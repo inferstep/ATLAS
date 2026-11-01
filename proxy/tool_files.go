@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
 func deleteFileTool() *ToolDef {
@@ -208,7 +210,7 @@ func relocateFile(ctx *AgentContext, input MoveFileInput, src, dst, relDest stri
 		if srcInfo.IsDir() {
 			return nil, errNoMutation(fmt.Errorf("move_file: cannot move directory across filesystems: %w", err))
 		}
-		data, rerr := readRegularFile(src)
+		data, rerr := workspacefs.ReadRegularFile(src)
 		if rerr != nil {
 			return nil, errNoMutation(fmt.Errorf("move_file: cannot read source: %w", rerr))
 		}

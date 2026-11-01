@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
 // shellCommandSeeds are the seeds of FuzzValidateShellCommand. The expected
@@ -555,7 +557,7 @@ func agentRequestIsRefused(body []byte) bool {
 	if json.NewDecoder(bytes.NewReader(body)).Decode(&req) != nil {
 		return true
 	}
-	return req.Message == "" || (req.SandboxSubdir != "" && !validSandboxSubdir(req.SandboxSubdir))
+	return req.Message == "" || (req.SandboxSubdir != "" && !workspacefs.ValidSandboxSubdir(req.SandboxSubdir))
 }
 
 // FuzzPassthroughCarriesTheBound: a /v1/chat/completions body that is a valid

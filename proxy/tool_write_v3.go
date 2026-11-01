@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
 // v3CandidatesTested unwraps a possibly-nil V3 response so the
@@ -161,7 +163,7 @@ func v3WriteRequest(path, baselineContent string, ctx *AgentContext) V3GenerateR
 		if abs == path {
 			continue // the file being generated is the baseline, not context
 		}
-		data, rerr := readRegularFile(abs)
+		data, rerr := workspacefs.ReadRegularFile(abs)
 		if rerr != nil {
 			continue
 		}

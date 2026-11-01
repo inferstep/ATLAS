@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"path/filepath"
 	"sync"
+
+	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
 // activeSessions tracks in-flight /v1/agent turns by session_id so
@@ -195,8 +197,8 @@ func agentWorkingDirs(w http.ResponseWriter, req *agentRequest) (string, string,
 	// /demo: each pane works inside its own workspace subdir. A non-empty
 	// sandbox_subdir must be one allowed bare name, else HTTP 400 and no turn.
 	if sub := req.SandboxSubdir; sub != "" {
-		if !validSandboxSubdir(sub) {
-			writeError(w, http.StatusBadRequest, ErrInvalidInput, sandboxSubdirDetail)
+		if !workspacefs.ValidSandboxSubdir(sub) {
+			writeError(w, http.StatusBadRequest, ErrInvalidInput, workspacefs.SandboxSubdirDetail)
 			return "", "", false
 		}
 		workingDir = filepath.Join(workingDir, sub)

@@ -7,15 +7,17 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
 // holdRefused makes the object hold fail for one test, as it does on a system
 // that has none.
 func holdRefused(t *testing.T) {
 	t.Helper()
-	previous := pinObjectFn
-	pinObjectFn = func(string) (*objectHandle, error) { return nil, errObjectIdentityUnavailable }
-	t.Cleanup(func() { pinObjectFn = previous })
+	previous := workspacefs.PinObjectFn
+	workspacefs.PinObjectFn = func(string) (*workspacefs.ObjectHandle, error) { return nil, workspacefs.ErrObjectIdentityUnavailable }
+	t.Cleanup(func() { workspacefs.PinObjectFn = previous })
 }
 
 // eventsOf returns the data of each stream event of one kind.
@@ -55,7 +57,7 @@ func TestARefusedDeletionReachesTheUserAndTheModelAsItsReason(t *testing.T) {
 	if asked := r.census["permission_request"]; asked != 0 {
 		t.Errorf("%d prompt(s) were shown for a deletion the proxy refuses before asking", asked)
 	}
-	reason := errObjectIdentityUnavailable.Error()
+	reason := workspacefs.ErrObjectIdentityUnavailable.Error()
 	for where, texts := range map[string][]string{
 		"the permission_denied event": r.eventsOf("permission_denied"),
 		"the tool_result event":       r.eventsOf("tool_result"),
@@ -141,12 +143,12 @@ func TestADeletionTheUserDeniedReadsAsItDidBefore(t *testing.T) {
 // system that has none. Where the hold exists the real one is used.
 func holdStandIn(t *testing.T) {
 	t.Helper()
-	if objectHoldSupported {
+	if workspacefs.ObjectHoldSupported {
 		return
 	}
-	previous := pinObjectFn
-	pinObjectFn = func(string) (*objectHandle, error) { return &objectHandle{}, nil }
-	t.Cleanup(func() { pinObjectFn = previous })
+	previous := workspacefs.PinObjectFn
+	workspacefs.PinObjectFn = func(string) (*workspacefs.ObjectHandle, error) { return &workspacefs.ObjectHandle{}, nil }
+	t.Cleanup(func() { workspacefs.PinObjectFn = previous })
 }
 
 // notAllowed runs the approval for one call and returns what the call then

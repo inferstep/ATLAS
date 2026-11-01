@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
 // shouldGeneratePlan decides whether a turn warrants the ~5-15s plan
@@ -157,7 +159,7 @@ func samplePlanContext(workingDir string, maxFiles, maxBytes int) map[string]str
 	}
 	// Every read goes through the workspace folder, so a name in it that
 	// points somewhere else is skipped like a file that cannot be read.
-	dir := openConfinedDir(workingDir)
+	dir := workspacefs.OpenConfinedDir(workingDir)
 	defer dir.Close()
 	sample := planSample{dir: dir, out: out, maxFiles: maxFiles, maxBytes: maxBytes}
 	sample.readPriorityFiles("", priority)
@@ -194,7 +196,7 @@ const planStage = "v3:plan"
 
 // planSample is what samplePlanContext has collected so far, and its limits.
 type planSample struct {
-	dir                confinedDir
+	dir                workspacefs.ConfinedDir
 	out                map[string]string
 	maxFiles, maxBytes int
 }
@@ -208,8 +210,8 @@ func (s planSample) readPriorityFiles(subdir string, priority []string) {
 			return
 		}
 		path := filepath.Join(subdir, rel)
-		if body, ok := s.dir.readCapped(path, s.maxBytes); ok {
-			s.out[path] = body
+		if body, ok := s.dir.ReadCapped(path, s.maxBytes); ok {
+			s.out[path] = contextEntry(body, s.maxBytes)
 		}
 	}
 }
@@ -224,8 +226,8 @@ func (s planSample) readSourceFiles(entries []fs.DirEntry) {
 		if e.IsDir() || !isSourceExtension(strings.ToLower(filepath.Ext(name))) {
 			continue
 		}
-		if body, ok := s.dir.readCapped(name, s.maxBytes); ok {
-			s.out[name] = body
+		if body, ok := s.dir.ReadCapped(name, s.maxBytes); ok {
+			s.out[name] = contextEntry(body, s.maxBytes)
 		}
 	}
 }

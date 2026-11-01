@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
 // --- The held reference ------------------------------------------------------
@@ -67,12 +69,12 @@ func TestHeldReferenceRefusesARecycledNumber(t *testing.T) {
 			p := filepath.Join(dir, c.name)
 			c.make(p)
 			before := openFDs(t)
-			h, err := pinObject(p)
+			h, err := workspacefs.PinObject(p)
 			if err != nil {
 				t.Fatalf("pin: %v", err)
 			}
 			info, _ := os.Lstat(p)
-			if !h.stillTheObjectAt(info) {
+			if !h.StillTheObjectAt(info) {
 				t.Fatal("the held object was not recognised at its own path")
 			}
 			pinned := lstatT(t, p)
@@ -81,15 +83,15 @@ func TestHeldReferenceRefusesARecycledNumber(t *testing.T) {
 			os.Remove(p)
 			c.make(p)
 			recycled := statInfo{FileInfo: info, st: pinned}
-			if h.stillTheObjectAt(recycled) {
+			if h.StillTheObjectAt(recycled) {
 				t.Error("a recycled device+inode passed as the held object")
 			}
-			if now, _ := os.Lstat(p); h.stillTheObjectAt(now) {
+			if now, _ := os.Lstat(p); h.StillTheObjectAt(now) {
 				t.Error("the replacement passed as the held object")
 			}
-			h.release()
-			h.release() // idempotent
-			if h.stillTheObjectAt(info) {
+			h.Release()
+			h.Release() // idempotent
+			if h.StillTheObjectAt(info) {
 				t.Error("a released reference answered true")
 			}
 			if got := openFDs(t); got != before {
@@ -105,23 +107,23 @@ func TestHeldReferenceFollowsNothing(t *testing.T) {
 	os.WriteFile(target, []byte("A\n"), 0o644)
 	link := filepath.Join(dir, "l.py")
 	os.Symlink("real.py", link)
-	h, err := pinObject(link)
+	h, err := workspacefs.PinObject(link)
 	if err != nil {
 		t.Fatalf("pin: %v", err)
 	}
-	defer h.release()
+	defer h.Release()
 	linkInfo, _ := os.Lstat(link)
 	targetInfo, _ := os.Lstat(target)
-	if !h.stillTheObjectAt(linkInfo) {
+	if !h.StillTheObjectAt(linkInfo) {
 		t.Error("the link itself was not held")
 	}
-	if h.stillTheObjectAt(targetInfo) {
+	if h.StillTheObjectAt(targetInfo) {
 		t.Error("the reference followed the link to its target")
 	}
 	// Removing the target does not touch the held link's identity; the
 	// content check (link text) is what would notice a retarget.
 	os.Remove(target)
-	if now, _ := os.Lstat(link); !h.stillTheObjectAt(now) {
+	if now, _ := os.Lstat(link); !h.StillTheObjectAt(now) {
 		t.Error("a dangling link is still the same link object")
 	}
 }
@@ -276,9 +278,9 @@ func TestHardLinkedNamesStaySeparatedByCanonicalPath(t *testing.T) {
 func TestIdentityUnavailableFailsClosedBeforeAsking(t *testing.T) {
 	dir := t.TempDir()
 	mkFile(dir)
-	saved := pinObjectFn
-	pinObjectFn = func(string) (*objectHandle, error) { return nil, errObjectIdentityUnavailable }
-	defer func() { pinObjectFn = saved }()
+	saved := workspacefs.PinObjectFn
+	workspacefs.PinObjectFn = func(string) (*workspacefs.ObjectHandle, error) { return nil, workspacefs.ErrObjectIdentityUnavailable }
+	defer func() { workspacefs.PinObjectFn = saved }()
 
 	ctx, cancel := deletePermCtx(t, "sess-noid", dir)
 	defer cancel()

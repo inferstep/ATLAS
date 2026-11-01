@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
 // ---------------------------------------------------------------------------
@@ -51,7 +53,7 @@ func executeStructuralEdit(rawInput json.RawMessage, ctx *AgentContext) (res *To
 		return nil, errNoMutation(fmt.Errorf("file not read yet — use read_file first before structural_edit: %s", input.Path))
 	}
 
-	data, err := readRegularFile(path)
+	data, err := workspacefs.ReadRegularFile(path)
 	if err != nil {
 		return nil, errNoMutation(fmt.Errorf("cannot read %s: %w", input.Path, err))
 	}

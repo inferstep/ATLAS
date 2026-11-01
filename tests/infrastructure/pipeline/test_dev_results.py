@@ -252,6 +252,7 @@ def test_the_build_for_the_cache_is_the_test_gates_own_command_with_no_test_to_r
     assert without == list(gate.command), "the build flags differ from the gate's"
     assert f"-coverprofile={tmp_path.resolve() / ('go-' + module + '.out')}" in command
     assert "-covermode=atomic" in command
+    assert "-coverpkg=./..." in command
     assert folder == ROOT / module
     assert "GOCACHE" in env
 

@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/workspacefs"
+)
 
 // objectHoldSkipReason is what a skipped test prints. One reason for all of
 // them, so a run on a system without the hold says the same thing each time.
@@ -12,7 +16,7 @@ const objectHoldSkipReason = "this test goes through the deletion approval, whic
 // hold exists it does nothing, so the test runs.
 func needsObjectHold(t *testing.T) {
 	t.Helper()
-	if !objectHoldSupported {
+	if !workspacefs.ObjectHoldSupported {
 		t.Skip(objectHoldSkipReason)
 	}
 }

@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
 // workspaceAlignment caches the last functional check of whether the proxy
@@ -52,7 +54,7 @@ func verifyWorkspaceAlignment(ctx *AgentContext) string {
 	wsAlignMu.Unlock()
 
 	token := fmt.Sprintf("atlas-mount-probe-%d", time.Now().UnixNano())
-	removeProbe, err := writeMountProbe(ctx.WorkingDir, token)
+	removeProbe, err := workspacefs.WriteMountProbe(ctx.WorkingDir, token)
 	if err != nil {
 		return "" // can't probe; not evidence of a split
 	}
@@ -84,7 +86,7 @@ func sandboxReadProbe(ctx *AgentContext) (string, bool) {
 	// identical on both sides — but only if the subdirectory is carried
 	// across. Hardcoding /workspace made every session with a sandbox_subdir
 	// look split, which refused 28 of 28 benchmark sessions before they ran.
-	probe := filepath.Join(ctx.WorkingDir, mountProbeName)
+	probe := filepath.Join(ctx.WorkingDir, workspacefs.MountProbeName)
 	body, err := json.Marshal(map[string]interface{}{
 		"code":     fmt.Sprintf("print(open(%q).read())", probe),
 		"language": "python",

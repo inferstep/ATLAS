@@ -3,6 +3,7 @@ FROM docker.io/golang:1.27-alpine@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944
 WORKDIR /build
 COPY go.mod ./
 COPY *.go ./
+COPY internal ./internal
 
 RUN go build -o atlas-proxy-v2 .
 

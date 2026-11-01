@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
 // ---------------------------------------------------------------------------
@@ -167,7 +169,7 @@ func readFileToEdit(ctx *AgentContext, path, relPath string) (string, error) {
 	}
 
 	// Read current content
-	data, err := readRegularFile(path)
+	data, err := workspacefs.ReadRegularFile(path)
 	if err != nil {
 		return "", errNoMutation(fmt.Errorf("cannot read %s: %w", relPath, err))
 	}
@@ -735,7 +737,7 @@ func insertAfterTool() *ToolDef {
 			if !editViewIsCurrent(ctx, path) {
 				return nil, errNoMutation(fmt.Errorf("file not read yet — use read_file first so the line numbers are current: %s", in.Path))
 			}
-			data, err := readRegularFile(path)
+			data, err := workspacefs.ReadRegularFile(path)
 			if err != nil {
 				return noMutation(fmt.Sprintf("cannot read %s: %v", in.Path, err)), nil
 			}
@@ -1029,7 +1031,7 @@ func replaceLinesTool() *ToolDef {
 			if !editViewIsCurrent(ctx, path) {
 				return nil, errNoMutation(fmt.Errorf("file not read yet — use read_file first so the line numbers are current: %s", in.Path))
 			}
-			data, err := readRegularFile(path)
+			data, err := workspacefs.ReadRegularFile(path)
 			if err != nil {
 				return noMutation(fmt.Sprintf("cannot read %s: %v", in.Path, err)), nil
 			}

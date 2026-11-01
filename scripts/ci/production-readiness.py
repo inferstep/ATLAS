@@ -91,7 +91,7 @@ def _with_coverage(gates: dict[str, Gate]) -> dict[str, Gate]:
     out.mkdir(parents=True, exist_ok=True)
     for name in ("go-proxy-test", "go-tui-test"):
         gate, label = gates[name], name[: -len("-test")]
-        flags = (f"-coverprofile={out / (label + '.out')}", "-covermode=atomic")
+        flags = (f"-coverprofile={out / (label + '.out')}", "-covermode=atomic", "-coverpkg=./...")
         command = gate.command[:2] + ("-json",) + gate.command[2:-1] + flags + gate.command[-1:]
         gates[name] = replace(gate, command=command, junit=out / (label + ".junit.xml"))
     for name, label in (("python-tests", "python"), ("python-tests-lens", "python-lens")):

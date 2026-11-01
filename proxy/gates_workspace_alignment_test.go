@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
 // Both containers see a split as `/workspace`, so no value either holds can
@@ -41,7 +43,7 @@ func TestWorkspaceAlignmentProbeIsFunctionalNotConfigural(t *testing.T) {
 	// A sandbox on the same disk: it runs the probe's
 	// print(open("<path>").read()). Only the path the proxy wrote holds the
 	// file; a probe that asks for any other path reads nothing.
-	probePath := filepath.Join(sub, mountProbeName)
+	probePath := filepath.Join(sub, workspacefs.MountProbeName)
 	sameDisk := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct{ Code string }
 		_ = json.NewDecoder(r.Body).Decode(&req)
@@ -72,7 +74,7 @@ func TestWorkspaceAlignmentProbeIsFunctionalNotConfigural(t *testing.T) {
 		})
 	}
 
-	if _, err := os.Stat(filepath.Join(sub, mountProbeName)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(sub, workspacefs.MountProbeName)); !os.IsNotExist(err) {
 		t.Error("probe file left in the user's workspace")
 	}
 }

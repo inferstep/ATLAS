@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
 // ---------------------------------------------------------------------------
@@ -524,12 +526,12 @@ type deleteTarget struct {
 	// what makes the identity a binding rather than two readings of numbers a
 	// filesystem may recycle. Kept internal -- descriptors, inode and device
 	// numbers never reach the event, the model, the logs, or the wire.
-	handle *objectHandle
+	handle *workspacefs.ObjectHandle
 }
 
 // release lets go of the held object. Safe on a zero target and safe to call
 // more than once; the handle itself is idempotent.
-func (d deleteTarget) release() { d.handle.release() }
+func (d deleteTarget) release() { d.handle.Release() }
 
 // withoutHandle is the target as a record: what was approved and removed,
 // with no reference left to hold.
@@ -553,7 +555,7 @@ func (d deleteTarget) withoutHandle() deleteTarget { d.handle = nil; return d }
 // retargeted, a directory that gained a child (it is no longer empty), a type
 // swapped under the same name.
 func (d deleteTarget) identityMatches(other deleteTarget) bool {
-	if other.info == nil || !d.handle.stillTheObjectAt(other.info) {
+	if other.info == nil || !d.handle.StillTheObjectAt(other.info) {
 		return false
 	}
 	return d.Canonical == other.Canonical && d.Kind == other.Kind &&
@@ -598,7 +600,7 @@ func inspectDeleteTarget(ctx *AgentContext, args json.RawMessage) (deleteTarget,
 	// is described is what is held. A platform that cannot hold it gets no
 	// prompt and no deletion: an approval that could bind to nothing is worse
 	// than no approval.
-	handle, perr := pinObjectFn(canonical)
+	handle, perr := workspacefs.PinObjectFn(canonical)
 	if perr != nil {
 		return deleteTarget{}, "delete_file: " + perr.Error()
 	}

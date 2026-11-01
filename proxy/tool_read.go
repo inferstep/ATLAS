@@ -15,6 +15,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
 // ---------------------------------------------------------------------------
@@ -48,7 +50,7 @@ func readFileTool() *ToolDef {
 
 			path := resolveAgentPath(ctx, input.Path)
 
-			data, err := readRegularFile(path)
+			data, err := workspacefs.ReadRegularFile(path)
 			if err != nil {
 				return nil, fmt.Errorf("cannot read %s: %w", input.Path, err)
 			}
@@ -233,7 +235,7 @@ func outlineFileTool() *ToolDef {
 					Error: "outline_file: path cannot be empty. Pass {\"path\":\"<file>\"}."}, nil
 			}
 			path := resolveAgentPath(ctx, input.Path)
-			data, err := readRegularFile(path)
+			data, err := workspacefs.ReadRegularFile(path)
 			if err != nil {
 				return nil, fmt.Errorf("cannot read %s: %w", input.Path, err)
 			}
@@ -555,7 +557,7 @@ func searchReadsEntry(input SearchFilesInput, d fs.DirEntry, walkErr error) (rea
 // appendFileMatches adds the lines of one file that match re, and stops once
 // there are maxMatches in all. A file it cannot read adds none.
 func appendFileMatches(matches []SearchMatch, re *regexp.Regexp, relPath, path string, maxMatches int) []SearchMatch {
-	data, err := readRegularFile(path)
+	data, err := workspacefs.ReadRegularFile(path)
 	if err != nil {
 		return matches
 	}
