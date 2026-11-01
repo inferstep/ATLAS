@@ -1066,6 +1066,8 @@ func TestTheAgentLoopsOtherDecisionsDoNotConsultTheTaskContract(t *testing.T) {
 		{"agent.go", "classifyAgentTier"}, {"agent.go", "terminalCompletionAllowed"},
 		{"agent.go", "blockingTombstone"}, {"agent.go", "needsPermission"},
 		{"agent.go", "honestTerminalSummary"}, {"agent.go", "buildSystemPrompt"},
+		{"agent.go", "writeProjectContext"}, {"agent.go", "writeToolchains"},
+		{"agent.go", "writeProjectFiles"}, {"agent.go", "writePlan"},
 		{"tool_schema.go", "buildToolDescriptionsExcluding"},
 	} {
 		text := readSourceForTest(t, c.file)
@@ -3758,18 +3760,20 @@ func textsFrom(src, marker string, width int) []string {
 // The prompt never sees them.
 func TestTheSystemPromptNeverReadsThePolicyFields(t *testing.T) {
 	prompt, _ := os.ReadFile("agent.go")
-	i := strings.Index(string(prompt), "func buildSystemPrompt")
-	if i < 0 {
-		t.Fatal("agent.go holds no func buildSystemPrompt, so the prompt check reads nothing; name the file that holds it")
-	}
-	end := strings.Index(string(prompt)[i+1:], "\nfunc ")
-	if end < 0 {
-		end = len(prompt) - i - 1
-	}
-	body := string(prompt)[i : i+1+end]
-	for _, f := range []string{"live_action_demand", "action_demand_source", "TaskContract"} {
-		if strings.Contains(body, f) {
-			t.Errorf("buildSystemPrompt reads %q", f)
+	for _, fn := range []string{"buildSystemPrompt", "writeProjectContext", "writeToolchains", "writeProjectFiles", "writePlan"} {
+		i := strings.Index(string(prompt), "func "+fn)
+		if i < 0 {
+			t.Fatalf("agent.go holds no func %s, so the prompt check reads nothing; name the file that holds it", fn)
+		}
+		end := strings.Index(string(prompt)[i+1:], "\nfunc ")
+		if end < 0 {
+			end = len(prompt) - i - 1
+		}
+		body := string(prompt)[i : i+1+end]
+		for _, f := range []string{"live_action_demand", "action_demand_source", "TaskContract"} {
+			if strings.Contains(body, f) {
+				t.Errorf("%s reads %q", fn, f)
+			}
 		}
 	}
 }

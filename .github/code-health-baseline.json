@@ -5,7 +5,6 @@
  },
  "functions": {
   "geometric-lens/geometric_lens/training.py:train_gx": 132,
-  "proxy/agent.go:buildSystemPrompt": 140,
   "proxy/agent.go:finalizeCompletion": 108,
   "proxy/agent.go:runAgentLoop": 152,
   "proxy/candidate_delivery.go:deliverCandidateBytes": 128,
@@ -13,9 +12,9 @@
   "sandbox/executor_server.py:_syntax_check_impl": 123
  },
  "files": {
-  "proxy/agent.go": 10800,
+  "proxy/agent.go": 10797,
   "proxy/tools.go": 5183,
   "sandbox/executor_server.py": 2059,
-  "v3-service/pipeline.py": 2735
+  "v3-service/pipeline.py": 2700
  }
 }
