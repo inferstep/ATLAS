@@ -390,7 +390,7 @@ container, meaningful names and labels.
 python scripts/production-readiness.py
 
 # One file
-pytest tests/v3/test_plan_search.py -v
+pytest tests/v3/stages/test_plan_search.py -v
 
 # End-to-end acceptance: real proxy + sandbox executor + fake
 # llama-server. No GPU or model needed. Build the proxy binary first.

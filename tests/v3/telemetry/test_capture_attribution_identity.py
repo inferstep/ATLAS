@@ -16,7 +16,7 @@ import sys
 
 import pytest
 
-V3 = os.path.join(os.path.dirname(__file__), "..", "..", "v3-service")
+V3 = os.path.join(os.path.dirname(__file__), "..", "..", "..", "v3-service")
 sys.path.insert(0, V3)
 import pipeline
 
@@ -164,7 +164,8 @@ def test_cost_reconciliation_carries_identity(tmp_path, monkeypatch):
     c.note_cost(code=None, phase="self_test_gen", tokens=5, latency_ms=1.0)
     c.close({"total_tokens": 15})
     rec = [r for r in recs(p) if r["type"] == "cost_reconciliation"][0]
-    assert rec["request_id"] == "req-1" and rec["v3_invocation_id"] == "inv-1"
+    assert rec["request_id"] == "req-1"
+    assert rec["v3_invocation_id"] == "inv-1"
     assert rec["shared_overhead"]["self_test_gen"]["tokens"] == 5
     assert rec["reconciles"] is True
 
@@ -173,7 +174,8 @@ def test_capture_status_carries_identity(tmp_path, monkeypatch):
     c, p = cap(tmp_path, monkeypatch)
     c.close({"total_tokens": 0})
     st = [r for r in recs(p) if r["type"] == "capture_status"][0]
-    assert st["request_id"] == "req-1" and st["v3_invocation_id"] == "inv-1"
+    assert st["request_id"] == "req-1"
+    assert st["v3_invocation_id"] == "inv-1"
 
 
 def test_legacy_stage2_records_remain_readable():

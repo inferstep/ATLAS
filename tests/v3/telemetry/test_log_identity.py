@@ -17,7 +17,7 @@ import threading
 
 import pytest
 
-V3 = os.path.join(os.path.dirname(__file__), "..", "..", "v3-service")
+V3 = os.path.join(os.path.dirname(__file__), "..", "..", "..", "v3-service")
 if V3 not in sys.path:
     sys.path.insert(0, V3)
 
@@ -61,7 +61,8 @@ def test_absent_identity_omits_the_fields_rather_than_emitting_empties():
     SL.bind_identity("", "")
     out = json.loads(SL.JsonFormatter("v3-service").format(
         logging.LogRecord("t", logging.INFO, __file__, 1, "x", None, None)))
-    assert "request_id" not in out and "invocation_id" not in out
+    assert "request_id" not in out
+    assert "invocation_id" not in out
 
 
 # --- worker threads -----------------------------------------------------------
@@ -155,7 +156,8 @@ def test_print_wrapper_carries_both_identities(monkeypatch):
     SL.bind_identity("req-P", "inv-P")
     wrapper.write("a printed line\n")
     recs = _records(buf)
-    assert recs and recs[0]["request_id"] == "req-P"
+    assert recs
+    assert recs[0]["request_id"] == "req-P"
     assert recs[0]["invocation_id"] == "inv-P"
     assert recs[0]["msg"] == "a printed line"
 
