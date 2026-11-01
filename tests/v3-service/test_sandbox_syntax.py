@@ -9,7 +9,7 @@ import pytest
 from tests.conftest import run_shell_sync
 from fastapi import HTTPException
 
-SANDBOX_DIR = Path(__file__).parents[3] / "sandbox"
+SANDBOX_DIR = Path(__file__).parents[2] / "sandbox"
 
 
 _SANDBOX_MODULE = None
