@@ -91,7 +91,15 @@ K3s 배포 경로(`scripts/install.sh`, `templates/`의 매니페스트)는 V3.1
 | 파일 | 담당 |
 |---|---|
 | `main.go` | HTTP 서버, 라우팅, 인증, 패스스루, 오류 엔벨로프, 비공개 값 로그 필터 |
-| `agent.go` | 에이전트 루프: 턴 상태, LLM 호출, 플랜 생성, 스턱 루프 차단기 |
+| `llm_call.go`, `model_reply.go` | llama-server 호출 1회와 모델 응답 읽기 |
+| `system_prompt.go`, `task_tier.go` | 시스템 프롬프트와 컨텍스트 예산, 메시지 티어 |
+| `agent_handler.go` | `/v1/agent` 및 `/cancel` 엔드포인트 |
+| `agent.go` | `runAgentLoop`, 펜스 가져오기, 툴체인 감지 |
+| `gates_exit.go` | 종료 게이트와 그 게이트가 읽는 실행 상태 |
+| `loop_turn.go`, `loop_checks.go`, `loop_results.go` | 루프의 한 턴: 모델 호출과 응답, 도구 실행 전 검사, 결과와 스턱 루프 차단기 |
+| `plan_generation.go`, `task_intake.go` | 요청에 플랜이 필요한지 판단과 플래너에 보여 줄 샘플, 요청이 선언한 태스크 계약 |
+| `run_end.go`, `recovery.go` | 실행 종료(터미널, 시간 예산, 요약), 막힌 모델에게 보여 줄 내용과 남은 작업 |
+| `fenced_channel.go` | 파일 본문을 가져오는 서브콜과 그 예산 |
 | `tools.go`, `tool_*.go` | 16개 도구 정의와 실행기, 티어 분류, 도구 호출 문법 |
 | `gates*.go` | 정직성/플랜 게이트: 클레임 체크, 구조, 구문, 임베드 스크립트, 플랜 준수, 플랜 리마인더, 에셋 린트 |
 | `detectors.go` | 스턱 패턴 검출: 도구 반복, 추론 반복, 트레이스백 지역화 |
@@ -174,8 +182,8 @@ flowchart LR
 | `edit_file` | ≤10줄 변경을 위한 정밀 인라인 문자열 치환(old_str/new_str) | 아니오 |
 | `insert_after` | 주어진 줄 번호(`read_file` 이 출력하는 줄 번호) 뒤에 새 줄을 삽입합니다. 기존 코드가 전혀 바뀌지 않는 코드 **추가**(분기, 함수, import)에 적합: 재현해야 할 `old_str` 이 없으며, 긴 구간에서 실패하는 단계가 바로 그것입니다 | 아니오 |
 | `replace_lines` | 줄 범위(`start_line`..`end_line`, `read_file` 이 출력하는 줄 번호)를 새 내용으로 교체합니다. 코드를 재현하지 않고 **변경**할 때 사용: 앵커가 구간 전체가 아니라 주장된 두 줄(범위의 첫 줄과 마지막 줄, 공백 무시)이므로 그대로 옮겨 적어야 하는 분량이 N 줄이 아닌 2 줄입니다. 호출당 최대 60줄 | 아니오 |
-| `structural_edit` | tree-sitter 셀렉터(`function:NAME`, `class:NAME`, `<tag>`)를 통한 함수/클래스/HTML 요소 전체 재작성; 노드 전체 교체에는 edit_file보다 필수(REQUIRED). GH #39, v1에서는 .py/.html/.htm만 | 아니오 |
-| `delete_file` | 파일 또는 빈 디렉토리 삭제(이후 루프 종료를 강제) | 아니오 |
+| `structural_edit` | tree-sitter 셀렉터(`function:NAME`, `class:NAME`, `<tag>`)를 통한 함수/클래스/HTML 요소 전체 재작성; 노드 전체 교체에는 edit_file보다 필수(REQUIRED). Python, HTML, Go, JavaScript, TypeScript 지원 | 아니오 |
+| `delete_file` | 파일 또는 빈 디렉토리 삭제 | 아니오 |
 | `move_file` | 워크스페이스 내에서 파일 이동 또는 이름 변경(예: `index.html` → `templates/`). 순수 재배치 — V3/정밀 편집 게이트를 우회하며, 기존 대상을 덮어쓰는 것은 거부. 셸 `mv`/`cp`가 거부되므로 "파일 재구성"을 위한 지원 경로 | 아니오 |
 | `find_file` | 파일 **이름**/경로에 대한 정규식 검색(저렴한 존재 확인 + 위치 파악). 파일 내용을 grep하는 `search_files`와 구별됨. | 예 |
 | `search_files` | 파일 내용 전체에 대한 정규식 검색(최대 200개 일치, .git/node_modules 건너뜀) | 예 |
@@ -192,12 +200,12 @@ flowchart LR
 인접한 도구 이름의 임베딩이 경쟁하며, 설명이 이름보다 더 중요함).
 프록시에서 모델 독립적인 네 가지 방어책이 결합됩니다:
 
-1. **설명 재작성**(`proxy/tools.go`). edit_file의 설명은 파일 전체/함수
+1. **설명 재작성**(`proxy/tool_edit.go`, `proxy/tool_structural_edit.go`). edit_file의 설명은 파일 전체/함수
    전체 용도에 대해 경고하고, structural_edit의 설명은 >10줄 / 노드 전체 교체에
    필수(REQUIRED)라고 명시하며, write_file의 설명은 새(NEW) 파일 전용임을
    명시합니다.
 2. **조건부 GBNF 문법**(`proxy/tool_schema.go`,
-   `proxy/agent.go:stepExclusions`). 5줄 초과의 기존 .py/.html/.htm
+   `proxy/llm_call.go:stepExclusions`). 5줄 초과의 기존 .py/.html/.htm
    파일에 대한 write_file가 거부되면, 다음 LLM 호출은 도구 이름 생성
    규칙에서 edit_file와 write_file를 금지하는 GBNF 문법으로 제약됩니다.
    모델은 물리적으로 그것들을 내보낼 수 없습니다. 제한은 한 번의
@@ -262,7 +270,7 @@ Plan 모드는 첫 도구 호출 전에 에이전트 턴마다 한 번 실행되
 
 ### 안전 제한
 
-운영자 대상 제한과 이를 튜닝하는 손잡이들입니다. 내부 스티어링 가드(트레이스백 위치 파악, 누락 모듈/대소문자 불일치 스티어, 심볼 그라운딩, no-op/빈 콘텐츠/구문 게이트, doctype 제거)는 `proxy/guardrails*.go`와 `proxy/agent.go`에 있습니다.
+운영자 대상 제한과 이를 튜닝하는 손잡이들입니다. 내부 스티어링 가드(트레이스백 위치 파악, 누락 모듈/대소문자 불일치 스티어, 심볼 그라운딩, no-op/빈 콘텐츠/구문 게이트, doctype 제거)는 `proxy/guardrails*.go`와 `proxy/loop_*.go`에 있습니다.
 
 | 제한 | 값 | 용도 |
 |-------|-------|---------|
@@ -273,7 +281,7 @@ Plan 모드는 첫 도구 호출 전에 에이전트 턴마다 한 번 실행되
 | 기존 파일에 대한 write_file | 파일이 5줄 초과면 거부; .py/.html/.htm에서는 단계별 문법 게이트가 `structural_edit`로 스티어 | 정밀 편집(`edit_file`) 또는 노드 전체 편집(`structural_edit`)을 강제 |
 | 의심스러운 축소 가드 | `oldSize >= 100B`이고 `newSize < 64B`일 때 `structural_edit`/`edit_file` 거부(`proxy/guardrails_write.go::validateNotSuspiciouslyShrunk`) | 파괴적 스텁 재작성이 디스크에 닿기 전에 포착 |
 | structural_edit 폭주 콘텐츠 가드 | `content` > 8 KB AND > 파일 크기의 4배일 때 거부 | 교체 노드로 방출된 추론 누출 덩어리를 포착 |
-| 에러 루프 브레이커 | 연속 3회 실패 | 폭주하는 실패 사이클 중단 |
+| 에러 루프 브레이커 | 같은 경로에서 같은 종류로 연속 3회 실패 | 폭주하는 실패 사이클 중단 |
 | 탐색 예산 | 연속 4회 읽기 전용 호출에서 넛지; 5회 이상에서 강화된 넛지. 읽기는 항상 실행됩니다 — 넛지는 *다음* 턴을 쓰기 쪽으로 유도할 뿐입니다 | 무한정 탐색하는 대신 쓰도록 모델을 유도 |
 | 명령 출력 잘라내기 | stdout 8,000자, stderr 4,000자 | 컨텍스트 범람 방지 |
 | 검색 결과 | 최대 200개 일치; 파일 검색은 1 MB 초과 파일 건너뜀 | 검색 비용 제한 |
@@ -471,7 +479,7 @@ graph LR
         Py["Python\npylint (0-10) + pytest"]
         JS["JavaScript\nNode.js 24"]
         TS["TypeScript\ntsc --noEmit + tsx"]
-        Go["Go 1.22\ngo build + run"]
+        Go["Go 1.27.2\ngo build + run"]
         Java["Java 21\njavac + java -cp"]
         Kotlin["Kotlin 2.4.0\nkotlinc + java -jar"]
         Rust["Rust stable\nrustc + run"]
@@ -491,7 +499,7 @@ graph LR
     style support fill:#333,color:#fff
 ```
 
-허용되는 언어 별칭: `py`/`python3` (Python), `js`/`node` (JavaScript), `ts` (TypeScript), `golang` (Go), `java` (Java), `kt`/`kts` (Kotlin), `rs` (Rust), `c++` (C++), `rb` (Ruby), `php` (PHP), `sh`/`shell` (Bash). 흔히 쓰는 CLI 도구는 이미지에 구워져 있고(`git`, `sqlite3`, `jq`, `patch`, `zip`/`unzip`, `xz`, `curl`), 바이너리 검사 도구(binutils의 `strings`, `objdump`, `readelf`, `nm`, 그리고 `file`, `xxd`)도 함께 들어 있습니다 — 컨테이너는 읽기 전용 베이스 위에서 비루트로 돌아가므로, 태스크가 셸로 호출하는 것은 전부 미리 설치돼 있어야 하며 런타임에 apt로 설치할 수 없습니다. 바이너리에 대한 `read_file`은 원시 바이트 대신 이 도구들을 가리키는 안내를 반환합니다. 최대 실행 시간: Docker 배포에서는 300초(compose가 프록시의 5분 `run_command` 상한에 맞춰 `MAX_EXECUTION_TIME=${ATLAS_SANDBOX_MAX_EXECUTION_TIME:-300}`를 설정; 순수 코드 기본값은 60초). 메모리, CPU, 프로세스 상한은 컨테이너 수준입니다: compose가 `mem_limit ${ATLAS_SANDBOX_MEM:-4g}`, `cpus ${ATLAS_SANDBOX_CPUS:-2}`, `pids_limit ${ATLAS_SANDBOX_PIDS:-1024}`를 설정하며, `atlas init`이 호스트에 맞는 값(RAM과 코어의 ~75%)을 `.env`에 기록합니다. 두 개의 워크스페이스 경로: **`/execute`**(V3 후보 테스트 경로)는 `/tmp/sandbox`(tmpfs) 아래의 일시적 스크래치 디렉토리를 사용; **`/shell`**(에이전트의 `run_command` 경로, 그리고 백그라운드 프로세스용 `/jobs/*`)은 `/workspace`에 대해 실행됩니다 — `ATLAS_PROJECT_DIR`(Docker)에서 바인드 마운트된 프로젝트 루트 또는 hostPath `${ATLAS_PROJECTS_DIR}`(K3s)로, 프록시가 보는 것과 동일한 경로입니다.
+허용되는 언어 별칭: `py`/`python3` (Python), `js`/`node` (JavaScript), `ts` (TypeScript), `golang` (Go), `java` (Java), `kt`/`kts` (Kotlin), `rs` (Rust), `c++` (C++), `rb` (Ruby), `php` (PHP), `sh`/`shell` (Bash). 흔히 쓰는 CLI 도구는 이미지에 구워져 있고(`git`, `sqlite3`, `jq`, `patch`, `zip`/`unzip`, `xz`, `curl`), 바이너리 검사 도구(binutils의 `strings`, `objdump`, `readelf`, `nm`, 그리고 `file`, `xxd`)도 함께 들어 있습니다 — 컨테이너는 읽기 전용 베이스 위에서 비루트로 돌아가므로, 태스크가 셸로 호출하는 것은 전부 미리 설치돼 있어야 하며 런타임에 apt로 설치할 수 없습니다. 바이너리에 대한 `read_file`은 원시 바이트 대신 이 도구들을 가리키는 안내를 반환합니다. 최대 실행 시간: Docker 배포에서는 300초(compose가 프록시의 5분 `run_command` 상한에 맞춰 `MAX_EXECUTION_TIME=${ATLAS_SANDBOX_MAX_EXECUTION_TIME:-300}`를 설정; 순수 코드 기본값은 60초). 메모리, CPU, 프로세스 상한은 컨테이너 수준입니다: compose가 `mem_limit ${ATLAS_SANDBOX_MEM:-1536m}`, `cpus ${ATLAS_SANDBOX_CPUS:-2}`, `pids_limit ${ATLAS_SANDBOX_PIDS:-1024}`를 설정하며, `atlas init`이 호스트에 맞는 값(RAM과 코어의 ~75%)을 `.env`에 기록합니다. 두 개의 워크스페이스 경로: **`/execute`**(V3 후보 테스트 경로)는 `/tmp/sandbox`(tmpfs) 아래의 일시적 스크래치 디렉토리를 사용; **`/shell`**(에이전트의 `run_command` 경로, 그리고 백그라운드 프로세스용 `/jobs/*`)은 `/workspace`에 대해 실행됩니다 — `ATLAS_PROJECT_DIR`(Docker)에서 바인드 마운트된 프로젝트 루트 또는 hostPath `${ATLAS_PROJECTS_DIR}`(K3s)로, 프록시가 보는 것과 동일한 경로입니다.
 
 ---
 
@@ -643,4 +651,4 @@ sequenceDiagram
     A-->>U: File updated
 ```
 
-5줄을 초과하는 기존 파일은 `write_file`에 대해 거부됩니다 — 모델은 `edit_file`(정밀, ≤10줄) 또는 `structural_edit`(노드 전체 재작성, .py/.html/.htm만)를 사용해야 합니다. `.py`/`.html`/`.htm` 파일에서는 단계별 문법 게이트(BiasBusters #2)가 다음 결정에 대해 도구 이름 생성 규칙에서 `edit_file`/`write_file`를 능동적으로 금지하여 모델이 잘못된 지름길로 되돌아가지 못하게 합니다.
+5줄을 초과하는 기존 파일은 `write_file`에 대해 거부됩니다 — 모델은 `edit_file`(정밀, ≤10줄) 또는 `structural_edit`(노드 전체 재작성: Python, HTML, Go, JavaScript, TypeScript)를 사용해야 합니다. `.py`/`.html`/`.htm` 파일에서는 단계별 문법 게이트(BiasBusters #2)가 다음 결정에 대해 도구 이름 생성 규칙에서 `edit_file`/`write_file`를 능동적으로 금지하여 모델이 잘못된 지름길로 되돌아가지 못하게 합니다.

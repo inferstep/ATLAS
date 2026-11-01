@@ -44,50 +44,71 @@ func (r *delLoop) toolMessages(tool string) []string {
 // permission_denied and tool_result events) and the model with its own
 // reason, never as a denial by the user, and the file stays.
 func TestARefusedDeletionReachesTheUserAndTheModelAsItsReason(t *testing.T) {
-	for _, tc := range []struct {
-		name       string
-		refuseHold bool
-		target     string
-		reason     string
-	}{
-		{"the object hold is missing", true, "a.py", errObjectIdentityUnavailable.Error()},
-		{"the file is missing", false, "gone.py", "file not found: gone.py"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if tc.refuseHold {
-				holdRefused(t)
-			}
-			r := delLoopFixture(t, map[string]string{"a.py": delSeed}, "Delete "+tc.target+".", func(turn int) map[string]interface{} {
-				if turn == 0 {
-					return dlDel(tc.target)
-				}
-				return map[string]interface{}{"type": "done", "summary": "deleted " + tc.target}
-			})
+	holdRefused(t)
+	r := delLoopFixture(t, map[string]string{"a.py": delSeed}, "Delete a.py.", func(turn int) map[string]interface{} {
+		if turn == 0 {
+			return dlDel("a.py")
+		}
+		return map[string]interface{}{"type": "done", "summary": "deleted a.py"}
+	})
 
-			if asked := r.census["permission_request"]; asked != 0 {
-				t.Errorf("%d prompt(s) were shown for a deletion the proxy refuses before asking", asked)
-			}
-			read := map[string][]string{
-				"the permission_denied event": r.eventsOf("permission_denied"),
-				"the tool_result event":       r.eventsOf("tool_result"),
-				"the message to the model":    r.toolMessages("delete_file"),
-			}
-			for where, texts := range read {
-				if len(texts) != 1 {
-					t.Errorf("%s: %d found, want 1: %q", where, len(texts), texts)
-					continue
-				}
-				if !strings.Contains(texts[0], tc.reason) {
-					t.Errorf("%s does not give the reason %q: %s", where, tc.reason, texts[0])
-				}
-				if strings.Contains(texts[0], userDenied) {
-					t.Errorf("%s says the user denied a deletion nobody was asked about: %s", where, texts[0])
-				}
-			}
-			if _, err := os.Stat(filepath.Join(r.dir, "a.py")); err != nil {
-				t.Errorf("a.py is gone after a refused deletion: %v", err)
-			}
-		})
+	if asked := r.census["permission_request"]; asked != 0 {
+		t.Errorf("%d prompt(s) were shown for a deletion the proxy refuses before asking", asked)
+	}
+	reason := errObjectIdentityUnavailable.Error()
+	for where, texts := range map[string][]string{
+		"the permission_denied event": r.eventsOf("permission_denied"),
+		"the tool_result event":       r.eventsOf("tool_result"),
+		"the message to the model":    r.toolMessages("delete_file"),
+	} {
+		if len(texts) != 1 {
+			t.Errorf("%s: %d found, want 1: %q", where, len(texts), texts)
+			continue
+		}
+		if !strings.Contains(texts[0], reason) {
+			t.Errorf("%s does not give the reason %q: %s", where, reason, texts[0])
+		}
+		if strings.Contains(texts[0], userDenied) {
+			t.Errorf("%s says the user denied a deletion nobody was asked about: %s", where, texts[0])
+		}
+	}
+	if _, err := os.Stat(filepath.Join(r.dir, "a.py")); err != nil {
+		t.Errorf("a.py is gone after a refused deletion: %v", err)
+	}
+}
+
+// A deletion of a file that is not there is refused the same way, with its
+// own reason.
+func TestADeletionOfAMissingFileReachesTheUserAndTheModelAsItsReason(t *testing.T) {
+	r := delLoopFixture(t, map[string]string{"a.py": delSeed}, "Delete gone.py.", func(turn int) map[string]interface{} {
+		if turn == 0 {
+			return dlDel("gone.py")
+		}
+		return map[string]interface{}{"type": "done", "summary": "deleted gone.py"}
+	})
+
+	if asked := r.census["permission_request"]; asked != 0 {
+		t.Errorf("%d prompt(s) were shown for a deletion the proxy refuses before asking", asked)
+	}
+	reason := "file not found: gone.py"
+	for where, texts := range map[string][]string{
+		"the permission_denied event": r.eventsOf("permission_denied"),
+		"the tool_result event":       r.eventsOf("tool_result"),
+		"the message to the model":    r.toolMessages("delete_file"),
+	} {
+		if len(texts) != 1 {
+			t.Errorf("%s: %d found, want 1: %q", where, len(texts), texts)
+			continue
+		}
+		if !strings.Contains(texts[0], reason) {
+			t.Errorf("%s does not give the reason %q: %s", where, reason, texts[0])
+		}
+		if strings.Contains(texts[0], userDenied) {
+			t.Errorf("%s says the user denied a deletion nobody was asked about: %s", where, texts[0])
+		}
+	}
+	if _, err := os.Stat(filepath.Join(r.dir, "a.py")); err != nil {
+		t.Errorf("a.py is gone after a refused deletion: %v", err)
 	}
 }
 

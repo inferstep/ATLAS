@@ -504,12 +504,8 @@ func TestWarnedRunMarkIsDischargedByFileNotSpelling(t *testing.T) {
 // boolean would silently reintroduce the false gate, so this pins the shape
 // rather than the behaviour.
 func TestPendingWarnedRunHasOneWriter(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
-	if err != nil {
-		t.Fatal(err)
-	}
 	var assigns, keyOnlyReads int
-	for i, line := range strings.Split(string(src), "\n") {
+	for _, line := range strings.Split(agentSources(t), "\n") {
 		l := strings.TrimSpace(line)
 		if !strings.Contains(l, "pendingWarnedRun") {
 			continue
@@ -519,7 +515,7 @@ func TestPendingWarnedRunHasOneWriter(t *testing.T) {
 			assigns++
 			// The one permitted assignment, inside markWarnedRun.
 			if !strings.HasSuffix(l, "= true") {
-				t.Errorf("agent.go:%d stores a non-true value in the warned set: %s", i+1, l)
+				t.Errorf("a non-true value is stored in the warned set: %s", l)
 			}
 		}
 		if strings.HasPrefix(l, "for ") && strings.Contains(l, "s.pendingWarnedRun") {

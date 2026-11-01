@@ -302,7 +302,7 @@ Cycle with `Ctrl+T`:
 | `accept-edits` | As above + `write_file` auto-allow; `delete_file` and every command still confirm |
 | `yolo` | Auto-allow everything except `delete_file`, which asks about each file |
 
-The exact gate is `needsPermission` in `proxy/agent.go`: `delete_file`
+The exact gate is `needsPermission` in `proxy/loop_checks.go`: `delete_file`
 always asks; outside yolo, every tool that runs a command asks; otherwise
 `Destructive: true` on the tool definition decides, and
 `accept-edits` additionally auto-approves `write_file`, `edit_file`,

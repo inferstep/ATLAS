@@ -21,8 +21,7 @@ import (
 // The sandbox verifies each file in isolation (compile, run, HTTP 200),
 // so a project can pass every check while its files ignore each other —
 // a template no route renders, a static script no page loads, an href
-// to a file that doesn't exist. All three shapes appeared in the
-// 2026-07-18 snake-game session. Findings are advisory text handed back
+// to a file that doesn't exist. Findings are advisory text handed back
 // to the model as [system note]s; nothing here blocks a write or a
 // done — the stuck-pattern detectors stay the only loop-breakers.
 
@@ -183,9 +182,9 @@ func orphanedTemplateFindings(f lintFile, allOther func(self string) string) []s
 			"%s is referenced by nothing (no render_template call or include names %q).",
 			f.rel, base)
 		// render_template_string elsewhere is the smell that
-		// pairs with an orphaned template (2026-07-18 snake
-		// session: model inlined the page and orphaned both
-		// the template and its static script).
+		// pairs with an orphaned template: the model inlined
+		// the page and orphaned the template and its static
+		// script.
 		if strings.Contains(others, "render_template_string") {
 			msg += " A .py file builds its page inline with render_template_string instead — either render this template or delete it."
 		}
@@ -283,9 +282,8 @@ func routeContractMessage(findings []string) string {
 	// How, not just what. Answering this with a whole-file write_file of a
 	// file the session created is allowed, and it is the expensive path: the
 	// fenced channel, then the full candidate pipeline again on a file that
-	// already passed it and ran. Measured 2026-09-15: one added route that way
-	// cost 183 s of a 570 s budget and introduced a 500 the run had 7 s left to
-	// find. Adding a handler is an insert; changing an action is an edit.
+	// already passed it and ran. Adding a handler is an insert; changing an
+	// action is an edit.
 	sb.WriteString("\nEither add a handler for that path -- with insert_after or structural_edit on the " +
 		"existing file, not a whole-file write_file -- or change the form action / fetch URL to a " +
 		"route that exists with edit_file. Then verify it with a request against the running " +
@@ -329,10 +327,9 @@ func assetLintNote(ctx *AgentContext) string {
 		sb.WriteString("Project structure check: " + strings.Join(advisory, " ") +
 			" This is advisory — fix it if these files are meant to work together.")
 	}
-	// A submit target with no handler was delivered under the same
-	// "advisory" wording as an orphaned file, and a model reading it as
-	// advice shipped a form that 404s (acceptance run, 2026-09-15). It is
-	// a defect, and the run will be asked about it before it can finish.
+	// A submit target with no handler is a defect, not advice: a model that
+	// reads it as advice ships a form that 404s, so the run is asked about
+	// it before it can finish.
 	if len(contract) > 0 {
 		if sb.Len() > 0 {
 			sb.WriteString(" ")

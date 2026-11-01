@@ -869,7 +869,7 @@ func keepLlamaWarm() {
 }
 
 // ---------------------------------------------------------------------------
-// Request tiers (classified by classifyAgentTier in agent.go and
+// Request tiers (classified by classifyAgentTier in task_tier.go and
 // classifyFileTier in tools.go)
 // ---------------------------------------------------------------------------
 

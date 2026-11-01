@@ -95,16 +95,15 @@ func buildToolCallSchemaForTools(excluded []string) map[string]interface{} {
 }
 
 // buildResponseFormat picks the response_format payload to send to
-// llama-server based on ATLAS_GRAMMAR_MODE (#33).
+// llama-server based on ATLAS_GRAMMAR_MODE.
 //
 //	"strict" (default): {"type":"json_object","schema":<full schema>}.
 //	  llama-server converts the schema to internal GBNF at the C side
 //	  so the token sampler can ONLY emit our tool_call/text/done union.
-//	  Previously the model could emit any valid JSON and we'd reject
-//	  + retry post-hoc, burning tokens; the schema-constrained path
-//	  eliminates that whole class of waste.
+//	  Without it the model could emit any valid JSON and we'd reject
+//	  + retry post-hoc, burning tokens.
 //
-//	"loose": {"type":"json_object"} — old behavior, "valid JSON only,
+//	"loose": {"type":"json_object"} — "valid JSON only,
 //	  shape not enforced." Kept as an escape hatch in case a model
 //	  handles the schema-to-GBNF conversion poorly (rare, but a
 //	  one-env-var rollback beats a code revert).

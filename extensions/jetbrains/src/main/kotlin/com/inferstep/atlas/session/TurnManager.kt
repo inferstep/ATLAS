@@ -143,7 +143,7 @@ class TurnManager(
 
                                 DONE_EVENT -> {
                                     // On a tool-shaped turn the model's final
-                                    // answer arrives only here (proxy/agent.go):
+                                    // answer arrives only here (proxy/loop_turn.go):
                                     // no text event precedes it.
                                     doneSummary =
                                         event.payloadOrNull<DonePayload>()?.summary.orEmpty()

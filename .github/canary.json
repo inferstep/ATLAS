@@ -373,10 +373,10 @@
       "red": [
         "replay (proxy)"
       ],
-      "what": "one changed word in a text of proxy/agent.go that the model reads",
+      "what": "one changed word in a text of proxy/llm_call.go that the model reads",
       "shows": "canaryreference",
       "action": "replace_line",
-      "path": "proxy/agent.go",
+      "path": "proxy/llm_call.go",
       "starts_with": "\tsb.WriteString(\" (line numbers are for reference",
       "lines": [
         "\tsb.WriteString(\" (line numbers are for canaryreference and are NOT in the file):\\n\")"

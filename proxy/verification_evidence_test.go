@@ -551,7 +551,7 @@ func TestTheOnlyProductionWriterOfVerificationEvidenceIsTheGreenBranch(t *testin
 	total := 0
 	for name, n := range writers {
 		total += n
-		if n > 0 && name != "agent.go" {
+		if n > 0 && name != "gates_exit.go" {
 			t.Errorf("%s writes verification evidence; only the agent loop's green "+
 				"branch may", name)
 		}

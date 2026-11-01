@@ -382,7 +382,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 				const payload = data as PermissionDeniedEventData;
 				this.permissions.handleDenied(payload.tool);
 				// The proxy answers a denial with permission_denied and then a
-				// tool_result whose success is false (proxy/agent.go), so that
+				// tool_result whose success is false (proxy/loop_checks.go), so that
 				// result consumes the snapshot, the pre-op state and the chip,
 				// as for any failed call. A stream that ends before it leaves
 				// nothing behind: the turn's end clears all three.
@@ -470,7 +470,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 			case 'done': {
 				// The run's outcome (status and reason) and, on a tool-shaped
 				// turn, the model's final answer, which arrives ONLY in this
-				// summary (proxy/agent.go). Posted even with no summary: whether
+				// summary (proxy/loop_turn.go). Posted even with no summary: whether
 				// the run completed, stopped or failed is the point (#236).
 				this.post({ type: 'doneSummary', ...doneOutcome(data as DoneEventData) });
 				break;

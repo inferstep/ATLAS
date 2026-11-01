@@ -957,7 +957,8 @@ func TestTaskContractHasNoDecisionConsumer(t *testing.T) {
 	// licence to replace an artifact nobody declared is the one thing no
 	// amount of evidence can justify. It reads no contract FIELD.
 	contractReaders := map[string]bool{
-		"agent.go:": true, "guardrails.go:": true, "obligations.go:": true,
+		"gates_exit.go:": true, "agent_handler.go:": true, "run_end.go:": true, "task_intake.go:": true,
+		"guardrails.go:": true, "obligations.go:": true,
 		"obligation_kinds.go:": true, "evidence_wiring.go:": true,
 		"authorization_grant.go:": true,
 		// delivery_settlement.go joins for the same reason again: it asks
@@ -1038,7 +1039,7 @@ func nonTestGoFiles(t *testing.T) []string {
 // policy owner and uses the answer. This pins that shape exactly, so a
 // future edit that starts inspecting TaskMode inline still fails.
 func TestFinalizeCompletionHandsTheContractToThePolicyOwner(t *testing.T) {
-	body, _ := os.ReadFile("agent.go")
+	body, _ := os.ReadFile("run_end.go")
 	final := string(body)[strings.Index(string(body), "func finalizeCompletion"):]
 	if e := strings.Index(final[1:], "\nfunc "); e >= 0 {
 		final = final[:e]
@@ -1063,11 +1064,11 @@ func TestTheAgentLoopsOtherDecisionsDoNotConsultTheTaskContract(t *testing.T) {
 	// Each function is read from the file that holds it. A name that is not
 	// there is an error: its check would otherwise pass without reading it.
 	for _, c := range []struct{ file, fn string }{
-		{"agent.go", "classifyAgentTier"}, {"agent.go", "terminalCompletionAllowed"},
-		{"agent.go", "blockingTombstone"}, {"agent.go", "needsPermission"},
-		{"agent.go", "honestTerminalSummary"}, {"agent.go", "buildSystemPrompt"},
-		{"agent.go", "writeProjectContext"}, {"agent.go", "writeToolchains"},
-		{"agent.go", "writeProjectFiles"}, {"agent.go", "writePlan"},
+		{"task_tier.go", "classifyAgentTier"}, {"run_end.go", "terminalCompletionAllowed"},
+		{"run_end.go", "blockingTombstone"}, {"loop_checks.go", "needsPermission"},
+		{"run_end.go", "honestTerminalSummary"}, {"system_prompt.go", "buildSystemPrompt"},
+		{"system_prompt.go", "writeProjectContext"}, {"system_prompt.go", "writeToolchains"},
+		{"system_prompt.go", "writeProjectFiles"}, {"system_prompt.go", "writePlan"},
 		{"tool_schema.go", "buildToolDescriptionsExcluding"},
 	} {
 		text := readSourceForTest(t, c.file)
@@ -3712,10 +3713,10 @@ func TestSchemaVersionOwnershipIsPerRecordKind(t *testing.T) {
 	if sharedConst != 0 {
 		t.Error("a shared shadowSchemaVersion constant is back; versions are per record kind")
 	}
-	agent, _ := os.ReadFile("agent.go")
+	intake, _ := os.ReadFile("task_intake.go")
 	for _, want := range []string{"shadowSchemaVersionRequest", "shadowSchemaVersionGate",
 		"shadowSchemaVersionFooter"} {
-		if !strings.Contains(string(agent), want) {
+		if !strings.Contains(string(intake), want) {
 			t.Errorf("%s is missing", want)
 		}
 	}
@@ -3759,11 +3760,11 @@ func textsFrom(src, marker string, width int) []string {
 
 // The prompt never sees them.
 func TestTheSystemPromptNeverReadsThePolicyFields(t *testing.T) {
-	prompt, _ := os.ReadFile("agent.go")
+	prompt, _ := os.ReadFile("system_prompt.go")
 	for _, fn := range []string{"buildSystemPrompt", "writeProjectContext", "writeToolchains", "writeProjectFiles", "writePlan"} {
 		i := strings.Index(string(prompt), "func "+fn)
 		if i < 0 {
-			t.Fatalf("agent.go holds no func %s, so the prompt check reads nothing; name the file that holds it", fn)
+			t.Fatalf("system_prompt.go holds no func %s, so the prompt check reads nothing; name the file that holds it", fn)
 		}
 		end := strings.Index(string(prompt)[i+1:], "\nfunc ")
 		if end < 0 {
@@ -3974,16 +3975,12 @@ func verificationDemandRun(t *testing.T, prompt string, contract *TaskContract,
 }
 
 func TestOneVerificationDemandSharedByBothExits(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := string(src)
+	body := agentSources(t)
 	// Two call sites, both shared by the done and text exits: the finalizer
 	// decides the terminal, and exitGates asks the same owner earlier so the
 	// run is told what it still owes while it can act on it.
 	if n := strings.Count(body, "decideVerificationDemand("); n != 2 {
-		t.Fatalf("agent.go calls decideVerificationDemand %d times; want the finalizer "+
+		t.Fatalf("the agent loop calls decideVerificationDemand %d times; want the finalizer "+
 			"and the exit gates, which both exits share", n)
 	}
 	i := strings.Index(body, "func finalizeCompletion")
@@ -3991,7 +3988,7 @@ func TestOneVerificationDemandSharedByBothExits(t *testing.T) {
 		t.Fatal("the demand is not evaluated inside finalizeCompletion, the single " +
 			"finalizer both the done and text exits call")
 	}
-	if g := guardCalls(t, "agent.go", "exitGates"); !g["decideVerificationDemand"] {
+	if g := guardCalls(t, "gates_exit.go", "exitGates"); !g["decideVerificationDemand"] {
 		t.Fatal("the second call site is not the exit gates both exits run")
 	}
 	for _, marker := range []string{

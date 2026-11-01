@@ -633,7 +633,7 @@ func TestPassedNoLongerAuthorizesDelivery(t *testing.T) {
 		}
 	}
 
-	tools, err := os.ReadFile("tools.go")
+	tools, err := os.ReadFile("tool_write_v3.go")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1440,14 +1440,14 @@ func TestFulfilledDeletionHasOneConsumer(t *testing.T) {
 		}
 	}
 	t.Logf("consumers: %v", callers)
-	if len(callers) != 1 || !strings.HasPrefix(callers[0], "agent.go") {
+	if len(callers) != 1 || !strings.HasPrefix(callers[0], "run_end.go") {
 		t.Errorf("fulfilled deletions are consumed from %v, want only the tombstone "+
-			"decision in agent.go", callers)
+			"decision in run_end.go", callers)
 	}
 }
 
 func TestDeletionCompletionHasNoLanguageDependency(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
+	src, err := os.ReadFile("run_end.go")
 	if err != nil {
 		t.Fatal(err)
 	}

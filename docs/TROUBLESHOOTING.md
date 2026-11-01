@@ -778,7 +778,7 @@ If `/v3/generate` receives an approved project build command, V3 emits a `build_
 
 **Symptom:** First request creates a file and V3 runs. A terse follow-up like "ok" or "yes" gets a conversational reply — no tool calls, no V3 events.
 
-**What's happening:** The agent-loop tier classifier (`proxy/agent.go:classifyAgentTier`) answers one question: is this conversation, or work? Work is the default, and T0 requires positive evidence, because the two mistakes cost very differently. Reading conversation as work wastes one planner call on a message the model closes in a single turn; reading work as conversation caps the turn at 5 and skips planning, which makes the request fail outright.
+**What's happening:** The agent-loop tier classifier (`proxy/task_tier.go:classifyAgentTier`) answers one question: is this conversation, or work? Work is the default, and T0 requires positive evidence, because the two mistakes cost very differently. Reading conversation as work wastes one planner call on a message the model closes in a single turn; reading work as conversation caps the turn at 12 and skips planning, which makes the request fail outright.
 
 A message is conversational only when it is under 12 characters (`hi`, `thanks`, `ok`) or shaped as a question — a `?` that ends a clause, or an interrogative opener (`why`, `what`, `how`, `is`, `can`, …) matched as a whole word. Task wording outranks both, so `can you fix the login bug?` is work despite the question mark. A client that declares `task_mode: work` (the TUI does) is never classified as conversational. Everything else is work: `still doesn't work, try again` and `the snake is moving way too fast, slow it down` both get the pipeline, even though neither names a file or matches a task-verb list.
 
@@ -1001,7 +1001,7 @@ To get faster (but lower quality) results:
 **Expected RAM usage:**
 - llama-server: ~8 GB (model in VRAM, minimal RAM)
 - geometric-lens: ~200 MB (PyTorch runtime + models)
-- v3-service: ~150 MB (PyTorch runtime)
+- v3-service: ~150 MB (no PyTorch: it parses and orchestrates)
 - sandbox: ~100 MB (base, spikes during compilation)
 - atlas-proxy: ~30 MB (Go binary)
 

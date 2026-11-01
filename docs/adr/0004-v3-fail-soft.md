@@ -13,7 +13,7 @@ return garbage.
 ## Decision
 V3 errors, timeouts and malformed responses fall back to writing the
 model's own content directly, with the fallback visible: never a silent
-skip, never a hard turn failure (`writeFileWithV3` in `proxy/tools.go`,
+skip, never a hard turn failure (`writeFileWithV3` in `proxy/tool_write_v3.go`,
 `deliverEditCandidate` in `proxy/edit_route_delivery.go`). One V3 call
 gets at most `ATLAS_V3_TIMEOUT` (default 300 s) or half the time the
 session has left, whichever is shorter; `ATLAS_V3_TIMEOUT=0` turns off
@@ -22,7 +22,7 @@ both caps (`v3CallTimeout` and `callV3GenerateStreaming` in
 
 Rationale: the fallback content still passes the gates every write
 passes (syntax, structural and comparative; `writeWithoutCandidate` in
-`proxy/tools.go`), so the fallback is safe, and an unavailable
+`proxy/tool_write_v3.go`), so the fallback is safe, and an unavailable
 enhancement layer must not brick the product.
 
 A lens that cannot score is not a V3 failure in this sense: nothing is
@@ -33,7 +33,7 @@ Users on a degraded stack lose what V3 adds but keep a working agent,
 and they can see it. The tool result does not claim V3 (`v3_used` is
 unset). A `write_file` fallback also sends a text event that says V3
 was unavailable or ran out of time (`writeWithoutCandidate` in
-`proxy/tools.go`); an edit fallback keeps the caller's content and only
+`proxy/tool_write_v3.go`); an edit fallback keeps the caller's content and only
 logs the reason (`deliverEditCandidate`). The run's
 final summary names each file whose bytes on disk V3 did not check,
 with the reason ("V3 did not check these files: ..."). A file changed

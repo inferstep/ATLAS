@@ -98,7 +98,7 @@ SCHEMA: Dict[str, Field] = {
     "ATLAS_EMBED_POOLING": Field("enum", enum=("none", "mean", "cls", "last", "rank")),
     "ATLAS_REASONING_BUDGET": Field("int", min=0),
     "ATLAS_PERMISSION_TIMEOUT_SEC": Field("int", min=0),
-    # Fenced file-content sub-call watchdogs (proxy/agent.go). The proxy
+    # Fenced file-content sub-call watchdogs (proxy/fenced_channel.go). The proxy
     # accepts 1..600 seconds and falls back to its default otherwise.
     "ATLAS_FENCED_FIRST_CONTENT_SEC": Field("int", min=1, max=600),
     "ATLAS_FENCED_IDLE_SEC": Field("int", min=1, max=600),

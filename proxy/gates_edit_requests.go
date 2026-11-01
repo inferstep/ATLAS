@@ -268,11 +268,8 @@ func echoesExistingFile(existing, incoming string) bool {
 //
 // echoesExistingFile keeps its 200-byte floor, which exists for the prefix
 // case (a short prefix proves nothing) and for files the session did not
-// write. For the session's own file the floor let small test files through.
-// In the ccc71fc smoke runs (2026-09-29), offbyone and add_function wrote a
-// 76-byte test_chunk.py (and a small test_stats.py), re-sent it five or six
-// times without running it, and passing work ended stopped/repeat_detector
-// in 4 of 84 sessions.
+// write. For the session's own file the floor would let small test files
+// through, and a model can re-send one several times without running it.
 func resendsOwnWrite(existing, incoming string) bool {
 	a, b := strings.TrimSpace(existing), strings.TrimSpace(incoming)
 	return b != "" && a == b
@@ -281,10 +278,8 @@ func resendsOwnWrite(existing, incoming string) bool {
 // echoedWriteRejection tells the model why copying a file back is refused.
 //
 // For a file this session wrote, the reason is different: the model already
-// wrote exactly these bytes, and the next step is to use them. Smoke run
-// 2026-09-28 (add_function rep 2): the test file landed, the model re-sent the
-// same write three times and was told each time that it did not need to
-// reproduce input data; the test never ran, and passing work ended "stopped".
+// wrote exactly these bytes, and the next step is to use them. Telling it
+// that it need not reproduce input data would leave the test unrun.
 func echoedWriteRejection(path string, sessionWrote bool) string {
 	if sessionWrote {
 		return fmt.Sprintf(

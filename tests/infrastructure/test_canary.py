@@ -224,7 +224,7 @@ def test_a_planted_file_stays_valid_where_its_reader_needs_that(canary, manifest
     canary.apply_plants(checkout, manifest)
     budgets = json.loads((checkout / "tests/perf/budgets.json").read_text(encoding="utf-8"))
     assert budgets["deterministic_max"]["proxy_binary_bytes"] == 1
-    changed = [line for line in (checkout / "proxy/agent.go").read_text(encoding="utf-8").splitlines()
+    changed = [line for line in (checkout / "proxy/llm_call.go").read_text(encoding="utf-8").splitlines()
                if "canaryreference" in line]
     assert len(changed) == 1
     assert changed[0].startswith("\tsb.WriteString(")

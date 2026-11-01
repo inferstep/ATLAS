@@ -2285,7 +2285,7 @@ func TestEditToolsReportTheDecisiveStructuralRefusal(t *testing.T) {
 // producer, and the remaining legacy wrapper calls are named rather than
 // counted, so a reintroduction has to edit this list.
 func TestLegacyCheckerWrapperInventory(t *testing.T) {
-	body := toolSources(t)
+	body := readSourceForTest(t, "tool_edit.go")
 
 	span := func(from, to string) string {
 		i := strings.Index(body, from)
@@ -2295,14 +2295,14 @@ func TestLegacyCheckerWrapperInventory(t *testing.T) {
 		rest := body[i:]
 		j := strings.Index(rest, to)
 		if j < 0 {
-			t.Fatalf("tools.go has no %q after %q, so the span would run to the end of the file", to, from)
+			t.Fatalf("tool_edit.go has no %q after %q, so the span would run to the end of the file", to, from)
 		}
 		return rest[:j]
 	}
 	for name, fn := range map[string]string{
-		"edit_file":     span("Name:   \"edit_file\"", "\nfunc structuralEditTool("),
+		"edit_file":     span("Name:   \"edit_file\"", "\n// closestLineHint"),
 		"insert_after":  span("Name:   \"insert_after\"", "\n// replaceLinesMaxSpan"),
-		"replace_lines": span("Name:   \"replace_lines\"", "\nfunc runCommandTool("),
+		"replace_lines": span("Name:   \"replace_lines\"", "\n// editSyntaxObservation"),
 	} {
 		if n := strings.Count(fn, "checkFallbackSyntax("); n != 0 {
 			t.Errorf("%s still calls the legacy wrapper %d time(s)", name, n)
@@ -2314,9 +2314,9 @@ func TestLegacyCheckerWrapperInventory(t *testing.T) {
 
 	// What is left, named. Two sites, both inside writeFileWithV3: the V3
 	// preflight's own pair is gone, and these belong to candidate revocation.
-	remaining := strings.Count(body, "checkFallbackSyntax(ctx")
+	remaining := strings.Count(toolSources(t), "checkFallbackSyntax(ctx")
 	if remaining != 0 {
-		t.Errorf("unexpected legacy wrapper calls remain in tools.go: %d", remaining)
+		t.Errorf("unexpected legacy wrapper calls remain in the tool files: %d", remaining)
 	}
 	// One producer, one wrapper definition -- no second checker implementation.
 	gates, err := os.ReadFile("gates.go")
@@ -2933,12 +2933,29 @@ func TestRunBackgroundRefusesBeforeItStarts(t *testing.T) {
 
 // toolFiles are the files that hold the tools. A guard over the tools reads
 // them all, so code that moves between them stays under the guard.
-var toolFiles = []string{"tools.go", "tool_read.go", "tool_background.go", "tool_schema.go", "tool_files.go"}
+var toolFiles = []string{"tools.go", "tool_read.go", "tool_background.go", "tool_schema.go", "tool_files.go",
+	"tool_write.go", "tool_write_v3.go", "tool_edit.go", "tool_structural_edit.go"}
 
 func toolSources(t *testing.T) string {
 	t.Helper()
+	return sourcesForTest(t, toolFiles)
+}
+
+// agentFiles are the files that hold the agent loop and its request. A guard
+// over the loop reads them all, as toolFiles does for the tools.
+var agentFiles = []string{"agent.go", "llm_call.go", "model_reply.go", "task_tier.go", "system_prompt.go",
+	"agent_handler.go", "plan_generation.go", "run_end.go", "recovery.go", "fenced_channel.go", "task_intake.go",
+	"gates_exit.go", "loop_turn.go", "loop_checks.go", "loop_results.go"}
+
+func agentSources(t *testing.T) string {
+	t.Helper()
+	return sourcesForTest(t, agentFiles)
+}
+
+func sourcesForTest(t *testing.T, files []string) string {
+	t.Helper()
 	var all strings.Builder
-	for _, file := range toolFiles {
+	for _, file := range files {
 		all.WriteString(readSourceForTest(t, file))
 	}
 	return all.String()

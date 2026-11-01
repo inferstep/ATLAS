@@ -283,11 +283,8 @@ func recordPlanAdherence(ctx *AgentContext, toolName string, args json.RawMessag
 	}
 	// The plan's verify step is satisfied by a passing verification of the
 	// same program, whatever its arguments. The planner names that command by
-	// guess: the smoke run of 2026-09-27 planned `curl http://127.0.0.1:5000`,
-	// the app served on 5001, and the model's passing `curl -sf
-	// http://127.0.0.1:5001/` did not count. The plan gate then demanded the
-	// literal step after the server had been stopped, and a finished, verified
-	// task ended "stopped".
+	// guess: the port it names may not be the one the app serves on, and a
+	// finished, verified task must not end "stopped" over that.
 	if idx < 0 && success && toolName == "run_command" {
 		idx = verifyStepSatisfiedBy(ctx.Plan, ctx.PlanStepsSatisfied, extractToolTarget(toolName, args))
 	}

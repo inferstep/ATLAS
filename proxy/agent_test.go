@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1176,6 +1178,59 @@ func TestSamplePlanContextSkipsNoiseDirs(t *testing.T) {
 	}
 }
 
+// The sample stops at its limit wherever it is reading, and a hit at one level
+// leaves the next level unread.
+func TestThePlanSampleStopsWhereItShould(t *testing.T) {
+	cases := []struct {
+		name  string
+		files []string
+		want  []string
+	}{
+		{"the root stops at the limit",
+			[]string{"app.py", "main.py", "manage.py"},
+			[]string{"app.py", "main.py"}},
+		{"the subfolders stop at the limit",
+			[]string{"a/app.py", "a/main.py", "b/app.py"},
+			[]string{"a/app.py", "a/main.py"}},
+		{"the source files stop at the limit",
+			[]string{"a.py", "b.py", "c.py"},
+			[]string{"a.py", "b.py"}},
+		{"a root hit ends the walk",
+			[]string{"app.py", "sub/main.py"},
+			[]string{"app.py"}},
+		{"a subfolder hit ends the walk",
+			[]string{"sub/app.py", "a.py"},
+			[]string{"sub/app.py"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for _, name := range c.files {
+				path := filepath.Join(dir, name)
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got := slices.Sorted(maps.Keys(samplePlanContext(dir, 2, 2000)))
+			if !slices.Equal(got, c.want) {
+				t.Errorf("sampled %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// Some chat templates refuse a system role in mid-conversation, and the prefix
+// is how the model tells a note from the user.
+func TestASystemNoteGoesAsAUserMessage(t *testing.T) {
+	got := systemNote("the file changed")
+	if got.Role != "user" || got.Content != "[system note]: the file changed" {
+		t.Errorf("got role %q, content %q", got.Role, got.Content)
+	}
+}
+
 func TestShouldGeneratePlanGates(t *testing.T) {
 	cases := []struct {
 		name string
@@ -1668,6 +1723,51 @@ func TestStepExclusions(t *testing.T) {
 			},
 			wantTools: []string{"edit_file", "write_file"},
 			wantExt:   ".html",
+		},
+		{
+			name: "the same refusal from another tool — does not fire",
+			messages: []AgentMessage{
+				{Role: "tool", ToolName: "edit_file", Content: `{"success":false,"error":"File app.py already exists (10 lines)."}`},
+			},
+			wantTools: nil,
+			wantExt:   "",
+		},
+		{
+			name: "a write_file failure of another kind — does not fire",
+			messages: []AgentMessage{
+				{Role: "tool", ToolName: "write_file", Content: `{"success":false,"error":"File app.py is read-only."}`},
+			},
+			wantTools: nil,
+			wantExt:   "",
+		},
+		{
+			name: "a read after the refusal, inside the window — still fires",
+			messages: []AgentMessage{
+				{Role: "tool", ToolName: "write_file", Content: `{"success":false,"error":"File app.py already exists (10 lines)."}`},
+				{Role: "tool", ToolName: "read_file", Content: "x = 1"},
+			},
+			wantTools: []string{"edit_file", "write_file"},
+			wantExt:   ".py",
+		},
+		{
+			name: "no space after the path — does not fire",
+			messages: []AgentMessage{
+				{Role: "tool", ToolName: "write_file", Content: "already exists: File app.py"},
+			},
+			wantTools: nil,
+			wantExt:   "",
+		},
+		{
+			name: "a refusal seven tool results back — out of the window",
+			messages: []AgentMessage{
+				{Role: "tool", ToolName: "write_file", Content: `{"success":false,"error":"File app.py already exists (10 lines)."}`},
+				{Role: "tool", ToolName: "read_file"}, {Role: "tool", ToolName: "read_file"},
+				{Role: "tool", ToolName: "read_file"}, {Role: "tool", ToolName: "read_file"},
+				{Role: "tool", ToolName: "read_file"}, {Role: "tool", ToolName: "read_file"},
+				{Role: "tool", ToolName: "read_file"},
+			},
+			wantTools: nil,
+			wantExt:   "",
 		},
 		{
 			name:      "empty conversation — does not fire",
@@ -2405,10 +2505,24 @@ func TestLastReadIsRestatedAtTheGenerationPoint(t *testing.T) {
 		t.Fatalf("expected a restatement appended, got %d messages", len(got))
 	}
 	last := got[len(got)-1]["content"]
-	for _, want := range []string{"app.py", "1\talpha", "2\tbravo", "NOT in the file"} {
+	for _, want := range []string{"Current contents of app.py (line", "1\talpha", "2\tbravo", "NOT in the file"} {
 		if !strings.Contains(last, want) {
 			t.Errorf("restatement missing %q:\n%s", want, last)
 		}
+	}
+}
+
+// A file outside the workspace has no name relative to it, so the restatement
+// keeps its whole path.
+func TestALastReadOutsideTheWorkspaceKeepsItsWholePath(t *testing.T) {
+	ctx := NewAgentContext(t.TempDir(), Tier1Simple)
+	outside := filepath.Join(t.TempDir(), "app.py")
+	ctx.RecordFileRead(outside, "alpha\n")
+
+	got := appendLastReadRestatementFor(ctx, []map[string]string{{"role": "user", "content": "fix the bug"}}, "")
+
+	if want := "Current contents of " + outside + " (line"; !strings.Contains(got[len(got)-1]["content"], want) {
+		t.Errorf("restatement does not hold %q:\n%s", want, got[len(got)-1]["content"])
 	}
 }
 
@@ -3233,7 +3347,7 @@ func TestADeclaredWorkRequestIsNeverTieredAsAQuestion(t *testing.T) {
 	}
 	// handleAgent applies it once the contract is validated, and resets the
 	// turn cap with it.
-	src, err := os.ReadFile("agent.go")
+	src, err := os.ReadFile("agent_handler.go")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3668,5 +3782,42 @@ func TestProbeSlotReadsTheSlotInUse(t *testing.T) {
 					processed, total, keepProbing, tc.processed, tc.total, tc.keepProbing)
 			}
 		})
+	}
+}
+
+// A tool_call is streamed the moment it parses, before permission and
+// execution. Every exit between that point and the tool_result has to answer
+// the call it announced, or the client is left rendering a spinner for a call
+// that never resolves.
+//
+// Measured 2026-08-03 on multiturn_stats: the repetition breaker stopped the
+// session one line after announcing a call, and the stream carried 12
+// tool_call events against 11 tool_result. endStream exists so the invariant
+// holds at every exit rather than at each one that remembered to; this test
+// keeps a new exit from quietly reintroducing the gap.
+func TestEveryExitAfterAToolCallAnswersIt(t *testing.T) {
+	lines := strings.Split(sourcesForTest(t, []string{"agent.go", "loop_turn.go", "loop_checks.go", "loop_results.go"}), "\n")
+
+	opening, closing := -1, -1
+	for i, ln := range lines {
+		if strings.Contains(ln, "pendingToolCall = parsed.Name") {
+			opening = i
+		}
+		if strings.Contains(ln, `pendingToolCall = ""`) && i > opening && opening != -1 {
+			closing = i
+		}
+	}
+	if opening == -1 || closing == -1 {
+		t.Fatal("could not locate the tool_call announcement and its result; " +
+			"if this moved, move the invariant with it")
+	}
+
+	for i := opening; i < closing; i++ {
+		if strings.Contains(lines[i], `ctx.Stream("done"`) {
+			t.Errorf("a stream ends between announcing a tool_call and answering it, "+
+				"leaving an orphaned call. Use endStream(summary) "+
+				"instead of ctx.Stream(\"done\", ...):\n\t%s",
+				strings.TrimSpace(lines[i]))
+		}
 	}
 }

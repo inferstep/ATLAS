@@ -318,6 +318,30 @@ func TestAFailedCheckIsClearedOnlyByItsOwnPassOrARun(t *testing.T) {
 	}
 }
 
+// A pass is the latest word on the bytes, so what was held against them before
+// it no longer stands.
+func TestAPassEndsTheRedStreakAndTheDrift(t *testing.T) {
+	ctx, dir := sepCtx(t, nil)
+	sepWrite(t, ctx, dir, "app.py", "print('ok')\n")
+
+	st := &runState{driftedAfterVerify: "app.py"}
+	st.observeVerification(ctx, "", 1, "python3 app.py", ranRed("Traceback"))
+	st.observeVerification(ctx, "", 2, "python3 app.py", ranClean("ok\n"))
+	if st.redRunStreak != 0 {
+		t.Errorf("a passing run left a streak of %d", st.redRunStreak)
+	}
+	if st.driftedAfterVerify != "" {
+		t.Errorf("a passing run left the drift on %q", st.driftedAfterVerify)
+	}
+
+	st = &runState{}
+	st.observeVerification(ctx, "", 1, "ruff check app.py", ranRed("E501"))
+	st.observeVerification(ctx, "", 2, "ruff check app.py", ranClean(""))
+	if st.redRunStreak != 0 {
+		t.Errorf("the failing check passing left a streak of %d", st.redRunStreak)
+	}
+}
+
 // A command the client declared is recorded whatever it is, so the
 // declaration can be discharged, and a static one still covers no file.
 func TestADeclaredStaticCommandDischargesItselfAndCoversNothing(t *testing.T) {

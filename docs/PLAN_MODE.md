@@ -59,7 +59,7 @@ API contract documented in [API.md § POST /v3/plan](API.md#post-v3plan).
 |---|---|
 | `proxy/v3_bridge.go` | `callV3PlanStreaming(reqCtx, v3URL, req, onProgress)` — opens the SSE stream, forwards progress events to the callback, returns the final `Plan` from the `event: result` frame. `reqCtx` binds the agent's request context so `/cancel` aborts an in-flight plan. Mirrors `callV3GenerateStreaming` for V3-pipeline runs. |
 | `proxy/types.go` | `V3PlanRequest`, `Plan`, `PlanStep` types. `AgentContext` gains `Plan`, `PlanStepsSatisfied[]`, `PlanOffStreak`, `PlanRevisions`. |
-| `proxy/agent.go` | `samplePlanContext()` walks priority files (app.py, templates/index.html, package.json, …) for the planner. `shouldGeneratePlan()` gates on tier + message length. `generatePlan()` runs the bridge, drops per-token noise, emits `plan_loaded` with the full step list. |
+| `proxy/plan_generation.go` | `samplePlanContext()` walks priority files (app.py, templates/index.html, package.json, …) for the planner. `shouldGeneratePlan()` gates on tier + message length. `generatePlan()` runs the bridge, drops per-token noise, emits `plan_loaded` with the full step list. |
 | `proxy/gates_plan.go` | `matchPlanStep()` (loose tool-name + path-suffix match), `recordPlanAdherence()` (per-tool-call accounting; recon tools — `read_file`/`list_directory`/`find_file`/`search_files` — are neutral: they satisfy no step but never extend `off_streak`), `revisePlan()` (regenerate with `FilesRead` carried forward as extra context). |
 
 The system prompt rendering happens in `buildSystemPrompt`. Plan steps are rendered as a numbered list with a `✓` marker on the verify step only, and the verify step is called out as the "evidence-of-fix" step that the verification gate guards against `done`. (The ☐/✓/⚐ per-step glyphs belong to the TUI rendering — see below.)
@@ -94,10 +94,11 @@ Defined in `proxy/gates_plan.go`:
 
 ## When plan mode is skipped
 
-Two predicates in `shouldGeneratePlan`:
+Three predicates in `shouldGeneratePlan`:
 
 1. **`ctx.Tier == Tier0Conversational`** — trivial chat ("hi", "thanks") never plans.
 2. **`len(message) < 12`** — short acks ("yes do it", "looks good") that depend on the prior turn's plan don't plan again.
+3. **`isReadOnlyRequest(message)`** — a request to look ("list the files") needs no plan, and a wrong plan steers the model into editing.
 
 Outside those, every turn plans. Failures (`/v3/plan` 5xx, network error, all candidates unparseable beyond the fallback) degrade silently — the loop runs without `ctx.Plan`, and the agent loop behaves as it does when plan mode is off.
 
