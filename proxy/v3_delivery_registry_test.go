@@ -22,10 +22,10 @@ var v3DeliveryRouteSteps = map[string][]string{
 		"edit_route_delivery.go:collectEditCandidateEvidence",
 		"edit_route_delivery.go:decideEditCandidateDelivery",
 	},
-	"tools.go:writeFileWithV3": {
-		"tools.go:proposeWriteCandidate",
-		"tools.go:collectWriteCandidateEvidence",
-		"tools.go:decideWriteCandidateDelivery",
+	"tool_write_v3.go:writeFileWithV3": {
+		"tool_write_v3.go:proposeWriteCandidate",
+		"tool_write_v3.go:collectWriteCandidateEvidence",
+		"tool_write_v3.go:decideWriteCandidateDelivery",
 	},
 }
 
@@ -45,7 +45,7 @@ var writeRouteGates = []string{
 // list's order, and each gate stays on it.
 func TestTheWriteRouteRunsItsGatesInTheirOrder(t *testing.T) {
 	var got []string
-	for _, d := range proxyFiles(t)["tools.go"].Decls {
+	for _, d := range proxyFiles(t)["tool_write_v3.go"].Decls {
 		fd, ok := d.(*ast.FuncDecl)
 		if !ok || fd.Name.Name != "applyWriteGates" {
 			continue
@@ -119,9 +119,9 @@ var v3DeliveryRouteSinkCallers = map[string]map[string]string{
 		"authorizeCandidateDelivery": "edit_route_delivery.go:decideEditCandidateDelivery",
 		"deliverCandidateBytes":      "edit_route_delivery.go:deliverEditCandidate",
 	},
-	"tools.go:writeFileWithV3": {
-		"authorizeCandidateDelivery": "tools.go:decideWriteCandidateDelivery",
-		"deliverAuthorizedCandidate": "tools.go:writeFileWithV3",
+	"tool_write_v3.go:writeFileWithV3": {
+		"authorizeCandidateDelivery": "tool_write_v3.go:decideWriteCandidateDelivery",
+		"deliverAuthorizedCandidate": "tool_write_v3.go:writeFileWithV3",
 	},
 }
 
@@ -299,7 +299,7 @@ func TestProseCannotSatisfyTheRegistryGuard(t *testing.T) {
 	if !strings.Contains(string(body), "var v3DeliveryRoutes = map[string]string{") {
 		t.Error("the registry is no longer a typed map")
 	}
-	if registeredV3DeliveryRoute("tools.go:someFunctionMentionedInAComment") {
+	if registeredV3DeliveryRoute("tool_write_v3.go:someFunctionMentionedInAComment") {
 		t.Error("an unregistered site was accepted")
 	}
 }

@@ -254,11 +254,7 @@ func TestScopeRecordCarriesNoContent(t *testing.T) {
 // with their own tool name. A tool that routed around it would be a mutation
 // nothing bounded.
 func TestEveryMutatingRouteDerivesItsOwnScope(t *testing.T) {
-	src, err := os.ReadFile("tools.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := codeWithoutComments(string(src))
+	body := codeWithoutComments(toolSources(t))
 	for _, tool := range []string{"edit_file", "insert_after", "replace_lines"} {
 		if !strings.Contains(body, `runEditPipeline(ctx, "`+tool+`"`) {
 			t.Errorf("%s no longer reaches the protected edit route", tool)

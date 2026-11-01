@@ -25,7 +25,7 @@ import (
 
 // ------------------------------------------------------------------------
 // Trust model (load-bearing — read before "fixing" go/path-injection CodeQL
-// alerts on this file or its helpers in tools.go, context.go, gates.go).
+// alerts on this file or its helpers in the tool files, context.go, gates.go).
 //
 // ATLAS is a single-tenant local-install agent. The proxy runs inside a
 // container whose /workspace mount IS the user's project directory: the
@@ -34,7 +34,7 @@ import (
 // CodeQL flags in agent path joins is almost always ctx.WorkingDir, which
 // is set ONCE at agent startup from the bind mount — not from a per-
 // request input. The few cases where the model emits a path
-// (resolveAgentPath callers in tools.go) go through that resolver, which
+// (resolveAgentPath callers in the tool files) go through that resolver, which
 // translates host-absolute paths into the container view + cleans `..`
 // segments before any os call.
 //

@@ -129,7 +129,7 @@ func dispositionSource(t *testing.T) string {
 }
 
 func TestGuardTheRouteHasADeferredBackstop(t *testing.T) {
-	b, err := os.ReadFile("tools.go")
+	b, err := os.ReadFile("tool_write_v3.go")
 	if err != nil {
 		t.Fatal(err)
 	}

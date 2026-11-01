@@ -520,7 +520,7 @@ func TestBaselineRestoringGatesWithdrawV3Provenance(t *testing.T) {
 // Bytes and provenance must not be assignable independently: every branch
 // that restores the caller's content has to go through the transition.
 func TestNoGateRestoresBaselineWithoutRevoking(t *testing.T) {
-	src, err := os.ReadFile("tools.go")
+	src, err := os.ReadFile("tool_write_v3.go")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -846,13 +846,13 @@ func TestEveryEditToolObeysTheAuthorizationBoundary(t *testing.T) {
 // Structural sentinel: the edit path authorizes through the one gate, and
 // never from the legacy fields.
 func TestEditPathAuthorizesOnlyThroughTheSharedGate(t *testing.T) {
-	src, err := os.ReadFile("tools.go")
+	src, err := os.ReadFile("tool_write_v3.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	body := string(src)
 	improve := body[strings.Index(body, "func improveContentWithV3("):]
-	improve = improve[:strings.Index(improve, "\n// findActualString")]
+	improve = improve[:strings.Index(improve, "\n// runEditPipeline")]
 	pipeline := body[strings.Index(body, "func runEditPipeline("):]
 	pipeline = pipeline[:strings.Index(pipeline, "\n// attachV3")]
 

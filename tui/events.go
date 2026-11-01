@@ -664,7 +664,7 @@ func (m *tuiModel) onV3LLMEnd(ev chatEvent) {
 
 // onV3Progress adds a row of V3 pipeline narration.
 func (m *tuiModel) onV3Progress(ev chatEvent) {
-	// V3 pipeline narration emitted by proxy/tools.go via
+	// V3 pipeline narration emitted by proxy/tool_write_v3.go via
 	// ctx.StreamFn("v3_progress", {message: "..."}). One row per
 	// stage (e.g. "[probe] Generating probe candidate..."). These
 	// were silently dropped in the first cut — without this case

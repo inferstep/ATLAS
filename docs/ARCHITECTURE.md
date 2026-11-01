@@ -448,7 +448,7 @@ A measured reference deployment showed a bias toward `edit_file` over
 embeddings of nearby tool names compete; descriptions matter more than names).
 Four model-independent defenses compose in the proxy:
 
-1. **Description rewrite** (`proxy/tools.go`). edit_file's description
+1. **Description rewrite** (`proxy/tool_edit.go`, `proxy/tool_structural_edit.go`). edit_file's description
    warns against whole-file/whole-function use; structural_edit's description
    says REQUIRED for >10-line / whole-node swaps; write_file's says
    NEW files only.
@@ -564,7 +564,7 @@ Classifier in `proxy/tools.go` (`classifyFileTier`); logic-pattern matcher in th
 
 The exact config-file list and extension sets live in `proxy/tools.go:classifyFileTier`.
 
-`edit_file`, `insert_after` and `replace_lines` enter the pipeline through `runEditPipeline` (`proxy/tools.go`), which ends in `deliverEditCandidate`. `write_file` enters it through `writeFileWithV3`, which calls the V3 service's generation stream itself. `structural_edit` first sends its splice to the V3 service's `/internal/structural_edit`, then makes the same tier decision itself and hands the result to `deliverEditCandidate`, where `runEditPipeline` also ends. In `runEditPipeline` and in `structural_edit`, tier classification uses `max(oldTier, newTier)`, so a destructive edit that shrinks a T2+ file into a T1 stub still qualifies. An edit tool that skips the pipeline gets no candidate generation, whatever the tier, which is the thing the tier system exists to prevent. `tests/contracts/test_write_gate_coverage.py` asserts that each of the five write tools enters the pipeline and runs the same gates: the unresolved-call check, the embedded-script gate and the duplicate-main guard.
+`edit_file`, `insert_after` and `replace_lines` enter the pipeline through `runEditPipeline` (`proxy/tool_write_v3.go`), which ends in `deliverEditCandidate`. `write_file` enters it through `writeFileWithV3`, which calls the V3 service's generation stream itself. `structural_edit` first sends its splice to the V3 service's `/internal/structural_edit`, then makes the same tier decision itself and hands the result to `deliverEditCandidate`, where `runEditPipeline` also ends. In `runEditPipeline` and in `structural_edit`, tier classification uses `max(oldTier, newTier)`, so a destructive edit that shrinks a T2+ file into a T1 stub still qualifies. An edit tool that skips the pipeline gets no candidate generation, whatever the tier, which is the thing the tier system exists to prevent. `tests/contracts/test_write_gate_coverage.py` asserts that each of the five write tools enters the pipeline and runs the same gates: the unresolved-call check, the embedded-script gate and the duplicate-main guard.
 
 **T2 (V3 pipeline)** — file qualifies if it's ≥10 lines AND either:
 - `hasLogicIndicators(content)` returns true — **2+ matches** across pattern families covering function/method definitions, control flow, error handling, Flask/FastAPI/Django routing, Express/Node API, React state/data, validation, database calls, JSX/React component patterns, and imports (the literal token list is in `proxy/tools.go:hasLogicIndicators`)

@@ -432,9 +432,9 @@ func TestEveryProductionConsumerOfProvenanceIsEnumerated(t *testing.T) {
 		"authorization_decision.go:decideAuthorization": true,
 		// The one site that computes the shadow decision beside the live one,
 		// and the one that asks the feasibility question before generation.
-		"tools.go:writeFileWithV3":               true,
-		"tools.go:collectWriteCandidateEvidence": true,
-		"tools.go:decideWriteCandidateDelivery":  true,
+		"tool_write_v3.go:writeFileWithV3":               true,
+		"tool_write_v3.go:collectWriteCandidateEvidence": true,
+		"tool_write_v3.go:decideWriteCandidateDelivery":  true,
 		// The feasibility owner reads only its own closed input set.
 		"feasibility_decision.go:observeInvocationFeasibility": true,
 	}
@@ -456,10 +456,10 @@ func TestTheDeliveryGraphGainedNoCaller(t *testing.T) {
 	allowed := map[string]bool{
 		"v3_bridge.go:v3DeliveryAuthorized":          true,
 		"v3_bridge.go:EvidenceSupportsProvenanceFor": true,
-		"tools.go:proposedV3Candidate":               true,
-		"tools.go:proposeWriteCandidate":             true,
-		"tools.go:emitV3WriteStageEnd":               true,
-		"tools.go:improveContentWithV3":              true,
+		"tool_write_v3.go:proposedV3Candidate":       true,
+		"tool_write_v3.go:proposeWriteCandidate":     true,
+		"tool_write_v3.go:emitV3WriteStageEnd":       true,
+		"tool_write_v3.go:improveContentWithV3":      true,
 	}
 	for _, fn := range deliveryDecisions {
 		for site := range callSites(proxyFiles(t), fn) {
@@ -575,7 +575,7 @@ func TestExactlyOneLiveAuthorizationOwnerAnswersForACandidate(t *testing.T) {
 // is kept. Falling through to the envelope's winner would mean the typed path
 // could be overruled by the thing it exists to check.
 func TestATypedRefusalNeverFallsBackToACandidate(t *testing.T) {
-	src, err := os.ReadFile("tools.go")
+	src, err := os.ReadFile("tool_write_v3.go")
 	if err != nil {
 		t.Fatal(err)
 	}

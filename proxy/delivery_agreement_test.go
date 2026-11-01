@@ -371,7 +371,7 @@ func TestFeasibilityIsReadAtExactlyOnePlace(t *testing.T) {
 	// route must not quietly start skipping generation, and any compute saving
 	// needs its own measurement and its own authorization.
 	want := map[string]bool{
-		"tools.go:writeFileWithV3":                    true,
+		"tool_write_v3.go:writeFileWithV3":            true,
 		"edit_route_delivery.go:deliverEditCandidate": true,
 	}
 	for site := range sites {
@@ -391,7 +391,7 @@ func TestFeasibilityIsReadAtExactlyOnePlace(t *testing.T) {
 func TestNoOtherFileReadsAFeasibilityVerdict(t *testing.T) {
 	files := proxyFiles(t)
 	for name := range files {
-		if name == "feasibility_decision.go" || name == "tools.go" {
+		if name == "feasibility_decision.go" {
 			continue
 		}
 		if strings.Contains(fileText(t, name), ".Feasible") {

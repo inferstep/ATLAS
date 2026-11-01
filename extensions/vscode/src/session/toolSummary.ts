@@ -5,7 +5,7 @@
 // files. The answer to a read-only request IS the tool output, so a chip that
 // shows only that the call succeeded answers nothing.
 //
-// Shapes are per-tool and the proxy is the source of truth (proxy/tools.go
+// Shapes are per-tool and the proxy is the source of truth (proxy/tool*.go
 // output structs). Anything unrecognised falls back to the generic keys the
 // TUI already looks for, so a new tool degrades to "ran" rather than lying.
 

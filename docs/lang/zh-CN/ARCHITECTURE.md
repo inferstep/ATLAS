@@ -295,7 +295,7 @@ run-first 门本身引用一条指令，`runFirstInstruction`：运行该扩展�
 
 一次实测的参考部署显示出一种偏差：即便 `structural_edit` 才是正确选择，模型也倾向于用 `edit_file`（BiasBusters arxiv 2510.00307 —— 相邻工具名的嵌入会相互竞争；描述比名称更重要）。代理中组合了四道与模型无关的防线：
 
-1. **描述重写**（`proxy/tools.go`）。edit_file 的描述
+1. **描述重写**（`proxy/tool_edit.go`、`proxy/tool_structural_edit.go`）。edit_file 的描述
    警告不要用于整文件/整函数；structural_edit 的描述
    声明对 >10 行 / 整节点替换是必需的；write_file 的描述
    声明仅用于新文件。

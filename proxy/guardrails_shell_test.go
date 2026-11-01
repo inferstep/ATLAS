@@ -322,7 +322,7 @@ func TestForegroundServerStartIsRedirectedBeforeItRuns(t *testing.T) {
 	}
 }
 
-// buildToolDescriptionsExcluding is in tools.go. It is the text the model
+// buildToolDescriptionsExcluding is in tool_schema.go. It is the text the model
 // reads when it picks a tool: run_command must say that it waits and that a
 // server belongs to run_background, and run_background must name a server
 // command.

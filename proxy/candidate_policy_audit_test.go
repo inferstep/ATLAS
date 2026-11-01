@@ -303,7 +303,7 @@ func TestDeliveredProvenanceMatchesWhatLanded(t *testing.T) {
 // the only way to reach one.
 func TestEveryByteToDiskRouteStaysRegistered(t *testing.T) {
 	for _, site := range []string{
-		"tools.go:writeFileWithV3",
+		"tool_write_v3.go:writeFileWithV3",
 		"edit_route_delivery.go:deliverEditCandidate",
 		"candidate_delivery.go:deliverAuthorizedCandidate",
 	} {
@@ -311,7 +311,7 @@ func TestEveryByteToDiskRouteStaysRegistered(t *testing.T) {
 			t.Errorf("%s is not a registered delivery route", site)
 		}
 	}
-	if registeredV3DeliveryRoute("tools.go:somethingElse") {
+	if registeredV3DeliveryRoute("tool_write_v3.go:somethingElse") {
 		t.Error("an unregistered site was accepted")
 	}
 }

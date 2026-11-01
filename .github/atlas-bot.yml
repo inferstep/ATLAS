@@ -54,7 +54,7 @@ pull_requests:
   # maintainer's approval.
   core_paths:
     proxy/agent.go: the agent loop
-    proxy/tools.go: the tool handlers
+    proxy/tool*: the tool handlers
     proxy/gates*: the guards
     proxy/guardrails*: the guards
     proxy/permissions.go: the guards

@@ -192,7 +192,7 @@ flowchart LR
 인접한 도구 이름의 임베딩이 경쟁하며, 설명이 이름보다 더 중요함).
 프록시에서 모델 독립적인 네 가지 방어책이 결합됩니다:
 
-1. **설명 재작성**(`proxy/tools.go`). edit_file의 설명은 파일 전체/함수
+1. **설명 재작성**(`proxy/tool_edit.go`, `proxy/tool_structural_edit.go`). edit_file의 설명은 파일 전체/함수
    전체 용도에 대해 경고하고, structural_edit의 설명은 >10줄 / 노드 전체 교체에
    필수(REQUIRED)라고 명시하며, write_file의 설명은 새(NEW) 파일 전용임을
    명시합니다.
