@@ -111,9 +111,9 @@ func writeFileEarlyRefusal(ctx *AgentContext, input WriteFileInput, path string)
 
 	// Echoed write: the content is the file that is already there.
 	// Reproducing data the session already has is never the task,
-	// and it is where the worst measured failure starts — the model
-	// retyping a 2000-line fixture from memory, degenerating into
-	// repetition, and getting its stream cut mid-JSON.
+	// and it is where a bad failure starts: the model retyping a long
+	// fixture from memory, degenerating into repetition, and getting
+	// its stream cut mid-JSON.
 	if existing, err := readRegularFile(path); err == nil {
 		if echoesExistingFile(string(existing), input.Content) ||
 			(ctx.SessionWrites[input.Path] && resendsOwnWrite(string(existing), input.Content)) {
@@ -130,7 +130,7 @@ func writeFileEarlyRefusal(ctx *AgentContext, input WriteFileInput, path string)
 func writeFileTier(ctx *AgentContext, input WriteFileInput) Tier {
 	// Per-file tier classification — determines V3 pipeline activation
 	fileTier := classifyFileTier(input.Path, input.Content)
-	// GH #39 point 2: real cyclomatic complexity from tree-sitter
+	// Real cyclomatic complexity from tree-sitter
 	// can escalate the regex classifier's verdict. Never downgrades.
 	if cc, ok := cyclomaticComplexity(ctx, input.Path, input.Content); ok {
 		if refined := refineTierWithCC(fileTier, cc); refined != fileTier {
@@ -182,15 +182,9 @@ func writeFileByRoute(ctx *AgentContext, input WriteFileInput, path string, file
 // disk, Unknown for a side it did not evaluate, and the refusal if it refused.
 func writeRegressionGate(ctx *AgentContext, input WriteFileInput, path string) (checkOutcome, checkOutcome, *ToolResult) {
 	// Regression protection for existing code, independent of tier
-	// and of whether V3 is configured. The healthy->broken rule
-	// exists to protect WORKING code, but it used to live only
-	// inside branches gated on `fileTier >= Tier2Medium &&
-	// ctx.V3URL != ""` or on an active debug iteration. A small
-	// file, or any file in a session without V3, reached neither and
-	// had valid bytes replaced by invalid ones with no check at all.
-	// Measured black-box through the agent loop: a T1 overwrite
-	// destroyed good bytes whether or not V3 was configured, while
-	// the T2+V3 cell refused the same rewrite.
+	// and of whether V3 is configured: the healthy->broken rule
+	// exists to protect WORKING code, and a small file, or any file
+	// in a session without V3, needs it as much as any other.
 	//
 	// Scope is deliberately narrow, so the three intended policies
 	// survive: a NEW file still lands with a warning (nothing on
@@ -268,12 +262,6 @@ func writeFileThroughV3(ctx *AgentContext, input WriteFileInput, path string, fi
 		// nothing to protect, and rejecting an imperfect fix
 		// guarantees the broken version survives. Same
 		// healthy->broken rule the fast-path below already uses.
-		// Measured twice on the novel benchmark: a broken first
-		// draft landed, the corrective write carried a new syntax
-		// slip, the rejection fed the model a line it could not
-		// act on, and it re-sent byte-identical content until the
-		// repetition breaker ended the session with the ORIGINAL
-		// broken file still on disk.
 		if prior, priorOK := readOriginalForGate(path); priorOK {
 			if baselineCheck.Status == ValidationUnknown {
 				baselineCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, prior).aggregate()
@@ -337,8 +325,8 @@ func writeFileDirectRoute(ctx *AgentContext, input WriteFileInput, path string, 
 		}
 	}
 
-	// #147: the T0/T1 direct path skipped the structural gate — a
-	// sub-10-line .py calling an unimported name landed as verified,
+	// The T0/T1 direct path needs the structural gate too, or a
+	// sub-10-line .py calling an unimported name lands as verified,
 	// the same NameError class the edit path blocks. Structural gate
 	// ONLY (.py-scoped, healthy->broken, fail-open): a syntax gate
 	// here would hard-block legitimate non-parsing T1 content that
@@ -435,7 +423,7 @@ func writeFastPathGates(ctx *AgentContext, input WriteFileInput, path string,
 		}
 		log.Printf("[write_file] %s still unparsable after fast-path write (was already broken) — allowing repair-in-progress", input.Path)
 	}
-	// #147 review finding #1: the fast-path skips V3 (and its
+	// The fast-path skips V3 (and its
 	// structural veto), so it needs the same structural gate
 	// edit_file/structural_edit have — otherwise a fast-path rewrite that
 	// introduces render_template lands as verified and 500s. A new
@@ -494,17 +482,10 @@ func landDirectWrite(ctx *AgentContext, input WriteFileInput, path string, propo
 	// or unreadable — the same case the non-bypassed route lands with
 	// a warning. Land it the same way, and say so.
 	//
-	// Only the SAYING is new. The observation was already overlaid
-	// onto the result below, so the ledger and the completion gate
-	// knew; the model did not. It was handed {"bytes_written":1243}
-	// and nothing else, which reads as a clean write. Measured on
-	// multifile_cli rep2: the model rewrote test_store.py containing
-	// `store.add("Buy milk"")`, was told the write succeeded, ran
-	// pytest, could not reconcile the failure with a write it had
-	// been told was fine, and resent content until the repetition
-	// breaker closed the path — leaving the file unparseable at the
-	// end of the session. The sandbox had answered `valid:false` for
-	// those bytes the whole time.
+	// The observation is overlaid onto the result below, so the ledger
+	// and the completion gate know; the model has to be told too, or
+	// {"bytes_written":1243} reads as a clean write and it cannot
+	// reconcile the failing run with a write it was told was fine.
 	if proposalCheck.Status == ValidationFailed {
 		log.Printf("[write_file] %s: landing an unparseable rewrite with a warning (%s)",
 			logPath(input.Path), safeDiagnosticSummary(proposalCheck.Detail))
@@ -601,8 +582,8 @@ func isActiveDebugIteration(ctx *AgentContext, path string) bool {
 }
 
 // mentionsFilename reports whether `base` appears in text as a whole
-// filename token, not as a substring of a longer name (#147 review finding
-// #12: a.py must not match data.py, main.py must not match domain.py). The
+// filename token, not as a substring of a longer name (a.py must not match
+// data.py, main.py must not match domain.py). The
 // character on each side of a real occurrence must not be a filename
 // character (letter, digit, _, ., -), so `webapp.py` and `app.python` don't
 // count while `./app.py`, `"app.py"`, and ` app.py:12` do.
@@ -641,16 +622,9 @@ func fileIsSourceCode(path string) bool {
 // writeNewFileWithWarning lands syntactically broken content in a file that
 // does not exist yet, and says so, instead of rejecting the write.
 //
-// The rejection was the harness substituting its judgement for execution's.
-// On an EXISTING file it earns its keep: it stops working code being
-// clobbered with garbage. On a new file there is nothing to protect, and the
-// rejection forbids the one loop that measurably works — write it, run it,
-// read the real traceback, fix it. The no-tool baseline arm, whose only
-// feedback IS the traceback, resolves its own syntax errors at 85-100%.
-// Under the rejection the model retried blind against our error message,
-// resent byte-identical content, and the repetition breaker ended the
-// session: three AoC sessions and a novel-arm session all died as
-// "solve.py was never created" — code on hand, nothing on disk.
+// On an EXISTING file a rejection stops working code being clobbered with
+// garbage. On a new file there is nothing to protect, and a rejection forbids
+// the one loop that works: write it, run it, read the real traceback, fix it.
 func writeNewFileWithWarning(path, inputPath, content, synErr string, ctx *AgentContext) (*ToolResult, error) {
 	logMandatoryChecks(ctx, "write_file", inputPath, "syntax failed, landing with a warning")
 	res, err := writeFileRecorded(path, content, ctx)
@@ -658,13 +632,10 @@ func writeNewFileWithWarning(path, inputPath, content, synErr string, ctx *Agent
 		return res, err
 	}
 	// Keyed on the INPUT path: every SessionWrites reader and writer uses the
-	// path as the model sent it (input.Path / wfInput.Path). This helper
-	// briefly keyed on the resolved path, so the session-owned carveout
-	// missed and the model's own CORRECTION of a warned write was rejected
-	// as an overwrite of an unread existing file — fail-forward landed the
-	// broken file and then forbade fixing it. Measured: every early novel-arm
-	// session hit "rejecting write_file over unread existing solve.py"
-	// immediately after a warned write.
+	// path as the model sent it (input.Path / wfInput.Path). Keyed on the
+	// resolved path, the session-owned carveout would miss, and the model's own
+	// CORRECTION of a warned write would be refused as an overwrite of an
+	// unread existing file.
 	ctx.SessionWrites[inputPath] = true
 	out := WriteFileOutput{
 		BytesWritten: len(content),
