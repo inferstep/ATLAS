@@ -119,17 +119,10 @@ func removeDeleteTarget(ctx *AgentContext, rawInput json.RawMessage, shownPath, 
 	// Removal demonstrated. A delete validates nothing: there are no
 	// bytes left to have an opinion about.
 	//
-	// This used to hand the loop a sentinel that ended the session on
-	// the spot, so the model could not narrate after a destructive
-	// operation. It also ended the TASK. Asked to delete a.py and
-	// write report.py, a run that happened to delete first stopped
-	// before report.py was ever attempted, and the outcome turned on
-	// nothing but which tool the model reached for first.
-	//
-	// The delete now returns like any other call. It still cannot
-	// authorise a completion -- the tombstone rule at the real
-	// terminal is unchanged and still fail-closed -- but the run gets
-	// to finish what it was asked to do and be judged on all of it.
+	// The delete returns like any other call, so a task that asks for
+	// more than the delete still gets finished. It cannot authorise a
+	// completion: the tombstone rule at the real terminal stands, and
+	// is fail-closed.
 	return &ToolResult{Success: true, Data: outBytes,
 		MutationStatus:   MutationApplied,
 		ValidationKind:   ValidationKindNone,

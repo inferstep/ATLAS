@@ -695,11 +695,9 @@ func classifyFileTier(filePath, content string) Tier {
 	// Source-code and markup extensions get the benefit of the doubt
 	// at T2 even without obvious logic-pattern matches — naming a file
 	// foo.py / foo.go / foo.html is itself a strong signal that V3's
-	// diverse candidate generation is worth the cost. HTML / JSX
-	// templates used to require ≥150 lines to clear the markup branch,
-	// which made V3 silent on every typical flask/express template
-	// (usually 30–120 lines). Now any file at ≥10 lines with a
-	// recognized code/markup extension goes T2.
+	// diverse candidate generation is worth the cost. HTML / JSX templates
+	// are usually short, so any file at ≥10 lines with a recognized
+	// code/markup extension goes T2.
 	codeExts := map[string]bool{
 		".py": true, ".go": true, ".rs": true,
 		".ts": true, ".tsx": true, ".js": true, ".jsx": true,
@@ -723,7 +721,7 @@ func classifyFileTier(filePath, content string) Tier {
 // timeout). Fail-soft is intentional — the existing regex-based
 // hasLogicIndicators stays the floor; CC only adds signal when available.
 //
-// GH #39 point 2. v1 supports Python only; HTML/JSON/etc. fall through
+// Python only; HTML/JSON/etc. fall through
 // to false here and the proxy uses the regex classifier.
 func cyclomaticComplexity(ctx *AgentContext, path, source string) (int, bool) {
 	if ctx == nil || ctx.V3URL == "" {
@@ -970,14 +968,14 @@ func v3StageToEvent(stage string) string {
 		// but lens vetoed" rather than burying it in v3_progress.
 		return "v3_lens_veto"
 	case "structural_veto":
-		// GH #39 point 1: V3 hard-rejected a sandbox-passing candidate
+		// V3 hard-rejected a sandbox-passing candidate
 		// because tree-sitter found unresolved direct-identifier calls.
 		// Sandbox passes for code with try/except ImportError fallbacks
 		// or dead branches; structural verification doesn't care whether
 		// the unresolved call executes, only that it can't resolve.
 		return "v3_structural_veto"
 	case "call_chain_context":
-		// GH #39 point 3: V3 phase-3 repair built a call-chain context
+		// V3 phase-3 repair built a call-chain context
 		// block for the failing function before invoking PR-CoT /
 		// refinement. Informational — not a veto, just shows the user
 		// that the repair phase has structural context the bare stderr
@@ -1183,15 +1181,12 @@ var syntaxErrorLineRe = regexp.MustCompile(`(?:\bline\s+(\d+)|:(\d+):)`)
 
 // offendingLineNote quotes the line a parse failure names.
 //
-// Measured (family P, cycle 9): the warning said `unmatched ')' (line 33)` and
-// the run rewrote the whole file six times over 530 s, each version carrying
-// the same error at the same line, without ever running it. The line it needed
-// to look at was `@app.route('/items', methods=['GET']))` — one paren too
-// many, visible at a glance and never shown. The number alone asks the model
-// to find the line in a file it is reproducing from memory.
+// The number alone asks the model to find the line in a file it is reproducing
+// from memory, and it can rewrite the whole file again and again with the same
+// error at the same line without ever running it.
 //
 // Information only: nothing is rejected, retried or repaired here, and the
-// write still lands with its warning as before.
+// write still lands with its warning.
 func offendingLineNote(content, synErr string) string {
 	m := syntaxErrorLineRe.FindStringSubmatch(synErr)
 	if m == nil {
