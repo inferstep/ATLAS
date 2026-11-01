@@ -19,6 +19,10 @@ change one thing without reading everything else.
 - **Oversized code doesn't grow.** A function or file on the baseline
   (`.github/code-health-baseline.json`) may shrink but not grow. If your
   change makes one shorter, lower its number in the same pull request.
+- **A folder stays short enough to read.** Over 25 entries, files and
+  sub-folders together, the check prints a note and passes. Split a folder
+  by subject when that helps a reader, and leave it flat when a sub-folder
+  would make it harder to follow.
 
 ## Structure
 
