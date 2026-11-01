@@ -12,9 +12,9 @@ from pathlib import Path
 
 import pytest
 
-from . import go_source
+from .. import go_source
 
-REPO = Path(__file__).resolve().parents[2]
+REPO = Path(__file__).resolve().parents[3]
 
 
 def _truth() -> str:

@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 
 SERVICE_CONFIGS = [
     ("geometric-lens/Dockerfile", "geometric-lens/requirements.txt", "geometric-lens/requirements-lock.txt"),

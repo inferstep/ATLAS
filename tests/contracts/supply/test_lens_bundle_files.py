@@ -13,7 +13,7 @@ from pathlib import Path
 
 from atlas.commands import artifact, lens
 
-REPO = Path(__file__).resolve().parents[2]
+REPO = Path(__file__).resolve().parents[3]
 
 
 def _provenance_bundle_files():

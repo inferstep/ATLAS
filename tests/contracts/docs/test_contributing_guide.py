@@ -2,7 +2,7 @@
 import re
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 GUIDE_PATH = ROOT / ".github" / "CONTRIBUTING.md"
 GUIDE = GUIDE_PATH.read_text(encoding="utf-8")
 

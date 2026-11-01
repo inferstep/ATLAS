@@ -393,7 +393,7 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 
 設定ファイルの正確なリストと拡張子集合は `proxy/tools.go:classifyFileTier` にあります。
 
-すべてのコンテンツ編集ツールは `runEditPipeline`（`proxy/tool_write_v3.go`）を通じてパイプラインに入ります — `edit_file`、`insert_after`、`replace_lines` は直接、`structural_edit` と `write_file` はそれぞれの V3 パス経由。ティア分類は `max(oldTier, newTier)` を使うため、T2+ ファイルを T1 のスタブへ縮小する破壊的な編集も依然として対象になります。これをスキップするツールは、ティアにかかわらず候補生成もレンズスコアリングもない貪欲サンプルを1つだけ生成します。ティアシステムが防ぐために存在するのはまさにそれです。`tests/contracts/test_write_gate_coverage.py` が、すべての書き込みパスがそこに到達することを表明します。
+すべてのコンテンツ編集ツールは `runEditPipeline`（`proxy/tool_write_v3.go`）を通じてパイプラインに入ります — `edit_file`、`insert_after`、`replace_lines` は直接、`structural_edit` と `write_file` はそれぞれの V3 パス経由。ティア分類は `max(oldTier, newTier)` を使うため、T2+ ファイルを T1 のスタブへ縮小する破壊的な編集も依然として対象になります。これをスキップするツールは、ティアにかかわらず候補生成もレンズスコアリングもない貪欲サンプルを1つだけ生成します。ティアシステムが防ぐために存在するのはまさにそれです。`tests/contracts/api/test_write_gate_coverage.py` が、すべての書き込みパスがそこに到達することを表明します。
 
 **T2（V3 パイプライン）** — ファイルが以下の場合に該当:
 - `hasLogicIndicators(content)` が true を返す — 関数/メソッド定義、制御フロー、エラー処理、Flask/FastAPI/Django ルーティング、Express/Node API、React の状態/データ、バリデーション、データベース呼び出し、JSX/React コンポーネントパターン、インポートをカバーするパターンファミリーにわたる **2+ 一致**（リテラルトークンリストは `proxy/tools.go:hasLogicIndicators`）

@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 SETTINGS = ROOT / ".github" / "dependency-review-config.yml"
 SCRIPT = ROOT / "scripts" / "licence_names.py"
 _spec = importlib.util.spec_from_file_location("licence_names", SCRIPT)
