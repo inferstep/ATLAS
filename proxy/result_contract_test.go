@@ -7,7 +7,6 @@ import (
 	"go/parser"
 	"go/printer"
 	"go/token"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -465,10 +464,6 @@ func TestInternalResultsStayFullyClassifiedBehindTheProjection(t *testing.T) {
 // other route, fails here rather than silently reaching the prompt.
 func TestEveryModelFacingSerializationSiteIsInventoried(t *testing.T) {
 	fset := token.NewFileSet()
-	files, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	// The approved ways a result becomes a tool message. Anything else must
 	// be added here deliberately.
@@ -484,10 +479,7 @@ func TestEveryModelFacingSerializationSiteIsInventoried(t *testing.T) {
 	resultish := regexp.MustCompile(`^&?\*?(result|res|toolResult|tr)$`)
 
 	var toolMessages, marshals int
-	for _, name := range files {
-		if strings.HasSuffix(name, "_test.go") {
-			continue
-		}
+	for _, name := range nonTestGoFiles(t) {
 		file, err := parser.ParseFile(fset, name, nil, 0)
 		if err != nil {
 			t.Fatalf("parse %s: %v", name, err)

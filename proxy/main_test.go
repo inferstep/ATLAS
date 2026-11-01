@@ -11,6 +11,7 @@ import (
 	"go/token"
 	"go/types"
 	"io"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -1010,20 +1011,42 @@ func astSites(t *testing.T, match func(ast.Node) bool) []string {
 	return out
 }
 
-// nonTestGoFiles names the package's .go files that are not tests, sorted.
+// nonTestGoFiles names the module's .go files that are not tests, sorted.
 func nonTestGoFiles(t *testing.T) []string {
 	t.Helper()
-	names, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatal(err)
-	}
 	var out []string
-	for _, n := range names {
+	for _, n := range moduleGoFiles(t) {
 		if !strings.HasSuffix(n, "_test.go") {
 			out = append(out, n)
 		}
 	}
 	return out
+}
+
+// moduleGoFiles names every .go file of the module, tests too, as paths from
+// this folder. It walks sub-folders because a guard over one folder stops
+// reading a file that moves into a package, and a check that forbids text
+// then passes in silence. A list of allowed files keeps naming them, so such a
+// move goes red there until the list follows.
+func moduleGoFiles(t *testing.T) []string {
+	t.Helper()
+	var names []string
+	err := filepath.WalkDir(".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() && entry.Name() == "testdata" {
+			return filepath.SkipDir
+		}
+		if !entry.IsDir() && strings.HasSuffix(path, ".go") {
+			names = append(names, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return names
 }
 
 // Step 1 pinned that NOTHING consulted the contract, because Step 1 added

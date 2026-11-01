@@ -7,7 +7,6 @@ import (
 	"go/token"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 )
@@ -53,20 +52,12 @@ func TestARemovedSwitchIsRefused(t *testing.T) {
 
 // Nothing in the product reads a switch that turns V3 or its gates off.
 func TestNoProductionCodeTurnsV3Off(t *testing.T) {
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		t.Fatal(err)
-	}
 	banned := map[string]bool{
 		"BypassV3": true, "V3Mode": true, "V3Bypassed": true, "V3GenerationEnabled": true,
 		"V3PlanningEnabled": true, "FeasibilityMode": true, "generationSkipped": true,
 	}
 	fset := token.NewFileSet()
-	for _, e := range entries {
-		n := e.Name()
-		if !strings.HasSuffix(n, ".go") || strings.HasSuffix(n, "_test.go") {
-			continue
-		}
+	for _, n := range nonTestGoFiles(t) {
 		f, err := parser.ParseFile(fset, n, nil, 0)
 		if err != nil {
 			t.Fatal(err)

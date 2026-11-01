@@ -5,7 +5,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -127,14 +126,7 @@ func proxyFiles(t *testing.T) map[string]*ast.File {
 	t.Helper()
 	fset := token.NewFileSet()
 	out := map[string]*ast.File{}
-	names, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, n := range names {
-		if strings.HasSuffix(n, "_test.go") {
-			continue
-		}
+	for _, n := range nonTestGoFiles(t) {
 		f, err := parser.ParseFile(fset, n, nil, 0)
 		if err != nil {
 			t.Fatalf("parse %s: %v", n, err)

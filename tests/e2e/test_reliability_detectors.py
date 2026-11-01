@@ -414,7 +414,7 @@ def test_the_mutation_gates_depend_on_no_switch():
     generation off: the three the proxy had are gone.
     """
     sources = {p.name: p.read_text()
-               for p in (REPO / "proxy").glob("*.go")
+               for p in (REPO / "proxy").rglob("*.go")
                if not p.name.endswith("_test.go")}
     gates = _go_funcs(sources["gates.go"])
     for fn, route in _MUTATION_GATES.items():

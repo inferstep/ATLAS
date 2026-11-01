@@ -497,15 +497,7 @@ func TestTheRoutesHandTheirFactsToTheOneAuthorizationOwner(t *testing.T) {
 
 // No approval prompt exists for a candidate, in any form.
 func TestNoCandidateApprovalSurfaceExists(t *testing.T) {
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, e := range entries {
-		n := e.Name()
-		if !strings.HasSuffix(n, ".go") || strings.HasSuffix(n, "_test.go") {
-			continue
-		}
+	for _, n := range nonTestGoFiles(t) {
 		src, err := os.ReadFile(n)
 		if err != nil {
 			t.Fatal(err)

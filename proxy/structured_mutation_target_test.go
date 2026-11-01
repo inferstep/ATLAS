@@ -275,13 +275,8 @@ func TestTheStructuredTargetReadsNoProseAndNoContractField(t *testing.T) {
 // verification producer, which asks it only whether declared commands
 // should run against a target a grant could later be minted for.
 func TestStructuredMutationTargetOwnership(t *testing.T) {
-	entries, _ := os.ReadDir(".")
 	readers := map[string]bool{}
-	for _, e := range entries {
-		n := e.Name()
-		if e.IsDir() || !strings.HasSuffix(n, ".go") || strings.HasSuffix(n, "_test.go") {
-			continue
-		}
+	for _, n := range nonTestGoFiles(t) {
 		if strings.Contains(readSourceForTest(t, n), "structuredMutationTargetGrounds(") {
 			readers[n] = true
 		}
