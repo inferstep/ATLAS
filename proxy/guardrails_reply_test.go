@@ -635,15 +635,6 @@ func textReply(s string) map[string]interface{} {
 	return map[string]interface{}{"type": "text", "content": s}
 }
 
-func writeWorkspaceFiles(t *testing.T, dir string, files map[string]string) {
-	t.Helper()
-	for name, src := range files {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
 // Each kind of final reply ends the run with its own status and reason. A
 // reply that defers work, or hands an avoidable question back to the user, is
 // sent back to the model ("gate" events) a bounded number of times, and never
@@ -760,7 +751,7 @@ func TestEachReplyKindEndsTheRunWithItsOwnStatus(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			writeWorkspaceFiles(t, dir, tc.workspace)
+			writeTree(t, dir, tc.workspace)
 			ctx, turns, census, terminal := termFixture(t, dir, tc.request, termCeiling,
 				func(i int, _ string) map[string]interface{} {
 					return tc.replies[min(i, len(tc.replies)-1)]
