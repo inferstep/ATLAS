@@ -264,7 +264,7 @@ func (loop *agentLoop) recordCallResult(turn int, parsed ModelResponse, intentAr
 			truncateStr(parsed.Name, 64), truncateStr(result.Error, 240))
 		recordFailedToolCall(ctx, parsed.Name,
 			retryIdentityArgs(parsed.Name, intentArgs, parsed.Args), result.Error)
-		// C4: a replacement refused while the file it targeted stayed
+		// A replacement refused while the file it targeted stayed
 		// valid. The second distinct proposal against one generation
 		// is the evidence that the refusal text alone is not landing,
 		// and the answer rides on the SAME result -- one call, one
@@ -379,9 +379,9 @@ func reportLiteralRepair(ctx *AgentContext, result *ToolResult, path, lp, fixed 
 	// Stated in the result the model is about to read
 	// -- a note, not a corrective turn -- so a change to
 	// what it sent is never silent. The ledger follows
-	// the bytes: without this, the session's own next
-	// edit of the file was refused as "modified since
-	// last read", and the write's verdict described
+	// the bytes: otherwise the session's own next edit
+	// of the file would be refused as "modified since
+	// last read", and the write's verdict would describe
 	// bytes no longer on disk.
 	noteContentChange(result, fmt.Sprintf(
 		"After the write, spacing inside %d line(s) was changed to match text the user stated exactly: %s",
@@ -410,12 +410,9 @@ func (loop *agentLoop) recordCallEffects(turn int, parsed ModelResponse, result 
 		st.madeProductiveChange = true
 		st.productiveChanges++
 		// A write AFTER a successful verification un-verifies the
-		// run: what was checked is no longer what is on disk. Three
-		// novel-benchmark sessions ran a working version, rewrote
-		// it, and exited — the checker then found a traceback the
-		// session never saw, because nothing demanded a re-run of
-		// the final artifact. Verification is of an artifact, not
-		// of a session.
+		// run: what was checked is no longer what is on disk, and the
+		// final artifact can fail where the checked version passed.
+		// Verification is of an artifact, not of a session.
 		if st.verifiedThisLoop {
 			log.Printf("[agent] %s after verification — the final artifact is unverified, re-arming the gate", parsed.Name)
 			st.verifiedThisLoop = false
@@ -601,9 +598,9 @@ func (loop *agentLoop) answerToolCall(turn int, response string, parsed ModelRes
 	// regression earlier in this iteration, append the corrective
 	// NOW so the next LLM call sees it after the tool result.
 	// Role MUST be "user" — some Jinja chat templates enforce
-	// "System message must be at the beginning" and rejects any
-	// system role appended mid-conversation, which previously
-	// crashed the next LLM call with a 500. The "[system note]:"
+	// "System message must be at the beginning" and reject any
+	// system role appended mid-conversation, which fails the next
+	// LLM call with a 500. The "[system note]:"
 	// prefix is how the model knows it's loop-machinery feedback,
 	// not an actual user instruction.
 	// Loop-health correctives, queued in signal order (lens
@@ -623,8 +620,7 @@ func (loop *agentLoop) answerToolCall(turn int, response string, parsed ModelRes
 		})
 		// The lens scored the SUBMITTED bytes, before execution. They
 		// are not on disk, so "your last write ... do not re-issue it"
-		// is advice about a file that does not exist -- and it was the
-		// instruction both adopting sessions acted on. The score is
+		// is advice about a file that does not exist. The score is
 		// still recorded and still counts toward the history; what is
 		// dropped is telling the model to act on it.
 		if steers.lens != "" {
@@ -657,11 +653,10 @@ func (loop *agentLoop) answerToolCall(turn int, response string, parsed ModelRes
 // trackReadOnlyCalls counts read-only calls in a row, for the exploration
 // budget, and notes that the model looked at the project.
 //
-// Track consecutive read-only calls to detect exploration loops.
 // outline_file/find_file MUST be here too — otherwise an
-// interleaved outline resets the counter and the model
-// read→outline→read→outline forever without the breaker firing
-// (observed live with a compact reasoning model). Every navigation-only tool counts.
+// interleaved outline resets the counter and the model goes
+// read→outline→read→outline forever without the breaker firing.
+// Every navigation-only tool counts.
 func (loop *agentLoop) trackReadOnlyCalls(parsed ModelResponse, result *ToolResult) {
 	st := loop.st
 	isReadOnly := parsed.Name == "read_file" ||
@@ -688,7 +683,7 @@ func (loop *agentLoop) trackReadOnlyCalls(parsed ModelResponse, result *ToolResu
 // run_background: a broken inline test, the frame of a traceback, a missing
 // module, a missing command or a file name that differs only in case.
 //
-// Option 3 (issue #39): traceback → directed edit. When a
+// Traceback → directed edit. When a
 // run_command surfaced a Python traceback, mechanically extract
 // the fix site and hand the model a directed instruction ("fix
 // function X here") instead of leaving it to localize — the step
@@ -781,35 +776,28 @@ func noteCrossFileCoherence(ctx *AgentContext, turn int, parsed ModelResponse, r
 // nudgeAfterV3Delivery tells the model what V3's delivery of a write or an edit
 // established, from the proxy's own evidence.
 //
-// Say what V3's delivery established, from the proxy's own
-// evidence. Compact models otherwise keep grinding after V3
+// Compact models otherwise keep grinding after V3
 // delivers: re-read the file, edit unrelated functions, run
-// another V3 cycle (~110s each), so the run is told where it
-// stands. But a phase name is not a run: phase1 can be reached by
-// agreement between candidates, or on a compile, with nothing ever
-// running the code. The nudge used to say "verified ...
-// build-checked ... respond NOW with done" on those too. It now
-// says the edit works only when a current run shows it
-// (pathCoverageSatisfied, which also reads the evidence V3's
-// delivery staged), and otherwise asks for that run.
+// another V3 cycle, so the run is told where it stands. But a
+// phase name is not a run: phase1 can be reached by agreement
+// between candidates, or on a compile, with nothing ever
+// running the code. So the nudge says the edit works only when
+// a current run shows it (pathCoverageSatisfied, which also
+// reads the evidence V3's delivery staged), and otherwise asks
+// for that run.
 // "none" is the phase a run reports when nothing passed, and it
-// is not the empty string — so this fired on every unverified
-// fallback and told the model its code was build-checked when
-// no candidate had passed anything. Measured across one
-// 28-session run: 0 of 44 candidates passed the sandbox and
-// this nudge fired 11 times, each one pushing the model to stop
-// working on a file that had failed verification.
+// is not the empty string. Read as a phase, it would tell the
+// model its code was build-checked when no candidate had passed
+// anything, and push it to stop working on a file that failed
+// verification.
 func nudgeAfterV3Delivery(ctx *AgentContext, parsed ModelResponse, result *ToolResult, superseded supersededWrite, wasSuperseded bool) {
 	if result.Success && result.V3Used && verifiedPhase(result.PhaseSolved) &&
 		(parsed.Name == "write_file" || parsed.Name == "edit_file") {
 		// Two shapes, because there are two situations. When the
-		// delivered bytes ARE the model's own, the original nudge is
-		// unchanged. When they are not, telling it not to re-read is
-		// telling it not to look at the only copy that matters, and
-		// "respond NOW with done" would have it certify content it has
-		// never seen. Measured: both sessions that adopted a candidate
-		// were sent the second situation's context with the first
-		// situation's instruction.
+		// delivered bytes ARE the model's own, the nudge stands. When
+		// they are not, telling it not to re-read is telling it not to
+		// look at the only copy that matters, and "respond NOW with
+		// done" would have it certify content it has never seen.
 		var landed struct {
 			Path string `json:"path"`
 		}
@@ -824,10 +812,9 @@ func nudgeAfterV3Delivery(ctx *AgentContext, parsed ModelResponse, result *ToolR
 			Role:    "user",
 			Content: nudge,
 		})
-		// Name what landed, not what was proposed. This line used to
-		// print the SUBMITTED args, so a reader of a session where a
-		// candidate replaced them saw the superseded content's hash
-		// and size described as the thing V3 verified.
+		// Name what landed, not what was proposed: when a candidate
+		// replaced the submitted args, their hash and size are not
+		// what V3 verified.
 		if wasSuperseded {
 			log.Printf("[agent] V3 %s delivered its own %s (%dB, not the %dB submitted) — pointing the model at what landed",
 				parsed.Name, logPath(superseded.Path),
@@ -850,12 +837,10 @@ func askForAKnownResponseType(ctx *AgentContext, parsed ModelResponse) {
 
 // endOutOfTurns ends a run that used all its turns, with what the run found.
 //
-// Running out of turns is not a reason to say nothing. This path used to
-// stream an `error` and return, so a user who asked a question and whose
-// turn hit the cap saw an empty reply — no answer, no partial, no
-// explanation. Observed on a fresh workspace with "how does the contact
-// form work?": four searches, cap reached, zero bytes back. Every other
-// loop exit authors a summary; this one has to as well.
+// Running out of turns is not a reason to say nothing: an `error` alone would
+// leave a user who asked a question with an empty reply — no answer, no
+// partial, no explanation. Every other loop exit authors a summary; this one
+// has to as well.
 func (loop *agentLoop) endOutOfTurns() {
 	ctx, st := loop.ctx, loop.st
 	log.Printf("[agent] max turns (%d) exceeded for %s — returning what the run found", ctx.MaxTurns, ctx.Tier)

@@ -146,8 +146,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				// Force the structural_edit steer on the FIRST miss for structured
 				// files — small models bail to run_command after a single
 				// edit_file miss rather than retrying, so waiting for a
-				// second miss never fires (observed: 1 edit_file all session,
-				// then 9 run_command re-runs).
+				// second miss never fires.
 				if editMissByPath[mp] >= 1 && (ext == ".py" || ext == ".html" || ext == ".htm") {
 					var source string
 					if b, rerr := os.ReadFile(resolveAgentPath(ctx, mp)); rerr == nil {
@@ -215,12 +214,10 @@ func fetchFencedContent(ctx *AgentContext, rawCall, path string) (string, error)
 		}
 		attemptStart := time.Now()
 		// Attempt 0 constrains decoding to the contract the note describes:
-		// one fenced block with the requested tag. Probe M (stabilization
-		// cycle 4): 44 of 49 captured sub-calls returned clean usable content
-		// that way, against 19 of 49 as free text, with no empty replies at
-		// all (27 of 49 as free text) and a median of 12 s against 60 s.
-		// A later attempt drops the grammar, so a server that refuses it
-		// still gets the free-text request this channel has always sent.
+		// one fenced block with the requested tag. That returns clean usable
+		// content far more often than free text, with fewer empty replies, in
+		// less time. A later attempt drops the grammar, so a server that
+		// refuses it still gets a free-text request.
 		grammar := fenceBlockGrammar(tag)
 		current, _ := os.ReadFile(resolveAgentPath(ctx, path)) // absent: a new file
 		if attempt > 0 || !fencedGrammarFits(string(current)) {

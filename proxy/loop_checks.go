@@ -18,18 +18,14 @@ import (
 //
 // The repetition detector has to judge what the MODEL sent, and
 // `parsed.Args` does not stay that. Fenced resolution rewrites it
-// with the fetched file body further down, so by the time the
-// detector runs it is fingerprinting bytes the model never wrote --
-// bytes that differ on every attempt, while the call itself is
-// byte-identical each time. That is why the seven-turn @fenced
-// loops in the frozen run reached the 600s cap with the detector
-// silent: the instrument built to catch exactly that repetition
-// was reading the output of the channel that resolved it.
+// with the fetched file body further down, so a detector reading it
+// would fingerprint bytes that differ on every attempt while the call
+// itself stays byte-identical, and stay silent on the very repetition
+// it exists to catch.
 //
-// Snapshotting here, before anything can rewrite it, is the whole
-// fix. The copy is used for the signature and nothing else: the
-// fetched bytes still drive the mutation, the gates, the ledger
-// and the write, exactly as before.
+// The copy made here is used for the signature and nothing else: the
+// fetched bytes still drive the mutation, the gates, the ledger and
+// the write.
 func announceToolCall(ctx *AgentContext, turn int, parsed ModelResponse) json.RawMessage {
 	intentArgs := append(json.RawMessage(nil), parsed.Args...)
 	ctx.Stream("tool_call", map[string]interface{}{
@@ -73,15 +69,11 @@ func (loop *agentLoop) screenBeforeWorkspaceCheck(turn int, response string, par
 func (loop *agentLoop) refuseOutsideWorkspace(parsed ModelResponse, intentArgs json.RawMessage, rejection string) bool {
 	ctx, st := loop.ctx, loop.st
 	st.bounceToolCall(ctx, parsed.Name, rejection)
-	// A refusal here is a failed call, and this branch returned
-	// before everything that counts one -- including the only
-	// reader of the counter it incremented. It is the fourth
-	// early-refusal branch with that shape, after the per-path
-	// ban, the retry ban and the fenced bounce.
-	//
-	// Measured: a session whose workspace root did not exist
-	// refused the same byte-identical find_file 60 times over its
-	// whole budget, with no intervention, no log line and no
+	// A refusal here is a failed call, so it goes through what
+	// counts one, including the only reader of the counter it
+	// increments. Otherwise a session whose workspace root does
+	// not exist can refuse the same byte-identical find_file for
+	// its whole budget, with no intervention, no log line and no
 	// terminal of its own.
 	if loop.accountRefusedCall(parsed.Name, intentArgs, rejection,
 		workspaceRefusalPath(ctx, parsed.Name, parsed.Args)) {
@@ -109,9 +101,9 @@ func (loop *agentLoop) screenAfterWorkspaceCheck(turn int, response string, pars
 	// has parsed, canonicalised and cleared the workspace boundary,
 	// and the structured intent is recorded -- so a refusal, a denial,
 	// a timeout or a cancel all leave the debt standing and the run
-	// cannot call itself finished. Asking earlier meant a refused
-	// deletion owed nothing: a session whose only act was trying to
-	// remove a non-empty directory reported completed.
+	// cannot call itself finished. Asked any earlier, a refused deletion
+	// would owe nothing, and a run whose only act was that refused
+	// deletion would report completed.
 	if parsed.Name == "delete_file" {
 		if outcome := loop.askPermission(turn, response, *parsed, intentArgs); outcome != turnContinues {
 			return outcome
@@ -150,13 +142,11 @@ func (loop *agentLoop) askPermission(turn int, response string, parsed ModelResp
 			denial := permissionDenial(ctx, permCallID(turn))
 			ctx.Stream("permission_denied",
 				permissionDeniedEvent(parsed.Name, denial))
-			// A refusal here is a failed call like any other, and this
-			// branch returned before everything that counts one. It
-			// matters more now that a deletion always reaches the
-			// handshake: a model repeating a delete of a path the
-			// preflight refuses gets denied every time, and without
-			// accounting it repeats until the turn cap -- measured at
-			// 21 turns with no terminal of ATLAS's own.
+			// A refusal here is a failed call like any other, so it is
+			// counted like one. A deletion always reaches the handshake,
+			// and a model repeating a delete of a path the preflight
+			// refuses is denied every time: without this it repeats until
+			// the turn cap, with no terminal of ATLAS's own.
 			if loop.accountRefusedCall(parsed.Name, intentArgs,
 				denial,
 				workspaceRefusalPath(ctx, parsed.Name, parsed.Args)) {
@@ -165,8 +155,7 @@ func (loop *agentLoop) askPermission(turn int, response string, parsed ModelResp
 			// A denied call still produced a result the model reads,
 			// so it owes the stream one too. Without this the run
 			// emits more tool_calls than tool_results, which every
-			// balance check treats as a dropped call -- invisible
-			// until deletion started always routing through here.
+			// balance check treats as a dropped call.
 			// The call is answered, so it is no longer pending; the
 			// terminal must not flush a second "not run" result for it.
 			st.pendingToolCall = ""
@@ -196,11 +185,8 @@ func (loop *agentLoop) askPermission(turn int, response string, parsed ModelResp
 }
 
 // refuseTruncatedArgs refuses a write_file, edit_file or run_command whose
-// arguments do not parse, before anything runs. Three in a row end the run.
-//
-// Fix C: Detect truncated args BEFORE execution.
-// If the args JSON doesn't parse, don't attempt execution —
-// tell the model to use smaller edits instead.
+// arguments do not parse, before anything runs, and tells the model to use
+// smaller edits. Three in a row end the run.
 func (loop *agentLoop) refuseTruncatedArgs(turn int, parsed ModelResponse) turnOutcome {
 	ctx, st := loop.ctx, loop.st
 	if parsed.Name == "write_file" || parsed.Name == "edit_file" || parsed.Name == "run_command" {
@@ -253,12 +239,8 @@ func (loop *agentLoop) runFirstGateForEdits(parsed ModelResponse) turnOutcome {
 // prepareWriteFile runs the write_file preflight: the run-first gate, then the
 // resolution of a fenced body.
 //
-// write_file preflight. Order matters: the run-first gate is
-// checked BEFORE fenced resolution, because "@fenced" resolution
-// costs a full model sub-call — paying that for a write the gate
-// is about to bounce is pure waste (audit finding: the gate sat
-// after resolution and every bounced warned-file rewrite burned
-// a generation first).
+// Order matters: "@fenced" resolution costs a full model sub-call, and
+// paying that for a write the gate is about to bounce is pure waste.
 func (loop *agentLoop) prepareWriteFile(turn int, parsed *ModelResponse, intentArgs json.RawMessage) turnOutcome {
 	if parsed.Name == "write_file" {
 		var wfInput WriteFileInput
@@ -278,14 +260,12 @@ func (loop *agentLoop) prepareWriteFile(turn int, parsed *ModelResponse, intentA
 func (loop *agentLoop) runFirstGateForWrite(wfInput WriteFileInput) turnOutcome {
 	ctx, st := loop.ctx, loop.st
 	if st.pendingWarnedRun[wfInput.Path] {
-		// The gate has already said this once. Saying it again
-		// while the same call stays available is the C5 shape:
-		// in the frozen run the demand repeated until its
-		// bounce budget ran out and the identical writes
-		// resumed. On the recurrence the model gets what it
-		// has been unable to get for itself -- the file as it
-		// actually is -- and the call that made no progress is
-		// held back until it changes.
+		// The gate has already said this once. Repeating it while the
+		// same call stays available only spends its bounce budget, and
+		// then the identical writes resume. On the recurrence the
+		// model gets what it has been unable to get for itself -- the
+		// file as it actually is -- and the call that made no progress
+		// is held back until it changes.
 		if msg := fencedRunFirstRecovery(ctx, st, wfInput.Path, wfInput.Content); msg != "" {
 			st.bounceToolCall(ctx, "write_file", msg)
 			return turnEnds
@@ -352,22 +332,15 @@ func (loop *agentLoop) replaceFencedSentinel(turn int, parsed *ModelResponse, in
 	//   * a complete body, bare or in its own fence — use it
 	//   * a body cut off mid-emission, which is precisely
 	//     what the JSON channel does and the whole reason
-	//     @fenced exists. Trusting that wrote truncated
-	//     programs to disk: `@fenced\n```python\nprint(`
-	//     had its fence line removed by the sanitizer and
-	//     landed as a one-line `print(`, so the session
-	//     shipped a file that could not parse and then
-	//     repeated the identical write for five more turns.
-	//     Measured at 6 of 20 create sessions.
+	//     @fenced exists. Trusting that writes a truncated
+	//     program to disk: `@fenced\n```python\nprint(`
+	//     has its fence line removed by the sanitizer and
+	//     lands as a one-line `print(`.
 	//
 	// Only protocol framing decides. An unterminated
 	// fence is one incomplete shape; a BARE body with no
-	// fence at all is the other, and it was accepted
-	// unconditionally until now. Across the sealed
-	// Stage-A run every inlined body was bare, so the
-	// unterminated check never fired once and the
-	// unframed case wrote 1106 truncated bytes that
-	// parsed cleanly. See classifyFencedPayload.
+	// fence at all is the other, and a truncated bare body
+	// can still parse cleanly. See classifyFencedPayload.
 	inline := strings.TrimLeft(strings.TrimPrefix(trimmed, "@fenced"), " \t\r\n")
 	resolved, framed, why := resolveInlineFencedBody(inline)
 	if framed {
@@ -421,9 +394,8 @@ func (loop *agentLoop) refuseFencedFetch(turn int, parsed ModelResponse, intentA
 		// The channel is off for the rest of the run;
 		// telling the model to try fenced again would
 		// only stall. Steer it to inline, the safe path.
-		// Say where the stall was: this fetch's own
-		// stall used to be reported as "earlier in
-		// this run" (#254).
+		// Say where the stall was, so this fetch's own stall
+		// is not reported as "earlier in this run".
 		when := "stalled earlier in this run"
 		if ctx.FencedStalls > stallsBefore {
 			when = "stalled on this file just now (it sent no content)"
@@ -433,21 +405,15 @@ func (loop *agentLoop) refuseFencedFetch(turn int, parsed ModelResponse, intentA
 			when, wfInput.Path)
 	}
 	st.bounceToolCall(ctx, "write_file", fencedBounce)
-	// A refusal here is a failed call like any
-	// other, and this branch returned before every
-	// mechanism that counts one. The same defect
-	// was found at the per-path ban and at the
-	// retry ban; this is the third instance, and
-	// the one the frozen run paid for: debounce2
-	// re-sent this call 147 times over 570s with
-	// the allowance correctly refusing all but
-	// four generations and nothing bounding the
-	// TURNS.
+	// A refusal here is a failed call like any other, and it has
+	// to reach every mechanism that counts one. Otherwise a model
+	// can re-send this call for its whole budget while the
+	// allowance correctly refuses each generation and nothing
+	// bounds the TURNS.
 	//
-	// A run that ended because the client left, or
-	// because the work deadline fired, is not a
-	// model repeating itself, and those paths keep
-	// their own terminals.
+	// A run that ended because the client left, or because the
+	// work deadline fired, is not a model repeating itself, and
+	// those paths keep their own terminals.
 	if ctx.Ctx == nil || ctx.Ctx.Err() == nil {
 		// The intent, not the resolved args: this
 		// call is byte-identical every time the
@@ -482,9 +448,6 @@ func (loop *agentLoop) guardExistingFileWrite(parsed ModelResponse, intentArgs j
 		// success branch below, so a read that fails for any
 		// reason other than "the file is genuinely new" silently
 		// disarms all of them and the write lands unguarded.
-		// A ~100-line file was replaced by three lines this way
-		// with no guard log at all, and the guard has never once
-		// fired in a full session log.
 		log.Printf("[agent] write_file pre-check could not read %q (resolved %q): %v — existing-file guards are NOT applied to this write",
 			wfInput.Path, existingPath, readErr)
 	}
@@ -512,12 +475,9 @@ func (loop *agentLoop) guardExistingFileWrite(parsed ModelResponse, intentArgs j
 		// structural_edit already demand a read first; this
 		// closes the one path that did not.
 		//
-		// Observed twice: given a 1-line puzzle input, the
-		// model recognised the puzzle from training, wrote the
-		// canonical textbook example over the real input
-		// without reading it, and solved the wrong data while
-		// honestly reporting "created input.txt with sample
-		// data".
+		// A model that recognises a small input can otherwise
+		// write the textbook example over the real file without
+		// reading it, and solve the wrong data.
 		if isUnreadOverwrite(ctx, existingPath, corrupted, sessionOwned) {
 			return loop.refuseUnreadOverwrite(parsed, intentArgs, wfInput, existingPath, existingLines)
 		}
@@ -554,11 +514,9 @@ func (loop *agentLoop) refuseUnreadOverwrite(parsed ModelResponse, intentArgs js
 	// Steering, not a verdict on the work: the model
 	// is being sent to a better tool. But a model that
 	// ignores the steer repeats the same refused write
-	// forever -- measured at 31 turns in a healthy
-	// workspace with no terminal of ATLAS's own -- so
-	// the ignored steer is accounted like any other
-	// refused call. A model that follows it pays
-	// nothing further: the next call is a different
+	// forever, so the ignored steer is accounted like
+	// any other refused call. A model that follows it
+	// pays nothing further: the next call is a different
 	// action on the path and clears the state.
 	if loop.accountRefusedCall("write_file", intentArgs, rejection,
 		workspaceRefusalPath(ctx, "write_file", parsed.Args)) {
@@ -573,7 +531,7 @@ func (loop *agentLoop) refuseUnreadOverwrite(parsed ModelResponse, intentArgs js
 func (loop *agentLoop) refuseWholeFileRewrite(parsed ModelResponse, intentArgs json.RawMessage, wfInput WriteFileInput,
 	existingPath string, existingLines int) turnOutcome {
 	ctx, st := loop.ctx, loop.st
-	// GH #39: when the existing file is .py or .html
+	// When the existing file is .py or .html
 	// and the model is replacing the whole thing,
 	// structural_edit is the right tool — selector-based
 	// node replacement, no old_str literal, no
@@ -653,8 +611,8 @@ func (loop *agentLoop) redirectForegroundServer(parsed ModelResponse, intentArgs
 				st.bounceToolCall(ctx, "run_command", rejection)
 				// Counted like every other refusal, so a model that
 				// re-sends it meets the identical-retry refusal and the
-				// failure bounds. Measured: 20 identical re-sends, each
-				// bounced, until the session deadline.
+				// failure bounds instead of re-sending until the session
+				// deadline.
 				if loop.accountRefusedCall(parsed.Name, intentArgs, rejection,
 					workspaceRefusalPath(ctx, parsed.Name, parsed.Args)) {
 					return runEnds
@@ -722,9 +680,8 @@ func (loop *agentLoop) refuseUnsafeRunBackground(parsed ModelResponse, intentArg
 // countWholeFileWrites counts each write_file per path, and reports whether
 // this one is the write that reaches the runaway threshold.
 //
-// Runaway backstop (#147 review #14): count writes per path and
-// force the repeat path once a single file is rewritten far more
-// than any real iteration would.
+// Runaway backstop: force the repeat path once a single file is rewritten
+// far more than any real iteration would.
 func (loop *agentLoop) countWholeFileWrites(parsed ModelResponse) bool {
 	const runawayWriteThreshold = 20
 	runawayWrite := false
@@ -753,10 +710,9 @@ func (loop *agentLoop) refuseBannedTool(turn int, parsed ModelResponse) turnOutc
 		st.bounceToolCall(ctx, parsed.Name, toolBanNoteFor(ctx, parsed.Name, p))
 		loop.consecutiveErrors++
 		loop.totalFailures++
-		// A bounce off the ban is a failure like any other. This
-		// branch incremented the counters and then continued without
-		// reading them, so the ceiling could not end a session that
-		// only ever bounced here — measured at 19 and 85 bounces.
+		// A bounce off the ban is a failure like any other, so the
+		// counters are read here too: otherwise the ceiling could not
+		// end a session that only ever bounces here.
 		ctx.RecentFailurePaths = appendRecentFailurePath(ctx.RecentFailurePaths, p)
 		if shouldStopForFailures(loop.totalFailures, loop.consecutiveErrors, ctx.RecentFailurePaths) {
 			log.Printf("[agent] breaking at turn %d: %d refused/failed calls, %d consecutive on %q",
@@ -773,7 +729,7 @@ func (loop *agentLoop) refuseBannedTool(turn int, parsed ModelResponse) turnOutc
 // answerRejectedProposal finds a replacement that was already refused against
 // the bytes still on disk, and answers it before the re-send ban can.
 //
-// C4: this exact replacement was already refused against the
+// This exact replacement was already refused against the
 // bytes still on disk. It has to be answered BEFORE the resend
 // ban, which would otherwise end the run with the model never
 // having been shown the file it keeps trying to replace.
@@ -811,7 +767,7 @@ func (loop *agentLoop) refuseRepeatedProposal(parsed ModelResponse, intentArgs j
 // answerBrokenArtifact answers a no-op edit over a file already shown to be
 // broken, before the re-send ban can.
 //
-// C3: the no-op edit over an artifact already shown to be broken.
+// The no-op edit over an artifact already shown to be broken.
 // This has to come BEFORE the identical-resend ban, which would
 // otherwise intercept the recurrence and end the run with the
 // broken file still on disk -- the retained shape exactly.
@@ -876,8 +832,8 @@ func (loop *agentLoop) refuseIdenticalRetry(turn int, parsed ModelResponse, inte
 		ctx.RecentFailurePaths = appendRecentFailurePath(ctx.RecentFailurePaths, failPath)
 		// ...and the same stopping rules have to apply here. Both the
 		// ceiling and the path-aware breaker live inside the
-		// post-execution failure branch, which this path skips, so
-		// incrementing alone left the counters with no reader.
+		// post-execution failure branch, which this path skips, so the
+		// counters need a reader here.
 		if shouldStopForFailures(loop.totalFailures, loop.consecutiveErrors, ctx.RecentFailurePaths) {
 			log.Printf("[agent] breaking at turn %d: %d refused/failed calls, %d consecutive on %q",
 				turn, loop.totalFailures, loop.consecutiveErrors, ctx.RecentFailurePaths[len(ctx.RecentFailurePaths)-1])
@@ -930,8 +886,7 @@ func needsPermission(ctx *AgentContext, toolName string, args json.RawMessage) b
 	}
 
 	// Anything that runs a command asks, whatever the tool is called:
-	// run_background started any command without a prompt while run_command
-	// asked for the same one.
+	// run_background prompts for a command exactly as run_command does.
 	if tool.Effect == ToolEffectCommandUnobserved {
 		return true
 	}
