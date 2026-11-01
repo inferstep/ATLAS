@@ -151,6 +151,19 @@ func TestOnlyReadOnlyAndCommandEffectsAreBoundaryClassifiable(t *testing.T) {
 	}
 }
 
+// The boundary leaves a direct mutator's result as it found it, so a missed
+// producer shows as unknown and is not filled in.
+func TestTheBoundaryLeavesADirectMutatorUnclassified(t *testing.T) {
+	result := &ToolResult{}
+	classifyByEffect(ToolEffectDirectMutation, result)
+	if result.MutationStatus != MutationUnknown {
+		t.Errorf("MutationStatus = %q, want it left unknown", result.MutationStatus)
+	}
+	if result.ValidationKind != ValidationKindUnknown {
+		t.Errorf("ValidationKind = %q, want it left unknown", result.ValidationKind)
+	}
+}
+
 // A direct mutator that fails gives its own classification and the real
 // error. Deleting a file that was never there removed nothing.
 func TestDirectMutatorFailureCarriesItsProducersClassification(t *testing.T) {
