@@ -103,11 +103,10 @@ def _remaining_budget_ms(start: float, cap_ms: Optional[float] = None) -> Option
 CAPTURE_ENV = "ATLAS_V3_CAPTURE_POOL"
 CAPTURE_SCHEMA = "atlas.v3_candidate_capture/1"
 
-# Sizing, from the Suite A run this instrument exists to explain: candidates
-# averaged 1.9 KB (p95 4.1 KB, max 13 KB), at most 3 per generation call and
-# roughly 2 calls per task. A candidate_evaluation is the base64 of that plus
-# ≤5 cases and the contract record — ~10 KB typical, ~25 KB worst — so a
-# 12-task diagnostic is a few megabytes. 64 MiB is ~25x that headroom and
+# Sizing: candidates average about 1.9 KB (p95 4.1 KB, max 13 KB), at most 3
+# per generation call and roughly 2 calls per task. A candidate_evaluation is
+# the base64 of that plus ≤5 cases and the contract record — ~10 KB typical,
+# ~25 KB worst — so a 12-task diagnostic is a few megabytes. 64 MiB is ~25x that headroom and
 # still bounds a runaway loop to something the telemetry volume absorbs.
 CAPTURE_DEFAULT_MAX_BYTES = 64 * 1024 * 1024
 # One pathological candidate must not consume the whole budget. Its identity
@@ -599,21 +598,15 @@ def _capture_pool_member(capture: "_PoolCapture", candidate, probe_code: str) ->
 def _entry_function(code: str) -> Optional[str]:
     """Name the function a self-test should call.
 
-    The generator used to take the first `def` in the file, which is the
-    entry point only when the solution happens to define no helpers above
-    it. `def parse(...)` followed by `def solve(...)` meant every test
-    called parse with the case input and compared it to the final answer —
-    a guaranteed failure that says nothing about the code.
-
-    Measured across a 28-session run: 0 of 44 candidates passed, and the
-    self-test results were 0/5, 0/4, 0/3 — never partial. Imperfect code
-    fails some cases; only a harness fault fails all of them uniformly.
+    The first `def` is the entry point only when the solution defines no
+    helpers above it. With `def parse(...)` followed by `def solve(...)`,
+    every test would call parse with the case input and compare it to the
+    final answer — a guaranteed failure that says nothing about the code.
 
     The entry point is the top-level function nothing else in the file
     calls. Where several qualify a conventional name wins, then the last
     one, since helpers are conventionally defined above their caller.
-    Unparseable code falls back to the first def, which is what the old
-    behaviour was.
+    Unparseable code falls back to the first def.
     """
     import ast as _ast
     try:
@@ -662,7 +655,7 @@ def _entry_takes_case_input(code: str, name: str) -> bool:
     try:
         tree = _ast.parse(code)
     except SyntaxError:
-        return True  # old behaviour for code that does not parse
+        return True  # unparseable code keeps the function-shaped path
     for node in _ast.walk(tree):
         if isinstance(node, _ast.FunctionDef) and node.name == name:
             args = node.args
@@ -820,14 +813,14 @@ def _staged_candidate_run(code: str, inp: str, infile: str):
     that executes the candidate. The self-test and the output probe differ
     only in what they do with the captured output and with an exception, so
     they share this and nothing else -- two copies of "how to run a
-    candidate" is how one of them was repaired and the other was not.
+    candidate" drift apart when only one gets fixed.
 
     The case's input is staged, never written by executable code: that write
-    lands in the candidate's working directory, which is read-only in the
-    sandbox, so it raised before the candidate ran. The candidate executes
-    once, from a file, under the name a program is really run with; exec'ing
-    it inside the imported ``solution`` module left ``__name__`` as
-    ``'solution'`` and a ``if __name__ == "__main__":`` body never ran.
+    would land in the candidate's working directory, which is read-only in
+    the sandbox, and raise before the candidate ran. The candidate executes
+    once, from a file, under the name a program is really run with; exec'd
+    inside an imported module, ``__name__`` would be the module name and an
+    ``if __name__ == "__main__":`` body would never run.
     """
     files = {_CANDIDATE_FILE: code}
     if infile:
@@ -851,19 +844,14 @@ def _make_self_test(code: str, tc, task_input_file: str = ""):
 
     Returns ``(wrapper_source, files)``. The wrapper creates nothing: the
     case's input file is staged through the sandbox's request files map, the
-    same mechanism that already carries project context. Writing it from
-    executable code instead put the write in the candidate's working
-    directory, which is read-only in the sandbox container, so the case died
-    with ``OSError: [Errno 30]`` before the candidate ran. Measured on the
-    captured candidate pool: 50 of 50 generated cases failed there, which is
-    why every suite in a 50-task run scored 0/N and a partial score was
-    structurally impossible.
+    same mechanism that already carries project context. Written from
+    executable code, it would land in the candidate's working directory,
+    which is read-only in the sandbox container, and the case would die with
+    ``OSError: [Errno 30]`` before the candidate ran.
 
     The candidate then runs through ``runpy.run_path(..., run_name="__main__")``
-    -- once, from a file, with the name a program is actually run under. The
-    previous form exec'd it inside the imported ``solution`` module, where
-    ``__name__`` is ``'solution'``, so a ``if __name__ == "__main__":`` body
-    never executed and the case compared against empty output.
+    -- once, from a file, with the name a program is actually run under, so
+    an ``if __name__ == "__main__":`` body executes.
 
     Uses ast.literal_eval (safe — only parses Python literals) to convert
     I/O string representations to actual values for comparison.
@@ -939,11 +927,8 @@ def _make_output_probe(code: str, tc, task_input_file: str = ""):
 
     The self-test compares that output to the model's predicted answer. For a
     problem the model cannot reliably solve, producing the answer IS the
-    problem, so the prediction is wrong and correct code fails its own suite.
-    Measured across 42 verifications in one run: every one scored 0/N, while a
-    candidate taken from those same logs passed immediately when given a
-    correct expected value. Uniform zero is a broken answer key, not broken
-    code.
+    problem, so the prediction can be wrong and correct code fail its own
+    suite. Uniform zero is a broken answer key, not broken code.
 
     CodeT (Chen et al., 2022), which this pipeline already cites, does not use
     generated tests as an oracle, for exactly this reason. It runs candidates
@@ -954,9 +939,9 @@ def _make_output_probe(code: str, tc, task_input_file: str = ""):
     inp = tc.input_str.strip()
     name = _entry_function(code)
     if name and _entry_takes_case_input(code, name):
-        # The pair every caller unpacks. A bare string here made the unpack
-        # raise, the caller's except turned that into "no answer", and a
-        # function-shaped candidate could never join a cluster.
+        # The pair every caller unpacks. A bare string makes the unpack
+        # raise, the caller's except turns that into "no answer", and a
+        # function-shaped candidate can never join a cluster.
         return (code + "\nimport ast as _a\n"
                 + f"_i={repr(inp)}\n"
                 + "try:\n _p=_a.literal_eval(_i)\nexcept:\n _p=_i\n"
@@ -965,18 +950,16 @@ def _make_output_probe(code: str, tc, task_input_file: str = ""):
     infile = task_input_file or _reads_input_file(code)
     header, run, files = _staged_candidate_run(code, inp, infile)
     # The marker is emitted ONLY on clean completion, and only for non-empty
-    # output. Swallowing exceptions and printing the marker regardless let two
-    # CRASHING candidates agree: repr('') is the two-character string "''",
-    # which is truthy, so their empty outputs clustered and crash consensus
-    # won (third-party audit reproduction: two ordinary-exception candidates,
-    # WINNERS [0, 1]). A crash prints a CRASH line the clustering explicitly
-    # refuses, and silence emits nothing.
+    # output. Printed regardless, it would let two CRASHING candidates agree:
+    # repr('') is the two-character string "''", which is truthy, so their
+    # empty outputs would cluster and crash consensus would win. A crash prints
+    # a CRASH line the clustering explicitly refuses, and silence emits nothing.
     #
     # The probe reports rather than fails, so unlike the self-test it catches
     # what the candidate raised instead of letting it end the process. A
     # SystemExit the program raised itself is ordinary termination at code 0
     # or None -- a candidate that prints its answer and calls sys.exit() has
-    # answered, and calling that a crash discarded a real output.
+    # answered, and is not a crash.
     return (header
             + "_crashed=False\n"
             + "try:\n"
@@ -1010,14 +993,13 @@ def _consensus_winners(candidates, test_cases, sandbox, emit,
     program agreeing with itself is not, so a lone cluster does not win.
 
     A candidate enters clustering only if it produced a real answer on EVERY
-    probe case. Partial validity is not agreement material: with any(), two
-    candidates that crashed on most cases but happened to match on one could
-    form the winning cluster, promoting code proven broken on the majority of
-    the very inputs the consensus ran (third-party audit finding).
+    probe case. Partial validity is not agreement material: two candidates
+    that crashed on most cases but matched on one must not form the winning
+    cluster.
 
     A cluster is sized by its DISTINCT programs. Byte-identical candidates
-    are one program agreeing with itself, and counting them twice let two
-    copies of a wrong program outvote one correct program.
+    are one program agreeing with itself, and counting them twice would let
+    two copies of a wrong program outvote one correct program.
 
     Agreement is not verification: the caller marks winners `consensus`, not
     `passed`.
@@ -1153,7 +1135,7 @@ def _score_and_test_probe(ctx, probe_code, tokens, verified_sandbox):
 def _smoke_language(file_path):
     """The language the smoke check verifies the target file in: from its
     extension, or Python when the task names no file."""
-    # PC-048: derive language from the target file's extension. Used
+    # Derive the language from the target file's extension. Used
     # by smoke_compile_check below to pick the right syntax checker, and
     # to keep the Python-only checks off other files. Python only when no
     # file_path is supplied (a bench task names no file).
@@ -1179,9 +1161,9 @@ def _smoke_language(file_path):
     }
     # A named file of a class the checker cannot verify keeps its own
     # name, so it fails as "verification unavailable". Defaulting it to
-    # Python parsed a stylesheet, a C file or a Makefile as Python: every
-    # candidate failed with a SyntaxError that said nothing about the
-    # file, and the Python-only checks ran on it.
+    # Python would parse a stylesheet, a C file or a Makefile as Python:
+    # every candidate would fail with a SyntaxError that says nothing about
+    # the file, and the Python-only checks would run on it.
     if file_path:
         smoke_language = _ext_to_lang.get(_ext, _ext.lstrip(".") or "unknown")
     else:
@@ -1264,7 +1246,7 @@ def _new_result(task_id):
 
 
 def _check_incumbent(ctx, verified_sandbox, _task, probe_code):
-    """The caller's own bytes, checked as a candidate (#259).
+    """The caller's own bytes, checked as a candidate.
 
     Returns (incumbent, result). The incumbent is None when the caller sent
     no file; result is the finished run when the incumbent passed and its
@@ -1273,18 +1255,13 @@ def _check_incumbent(ctx, verified_sandbox, _task, probe_code):
     baseline_code, file_path, emit, capture = ctx.baseline_code, ctx.file_path, ctx.emit, ctx.capture
     result, start, events = ctx.result, ctx.start, ctx.events
     # ===== THE INCUMBENT =====
-    # The caller's own bytes are a real candidate (#259). They face the
+    # The caller's own bytes are a real candidate. They face the
     # checks every generated candidate faces -- the lens, the sandbox
     # verification, the contract record, and in phase one the vetoes --
     # and the lens ranks them with the rest, so a candidate replaces them
     # only by beating them. They are the EXACT bytes the request carried:
     # nothing re-types them, and a copy that differs only in whitespace
     # is never delivered in their place (_without_retypings).
-    #
-    # Until #259 they were only prose in the problem statement. Across 112
-    # recorded sessions V3 replaced the model's file in all 33 of its
-    # deliveries, three of them test files replaced by module code that
-    # ran, tested nothing, and left two runs unable to finish.
     incumbent = None
     if baseline_code:
         incumbent = {"index": INCUMBENT_INDEX, "incumbent": True,
@@ -1575,12 +1552,11 @@ def _test_pool(ctx, run_pool, verified_sandbox, _task):
                 passing.append(c)
             continue
         if c.get("passed"):
-            # Cached execution result -- do NOT skip evidence. This
-            # `continue` is exactly how candidate zero escaped the
-            # "one evaluation path": compile smoke set passed=True for
-            # an interactive artifact, so the real Snake candidate
-            # entered the pool with no behavioural evidence at all and
-            # rank_key saw defaults for it.
+            # Cached execution result -- do NOT skip evidence. A compile
+            # smoke sets passed=True for an interactive artifact, so
+            # continuing here without a record would let candidate zero
+            # enter the pool with no behavioural evidence, and rank_key
+            # would see defaults for it.
             if "contract_record" not in c:
                 c["contract_record"] = _evaluate_candidate(
                     file_path, c["code"], True, emit, task=_task)
@@ -1596,9 +1572,9 @@ def _test_pool(ctx, run_pool, verified_sandbox, _task):
         c["verification_evidence"] = verification_evidence
         # ONE structured evaluation path: candidate zero and every
         # generated candidate get the same adapter, the same probe and
-        # the same evidence record. Two sets of verification semantics
-        # is how the boolean survived into the candidate path, letting
-        # ATLAS generate alternatives it could not rank.
+        # the same evidence record. A second set of verification
+        # semantics would leave generated candidates with only a boolean,
+        # and ATLAS could not rank the alternatives it generates.
         c["contract_record"] = _evaluate_candidate(
             file_path, c["code"], passed, emit, task=_task)
         _capture_pool_member(capture, c, probe_code)
@@ -1630,9 +1606,7 @@ def _agree_by_consensus(ctx, passing, pool_members, self_tests):
     # Fall back to the agreement signal CodeT actually uses: run the
     # candidates on the generated INPUTS and take the largest cluster
     # that produced the same answers. The generated expected outputs
-    # are not used. Measured across 42 verifications in one run: all
-    # 42 scored 0/N against them, and a candidate pulled from those
-    # logs passed immediately against a correct expected value.
+    # are not used.
     #
     # Agreement is not verification. Winners are marked `consensus`,
     # never `passed`, and a candidate that failed a project check is
@@ -1664,7 +1638,7 @@ def _select(ctx, passing):
     # tiebreaks every pair scored 0-0 and 110/110 winners equaled the
     # lens min-energy pick, so it carried zero discriminating signal.)
     #
-    # The incumbent is ranked like any other candidate (#259). A rule
+    # The incumbent is ranked like any other candidate. A rule
     # that kept it on every tie was measured against: in 3 of 23
     # recorded AoC deliveries the model's own file was wrong yet ran
     # cleanly, and a lens-ranked fresh candidate was right.
@@ -1733,9 +1707,9 @@ def _enter_repair(ctx, run_pool, task_type):
     check_client()
     if _out_of_budget(ctx):
         return _finish_with_best(ctx, run_pool, "budget spent before the repair phase")
-    # Preserve the existing repair-budget rule: if every candidate
-    # failed and the submitted interactive baseline compiles, return
-    # to the outer loop with that baseline rather than spending more
+    # Repair-budget rule: if every candidate failed and the submitted
+    # interactive baseline compiles, return to the outer loop with that
+    # baseline rather than spending more
     # generations. An import comparison rejects observed regressions;
     # it does not prove requested features or justify relaxing this
     # rule. A compiling baseline is NOT necessarily a runnable app.
@@ -1774,7 +1748,7 @@ def _call_chain_context(ctx, failing):
     """The call-graph context of the first failing candidate's failing
     function, built once for both repair strategies; "" when there is none."""
     files, emit = ctx.files, ctx.emit
-    # GH #39 point 3: build call-graph context for the failing
+    # Build call-graph context for the failing
     # function once, reuse across PR-CoT + refinement. Skips
     # cleanly when stderr isn't a Python traceback or the failing
     # function isn't defined in the project — both arms get plain
@@ -1831,13 +1805,10 @@ def _check_repair(ctx, failing, pr_result, repair_code, verified_sandbox, _task)
     # and live repair selection remain unchanged.
     repair_lens = (_lens_view(repair_code)
                    if capture.enabled else None)
-    # A repair is a candidate. It used to be captured with
-    # record=None, so the sealed Stage-A run holds three
-    # pool members with adapter None and an empty record --
-    # a candidate nothing can say anything about. Same
-    # canonical adapter->contract path as every other
-    # candidate; it adds no generation and no sandbox run
-    # of its own.
+    # A repair is a candidate, and a candidate with no record
+    # is one nothing can say anything about. Same canonical
+    # adapter->contract path as every other candidate; it adds
+    # no generation and no sandbox run of its own.
     capture.note_candidate(
         role="repair", index=None, code=repair_code,
         accepted=passed,
@@ -1926,7 +1897,7 @@ class _CandidateVerifier:
         I/O self-tests recorded as diagnostics; interactive: compile smoke.
 
         A replacement for a file the caller already wrote must first keep
-        that file's role: every top-level name it binds (#259). It runs
+        that file's role: every top-level name it binds. It runs
         here, ahead of the sandbox, so every path that can hand back code
         -- phase one, PR-CoT, refinement, the budget boundary -- is held
         to it, and the reason reaches repair as the error to fix."""
@@ -1945,7 +1916,7 @@ class _CandidateVerifier:
         # Interactive tasks: skip the run-and-test; just verify the code
         # parses and compiles. Running curses/pygame/flask in the sandbox
         # would fail for environmental reasons (no TTY, no display) even
-        # when the code is correct — see PC-022.
+        # when the code is correct.
         if task_type == "interactive":
             return self._smoke_interactive(code, verification_evidence)
 
@@ -1959,7 +1930,7 @@ class _CandidateVerifier:
         return self._verify_build_if_requested(code, verification_evidence, out, err)
 
     def _check_role(self, code, verification_evidence):
-        """The submitted file's role (#259): a replacement must keep every
+        """The submitted file's role: a replacement must keep every
         top-level name the file binds. Returns the failed verdict, or None."""
         baseline_code, file_path, files, emit = self.ctx.baseline_code, self.ctx.file_path, self.ctx.files, self.ctx.emit
         if baseline_code and code != baseline_code:
@@ -2022,7 +1993,7 @@ class _CandidateVerifier:
         """An interactive Python task: the compile smoke and the interactive
         lint instead of a run, then the checks after them."""
         sandbox, smoke_language, file_path, emit = self.ctx.sandbox, self.ctx.smoke_language, self.ctx.file_path, self.ctx.emit
-        # PC-048: pass the detected language so HTML/JSON/etc. files
+        # Pass the detected language so HTML/JSON/etc. files
         # don't get parsed as Python (which produces spurious
         # SYNTAX_ERROR cascades into PR-CoT repair + LLM timeouts).
         ok, out, err = scoring.smoke_compile_check(code, sandbox, language=smoke_language, filename=file_path)
@@ -2035,7 +2006,7 @@ class _CandidateVerifier:
             return True, out, err, verification_evidence
         # Interactive lint: catch raw stdin reads / blocking input loops
         # that compile fine but don't actually work for keystroke
-        # handling (PC-034).
+        # handling.
         lint_ok, lint_reason = scoring.interactive_lint(code)
         if lint_ok:
             emit("interactive_lint",
@@ -2073,12 +2044,11 @@ class _CandidateVerifier:
             if not _has_trusted_oracle:
                 # Observed, recorded, and given no authority. These cases
                 # were written by the same model as the candidate, from
-                # the problem statement alone; letting them reject is how
-                # a candidate that matched the task's own reference on
-                # every input scored 2/5 and was discarded. The score and
-                # every per-case pair stay in telemetry and in the pool
-                # capture for offline analysis -- what changes is that
-                # nothing downstream reads them as a verdict.
+                # the problem statement alone, so letting them reject would
+                # discard candidates that match the task's own reference.
+                # The score and every per-case pair stay in telemetry and
+                # in the pool capture for offline analysis; nothing
+                # downstream reads them as a verdict.
                 emit("self_test_untrusted",
                      f"{p}/{total} against model-generated cases — "
                      f"diagnostic only, no rejection authority",
@@ -2265,12 +2235,11 @@ class V3PipelineService:
         check_client = _client_check(progress_callback, cancel_scope, task_id)
         llm = _new_llm(emit, start, budget_ms, cancel_scope,
                        request_identity=request_identity)
-        # PC-046: ship the user's other project files into the sandbox so
+        # Ship the user's other project files into the sandbox so
         # multi-file imports resolve. `files` is the same Dict that V3
-        # already prepends to the LLM prompt above; passing it to the
-        # sandbox closes the gap where the model writes
-        # `from utils import helper` and the sandbox imports a workspace
-        # that contains only solution.py.
+        # already prepends to the LLM prompt above; without it, a model
+        # that writes `from utils import helper` is checked in a workspace
+        # that contains only the candidate.
         sandbox = adapters.SandboxAdapter(project_files=files)
         # The contract verification must hold candidates to: the caller runs
         # the program with these files on disk and no stdin.
@@ -2292,14 +2261,11 @@ class V3PipelineService:
 
         # Evidence strength decides whether phase 0 may close the pipeline.
         # A compile smoke on interactive code demonstrates only that the file
-        # parses, and returning on it made candidates_generated=1 with
-        # PlanSearch, DivSampling, consensus and ranking never running — the
-        # whole test-time-compute apparatus skipped for any interactive artifact.
-        # Strength comes from the VERIFIER THAT RAN. Keying it off the file
-        # extension mapped every .py to behavioural completeness, which is
-        # wrong for Pygame/Tkinter/Flask — those get a compile smoke and
-        # nothing more, and would have closed the pipeline claiming behaviour
-        # nobody demonstrated.
+        # parses; returning on it would skip PlanSearch, DivSampling, consensus
+        # and ranking for every interactive artifact.
+        # Strength comes from the VERIFIER THAT RAN, not the file extension:
+        # Pygame/Tkinter/Flask files get a compile smoke and nothing more, and
+        # must not close the pipeline claiming behaviour nobody demonstrated.
         # The adapter is chosen from the artifact alone. The self-test cases
         # play no part in it: they are diagnostics (see verified_sandbox).
         _task = _task_identity(file_path, problem)
@@ -2412,9 +2378,9 @@ class V3PipelineService:
             try:
                 ps_result = self.plan_search.generate(
                     problem, task_id, llm, num_plans=remaining_k,
-                    # The allocator's tier, not the signature default:
-                    # generate() was silently running "standard" thinking
-                    # depth whatever the CxGx gate decided (audit finding).
+                    # The allocator's tier, not the signature default
+                    # ("standard"), so PlanSearch thinks at the depth the
+                    # CxGx gate decided.
                     budget_tier=budget_tier,
                 )
                 # PlanSearch reports one aggregate for the whole batch, so
@@ -2527,7 +2493,7 @@ class V3PipelineService:
         # diagnostic. Regenerate only when phase 0 produced none (e.g. a
         # transient LLM failure); a failed retry here must not downgrade an
         # existing good set to None. Interactive tasks repair against
-        # compile-smoke (PC-022).
+        # compile-smoke.
         if task_type == "algorithmic" and not (self_tests and self_tests.test_cases):
             emit("self_test_gen", "Generating self-tests...")
             try:
@@ -2605,7 +2571,7 @@ class V3PipelineService:
         check_client()
         emit("refinement", "Starting refinement loop...",
              strategy="refinement", failing=len(failing))
-        # GH #39 point 3: enrich each failing candidate's error_output
+        # Enrich each failing candidate's error_output
         # with call-chain context so the refinement loop sees it on
         # every iteration. Cheap (chain_context_block is built once
         # above and reused).
@@ -2637,9 +2603,8 @@ class V3PipelineService:
                 # PR-CoT repair path above.
                 refinement_lens = (_lens_view(ref_result.winning_code)
                                    if capture.enabled else None)
-                # Same gap the repair path had: a refinement winner
-                # is a candidate, and a candidate with no record is one
-                # nothing can say anything about.
+                # A refinement winner is a candidate too, and a candidate
+                # with no record is one nothing can say anything about.
                 capture.note_candidate(
                     role="refinement", index=None,
                     code=ref_result.winning_code, accepted=passed,
@@ -2680,7 +2645,7 @@ def _build_problem_from_request(
 
     Here the incumbent is prose: the reference the generated candidates work
     from. It is ALSO a candidate in its own right, with its exact bytes -- the
-    pipeline checks, scores and ranks it beside them (#259) -- and pool index
+    pipeline checks, scores and ranks it beside them -- and pool index
     0 is still the phase-zero probe, a fresh generation, not the incumbent.
 
     The user's own request leads, when the caller sends one. Without it the
