@@ -101,7 +101,7 @@ func evidenceCases(t *testing.T) []evidenceCase {
 	if err != nil {
 		t.Fatalf("golden cases missing (regenerate with "+
 			"ATLAS_WRITE_EVIDENCE_FIXTURES=1 pytest "+
-			"tests/v3-service/test_contract_genericity.py): %v", err)
+			"tests/v3-service/pipeline/test_contract_genericity.py): %v", err)
 	}
 	var doc struct {
 		Schema string         `json:"schema"`
