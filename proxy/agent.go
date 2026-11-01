@@ -5390,113 +5390,6 @@ func detectProjectVenvPython(workingDir string) string {
 	return ""
 }
 
-// samplePlanContext walks ctx.WorkingDir and reads a handful of files
-// the planner is most likely to need: source files, templates,
-// manifests. Limited to maxFiles per call, each truncated to maxBytes.
-//
-// The planner runs *before* any tool calls have happened in the loop,
-// so ctx.FilesRead is empty — without this, plans for "fix the flask
-// app" would have no signal about what's in app.py and would generate
-// generic 5-step recipes. We pay one fs walk + a few small reads up
-// front; the budget is small (~5 files × 2KB) and the planning quality
-// jump is large.
-func samplePlanContext(workingDir string, maxFiles, maxBytes int) map[string]string {
-	if workingDir == "" {
-		return nil
-	}
-	out := map[string]string{}
-	// Files we always inline if present — most projects have at least
-	// one of these and they describe shape (deps, entry point).
-	priority := []string{
-		"app.py", "main.py", "manage.py", "wsgi.py",
-		"index.html", "templates/index.html", "templates/base.html",
-		"package.json", "tsconfig.json", "vite.config.ts", "vite.config.js",
-		"go.mod", "main.go",
-		"Cargo.toml", "src/main.rs", "src/lib.rs",
-		"requirements.txt", "pyproject.toml", "setup.py",
-		"README.md",
-	}
-	// Every read goes through the workspace folder, so a name in it that
-	// points somewhere else is skipped like a file that cannot be read.
-	dir := openConfinedDir(workingDir)
-	defer dir.Close()
-	for _, rel := range priority {
-		if len(out) >= maxFiles {
-			break
-		}
-		// Oversized files are skipped: the planner doesn't need a 50KB README.
-		if s, ok := dir.readCapped(rel, maxBytes); ok {
-			out[rel] = s
-		}
-	}
-	// If priority files yielded nothing at the workspace root, the
-	// project may live one level down -- common when the user's
-	// `atlas tui` cwd was the parent dir (e.g. /workspace) and the app
-	// is in a subdirectory. Walk one level looking for the SAME
-	// priority filenames inside subdirectories. Without this the
-	// planner sees no project context and the agent spends turns
-	// finding the files.
-	if len(out) == 0 {
-		entries, err := dir.ReadDir()
-		if err != nil {
-			return nil
-		}
-		// First pass: peek into subdirectories for priority files.
-		for _, e := range entries {
-			if !e.IsDir() {
-				continue
-			}
-			name := e.Name()
-			// Skip caches, vendors, dot-dirs — these aren't projects.
-			if strings.HasPrefix(name, ".") || name == "node_modules" ||
-				name == "venv" || name == "__pycache__" ||
-				name == "dist" || name == "build" || name == "target" ||
-				name == "vendor" {
-				continue
-			}
-			for _, rel := range priority {
-				if len(out) >= maxFiles {
-					break
-				}
-				// Key uses subdir/filename so the planner sees the
-				// path the agent will need to use in tool calls.
-				if s, ok := dir.readCapped(filepath.Join(name, rel), maxBytes); ok {
-					out[filepath.Join(name, rel)] = s
-				}
-			}
-			if len(out) >= maxFiles {
-				break
-			}
-		}
-		// Second pass: shallow walk of the workspace root for any
-		// source-looking files (uncommon repo layout, no priority
-		// hits anywhere).
-		if len(out) == 0 {
-			for _, e := range entries {
-				if len(out) >= maxFiles {
-					break
-				}
-				if e.IsDir() {
-					continue
-				}
-				name := e.Name()
-				ext := strings.ToLower(filepath.Ext(name))
-				switch ext {
-				case ".py", ".go", ".js", ".ts", ".tsx", ".jsx",
-					".html", ".rs", ".rb", ".java", ".kt", ".swift":
-					// pass
-				default:
-					continue
-				}
-				if s, ok := dir.readCapped(name, maxBytes); ok {
-					out[name] = s
-				}
-			}
-		}
-	}
-	return out
-}
-
 // removedSwitchRefusal names a request field that asks for a switch this build
 // no longer has, or returns "". Values that ask for what always happens are
 // accepted: bypass_v3 false, v3_mode full and feasibility_mode observe.
@@ -5559,7 +5452,7 @@ func generatePlan(ctx *AgentContext, userMessage string) *Plan {
 	}
 
 	planStart := time.Now()
-	Emit(NewEnvelope(EvtStageStart, "v3:plan", map[string]interface{}{
+	Emit(NewEnvelope(EvtStageStart, planStage, map[string]interface{}{
 		"detail":     fmt.Sprintf("planning: %s", truncateStr(userMessage, 60)),
 		"context_n":  len(pctx),
 		"candidates": req.NCandidates,
@@ -5595,7 +5488,7 @@ func generatePlan(ctx *AgentContext, userMessage string) *Plan {
 			EventID:    NewEventID(),
 			Timestamp:  float64(time.Now().UnixNano()) / 1e9,
 			Type:       EvtStageEnd,
-			Stage:      "v3:plan",
+			Stage:      planStage,
 			DurationMS: dur,
 			Payload:    map[string]interface{}{"success": false, "error": err.Error()},
 		})
@@ -5606,7 +5499,7 @@ func generatePlan(ctx *AgentContext, userMessage string) *Plan {
 		EventID:    NewEventID(),
 		Timestamp:  float64(time.Now().UnixNano()) / 1e9,
 		Type:       EvtStageEnd,
-		Stage:      "v3:plan",
+		Stage:      planStage,
 		DurationMS: dur,
 		Payload: map[string]interface{}{
 			"success":           true,
@@ -5774,16 +5667,7 @@ func emitTerminal(ctx *AgentContext, st *runState, status TerminalStatus, reason
 		// deliver the thing it was bounced to write. This is the emission
 		// itself, and it happens once.
 		retireAuthorizationGrants(ctx, grantTerminal)
-		// No run that leaves a file it wrote unparseable is reported
-		// completed, whichever path reached here (repair.go).
-		if st != nil {
-			st.refreshRepairs(ctx, st.turn, "")
-			if open := st.openRepairs(); len(open) > 0 && status.Completed() {
-				log.Printf("[agent] terminal %s/%s with %s unparseable — reporting repair_unfinished",
-					status, reason, repairNames(open))
-				status, reason = TerminalIncomplete, "repair_unfinished"
-			}
-		}
+		status, reason = withheldForOpenRepairs(ctx, st, status, reason)
 		ctx.TerminalStatus = status
 		ctx.TerminalReason = reason
 		ctx.TerminalUnresolved = unresolvedGateNames(st)
@@ -5827,6 +5711,22 @@ func emitTerminal(ctx *AgentContext, st *runState, status TerminalStatus, reason
 		}
 		ctx.Stream("done", done)
 	})
+}
+
+// withheldForOpenRepairs is the terminal to report: no run that leaves a file it
+// wrote unparseable is reported completed, whichever path reached here
+// (repair.go).
+func withheldForOpenRepairs(ctx *AgentContext, st *runState, status TerminalStatus, reason string) (TerminalStatus, string) {
+	if st == nil {
+		return status, reason
+	}
+	st.refreshRepairs(ctx, st.turn, "")
+	if open := st.openRepairs(); len(open) > 0 && status.Completed() {
+		log.Printf("[agent] terminal %s/%s with %s unparseable — reporting repair_unfinished",
+			status, reason, repairNames(open))
+		return TerminalIncomplete, "repair_unfinished"
+	}
+	return status, reason
 }
 
 // terminalCompletionAllowed decides whether a model-issued `done` may be
@@ -6308,21 +6208,24 @@ func claimIn(s string, claims []string) string {
 				break
 			}
 			at := from + i
-			window := low[max(0, at-48):at]
-			negated := false
-			for _, n := range claimNegators {
-				if strings.Contains(window, n) {
-					negated = true
-					break
-				}
-			}
-			if !negated {
+			if !negatedBefore(low, at) {
 				return claim
 			}
 			from = at + len(claim)
 		}
 	}
 	return ""
+}
+
+// negatedBefore reports a negator in the 48 characters before position at.
+func negatedBefore(low string, at int) bool {
+	window := low[max(0, at-48):at]
+	for _, n := range claimNegators {
+		if strings.Contains(window, n) {
+			return true
+		}
+	}
+	return false
 }
 
 // honestMarkers are the ways a summary can already be saying the run did not
@@ -6352,6 +6255,9 @@ func hasHonestMarker(s string) bool {
 // every other status it guarantees three properties --
 // there is a summary, it carries no completion claim, and it says plainly that
 // the task was not confirmed finished.
+// runNotConfirmedNote ends the summary of a run that did not finish.
+const runNotConfirmedNote = " This run did not confirm the task was complete."
+
 // deletionSummaryLimit bounds how many paths a completion summary names before
 // counting the rest, so a large tidy-up stays readable.
 const deletionSummaryLimit = 5
@@ -6392,7 +6298,7 @@ func honestTerminalSummary(ctx *AgentContext, st *runState, status TerminalStatu
 		out = serverTerminalFallback(ctx, st, status, reason)
 	}
 	if !hasHonestMarker(out) {
-		out += " This run did not confirm the task was complete."
+		out += runNotConfirmedNote
 	}
 	return out + v3FallbackNote(ctx)
 }
@@ -6508,7 +6414,7 @@ func serverTerminalFallback(ctx *AgentContext, st *runState, status TerminalStat
 				"as unverified.")
 		}
 	}
-	sb.WriteString(" This run did not confirm the task was complete.")
+	sb.WriteString(runNotConfirmedNote)
 	sb.WriteString(liveBackgroundJobNote(ctx))
 	return sb.String()
 }
@@ -6719,13 +6625,8 @@ func steerRecovery(ctx *AgentContext, st *runState, relPath, resolvedPath string
 	if st.steerRepeats[key] < steerRecoveryRepeat || st.steerRecovered[key] {
 		return ""
 	}
-	// Context nobody has time to act on is worse than stopping.
-	if ctx.Ctx != nil {
-		if deadline, ok := ctx.Ctx.Deadline(); ok && time.Until(deadline) < fencedRecoveryFloor {
-			log.Printf("[agent] skipping the write_file steering recovery for %s — %v of budget left",
-				relPath, time.Until(deadline).Round(time.Second))
-			return ""
-		}
+	if tooLateToRecover(ctx, "the write_file steering recovery for "+relPath) {
+		return ""
 	}
 	if st.steerRecovered == nil {
 		st.steerRecovered = map[string]bool{}
@@ -6754,21 +6655,7 @@ func steerRecovery(ctx *AgentContext, st *runState, relPath, resolvedPath string
 			"place with edit_file (old_str/new_str) or structural_edit (a selector and the new " +
 			"body) — whichever fits the change you mean to make. write_file on this path will " +
 			"keep being refused.")
-		// Record only what was shown, exactly as read_file does for a
-		// truncated read: the model owns what it saw and nothing more.
-		shown := source
-		if !truncated {
-			if data, _, err := readWorkspaceFile(ctx, relPath); err == nil {
-				shown = string(data)
-			}
-		}
-		ctx.RecordFileRead(resolvedPath, shown)
-		if truncated {
-			// Only the head was shown; the file runs past it.
-			ctx.RecordBodyRead(resolvedPath, 1, fencedRecoveryMaxLines, fencedRecoveryMaxLines+1)
-		} else {
-			ctx.RecordBodySeen(resolvedPath)
-		}
+		recordSteeredRead(ctx, relPath, resolvedPath, source, truncated)
 		log.Printf("[agent] steering recovery for %s: showed the file (truncated=%v)", relPath, truncated)
 	} else {
 		fmt.Fprintf(&sb, "You have already read %s, and write_file will keep refusing it — "+
@@ -6780,6 +6667,38 @@ func steerRecovery(ctx *AgentContext, st *runState, relPath, resolvedPath string
 		log.Printf("[agent] steering recovery for %s: reminded once, no reread", relPath)
 	}
 	return sb.String()
+}
+
+// tooLateToRecover reports a run with too little time left for a recovery:
+// context nobody has time to act on is worse than stopping.
+func tooLateToRecover(ctx *AgentContext, what string) bool {
+	if ctx.Ctx == nil {
+		return false
+	}
+	deadline, ok := ctx.Ctx.Deadline()
+	if !ok || time.Until(deadline) >= fencedRecoveryFloor {
+		return false
+	}
+	log.Printf("[agent] skipping %s — %v of budget left", what, time.Until(deadline).Round(time.Second))
+	return true
+}
+
+// recordSteeredRead records only what the recovery showed, exactly as read_file
+// does for a truncated read: the model owns what it saw and nothing more.
+func recordSteeredRead(ctx *AgentContext, relPath, resolvedPath, source string, truncated bool) {
+	shown := source
+	if !truncated {
+		if data, _, err := readWorkspaceFile(ctx, relPath); err == nil {
+			shown = string(data)
+		}
+	}
+	ctx.RecordFileRead(resolvedPath, shown)
+	if truncated {
+		// Only the head was shown; the file runs past it.
+		ctx.RecordBodyRead(resolvedPath, 1, fencedRecoveryMaxLines, fencedRecoveryMaxLines+1)
+	} else {
+		ctx.RecordBodySeen(resolvedPath)
+	}
 }
 
 // clearSteerState releases a path's steering state after a materially
@@ -6936,6 +6855,25 @@ func noteRejectedProposal(ctx *AgentContext, st *runState, name string,
 	if canon == "" {
 		return "", "", 0
 	}
+	ev := rejectionEvidence(ctx, st, canon, diskHash)
+	if ev == nil {
+		return "", "", 0
+	}
+	if _, seen := ev.diagnostics[sha]; !seen {
+		if len(ev.order) >= maxC4Proposals {
+			return canon, sha, len(ev.order)
+		}
+		ev.order = append(ev.order, sha)
+	}
+	// Stored together, always: a hash without its own diagnostic would be a
+	// diagnostic waiting to be attached to the wrong bytes.
+	ev.diagnostics[sha] = result.ValidationDetail
+	return canon, sha, len(ev.order)
+}
+
+// rejectionEvidence is what is held for canon at these bytes, or nil when there
+// is no room to hold it.
+func rejectionEvidence(ctx *AgentContext, st *runState, canon, diskHash string) *proposalRejection {
 	if st.c4Rejected == nil {
 		st.c4Rejected = map[string]*proposalRejection{}
 	}
@@ -6949,7 +6887,7 @@ func noteRejectedProposal(ctx *AgentContext, st *runState, name string,
 			// diagnostic can be offered for these bytes at all.
 			evictStaleGenerations(ctx, st)
 			if len(st.c4Rejected) >= maxC4Generations {
-				return "", "", 0
+				return nil
 			}
 		}
 		ev = &proposalRejection{}
@@ -6960,16 +6898,7 @@ func noteRejectedProposal(ctx *AgentContext, st *runState, name string,
 		// hashes and diagnostics are released with the bytes they described.
 		ev.reset(diskHash)
 	}
-	if _, seen := ev.diagnostics[sha]; !seen {
-		if len(ev.order) >= maxC4Proposals {
-			return canon, sha, len(ev.order)
-		}
-		ev.order = append(ev.order, sha)
-	}
-	// Stored together, always: a hash without its own diagnostic would be a
-	// diagnostic waiting to be attached to the wrong bytes.
-	ev.diagnostics[sha] = result.ValidationDetail
-	return canon, sha, len(ev.order)
+	return ev
 }
 
 // rejectedProposalRecovery shows the model the file it is replacing and says
@@ -7154,13 +7083,8 @@ func brokenArtifactRecovery(ctx *AgentContext, st *runState, relPath string) str
 	if st.noopEditRepeats[genKey] < c3RecoveryRepeat || st.brokenArtifactRecovered[genKey] {
 		return ""
 	}
-	// Context nobody has time to act on is worse than stopping.
-	if ctx.Ctx != nil {
-		if deadline, ok := ctx.Ctx.Deadline(); ok && time.Until(deadline) < fencedRecoveryFloor {
-			log.Printf("[agent] skipping the no-op-edit recovery for %s — %v of budget left",
-				relPath, time.Until(deadline).Round(time.Second))
-			return ""
-		}
+	if tooLateToRecover(ctx, "the no-op-edit recovery for "+relPath) {
+		return ""
 	}
 	source, truncated, err := boundedCurrentSource(ctx, relPath)
 	if err != nil {
@@ -7179,16 +7103,21 @@ func brokenArtifactRecovery(ctx *AgentContext, st *runState, relPath string) str
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "That edit changes nothing: old_str and new_str are the same string, "+
 		"so %s would be left exactly as it is. It is still broken.\n\n", relPath)
-	fmt.Fprintf(&sb, "%s currently contains", relPath)
-	if truncated {
-		fmt.Fprintf(&sb, " (first %d lines)", fencedRecoveryMaxLines)
-	}
-	sb.WriteString(":\n\n")
-	sb.WriteString(source)
+	writeCurrentSource(&sb, relPath, source, truncated)
 	fmt.Fprintf(&sb, "\n\nThe %s check on exactly these bytes failed: %s\n\n", kind, detail)
 	sb.WriteString("Send an edit whose new_str actually differs from old_str and fixes that. " +
 		"Nothing has been changed for you, and nothing will be until you do.")
 	return sb.String()
+}
+
+// writeCurrentSource shows the file as it is now, and says when that is only its head.
+func writeCurrentSource(sb *strings.Builder, relPath, source string, truncated bool) {
+	fmt.Fprintf(sb, "%s currently contains", relPath)
+	if truncated {
+		fmt.Fprintf(sb, " (first %d lines)", fencedRecoveryMaxLines)
+	}
+	sb.WriteString(":\n\n")
+	sb.WriteString(source)
 }
 
 // clearBrokenArtifactState releases a path's C3 state once a materially
@@ -7311,13 +7240,8 @@ func fencedChannelRecovery(ctx *AgentContext, st *runState, relPath string) stri
 	if st.fencedChannelClosed[key] {
 		return ""
 	}
-	// Context nobody has time to act on is worse than stopping.
-	if ctx.Ctx != nil {
-		if deadline, ok := ctx.Ctx.Deadline(); ok && time.Until(deadline) < fencedRecoveryFloor {
-			log.Printf("[agent] skipping the fenced-channel recovery for %s — %v of budget left",
-				relPath, time.Until(deadline).Round(time.Second))
-			return ""
-		}
+	if tooLateToRecover(ctx, "the fenced-channel recovery for "+relPath) {
+		return ""
 	}
 	if st.fencedChannelClosed == nil {
 		st.fencedChannelClosed = map[string]bool{}
@@ -7332,12 +7256,7 @@ func fencedChannelRecovery(ctx *AgentContext, st *runState, relPath string) stri
 		"succeed now, however many times it is repeated.\n\n", relPath, relPath)
 
 	if source, truncated, err := boundedCurrentSource(ctx, relPath); err == nil {
-		fmt.Fprintf(&sb, "%s currently contains", relPath)
-		if truncated {
-			fmt.Fprintf(&sb, " (first %d lines)", fencedRecoveryMaxLines)
-		}
-		sb.WriteString(":\n\n")
-		sb.WriteString(source)
+		writeCurrentSource(&sb, relPath, source, truncated)
 		sb.WriteString("\n\n")
 	} else {
 		fmt.Fprintf(&sb, "%s is not on disk yet, so there is nothing to show you "+
@@ -7435,29 +7354,8 @@ func finalizeCompletion(ctx *AgentContext, st *runState, userMessage, completedR
 		tc.TaskMode == TaskModeWork && st.madeProductiveChange {
 		return TerminalIncomplete, "work_not_declared_complete"
 	}
-	// The claim itself says it is not an answer. exitGates recorded it: a
-	// closing that deferred work the session could not be sent back to do,
-	// or a first-person statement that the request could not be accomplished.
-	// Product status only -- whether an answer is acceptable to a user is
-	// judged elsewhere.
-	if st.replyOutstanding {
-		return TerminalIncomplete, "reply_left_work_outstanding"
-	}
-	if st.replyDeclaredIncomplete {
-		return TerminalIncomplete, "reply_declared_incomplete"
-	}
-	// The reply asks the user for something. Handed back: the run had files it
-	// never opened. Awaiting: it had nothing to open, or already looked.
-	if st.replyHandedBack {
-		return TerminalIncomplete, "investigation_handed_back"
-	}
-	// The run opened several files and answered for fewer than two of them,
-	// after being sent back for the coverage the request asked for.
-	if st.replyScopeUnmet {
-		return TerminalIncomplete, "investigation_scope_unmet"
-	}
-	if st.replyAwaitsUser {
-		return TerminalIncomplete, "clarification_requested"
+	if reason := st.replyIncompleteReason(); reason != "" {
+		return TerminalIncomplete, reason
 	}
 	// Something may still be writing. A hash taken now describes an instant,
 	// not a result, and nothing here can tell a quiet process from a finished
@@ -7484,15 +7382,50 @@ func finalizeCompletion(ctx *AgentContext, st *runState, userMessage, completedR
 	// that never ran, a reply citing files the run never read. Last, so every
 	// more specific reason above keeps its place. The heuristic gates stand as
 	// caveats in the summary instead.
-	for _, u := range unresolvedReasons {
-		if _, ok := st.unresolvedGates[u.gate]; ok {
-			return TerminalIncomplete, u.reason
-		}
+	if reason := st.unresolvedGateReason(); reason != "" {
+		return TerminalIncomplete, reason
 	}
 	if completedReason != "" {
 		return TerminalCompleted, completedReason
 	}
 	return TerminalCompleted, why
+}
+
+// replyIncompleteReason is why the closing itself is not an answer, or "".
+func (st *runState) replyIncompleteReason() string {
+	switch {
+	// The claim itself says it is not an answer. exitGates recorded it: a
+	// closing that deferred work the session could not be sent back to do,
+	// or a first-person statement that the request could not be accomplished.
+	// Product status only -- whether an answer is acceptable to a user is
+	// judged elsewhere.
+	case st.replyOutstanding:
+		return "reply_left_work_outstanding"
+	case st.replyDeclaredIncomplete:
+		return "reply_declared_incomplete"
+	// The reply asks the user for something. Handed back: the run had files it
+	// never opened. Awaiting: it had nothing to open, or already looked.
+	case st.replyHandedBack:
+		return "investigation_handed_back"
+	// The run opened several files and answered for fewer than two of them,
+	// after being sent back for the coverage the request asked for.
+	case st.replyScopeUnmet:
+		return "investigation_scope_unmet"
+	case st.replyAwaitsUser:
+		return "clarification_requested"
+	}
+	return ""
+}
+
+// unresolvedGateReason is the reason of the first listed gate that spent its
+// bounces with its finding still true, or "".
+func (st *runState) unresolvedGateReason() string {
+	for _, u := range unresolvedReasons {
+		if _, ok := st.unresolvedGates[u.gate]; ok {
+			return u.reason
+		}
+	}
+	return ""
 }
 
 // --- Unresolved mutation debt -----------------------------------------------
@@ -7550,7 +7483,7 @@ func mutationIntentTargets(ctx *AgentContext, name string, args json.RawMessage)
 	if denied, _ := shouldDenyToolCall(name, args); denied {
 		return nil
 	}
-	if reason := validateToolWorkspacePaths(name, args, ctx); reason != "" {
+	if validateToolWorkspacePaths(name, args, ctx) != "" {
 		return nil
 	}
 	rel := func(field string) string {
@@ -7592,15 +7525,7 @@ func noteMutationIntent(ctx *AgentContext, st *runState, name string, args json.
 			st.mutationDebt = map[string]*mutationDebtEntry{}
 		}
 		if prev, exists := st.mutationDebt[key]; exists {
-			// The one structured way a mistaken path is retired: the model
-			// explicitly asks for the same path to be REMOVED. That converts
-			// what it owes from "produce this" to "prove it is gone", and the
-			// proof is a confirmed absence, not a claim.
-			if prev.Kind == debtContent && e.Kind == debtDelete {
-				e.Gen = prev.Gen
-				st.mutationDebt[key] = e
-				log.Printf("[agent] %s: explicit removal requested — it now has to be shown gone", e.Rel)
-			}
+			st.retireMistakenPath(key, prev, e)
 			continue // one debt per canonical path, whatever the spelling
 		}
 		if len(st.mutationDebt) >= maxTrackedMutationDebt {
@@ -7620,6 +7545,18 @@ func noteMutationIntent(ctx *AgentContext, st *runState, name string, args json.
 		e.Gen = st.debtGeneration
 		st.mutationDebt[key] = e
 		log.Printf("[agent] tracking unresolved %s work on %s", e.Kind, e.Rel)
+	}
+}
+
+// retireMistakenPath is the one structured way a mistaken path is retired: the
+// model explicitly asks for the same path to be REMOVED. That converts what it
+// owes from "produce this" to "prove it is gone", and the proof is a confirmed
+// absence, not a claim.
+func (st *runState) retireMistakenPath(key string, prev, e *mutationDebtEntry) {
+	if prev.Kind == debtContent && e.Kind == debtDelete {
+		e.Gen = prev.Gen
+		st.mutationDebt[key] = e
+		log.Printf("[agent] %s: explicit removal requested — it now has to be shown gone", e.Rel)
 	}
 }
 
@@ -7824,7 +7761,7 @@ func unresolvedDebtSummary(st *runState) string {
 	if more {
 		sb.WriteString(" Other files are in the same state.")
 	}
-	sb.WriteString(" This run did not confirm the task was complete.")
+	sb.WriteString(runNotConfirmedNote)
 	return sb.String()
 }
 
@@ -7846,13 +7783,8 @@ func offerDebtRecovery(ctx *AgentContext, st *runState) string {
 	if st.debtRecoveryOffered >= st.debtGeneration || st.debtRecoveryCount >= maxDebtRecoveries {
 		return ""
 	}
-	// Context nobody has budget to act on is worse than stopping.
-	if ctx.Ctx != nil {
-		if deadline, ok := ctx.Ctx.Deadline(); ok && time.Until(deadline) < fencedRecoveryFloor {
-			log.Printf("[agent] skipping the unresolved-work recovery — %v of budget left",
-				time.Until(deadline).Round(time.Second))
-			return ""
-		}
+	if tooLateToRecover(ctx, "the unresolved-work recovery") {
+		return ""
 	}
 	st.debtRecoveryOffered = st.debtGeneration
 	st.debtRecoveryCount++

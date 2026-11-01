@@ -285,6 +285,29 @@ func TestEachReplyKindEndsTheRunWithItsOwnStatus(t *testing.T) {
 	}
 }
 
+// A closing can be several of these at once, and the reasons have an order: each
+// stands until its own flag clears.
+func TestTheReplyReasonsHaveAnOrder(t *testing.T) {
+	ctx := NewAgentContext(t.TempDir(), Tier1Simple)
+	st := &runState{replyOutstanding: true, replyDeclaredIncomplete: true, replyHandedBack: true,
+		replyScopeUnmet: true, replyAwaitsUser: true}
+	for _, step := range []struct {
+		want  string
+		clear *bool
+	}{
+		{"reply_left_work_outstanding", &st.replyOutstanding},
+		{"reply_declared_incomplete", &st.replyDeclaredIncomplete},
+		{"investigation_handed_back", &st.replyHandedBack},
+		{"investigation_scope_unmet", &st.replyScopeUnmet},
+		{"clarification_requested", &st.replyAwaitsUser},
+	} {
+		if _, reason := finalizeCompletion(ctx, st, "", "text_reply"); reason != step.want {
+			t.Errorf("reason = %q, want %q", reason, step.want)
+		}
+		*step.clear = false
+	}
+}
+
 // A clarification ends the run waiting for the user, and its summary says so.
 func TestAClarificationSaysItIsWaitingForTheAnswer(t *testing.T) {
 	for _, tc := range []struct {

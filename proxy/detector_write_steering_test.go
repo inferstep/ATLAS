@@ -443,6 +443,33 @@ func TestUnreadSteerRecoveryShowsTheFile(t *testing.T) {
 	}
 }
 
+// A file too long to show whole is shown by its head, and the model owns only
+// that: the lines past it stay unread.
+func TestASteerRecoveryOfALongFileRecordsOnlyItsHead(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "long.py")
+	if err := os.WriteFile(path, []byte(strings.Repeat("x = 1\n", fencedRecoveryMaxLines+50)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := NewAgentContext(dir, Tier2Medium)
+	st := &runState{}
+
+	var note string
+	for i := 0; i < steerRecoveryRepeat; i++ {
+		note = steerRecovery(ctx, st, "long.py", path, true)
+	}
+
+	if want := fmt.Sprintf("(first %d lines)", fencedRecoveryMaxLines); !strings.Contains(note, want) {
+		t.Errorf("the recovery does not say %q: %.120s", want, note)
+	}
+	if !ctx.LineWasShown(path, fencedRecoveryMaxLines) {
+		t.Error("the last line of the head was not recorded as shown")
+	}
+	if ctx.LineWasShown(path, fencedRecoveryMaxLines+1) {
+		t.Error("a line past the head was recorded as shown")
+	}
+}
+
 // The already-read steer fails for a different reason, so it gets a different
 // recovery: one reminder, no reread, both edit tools still on the table.
 func TestAlreadyReadSteerRecoveryRemindsWithoutRereading(t *testing.T) {

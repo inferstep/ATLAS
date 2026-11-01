@@ -57,6 +57,7 @@ pull_requests:
     proxy/agent_handler.go: the agent loop
     proxy/llm_call.go: the agent loop
     proxy/model_reply.go: the agent loop
+    proxy/plan_generation.go: the agent loop
     proxy/system_prompt.go: the agent loop
     proxy/task_tier.go: the agent loop
     proxy/tool*: the tool handlers
