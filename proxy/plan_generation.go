@@ -246,3 +246,34 @@ func isSourceExtension(ext string) bool {
 	}
 	return false
 }
+
+// addFilesReadToPlanContext adds the files this run has read to the context of
+// a revised plan, until the context holds `limit` files.
+//
+// When more files were read than fit, they are taken in sorted order of their
+// paths. The run keeps no order of reading (FilesRead is a map), and the map's
+// own order would make which files the planner sees a matter of chance.
+func addFilesReadToPlanContext(ctx *AgentContext, pctx map[string]string, limit int) {
+	files := ctx.SnapshotFilesRead()
+	for _, path := range sortedKeys(files) {
+		if len(pctx) >= limit {
+			break
+		}
+		// Use relative path if possible so the planner key matches
+		// what the agent will pass to read_file/edit_file later.
+		rel := path
+		if strings.HasPrefix(path, ctx.WorkingDir+"/") {
+			rel = strings.TrimPrefix(path, ctx.WorkingDir+"/")
+		}
+		pctx[rel] = contextEntry(files[path], 2000)
+	}
+}
+
+// contextEntry cuts a file to the bytes a request carries for it, to save
+// tokens.
+func contextEntry(content string, limit int) string {
+	if len(content) > limit {
+		return content[:limit] + "\n... (truncated)"
+	}
+	return content
+}

@@ -672,7 +672,7 @@ func TestTheAttributionCannotBecomeAnObligationOrAVerificationResult(t *testing.
 		"authorization_decision.go", "authorization_grant.go", "candidate_delivery.go",
 		"delivery_settlement.go", "feasibility_decision.go", "candidate_policy.go",
 		"advisory_policy.go", "gates.go",
-		"gates_asset_lint.go", "gates_background_jobs.go", "gates_command_line.go",
+		"gates_asset_lint.go", "gates_background_jobs.go", "shell_wrapper.go",
 		"gates_completion.go", "gates_edit_requests.go", "gates_ledger.go", "gates_plan.go",
 		"gates_syntax_rejection.go", "gates_workspace_alignment.go",
 		"guardrails.go",
