@@ -222,7 +222,7 @@ def test_each_file_of_a_group_is_there_and_is_in_one_group_only(counted):
 
 
 def test_the_groups_hold_the_files_that_carry_the_mark_and_no_other(counted):
-    marked = re.findall(r'"/(tests/infrastructure/test_\w+\.py)"', (ROOT / "tests" / "conftest.py").read_text(encoding="utf-8"))
+    marked = re.findall(r'"/(tests/infrastructure/(?:sandbox/)?test_\w+\.py)"', (ROOT / "tests" / "conftest.py").read_text(encoding="utf-8"))
     in_a_group = sorted(file for group in counted.GROUPS.values() for file in group.files)
     assert sorted(marked) == in_a_group, (
         "tests/conftest.py gives the mark `integration` to another list of files than the groups of scripts/tests_counted.py "
@@ -249,7 +249,7 @@ def number_of_tests(file):
 def test_the_number_of_each_group_is_the_number_of_tests_in_its_files_and_the_gates_page_has_each(counted):
     page = (ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8")
     rows = {file: (int(count), runs_in) for file, count, runs_in in
-            re.findall(r"^\| `(tests/infrastructure/test_\w+\.py)` \| (\d+) \| [^|]+ \| ([^|]+?) \|$", page, re.MULTILINE)}
+            re.findall(r"^\| `(tests/infrastructure/(?:sandbox/)?test_\w+\.py)` \| (\d+) \| [^|]+ \| ([^|]+?) \|$", page, re.MULTILINE)}
     for name, group in counted.GROUPS.items():
         in_the_files = {file: number_of_tests(file) for file in group.files}
         assert sum(in_the_files.values()) == group.expected, (

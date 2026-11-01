@@ -287,9 +287,9 @@ def pytest_collection_modifyitems(config, items):
         path = str(item.fspath).replace("\\", "/")
         live_infrastructure = path.endswith((
             "/tests/infrastructure/test_llm.py",
-            "/tests/infrastructure/test_sandbox.py",
-            "/tests/infrastructure/test_sandbox_java_kotlin.py",
-            "/tests/infrastructure/test_sandbox_ruby_php.py",
+            "/tests/infrastructure/sandbox/test_sandbox.py",
+            "/tests/infrastructure/sandbox/test_sandbox_java_kotlin.py",
+            "/tests/infrastructure/sandbox/test_sandbox_ruby_php.py",
             "/tests/infrastructure/test_tui_render.py",
             "/tests/infrastructure/test_tui_commands.py",
             "/tests/infrastructure/test_control_plane.py",
