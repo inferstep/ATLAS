@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -3259,5 +3260,223 @@ func TestTheSameEditIsAppliedOnce(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(path); string(got) != " x = 1\n" {
 		t.Errorf("the file holds %q", got)
+	}
+}
+
+// What structural_edit answers for each shape of its call that no other test
+// sends. The service is a stub: `spliced` is the file it hands back, or `body`
+// its whole answer. A refusal leaves the file as it was.
+func TestStructuralEditAnswersEachShapeOfItsCall(t *testing.T) {
+	original := "def a():\n    return 1\n"
+	entry := "if __name__ == \"__main__\":\n    a()\n"
+	for _, c := range []struct {
+		name, file, selector, content string
+		spliced, body                 string
+		oldSize, newSize              int
+		wantSent, wantError, wantDisk string
+	}{
+		{name: "a fenced replacement loses its fence", file: "a.py", selector: "function:a",
+			content: "```python\ndef a():\n    return 2\n```\n", spliced: "def a():\n    return 2\n",
+			wantSent: "def a():\n    return 2\n", wantDisk: "def a():\n    return 2\n"},
+		{name: "the doctype of a replaced html element goes", file: "a.html", selector: "<html>",
+			content: "<!DOCTYPE html>\n<html></html>\n", spliced: "<html></html>\n",
+			wantSent: "<html></html>\n", wantDisk: "<html></html>\n"},
+		{name: "a service answer that is not JSON", file: "a.py", selector: "function:a",
+			content: "def a():\n    return 2\n", body: "not json",
+			wantError: "parse v3 response", wantDisk: original},
+		{name: "a replacement far smaller than its node", file: "a.py", selector: "function:a",
+			content: "def a(): pass\n", spliced: "def a(): pass\n", oldSize: 200, newSize: 14,
+			wantError: "suspiciously small", wantDisk: original},
+		{name: "a call that resolves to nothing", file: "a.py", selector: "function:a",
+			content: "def a():\n    return missing_helper()\n", spliced: "def a():\n    return missing_helper()\n",
+			wantError: "missing_helper", wantDisk: original},
+		{name: "a second module entrypoint", file: "a.py", selector: "function:a",
+			content: "def a():\n    return 2\n", spliced: entry + "\n" + entry,
+			wantError: "`if __name__ == \"__main__\":` blocks", wantDisk: original},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var sent string
+			service := httptest.NewServer(structuralEditStub(t, c.spliced, c.body, c.oldSize, c.newSize, &sent))
+			defer service.Close()
+			dir := t.TempDir()
+			path := filepath.Join(dir, c.file)
+			if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			ctx := writeGateCtx(t, service.URL, "", dir)
+			ctx.RecordFileRead(path, original)
+			args, err := json.Marshal(map[string]string{"path": c.file, "selector": c.selector, "content": c.content})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			res, execErr := structuralEditTool().Execute(args, ctx)
+
+			answer := fmt.Sprint(execErr)
+			if res != nil {
+				answer = res.Error
+			}
+			if !strings.Contains(answer, c.wantError) {
+				t.Errorf("answer %q, want it to hold %q", answer, c.wantError)
+			}
+			if c.wantSent != "" && sent != c.wantSent {
+				t.Errorf("the service got %q, want %q", sent, c.wantSent)
+			}
+			if got, err := os.ReadFile(path); err != nil || string(got) != c.wantDisk {
+				t.Errorf("the file holds %q (%v), want %q", got, err, c.wantDisk)
+			}
+		})
+	}
+}
+
+// structuralEditStub answers for v3-service: `spliced` is the file it hands back,
+// or `body` its whole answer. It keeps the content it was sent in `sent`, and
+// reports `missing_helper` as a call that resolves to nothing.
+func structuralEditStub(t *testing.T, spliced, body string, oldSize, newSize int, sent *string) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/internal/structural_edit":
+			var request struct{ Content string }
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Error(err)
+			}
+			*sent = request.Content
+			if body != "" {
+				fmt.Fprint(w, body)
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "language": "python",
+				"new_content": spliced, "old_size": oldSize, "new_size": newSize})
+		case "/internal/structural_check":
+			var request struct{ Source string }
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Error(err)
+			}
+			unresolved := []string{}
+			if strings.Contains(request.Source, "missing_helper(") {
+				unresolved = append(unresolved, "missing_helper")
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "unresolved": unresolved})
+		default:
+			http.NotFound(w, r)
+		}
+	}
+}
+
+// An edit below the tier that warrants a candidate lands the caller's own
+// content, and the service is never asked to generate one.
+func TestABypassedStructuralEditStaysOffTheV3Route(t *testing.T) {
+	const original, edited = "def a():\n    return 1\n", "def a():\n    return 2\n"
+	var sent string
+	var generated atomic.Bool
+	stub := structuralEditStub(t, edited, "", 0, 0, &sent)
+	service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v3/generate" {
+			generated.Store(true)
+		}
+		stub(w, r)
+	}))
+	defer service.Close()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.py")
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := writeGateCtx(t, service.URL, "", dir)
+	ctx.RecordFileRead(path, original)
+	args, err := json.Marshal(map[string]string{"path": "a.py", "selector": "function:a", "content": edited})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, execErr := structuralEditTool().Execute(args, ctx)
+
+	if execErr != nil || !res.Success {
+		t.Fatalf("the edit was refused: %v, %+v", execErr, res)
+	}
+	if generated.Load() {
+		t.Error("a bypassed edit reached the V3 route")
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != edited {
+		t.Errorf("the file holds %q (%v), want %q", got, err, edited)
+	}
+}
+
+// A call that names no file or node, or whose content cannot be one node's body,
+// is answered before the service is asked.
+func TestStructuralEditRefusesACallThatCannotBeAnEdit(t *testing.T) {
+	body := "def a():\n    return 2\n"
+	for _, c := range []struct {
+		name, path, selector, content, want string
+	}{
+		{"no path", " ", "function:a", body, "path cannot be empty"},
+		{"no selector", "a.py", " ", body, "selector cannot be empty"},
+		{"no content", "a.py", "function:a", " ", "content is empty"},
+		{"content far larger than the file", "a.py", "function:a", strings.Repeat("x", 8001), "far larger than the entire"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				t.Errorf("the service was asked: %s", r.URL.Path)
+			}))
+			defer service.Close()
+			dir := t.TempDir()
+			path := filepath.Join(dir, "a.py")
+			original := "def a():\n    return 1\n"
+			if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			ctx := writeGateCtx(t, service.URL, "", dir)
+			ctx.RecordFileRead(path, original)
+			args, err := json.Marshal(map[string]string{"path": c.path, "selector": c.selector, "content": c.content})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			res, err := structuralEditTool().Execute(args, ctx)
+
+			if err != nil || res.Success || !strings.Contains(res.Error, c.want) {
+				t.Errorf("result %+v, error %v, want a refusal holding %q", res, err, c.want)
+			}
+			if got, err := os.ReadFile(path); err != nil || string(got) != original {
+				t.Errorf("the file holds %q (%v)", got, err)
+			}
+		})
+	}
+}
+
+// A file that changed after the read is refused, and a service that cannot be
+// reached leaves the file as it was.
+func TestStructuralEditRefusesWhatItCannotTrust(t *testing.T) {
+	gone := httptest.NewServer(http.NotFoundHandler())
+	gone.Close()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.py")
+	original := "def a():\n    return 1\n"
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := writeGateCtx(t, gone.URL, "", dir)
+	ctx.RecordFileRead(path, original)
+	args := json.RawMessage(`{"path":"a.py","selector":"function:a","content":"def a():\n    return 2\n"}`)
+
+	if _, err := structuralEditTool().Execute(args, ctx); err == nil || !strings.Contains(err.Error(), "v3-service unreachable") {
+		t.Errorf("with the service gone: %v", err)
+	}
+
+	changed := "def a():\n    return 3\n"
+	if err := os.WriteFile(path, []byte(changed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Later than the read, whatever the file system's clock resolution.
+	later := time.Now().Add(time.Hour)
+	if err := os.Chtimes(path, later, later); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := structuralEditTool().Execute(args, ctx); err == nil || !strings.Contains(err.Error(), "file modified since last read") {
+		t.Errorf("with the file changed: %v", err)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != changed {
+		t.Errorf("the file holds %q (%v), want %q", got, err, changed)
 	}
 }
