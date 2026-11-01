@@ -138,27 +138,7 @@ func executeToolCall(name string, args json.RawMessage, ctx *AgentContext) *Tool
 	if result == nil || tool == nil {
 		return result
 	}
-	// Only fill what the effect class alone can prove, and only where a local
-	// producer has not already spoken.
-	if tool.Effect.BoundaryClassifiable() && result.MutationStatus == MutationUnknown {
-		switch tool.Effect {
-		case ToolEffectReadOnly:
-			// Cannot mutate by construction, on success or failure alike.
-			result.MutationStatus = MutationNone
-		case ToolEffectCommandUnobserved:
-			// Conservative: once dispatch reached the handler, a subprocess or
-			// background job may have started and written before failing,
-			// timing out, or being killed. Only a branch that proves no
-			// execution began may claim MutationNone, and it does so locally.
-			result.MutationStatus = MutationUnobserved
-		}
-	}
-	if result.ValidationKind == ValidationKindUnknown && tool.Effect.BoundaryClassifiable() {
-		// Neither class performs content validation. Saying so explicitly is
-		// different from leaving it unknown.
-		result.ValidationKind = ValidationKindNone
-		result.ValidationStatus = ValidationNotApplicable
-	}
+	classifyByEffect(tool.Effect, result)
 	// Observational: records what the call did to the session's deliverables.
 	// Runs after classification so it sees the final evidence, and returns the
 	// same result either way — nothing downstream can observe that it ran.
@@ -176,6 +156,33 @@ func executeToolCall(name string, args json.RawMessage, ctx *AgentContext) *Tool
 		settleBackgroundEffects(ctx)
 	}
 	return result
+}
+
+// classifyByEffect fills only what the effect class alone can prove, and only
+// where a local producer has not already spoken.
+func classifyByEffect(effect ToolEffect, result *ToolResult) {
+	if !effect.BoundaryClassifiable() {
+		return
+	}
+	if result.MutationStatus == MutationUnknown {
+		switch effect {
+		case ToolEffectReadOnly:
+			// Cannot mutate by construction, on success or failure alike.
+			result.MutationStatus = MutationNone
+		case ToolEffectCommandUnobserved:
+			// Conservative: once dispatch reached the handler, a subprocess or
+			// background job may have started and written before failing,
+			// timing out, or being killed. Only a branch that proves no
+			// execution began may claim MutationNone, and it does so locally.
+			result.MutationStatus = MutationUnobserved
+		}
+	}
+	if result.ValidationKind == ValidationKindUnknown {
+		// Neither class performs content validation. Saying so explicitly is
+		// different from leaving it unknown.
+		result.ValidationKind = ValidationKindNone
+		result.ValidationStatus = ValidationNotApplicable
+	}
 }
 
 func executeToolCallInner(name string, args json.RawMessage, ctx *AgentContext) *ToolResult {
