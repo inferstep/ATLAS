@@ -1670,6 +1670,51 @@ func TestStepExclusions(t *testing.T) {
 			wantExt:   ".html",
 		},
 		{
+			name: "the same refusal from another tool — does not fire",
+			messages: []AgentMessage{
+				{Role: "tool", ToolName: "edit_file", Content: `{"success":false,"error":"File app.py already exists (10 lines)."}`},
+			},
+			wantTools: nil,
+			wantExt:   "",
+		},
+		{
+			name: "a write_file failure of another kind — does not fire",
+			messages: []AgentMessage{
+				{Role: "tool", ToolName: "write_file", Content: `{"success":false,"error":"File app.py is read-only."}`},
+			},
+			wantTools: nil,
+			wantExt:   "",
+		},
+		{
+			name: "a read after the refusal, inside the window — still fires",
+			messages: []AgentMessage{
+				{Role: "tool", ToolName: "write_file", Content: `{"success":false,"error":"File app.py already exists (10 lines)."}`},
+				{Role: "tool", ToolName: "read_file", Content: "x = 1"},
+			},
+			wantTools: []string{"edit_file", "write_file"},
+			wantExt:   ".py",
+		},
+		{
+			name: "no space after the path — does not fire",
+			messages: []AgentMessage{
+				{Role: "tool", ToolName: "write_file", Content: "already exists: File app.py"},
+			},
+			wantTools: nil,
+			wantExt:   "",
+		},
+		{
+			name: "a refusal seven tool results back — out of the window",
+			messages: []AgentMessage{
+				{Role: "tool", ToolName: "write_file", Content: `{"success":false,"error":"File app.py already exists (10 lines)."}`},
+				{Role: "tool", ToolName: "read_file"}, {Role: "tool", ToolName: "read_file"},
+				{Role: "tool", ToolName: "read_file"}, {Role: "tool", ToolName: "read_file"},
+				{Role: "tool", ToolName: "read_file"}, {Role: "tool", ToolName: "read_file"},
+				{Role: "tool", ToolName: "read_file"},
+			},
+			wantTools: nil,
+			wantExt:   "",
+		},
+		{
 			name:      "empty conversation — does not fire",
 			messages:  []AgentMessage{},
 			wantTools: nil,
@@ -2405,10 +2450,24 @@ func TestLastReadIsRestatedAtTheGenerationPoint(t *testing.T) {
 		t.Fatalf("expected a restatement appended, got %d messages", len(got))
 	}
 	last := got[len(got)-1]["content"]
-	for _, want := range []string{"app.py", "1\talpha", "2\tbravo", "NOT in the file"} {
+	for _, want := range []string{"Current contents of app.py (line", "1\talpha", "2\tbravo", "NOT in the file"} {
 		if !strings.Contains(last, want) {
 			t.Errorf("restatement missing %q:\n%s", want, last)
 		}
+	}
+}
+
+// A file outside the workspace has no name relative to it, so the restatement
+// keeps its whole path.
+func TestALastReadOutsideTheWorkspaceKeepsItsWholePath(t *testing.T) {
+	ctx := NewAgentContext(t.TempDir(), Tier1Simple)
+	outside := filepath.Join(t.TempDir(), "app.py")
+	ctx.RecordFileRead(outside, "alpha\n")
+
+	got := appendLastReadRestatementFor(ctx, []map[string]string{{"role": "user", "content": "fix the bug"}}, "")
+
+	if want := "Current contents of " + outside + " (line"; !strings.Contains(got[len(got)-1]["content"], want) {
+		t.Errorf("restatement does not hold %q:\n%s", want, got[len(got)-1]["content"])
 	}
 }
 
