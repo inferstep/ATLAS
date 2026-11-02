@@ -143,7 +143,9 @@ func safeDiagnosticSummary(detail string) string {
 // escapeControls prints every control character but tab, and the Unicode line
 // and paragraph separators, as text, so no logged value can start a line of its
 // own or reach a terminal as a control code. A byte that is not UTF-8 becomes
-// the replacement character.
+// the replacement character. The \uXXXX form stays valid inside a JSON
+// string: logEvent's finished records pass through here, and json.Marshal
+// leaves DEL and the C1 controls raw.
 func escapeControls(s string) string {
 	var out strings.Builder
 	for _, r := range s {
@@ -152,9 +154,7 @@ func escapeControls(s string) string {
 			out.WriteString(`\n`)
 		case r == '\r':
 			out.WriteString(`\r`)
-		case r != '\t' && unicode.IsControl(r):
-			fmt.Fprintf(&out, `\x%02x`, r)
-		case unicode.In(r, unicode.Zl, unicode.Zp):
+		case r != '\t' && unicode.IsControl(r), unicode.In(r, unicode.Zl, unicode.Zp):
 			fmt.Fprintf(&out, `\u%04x`, r)
 		default:
 			out.WriteRune(r)

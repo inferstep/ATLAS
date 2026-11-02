@@ -204,10 +204,10 @@ func TestALoggedValueStaysInsideItsRecord(t *testing.T) {
 		{"backslash", `a\b`, `a\b`},
 		{"text that reads as an escape", `a\nb`, `a\nb`},
 		{"tab", "a\tb", "a\tb"},
-		{"escape character", "a\x1b[0mb", `a\x1b[0mb`},
-		{"null", "a\x00b", `a\x00b`},
-		{"delete", "a\x7fb", `a\x7fb`},
-		{"control character above ASCII", "a\xc2\x85b", `a\x85b`},
+		{"escape character", "a\x1b[0mb", `a\u001b[0mb`},
+		{"null", "a\x00b", `a\u0000b`},
+		{"delete", "a\x7fb", `a\u007fb`},
+		{"control character above ASCII", "a\xc2\x85b", `a\u0085b`},
 		{"line and paragraph separators", "a\xe2\x80\xa8b\xe2\x80\xa9c", `a\u2028b\u2029c`},
 		{"letter above ASCII", "a\xc3\xa9b", "a\xc3\xa9b"},
 		{"byte that is not UTF-8", "a\xffb", "a\xef\xbf\xbdb"},
@@ -226,10 +226,32 @@ func TestALoggedValueStaysInsideItsRecord(t *testing.T) {
 	}
 }
 
+// logEvent's finished JSON passes through the writer too. An escape that is
+// not valid JSON would make jsonLineWriter read the record as plain text, and
+// the record's own fields would be lost.
+func TestAJSONRecordStaysWholeWithAControlCharacterInIt(t *testing.T) {
+	var buf bytes.Buffer
+	oldOut, oldFlags, oldJSON := log.Writer(), log.Flags(), logJSON
+	log.SetOutput(filteringWriter{w: jsonLineWriter{w: &buf}})
+	log.SetFlags(0)
+	logJSON = true
+	t.Cleanup(func() { log.SetOutput(oldOut); log.SetFlags(oldFlags); logJSON = oldJSON })
+
+	logEvent("warn", "a\x7fb\xc2\x85c", "req-7", nil)
+
+	var rec map[string]interface{}
+	if err := json.Unmarshal(buf.Bytes(), &rec); err != nil {
+		t.Fatalf("not JSON: %v (%q)", err, buf.String())
+	}
+	if rec["level"] != "warn" || rec["request_id"] != "req-7" || rec["msg"] != "a\x7fb\xc2\x85c" {
+		t.Fatalf("the record lost its fields: %v", rec)
+	}
+}
+
 // filteringWriter is the one place every log line is filtered and escaped, so
 // nothing in the proxy may reach stdout or stderr around it.
 func TestNothingWritesBesideTheLogFilter(t *testing.T) {
-	output := regexp.MustCompile(`.*(os\.Std(out|err)|fmt\.Print|log\.New\(|log\.SetOutput\().*`)
+	output := regexp.MustCompile(`.*(os\.Std(out|err)|fmt\.Print|log\.New\(|\.SetOutput\().*`)
 	var found []string
 	for _, path := range moduleGoFiles(t) {
 		if !strings.HasSuffix(path, "_test.go") {
