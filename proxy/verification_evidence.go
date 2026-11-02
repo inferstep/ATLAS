@@ -109,12 +109,7 @@ func produceDeclaredVerificationEvidence(ctx *AgentContext, req verificationEvid
 
 	p := declaredVerificationProvenance(ctx, req, requestID, requirement)
 	outcome := ValidationFailed
-	// Passing means the exact command exited zero having changed neither the
-	// candidate it was testing nor anything else it could see. A command that
-	// rewrote its own subject proved something about bytes that no longer
-	// exist.
-	if req.Result.Outcome == stagingExitedZero &&
-		!req.Result.MutatedTarget && !req.Result.MutatedWorkspace {
+	if req.Result.passedClean() {
 		outcome = ValidationPassed
 	}
 	return proxyEvidence{Provenance: p, Outcome: outcome}, true
