@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"log"
 	"os"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -189,6 +191,93 @@ func TestCredentialFilteringStillApplies(t *testing.T) {
 	})
 	if strings.Contains(out, "SUPERSECRETVALUE1234567890") {
 		t.Fatalf("credential filtering regressed: %s", out)
+	}
+}
+
+// The filter reads the record before the escape does: an escaped line break is
+// no longer white space, so a credential after it would pass the filter.
+func TestCredentialFilteringSeesTheRecordBeforeItsEscape(t *testing.T) {
+	out := captureLog(t, func() {
+		log.Printf("auth=%s", "bearer\nSUPERSECRETVALUE1234567890")
+	})
+	if strings.Contains(out, "SUPERSECRETVALUE1234567890") {
+		t.Fatalf("the escape ran before the filter: %s", out)
+	}
+}
+
+// A logged value keeps no control character but tab and no Unicode line break,
+// so it cannot pass for a record or act on a terminal. Sites that already call
+// logPath escape the same text twice, which must change nothing.
+func TestALoggedValueStaysInsideItsRecord(t *testing.T) {
+	for _, c := range []struct{ name, value, want string }{
+		{"line feed", "a\nb", `a\nb`},
+		{"carriage return", "a\rb", `a\rb`},
+		{"backslash", `a\b`, `a\b`},
+		{"text that reads as an escape", `a\nb`, `a\nb`},
+		{"tab", "a\tb", "a\tb"},
+		{"escape character", "a\x1b[0mb", `a\u001b[0mb`},
+		{"null", "a\x00b", `a\u0000b`},
+		{"delete", "a\x7fb", `a\u007fb`},
+		{"control character above ASCII", "a\xc2\x85b", `a\u0085b`},
+		{"line and paragraph separators", "a\xe2\x80\xa8b\xe2\x80\xa9c", `a\u2028b\u2029c`},
+		{"letter above ASCII", "a\xc3\xa9b", "a\xc3\xa9b"},
+		{"byte that is not UTF-8", "a\xffb", "a\xef\xbf\xbdb"},
+		{"stack trace", "main.f()\n\tmain.go:1\nmain.main()",
+			`main.f()\n` + "\t" + `main.go:1\nmain.main()`},
+	} {
+		want := "name=" + c.want + " status=500\n"
+		once := captureLog(t, func() { log.Printf("name=%s status=500", c.value) })
+		if once != want {
+			t.Errorf("%s: got %q, want %q", c.name, once, want)
+		}
+		twice := captureLog(t, func() { log.Printf("name=%s status=500", logPath(c.value)) })
+		if twice != want {
+			t.Errorf("%s, logPath first: got %q, want %q", c.name, twice, want)
+		}
+	}
+}
+
+// logEvent's finished JSON passes through the writer too. An escape that is
+// not valid JSON would make jsonLineWriter read the record as plain text, and
+// the record's own fields would be lost.
+func TestAJSONRecordStaysWholeWithAControlCharacterInIt(t *testing.T) {
+	var buf bytes.Buffer
+	oldOut, oldFlags, oldJSON := log.Writer(), log.Flags(), logJSON
+	log.SetOutput(filteringWriter{w: jsonLineWriter{w: &buf}})
+	log.SetFlags(0)
+	logJSON = true
+	t.Cleanup(func() { log.SetOutput(oldOut); log.SetFlags(oldFlags); logJSON = oldJSON })
+
+	logEvent("warn", "a\x7fb\xc2\x85c", "req-7", nil)
+
+	var rec map[string]interface{}
+	if err := json.Unmarshal(buf.Bytes(), &rec); err != nil {
+		t.Fatalf("not JSON: %v (%q)", err, buf.String())
+	}
+	if rec["level"] != "warn" || rec["request_id"] != "req-7" || rec["msg"] != "a\x7fb\xc2\x85c" {
+		t.Fatalf("the record lost its fields: %v", rec)
+	}
+}
+
+// filteringWriter is the one place every log line is filtered and escaped, so
+// nothing in the proxy may reach stdout or stderr around it.
+func TestNothingWritesBesideTheLogFilter(t *testing.T) {
+	output := regexp.MustCompile(`.*(os\.Std(out|err)|fmt\.Print|log\.New\(|\.SetOutput\().*`)
+	var found []string
+	for _, path := range moduleGoFiles(t) {
+		if !strings.HasSuffix(path, "_test.go") {
+			for _, line := range output.FindAllString(readSourceForTest(t, path), -1) {
+				found = append(found, path+": "+strings.TrimSpace(line))
+			}
+		}
+	}
+	want := []string{
+		"main.go: out := io.Writer(os.Stderr)",
+		"main.go: out = jsonLineWriter{w: os.Stderr}",
+		"main.go: log.SetOutput(filteringWriter{w: out})",
+	}
+	if !slices.Equal(found, want) {
+		t.Errorf("a log output beside filteringWriter:\n got %q\nwant %q", found, want)
 	}
 }
 
