@@ -393,9 +393,11 @@ func TestGeneratePlanDropsTokenNoiseFromTheStream(t *testing.T) {
 	var mu sync.Mutex
 	var stages []string
 	ctx := &AgentContext{
-		Ctx:        context.Background(),
-		V3URL:      srv.URL,
-		WorkingDir: t.TempDir(),
+		runSetup: runSetup{
+			Ctx:        context.Background(),
+			V3URL:      srv.URL,
+			WorkingDir: t.TempDir(),
+		},
 	}
 	ctx.StreamFn = func(kind string, data interface{}) {
 		if kind != "v3_plan" {
@@ -431,7 +433,7 @@ func TestGeneratePlanDropsTokenNoiseFromTheStream(t *testing.T) {
 // No v3-service configured means no planner. Returning nil here is what
 // makes plan mode degrade to a plain agent loop instead of erroring.
 func TestGeneratePlanWithoutV3URLIsNil(t *testing.T) {
-	if p := generatePlan(&AgentContext{Ctx: context.Background()}, "do a thing"); p != nil {
+	if p := generatePlan(&AgentContext{runSetup: runSetup{Ctx: context.Background()}}, "do a thing"); p != nil {
 		t.Errorf("expected nil plan with no V3URL, got %+v", p)
 	}
 }
@@ -441,12 +443,16 @@ func TestGeneratePlanWithoutV3URLIsNil(t *testing.T) {
 // compatibility, so "the last user turn" can be a note instead of the task.
 func TestLatestUserMessagePrefersHumanTask(t *testing.T) {
 	ctx := &AgentContext{
-		HumanTask: "write a debounce filter over readings.txt",
-		Messages: []wire.AgentMessage{
-			{Role: "user", Content: "write a debounce filter over readings.txt"},
-			{Role: "assistant", Content: `{"type":"tool_call"}`},
-			{Role: "user", Content: "[system note]: run the program standalone"},
-			{Role: "user", Content: "[system note]: session file manifest: solve.py"},
+		runSetup: runSetup{
+			HumanTask: "write a debounce filter over readings.txt",
+		},
+		modelExchange: modelExchange{
+			Messages: []wire.AgentMessage{
+				{Role: "user", Content: "write a debounce filter over readings.txt"},
+				{Role: "assistant", Content: `{"type":"tool_call"}`},
+				{Role: "user", Content: "[system note]: run the program standalone"},
+				{Role: "user", Content: "[system note]: session file manifest: solve.py"},
+			},
 		},
 	}
 	if got := latestUserMessage(ctx); got != ctx.HumanTask {
@@ -456,9 +462,11 @@ func TestLatestUserMessagePrefersHumanTask(t *testing.T) {
 
 func TestLatestUserMessageFallbackSkipsSyntheticNotes(t *testing.T) {
 	ctx := &AgentContext{ // no HumanTask: context built outside the loop
-		Messages: []wire.AgentMessage{
-			{Role: "user", Content: "the real task"},
-			{Role: "user", Content: "[system note]: lessons from previous sessions"},
+		modelExchange: modelExchange{
+			Messages: []wire.AgentMessage{
+				{Role: "user", Content: "the real task"},
+				{Role: "user", Content: "[system note]: lessons from previous sessions"},
+			},
 		},
 	}
 	if got := latestUserMessage(ctx); got != "the real task" {

@@ -100,7 +100,7 @@ func validateTaskContract(in *taskcontract.TaskContract, workingDir string) (*ta
 // distinctOutputPaths checks each declared output path against the workspace
 // and keeps one spelling of each file, in the order declared.
 func distinctOutputPaths(in *taskcontract.TaskContract, workingDir string) ([]string, error) {
-	probe := &AgentContext{WorkingDir: workingDir}
+	probe := &AgentContext{runSetup: runSetup{WorkingDir: workingDir}}
 	seen := map[string]bool{}
 	var paths []string
 	for _, p := range in.OutputPaths() {

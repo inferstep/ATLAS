@@ -2073,7 +2073,7 @@ func TestMissingModuleAndMissingFileSteers(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			got := tc.steer(&AgentContext{WorkingDir: dir}, tc.out)
+			got := tc.steer(&AgentContext{runSetup: runSetup{WorkingDir: dir}}, tc.out)
 			if len(tc.want) == 0 && got != "" {
 				t.Errorf("want no steer, got %q", got)
 			}
@@ -2116,7 +2116,7 @@ func TestTracebackSteer(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := tracebackSteer(&AgentContext{WorkingDir: "/workspace"}, tc.out)
+			got := tracebackSteer(&AgentContext{runSetup: runSetup{WorkingDir: "/workspace"}}, tc.out)
 			for _, want := range tc.want {
 				if !strings.Contains(got, want) {
 					t.Errorf("steer lacks %q:\n%s", want, got)
@@ -2148,7 +2148,7 @@ func TestTracebackSteerStaysSilent(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := tracebackSteer(&AgentContext{WorkingDir: "/workspace"}, tc.out); got != "" {
+			if got := tracebackSteer(&AgentContext{runSetup: runSetup{WorkingDir: "/workspace"}}, tc.out); got != "" {
 				t.Errorf("want no steer, got %q", got)
 			}
 		})

@@ -71,7 +71,7 @@ func inputFields(tool *ToolDef) map[string]bool {
 // commands asks in default mode, and one that takes a command refuses what the
 // policy refuses.
 func TestEveryCommandToolIsUnderTheCommandPolicy(t *testing.T) {
-	ask := &AgentContext{PermissionMode: PermissionDefault}
+	ask := &AgentContext{runSetup: runSetup{PermissionMode: PermissionDefault}}
 	for _, tool := range allTools() {
 		if tool.Effect != wire.ToolEffectCommandUnobserved {
 			continue
@@ -97,7 +97,7 @@ func TestEveryPathMutatorIsUnderTheWritePolicy(t *testing.T) {
 			}
 		}
 	}
-	ask := &AgentContext{PermissionMode: PermissionDefault}
+	ask := &AgentContext{runSetup: runSetup{PermissionMode: PermissionDefault}}
 	if !needsPermission(ask, "delete_file", json.RawMessage(`{}`)) {
 		t.Error("delete_file does not ask")
 	}
@@ -105,12 +105,12 @@ func TestEveryPathMutatorIsUnderTheWritePolicy(t *testing.T) {
 
 func TestBackgroundCommandsAskLikeCommands(t *testing.T) {
 	for _, mode := range []PermissionMode{PermissionDefault, PermissionAcceptEdits} {
-		ctx := &AgentContext{PermissionMode: mode}
+		ctx := &AgentContext{runSetup: runSetup{PermissionMode: mode}}
 		if !needsPermission(ctx, "run_background", commandArgs("python app.py")) {
 			t.Errorf("%s: run_background did not ask", mode)
 		}
 	}
-	if needsPermission(&AgentContext{PermissionMode: PermissionYolo}, "run_background", commandArgs("python app.py")) {
+	if needsPermission(&AgentContext{runSetup: runSetup{PermissionMode: PermissionYolo}}, "run_background", commandArgs("python app.py")) {
 		t.Error("yolo asked")
 	}
 }

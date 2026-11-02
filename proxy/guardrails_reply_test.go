@@ -325,10 +325,14 @@ func evidenceCtx(t *testing.T, files map[string]string) *AgentContext {
 		}
 	}
 	return &AgentContext{
-		WorkingDir:    root,
-		BodySeen:      map[string]bool{},
-		FilesRead:     map[string]string{},
-		FileReadTimes: map[string]time.Time{},
+		runSetup: runSetup{
+			WorkingDir: root,
+		},
+		fileHistory: fileHistory{
+			BodySeen:      map[string]bool{},
+			FilesRead:     map[string]string{},
+			FileReadTimes: map[string]time.Time{},
+		},
 	}
 }
 

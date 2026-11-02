@@ -68,9 +68,33 @@ func envOverrideMaxTurns() int {
 // Agent context — shared state for the agent loop
 // ---------------------------------------------------------------------------
 
-// AgentContext holds all state for a single agent loop execution.
+// AgentContext holds all state for a single agent loop execution, grouped by
+// concern into the structs embedded below. A field is still read as ctx.Field.
 type AgentContext struct {
-	// Configuration
+	runSetup
+	modelExchange
+	planProgress
+	fileHistory
+	loopWatch
+	fencedChannel
+	checkRecords
+	deliverableLedger
+	deliveryGrants
+	workspaceSafety
+	backgroundWork
+	serviceHealth
+	routeEntries
+	runOutcome
+
+	// mu stays here because four groups share it: AllowedTools, the file history,
+	// the deletion records and CheckServiceFailures are read and written under it.
+	mu sync.Mutex
+}
+
+// runSetup is what the request fixed when the run started: its limits and
+// directories, what it may do, the services it calls, what the client sent,
+// and the callbacks and lifetimes it runs under.
+type runSetup struct {
 	Tier           Tier
 	MaxTurns       int
 	WorkingDir     string // Project directory for agent operations (container path, e.g. /workspace)
@@ -82,28 +106,6 @@ type AgentContext struct {
 	// runs without a bind mount (dev / test).
 	PermissionMode PermissionMode
 	YoloMode       bool
-
-	// approvedDelete is the single outstanding user approval for a deletion,
-	// bound to one canonical target in one exact state. It is set only by the
-	// permission handshake and consumed by the first execution attempt, so an
-	// answer about one file can never authorise another. Nil means no
-	// deletion is approved, which is the state a session spends almost all of
-	// its life in.
-	approvedDelete *approvedDeletion
-
-	// deletionAttempts and fulfilledDeletions are the record of destructive
-	// work the USER authorised and the system then carried out. An attempt is
-	// written only by the delete tool, on the exact route where a consumed
-	// approval survived revalidation and os.Remove succeeded; it is promoted
-	// only by the ledger, which is the one place that both confirms absence
-	// and writes the tombstone. Nothing the model emits reaches either map.
-	// lastDeleteCallID is the tool-call id the outstanding approval was
-	// granted under, kept so the fulfilled record can name the exact call the
-	// user answered.
-	lastDeleteCallID string
-
-	deletionAttempts   map[string]*deletionAttempt
-	fulfilledDeletions map[string]*fulfilledDeletion
 
 	// TaskContract is what the client declared about this request, validated
 	// at the request boundary (validateTaskContract). Nil means the client
@@ -135,8 +137,6 @@ type AgentContext struct {
 	// Project info (populated by project detection)
 	Project *ProjectInfo
 
-	// State
-	Messages []wire.AgentMessage
 	// PriorHistory is the prior-turn user/assistant transcript, sent by
 	// the TUI on each /v1/agent request so the agent can answer follow-ups
 	// like "what did you just delete?" — without it, every user message
@@ -144,59 +144,7 @@ type AgentContext struct {
 	// from the request body; consumed once at the top of runAgentLoop
 	// and then ignored. Tool/system rows are filtered out at the TUI
 	// boundary; only role=user|assistant text turns flow through here.
-	PriorHistory  []wire.AgentMessage
-	FileReadTimes map[string]time.Time // for staleness detection
-	FilesRead     map[string]string    // cache of read file contents
-	TotalTokens   int
-
-	// VerificationEvidence holds one record per verification run, binding
-	// the result to what the command actually exercised: the command line,
-	// its stdin contract, and the sha256 of each covered session-written
-	// file at that moment. A failed run is recorded too and takes back an
-	// earlier pass over the same bytes. Lens labels are drawn from these
-	// records, never from a session-wide boolean: a flag can't answer
-	// "verified WHAT, at WHICH bytes", and labelling on it would train the
-	// lens on files the passing command never touched.
-	VerificationEvidence []taskcontract.VerificationRecord
-
-	// StagedCommands are declared commands that ran against exact candidate
-	// bytes in the staging overlay, kept in their own store rather than
-	// flattened into the record above. That record can say which paths a run
-	// named; it cannot say which candidate, invocation or grant a run belongs
-	// to, and those are exactly what makes a staged execution worth trusting.
-	StagedCommands []stagedCommandFulfillment
-
-	// routeEntrySeq numbers the entries this request has made into the
-	// candidate-generation route. One write_file call that reaches the route
-	// is one entry, and a retry is a new one -- see routeEntry.
-	routeEntryMu  sync.Mutex
-	routeEntrySeq int
-
-	// grants holds the one-time authorization grants this request has
-	// minted, keyed by canonical grant id. A grant is spent exactly once at
-	// the delivery owner; nothing else may read or clear one.
-	//
-	// Guarded by grantMu, which is its own lock rather than LedgerMu: a
-	// consumption re-reads the ledger while it decides, and one mutex for
-	// both would be a self-deadlock the first time that happened.
-	grantMu   sync.Mutex
-	grants    map[string]*authorizationGrant
-	grantSeq  int
-	grantsOff string
-	// lensDown is why the lens stopped scoring during this run, set by
-	// noteLensDown; the agent loop ends the run when it is not empty.
-	lensDown string
-	// v3Unchecked holds the writes that landed after V3 failed on them (ran
-	// out of time or was unavailable), keyed by ledger key. The final summary
-	// names each one whose bytes are still on disk (v3_fallback_note.go).
-	v3Unchecked   map[string]v3UncheckedWrite
-	v3UncheckedMu sync.Mutex
-
-	// settlements holds what each authorized delivery left behind, keyed by
-	// canonical target. Written only by the delivery owner, and only for a
-	// delivery whose exact authorized bytes were confirmed on disk. Guarded
-	// by grantMu, beside the licence that produced it.
-	settlements map[string]*deliverySettlement
+	PriorHistory []wire.AgentMessage
 
 	// HumanTask is the CURRENT request's actual human instruction, captured
 	// once at the top of runAgentLoop before the loop appends anything.
@@ -216,13 +164,102 @@ type AgentContext struct {
 	// extractLiteralBlocks / repairLiteralDrift in guardrails_write.go.
 	LiteralBlocks []string
 
-	// FencedCalls / FencedTokens account the @fenced sub-calls
-	// (fetchFencedContent): every attempt is a full model generation, and
-	// leaving it out makes a session's reported token count short by one
-	// whole generation per written file. FencedTokens is also folded into
-	// TotalTokens; these two exist so the fenced share is visible on its own.
-	FencedCalls  int
-	FencedTokens int
+	// PassID identifies this prompt-pass (the session id from the request).
+	PassID string
+
+	// VerifyOnHost flips run_command from sandbox-routing to local
+	// host execution. Set only from ATLAS_VERIFY_IN=host together with
+	// ATLAS_TRUST_MODE=fully-trusted; a workspace's .atlas/config.toml
+	// may choose only the sandbox. The default (false) is the safer path;
+	// opt-in is for codebases that depend on host services (DBs, env vars,
+	// system tools) the sandbox can't see. Guardrails apply either way.
+	VerifyOnHost bool
+
+	// TrustMode gates command execution (untrusted refuses; trusted =
+	// sandbox; fully-trusted permits host execution). Resolved once per
+	// turn from ATLAS_TRUST_MODE.
+	TrustMode trustMode
+
+	// Streaming callback
+	StreamFn func(eventType string, data interface{})
+
+	// Permission callback
+	PermissionFn func(toolName string, args json.RawMessage) bool
+
+	// RequestCtx is the RESPONSE lifetime: alive for finalisation after the
+	// work context has been cancelled. Ctx is the WORK lifetime -- LLM calls,
+	// tools, gates, V3 and the sandbox all hang off it -- and it ends one
+	// reserve before the session budget does.
+	RequestCtx context.Context
+	cancelWork context.CancelFunc
+
+	// Context for cancellation
+	Ctx context.Context
+}
+
+// modelExchange is the conversation with the model: the messages, the tokens
+// they cost, which session files it has been told about, and why the proxy
+// last cut a generation.
+type modelExchange struct {
+	Messages    []wire.AgentMessage
+	TotalTokens int
+
+	// ManifestAnnounced tracks which SessionWrites paths have been named
+	// in a session-file-manifest note (context.go) so each file
+	// is announced to the model once.
+	ManifestAnnounced map[string]bool
+
+	// LastStreamCut records why the proxy itself ended the generation, when
+	// it did. A cut lands mid-JSON, so the parse then fails; the parse-failure
+	// classifier reads this known cause instead of inferring one from the
+	// broken output.
+	LastStreamCut string
+
+	// LastOldStrCut is what the old_str watch saw when LastStreamCut is
+	// "old_str_unmatched": the file, and where old_str stopped matching it.
+	LastOldStrCut *oldStrWatch
+}
+
+// planProgress is the pre-flight plan and how far the run's tool calls have
+// followed it.
+type planProgress struct {
+	// Plan is the optional pre-flight plan produced by /v3/plan. Set
+	// once at the top of the agent loop for non-trivial requests; nil
+	// when we skipped planning (T0, simple greetings, dev mode without
+	// V3). Read by the plan-adherence gate to compare actual tool calls
+	// against the planned step actions.
+	Plan *wire.Plan
+
+	// PlanStepsSatisfied[i] flips true once a tool call has matched
+	// plan step i. Length tracks len(Plan.Steps); nil when no plan.
+	// Reset whenever the plan is revised so we re-track from scratch.
+	PlanStepsSatisfied []bool
+
+	// PlanOffStreak counts consecutive tool calls that DIDN'T match
+	// any unsatisfied plan step. Crosses the auto-revise threshold ->
+	// planner re-runs with whatever context we've discovered so far.
+	PlanOffStreak int
+
+	// PlanRevisions counts how many times we've auto-regenerated the
+	// plan in this loop. Capped to keep us from thrashing — after the
+	// cap is hit we stop revising and let the agent run plan-free.
+	PlanRevisions int
+}
+
+// fileHistory is what the run has done with files: what it read and when,
+// what it showed the model, what it wrote and which edits it applied.
+type fileHistory struct {
+	FileReadTimes map[string]time.Time // for staleness detection
+	FilesRead     map[string]string    // cache of read file contents
+
+	// LastReadPath is the file most recently returned by read_file, restated
+	// near the generation point so the model copies from close range.
+	LastReadPath string
+
+	// OriginalContent is each touched file as the run FIRST saw it. FilesRead
+	// is overwritten on every edit, so it cannot answer "what did this run
+	// change".
+	OriginalContent map[string]string
 
 	// BodySeen records the files whose CONTENTS were put in front of the
 	// model. FilesRead answers a different question: outline_file caches a
@@ -264,6 +301,79 @@ type AgentContext struct {
 	// not share this defect.
 	SessionWrites map[string]bool
 
+	// AppliedEdits keys every edit_file that already succeeded, by
+	// (path, old_str, new_str). A model that re-applies an identical edit has
+	// lost track of its own work, and when the edit is whitespace-only the
+	// original old_str still matches afterwards, so it can apply forever.
+	// Observed live: the same `'PAUSED';` -> `' PAUSED';` edit ran twice,
+	// 1m25s and 1m15s, each adding another space.
+	AppliedEdits map[string]bool
+}
+
+// loopWatch is the state of the detectors that step in when the model repeats
+// itself: the same tool call or reasoning, the same failure, or a run of low
+// lens scores.
+type loopWatch struct {
+	// Tool-call repetition detector: rolling window of recent (tool,
+	// args) signatures. When the same signature appears
+	// toolRepeatThreshold times within the last toolRepeatWindow
+	// entries, the loop injects a corrective system message. Owned by
+	// the detector — recordToolCall appends to it and clears it as it
+	// fires; callers go through resetToolRepeatWindow rather than
+	// assigning here. See proxy/detectors.go for the detection logic.
+	RecentToolCalls []string
+
+	// FailedToolCalls keys every tool call that has already been REJECTED,
+	// by the same (name, args) signature the repetition detector uses.
+	// Re-sending a byte-identical call whose last run failed cannot produce
+	// a different result — the harness is deterministic — so the second one
+	// is refused before it executes rather than nudged afterwards.
+	FailedToolCalls map[string]string
+
+	// Reasoning-repetition detector state. Per-turn snapshot of the
+	// model's reasoning_content stream. When the same opening prose
+	// ("Now I need to look at the file" or similar) appears across
+	// consecutive turns, the loop injects a corrective so the model
+	// breaks out of the thought loop. The streak fields are owned by the
+	// detector: recordReasoning clears them as it fires and hands the
+	// count and snippet back in its repeatObservation. See
+	// proxy/detectors.go.
+	LastTurnReasoning           string
+	LastReasoningSnippet        string
+	ConsecutiveReasoningRepeats int
+
+	// LastRejectionClass is the skeleton of the previous failure's message.
+	// The error-loop breaker resets when a new failure differs from it: three
+	// DIFFERENT rejections is a model converging, not one looping.
+	LastRejectionClass string
+
+	// Path-aware error-loop detector. Tracks recent failure paths so
+	// the 3-consecutive-failures breaker can distinguish "stuck on one
+	// file" (real loop, stop) from "grinding through different files,
+	// some succeed, some fail" (progress, keep going). Cleared on any
+	// successful tool result. See the error-loop break in
+	// proxy/loop_results.go for the use site.
+	RecentFailurePaths []string
+
+	// Rolling list of gx_score_min values
+	// from lens scoring of write_file/edit_file tool calls. When the
+	// recent N values all fall below the selected model's calibrated threshold the loop
+	// injects a corrective system message before the next LLM call.
+	// See proxy/lens.go for the pattern detection.
+	LensScoreHistory []float64
+}
+
+// fencedChannel is the session's record of the @fenced sub-calls: what they
+// cost, where they failed or stalled, and what the last one streamed.
+type fencedChannel struct {
+	// FencedCalls / FencedTokens account the @fenced sub-calls
+	// (fetchFencedContent): every attempt is a full model generation, and
+	// leaving it out makes a session's reported token count short by one
+	// whole generation per written file. FencedTokens is also folded into
+	// TotalTokens; these two exist so the fenced share is visible on its own.
+	FencedCalls  int
+	FencedTokens int
+
 	// FencedFailures counts CONSECUTIVE zero-byte fenced resolutions per
 	// target path, for the life of the session. It lives here and not in
 	// fetchFencedContent because that function's attempt counter is a local:
@@ -284,34 +394,35 @@ type AgentContext struct {
 	// LastFencedStream is what the wire showed during the last fenced
 	// sub-call, for the fenced_fetch event its attempt emits.
 	LastFencedStream fencedStreamStats
+}
 
-	// RequestCtx is the RESPONSE lifetime: alive for finalisation after the
-	// work context has been cancelled. Ctx is the WORK lifetime -- LLM calls,
-	// tools, gates, V3 and the sandbox all hang off it -- and it ends one
-	// reserve before the session budget does.
-	RequestCtx context.Context
-	cancelWork context.CancelFunc
+// checkRecords is what the run's checks found: each verification run, each
+// staged command, and the asset lint findings already mentioned.
+type checkRecords struct {
+	// VerificationEvidence holds one record per verification run, binding
+	// the result to what the command actually exercised: the command line,
+	// its stdin contract, and the sha256 of each covered session-written
+	// file at that moment. A failed run is recorded too and takes back an
+	// earlier pass over the same bytes. Lens labels are drawn from these
+	// records, never from a session-wide boolean: a flag can't answer
+	// "verified WHAT, at WHICH bytes", and labelling on it would train the
+	// lens on files the passing command never touched.
+	VerificationEvidence []taskcontract.VerificationRecord
 
-	// The session's single terminal outcome, set by the one emitter. Read by
-	// the deferred broker envelope so the two cannot disagree.
-	TerminalStatus wire.TerminalStatus
-	TerminalReason string
-	// InitialWorkspace is what the workspace held when this request started:
-	// the files a shell command's removal can take from the user
-	// (applyShellChanges). ShellEffectsUnobserved says some command's changes
-	// could not all be seen, because the workspace outgrew the walk.
-	InitialWorkspace       workspaceSnapshot
-	ShellEffectsUnobserved bool
-	// BackgroundBaseline is the walk taken after the call that started the
-	// first background job still live. What jobs changed is recorded against
-	// it once none can still be writing (settleBackgroundEffects).
-	BackgroundBaseline workspaceSnapshot
+	// StagedCommands are declared commands that ran against exact candidate
+	// bytes in the staging overlay, kept in their own store rather than
+	// flattened into the record above. That record can say which paths a run
+	// named; it cannot say which candidate, invocation or grant a run belongs
+	// to, and those are exactly what makes a staged execution worth trusting.
+	StagedCommands []stagedCommandFulfillment
 
-	// TerminalUnresolved names the exit gates that spent their bounces with
-	// their finding still true, comma-separated; empty when there were none.
-	TerminalUnresolved string
-	terminalOnce       sync.Once
+	// AssetLintSeen dedupes asset-graph lint findings (gates.go) so
+	// a persistent orphan is mentioned once, not after every write.
+	AssetLintSeen map[string]bool
+}
 
+// deliverableLedger holds the ledger and its lock.
+type deliverableLedger struct {
 	// Ledger is the record of what this session has done to each declared
 	// or session-owned deliverable, keyed by CANONICAL workspace-relative
 	// path.
@@ -324,6 +435,40 @@ type AgentContext struct {
 	// and delivery grants read it.
 	Ledger   map[string]*taskcontract.DeliverableState
 	LedgerMu sync.Mutex
+}
+
+// deliveryGrants is the one-time grants this request minted and what each
+// authorized delivery left behind, under one lock.
+type deliveryGrants struct {
+	// grants holds the one-time authorization grants this request has
+	// minted, keyed by canonical grant id. A grant is spent exactly once at
+	// the delivery owner; nothing else may read or clear one.
+	//
+	// Guarded by grantMu, which is its own lock rather than LedgerMu: a
+	// consumption re-reads the ledger while it decides, and one mutex for
+	// both would be a self-deadlock the first time that happened.
+	grantMu   sync.Mutex
+	grants    map[string]*authorizationGrant
+	grantSeq  int
+	grantsOff string
+
+	// settlements holds what each authorized delivery left behind, keyed by
+	// canonical target. Written only by the delivery owner, and only for a
+	// delivery whose exact authorized bytes were confirmed on disk. Guarded
+	// by grantMu, beside the licence that produced it.
+	settlements map[string]*deliverySettlement
+}
+
+// workspaceSafety protects what the user had: the workspace as the request
+// found it, background work that may still be writing, and the approval and
+// record of each deletion.
+type workspaceSafety struct {
+	// InitialWorkspace is what the workspace held when this request started:
+	// the files a shell command's removal can take from the user
+	// (applyShellChanges). ShellEffectsUnobserved says some command's changes
+	// could not all be seen, because the workspace outgrew the walk.
+	InitialWorkspace       workspaceSnapshot
+	ShellEffectsUnobserved bool
 
 	// WorkspaceHazards is the set of background work that may still be
 	// writing, keyed by job identity rather than counted by start attempt, so
@@ -335,11 +480,32 @@ type AgentContext struct {
 	// raises hazardUnidentifiedJob, which nothing can clear.
 	WorkspaceHazards map[string]bool
 
-	// ManifestAnnounced tracks which SessionWrites paths have been named
-	// in a session-file-manifest note (context.go) so each file
-	// is announced to the model once.
-	ManifestAnnounced map[string]bool
+	// approvedDelete is the single outstanding user approval for a deletion,
+	// bound to one canonical target in one exact state. It is set only by the
+	// permission handshake and consumed by the first execution attempt, so an
+	// answer about one file can never authorise another. Nil means no
+	// deletion is approved, which is the state a session spends almost all of
+	// its life in.
+	approvedDelete *approvedDeletion
 
+	// deletionAttempts and fulfilledDeletions are the record of destructive
+	// work the USER authorised and the system then carried out. An attempt is
+	// written only by the delete tool, on the exact route where a consumed
+	// approval survived revalidation and os.Remove succeeded; it is promoted
+	// only by the ledger, which is the one place that both confirms absence
+	// and writes the tombstone. Nothing the model emits reaches either map.
+	// lastDeleteCallID is the tool-call id the outstanding approval was
+	// granted under, kept so the fulfilled record can name the exact call the
+	// user answered.
+	lastDeleteCallID string
+
+	deletionAttempts   map[string]*deletionAttempt
+	fulfilledDeletions map[string]*fulfilledDeletion
+}
+
+// backgroundWork is the background jobs this loop started and the walk their
+// effects are measured against.
+type backgroundWork struct {
 	// BackgroundJobs maps job_id -> command for jobs this loop started and
 	// has not stopped. A background server the model started to verify its
 	// own work keeps holding the port, so the model's next `python app.py`
@@ -353,152 +519,71 @@ type AgentContext struct {
 	// on disk now.
 	BackgroundJobStarted map[string]time.Time
 
-	// AssetLintSeen dedupes asset-graph lint findings (gates.go) so
-	// a persistent orphan is mentioned once, not after every write.
-	AssetLintSeen map[string]bool
+	// BackgroundBaseline is the walk taken after the call that started the
+	// first background job still live. What jobs changed is recorded against
+	// it once none can still be writing (settleBackgroundEffects).
+	BackgroundBaseline workspaceSnapshot
+}
 
-	// PassID identifies this prompt-pass (the session id from the request).
-	PassID string
-
-	// Rolling list of gx_score_min values
-	// from lens scoring of write_file/edit_file tool calls. When the
-	// recent N values all fall below the selected model's calibrated threshold the loop
-	// injects a corrective system message before the next LLM call.
-	// See proxy/lens.go for the pattern detection.
-	LensScoreHistory []float64
-
-	// Tool-call repetition detector: rolling window of recent (tool,
-	// args) signatures. When the same signature appears
-	// toolRepeatThreshold times within the last toolRepeatWindow
-	// entries, the loop injects a corrective system message. Owned by
-	// the detector — recordToolCall appends to it and clears it as it
-	// fires; callers go through resetToolRepeatWindow rather than
-	// assigning here. See proxy/detectors.go for the detection logic.
-	RecentToolCalls []string
-
-	// LastReadPath is the file most recently returned by read_file, restated
-	// near the generation point so the model copies from close range.
-	LastReadPath string
-
-	// AppliedEdits keys every edit_file that already succeeded, by
-	// (path, old_str, new_str). A model that re-applies an identical edit has
-	// lost track of its own work, and when the edit is whitespace-only the
-	// original old_str still matches afterwards, so it can apply forever.
-	// Observed live: the same `'PAUSED';` -> `' PAUSED';` edit ran twice,
-	// 1m25s and 1m15s, each adding another space.
-	AppliedEdits map[string]bool
-
-	// FailedToolCalls keys every tool call that has already been REJECTED,
-	// by the same (name, args) signature the repetition detector uses.
-	// Re-sending a byte-identical call whose last run failed cannot produce
-	// a different result — the harness is deterministic — so the second one
-	// is refused before it executes rather than nudged afterwards.
-	FailedToolCalls map[string]string
-
-	// LastRejectionClass is the skeleton of the previous failure's message.
-	// The error-loop breaker resets when a new failure differs from it: three
-	// DIFFERENT rejections is a model converging, not one looping.
-	LastRejectionClass string
-
-	// LastStreamCut records why the proxy itself ended the generation, when
-	// it did. A cut lands mid-JSON, so the parse then fails; the parse-failure
-	// classifier reads this known cause instead of inferring one from the
-	// broken output.
-	LastStreamCut string
-
-	// LastOldStrCut is what the old_str watch saw when LastStreamCut is
-	// "old_str_unmatched": the file, and where old_str stopped matching it.
-	LastOldStrCut *oldStrWatch
-
-	// OriginalContent is each touched file as the run FIRST saw it. FilesRead
-	// is overwritten on every edit, so it cannot answer "what did this run
-	// change".
-	OriginalContent map[string]string
-
-	// Reasoning-repetition detector state. Per-turn snapshot of the
-	// model's reasoning_content stream. When the same opening prose
-	// ("Now I need to look at the file" or similar) appears across
-	// consecutive turns, the loop injects a corrective so the model
-	// breaks out of the thought loop. The streak fields are owned by the
-	// detector: recordReasoning clears them as it fires and hands the
-	// count and snippet back in its repeatObservation. See
-	// proxy/detectors.go.
-	LastTurnReasoning           string
-	LastReasoningSnippet        string
-	ConsecutiveReasoningRepeats int
-
-	// Path-aware error-loop detector. Tracks recent failure paths so
-	// the 3-consecutive-failures breaker can distinguish "stuck on one
-	// file" (real loop, stop) from "grinding through different files,
-	// some succeed, some fail" (progress, keep going). Cleared on any
-	// successful tool result. See the error-loop break in
-	// proxy/loop_results.go for the use site.
-	RecentFailurePaths []string
-
-	mu sync.Mutex
-
-	// Plan is the optional pre-flight plan produced by /v3/plan. Set
-	// once at the top of the agent loop for non-trivial requests; nil
-	// when we skipped planning (T0, simple greetings, dev mode without
-	// V3). Read by the plan-adherence gate to compare actual tool calls
-	// against the planned step actions.
-	Plan *wire.Plan
-
-	// PlanStepsSatisfied[i] flips true once a tool call has matched
-	// plan step i. Length tracks len(Plan.Steps); nil when no plan.
-	// Reset whenever the plan is revised so we re-track from scratch.
-	PlanStepsSatisfied []bool
-
-	// PlanOffStreak counts consecutive tool calls that DIDN'T match
-	// any unsatisfied plan step. Crosses the auto-revise threshold ->
-	// planner re-runs with whatever context we've discovered so far.
-	PlanOffStreak int
-
-	// PlanRevisions counts how many times we've auto-regenerated the
-	// plan in this loop. Capped to keep us from thrashing — after the
-	// cap is hit we stop revising and let the agent run plan-free.
-	PlanRevisions int
-
-	// VerifyOnHost flips run_command from sandbox-routing to local
-	// host execution. Set only from ATLAS_VERIFY_IN=host together with
-	// ATLAS_TRUST_MODE=fully-trusted; a workspace's .atlas/config.toml
-	// may choose only the sandbox. The default (false) is the safer path;
-	// opt-in is for codebases that depend on host services (DBs, env vars,
-	// system tools) the sandbox can't see. Guardrails apply either way.
-	VerifyOnHost bool
-
-	// TrustMode gates command execution (untrusted refuses; trusted =
-	// sandbox; fully-trusted permits host execution). Resolved once per
-	// turn from ATLAS_TRUST_MODE.
-	TrustMode trustMode
-
-	// Streaming callback
-	StreamFn func(eventType string, data interface{})
-
-	// Permission callback
-	PermissionFn func(toolName string, args json.RawMessage) bool
-
-	// Context for cancellation
-	Ctx context.Context
+// serviceHealth is what the run noticed about services that stopped
+// answering: the lens, V3, and the services behind mandatory checks.
+type serviceHealth struct {
+	// lensDown is why the lens stopped scoring during this run, set by
+	// noteLensDown; the agent loop ends the run when it is not empty.
+	lensDown string
+	// v3Unchecked holds the writes that landed after V3 failed on them (ran
+	// out of time or was unavailable), keyed by ledger key. The final summary
+	// names each one whose bytes are still on disk (v3_fallback_note.go).
+	v3Unchecked   map[string]v3UncheckedWrite
+	v3UncheckedMu sync.Mutex
 	// Mandatory checks that could not run because their service did not
 	// answer, by check name. Guarded by mu. See noteCheckServiceUnavailable.
 	CheckServiceFailures map[string]int
 }
 
+// routeEntries counts this request's entries into the candidate-generation
+// route, under its own lock.
+type routeEntries struct {
+	// routeEntrySeq numbers the entries this request has made into the
+	// candidate-generation route. One write_file call that reaches the route
+	// is one entry, and a retry is a new one -- see routeEntry.
+	routeEntryMu  sync.Mutex
+	routeEntrySeq int
+}
+
+// runOutcome is how the session ended, set once.
+type runOutcome struct {
+	// The session's single terminal outcome, set by the one emitter. Read by
+	// the deferred broker envelope so the two cannot disagree.
+	TerminalStatus wire.TerminalStatus
+	TerminalReason string
+
+	// TerminalUnresolved names the exit gates that spent their bounces with
+	// their finding still true, comma-separated; empty when there were none.
+	TerminalUnresolved string
+	terminalOnce       sync.Once
+}
+
 // NewAgentContext creates a new agent context with defaults.
 func NewAgentContext(workingDir string, tier Tier) *AgentContext {
 	return &AgentContext{
-		Tier:            tier,
-		MaxTurns:        TierMaxTurns(tier),
-		WorkingDir:      workingDir,
-		PermissionMode:  PermissionDefault,
-		FileReadTimes:   make(map[string]time.Time),
-		FilesRead:       make(map[string]string),
-		BodySeen:        make(map[string]bool),
-		AppliedEdits:    make(map[string]bool),
-		FailedToolCalls: make(map[string]string),
-		SessionWrites:   make(map[string]bool),
-		Ctx:             context.Background(),
+		runSetup: runSetup{
+			Tier:           tier,
+			MaxTurns:       TierMaxTurns(tier),
+			WorkingDir:     workingDir,
+			PermissionMode: PermissionDefault,
+			Ctx:            context.Background(),
+		},
+		fileHistory: fileHistory{
+			FileReadTimes: make(map[string]time.Time),
+			FilesRead:     make(map[string]string),
+			BodySeen:      make(map[string]bool),
+			AppliedEdits:  make(map[string]bool),
+			SessionWrites: make(map[string]bool),
+		},
+		loopWatch: loopWatch{
+			FailedToolCalls: make(map[string]string),
+		},
 	}
 }
 

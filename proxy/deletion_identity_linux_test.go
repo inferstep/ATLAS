@@ -520,8 +520,18 @@ func TestConcurrentDecisionAndCancellationReleaseOnce(t *testing.T) {
 		mkFile(dir)
 		sess := fmt.Sprintf("sess-race-%d", i)
 		reqCtx, cancel := context.WithCancel(context.Background())
-		ctx := &AgentContext{PassID: sess, Ctx: reqCtx, WorkingDir: dir,
-			FilesRead: map[string]string{}, FileReadTimes: map[string]time.Time{}, SessionWrites: map[string]bool{}}
+		ctx := &AgentContext{
+			runSetup: runSetup{
+				PassID:     sess,
+				Ctx:        reqCtx,
+				WorkingDir: dir,
+			},
+			fileHistory: fileHistory{
+				FilesRead:     map[string]string{},
+				FileReadTimes: map[string]time.Time{},
+				SessionWrites: map[string]bool{},
+			},
+		}
 		ctx.StreamFn = func(string, interface{}) {}
 		done := make(chan bool, 1)
 		go func() { done <- awaitPermission(ctx, "delete_file", "c", json.RawMessage(`{"path":"f.py"}`)) }()

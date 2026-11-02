@@ -17,7 +17,7 @@ import (
 
 func TestTheV3NoteNamesOnlyTheUncheckedBytesOnDisk(t *testing.T) {
 	dir := t.TempDir()
-	ctx := &AgentContext{WorkingDir: dir}
+	ctx := &AgentContext{runSetup: runSetup{WorkingDir: dir}}
 	p := filepath.Join(dir, "app.py")
 	if err := os.WriteFile(p, []byte("x = 1\n"), 0o644); err != nil {
 		t.Fatal(err)

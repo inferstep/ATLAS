@@ -50,7 +50,7 @@ func TestEditIntroducesUnresolved(t *testing.T) {
 	defer srv.Close()
 	// No request context (Ctx nil), as on paths built without one: the gate
 	// runs on a background context rather than panic.
-	ctx := &AgentContext{V3URL: srv.URL, WorkingDir: "/workspace"}
+	ctx := &AgentContext{runSetup: runSetup{V3URL: srv.URL, WorkingDir: "/workspace"}}
 	for _, c := range []struct {
 		name, path, original, edited string
 		want                         []string
@@ -88,7 +88,7 @@ func TestEditIntroducesUnresolved(t *testing.T) {
 // twice (once, then one retry): with no baseline, counting every unresolved
 // name as new would block a model that fixes one error at a time.
 func TestTheStructuralGateFailsOpen(t *testing.T) {
-	unreachable := &AgentContext{V3URL: "http://127.0.0.1:0"}
+	unreachable := &AgentContext{runSetup: runSetup{V3URL: "http://127.0.0.1:0"}}
 	if got := editIntroducesUnresolved(unreachable, "app.py", "x", "y = render_template('i.html')"); got != nil {
 		t.Errorf("an unreachable service blocked the edit: %v", got)
 	}
@@ -105,7 +105,7 @@ func TestTheStructuralGateFailsOpen(t *testing.T) {
 		_, _ = w.Write([]byte(`{"ok":true,"unresolved":["helper_x"]}`))
 	}))
 	defer srv.Close()
-	ctx := &AgentContext{V3URL: srv.URL}
+	ctx := &AgentContext{runSetup: runSetup{V3URL: srv.URL}}
 	got := editIntroducesUnresolved(ctx, "app.py", "# original\ndef a():\n    return helper_x()\n", "def fixed():\n    return helper_x()\n")
 	if got != nil {
 		t.Errorf("introduced %v, want nothing", got)
@@ -129,9 +129,15 @@ func TestStructuralCheckExcludesEditedSelf(t *testing.T) {
 	}))
 	defer srv.Close()
 	ctx := &AgentContext{
-		V3URL: srv.URL, Ctx: context.Background(), WorkingDir: "/workspace",
-		FilesRead:     map[string]string{"/workspace/app.py": "def gone(): pass", "/workspace/util.py": "def helper(): pass"},
-		FileReadTimes: map[string]time.Time{"/workspace/app.py": time.Now(), "/workspace/util.py": time.Now()},
+		runSetup: runSetup{
+			V3URL:      srv.URL,
+			Ctx:        context.Background(),
+			WorkingDir: "/workspace",
+		},
+		fileHistory: fileHistory{
+			FilesRead:     map[string]string{"/workspace/app.py": "def gone(): pass", "/workspace/util.py": "def helper(): pass"},
+			FileReadTimes: map[string]time.Time{"/workspace/app.py": time.Now(), "/workspace/util.py": time.Now()},
+		},
 	}
 	_, _ = checkStructuralUnresolved(ctx, "/workspace/app.py", "x = gone()")
 	if _, present := sent["app.py"]; present {
@@ -240,7 +246,7 @@ func TestEmbeddedScriptGateRefusesAnEditThatBreaksTheScript(t *testing.T) {
 	srv := fakeV3Embedded(t, "'DOWN');", nil)
 	defer srv.Close()
 
-	msg := embeddedScriptGate(&AgentContext{V3URL: srv.URL}, "app.py",
+	msg := embeddedScriptGate(&AgentContext{runSetup: runSetup{V3URL: srv.URL}}, "app.py",
 		flaskWithScript("            let x = 1;"), flaskWithScript(strayParenLine))
 	opening := "Your content for app.py has a JavaScript syntax error in the <script> block inside the Python string HTML_TEMPLATE"
 	if !strings.HasPrefix(msg, opening) {
@@ -278,13 +284,13 @@ func TestEmbeddedScriptGateLetsTheWriteThrough(t *testing.T) {
 		ctx              *AgentContext
 		original, edited string
 	}{
-		{"a script that was already broken", &AgentContext{V3URL: withFinding.URL}, broken, broken + "\n# one more try\n"},
-		{"the fix of a broken script", &AgentContext{V3URL: withFinding.URL}, broken, fixed},
-		{"an unreachable service", &AgentContext{V3URL: "http://127.0.0.1:0"}, "", broken},
+		{"a script that was already broken", &AgentContext{runSetup: runSetup{V3URL: withFinding.URL}}, broken, broken + "\n# one more try\n"},
+		{"the fix of a broken script", &AgentContext{runSetup: runSetup{V3URL: withFinding.URL}}, broken, fixed},
+		{"an unreachable service", &AgentContext{runSetup: runSetup{V3URL: "http://127.0.0.1:0"}}, "", broken},
 		{"no service configured", &AgentContext{}, "", broken},
 		{"no agent context", nil, "", broken},
-		{"a service that cannot analyse the content", &AgentContext{V3URL: notAnalysable.URL}, "", broken},
-		{"a service that fails", &AgentContext{V3URL: failing.URL}, "", broken},
+		{"a service that cannot analyse the content", &AgentContext{runSetup: runSetup{V3URL: notAnalysable.URL}}, "", broken},
+		{"a service that fails", &AgentContext{runSetup: runSetup{V3URL: failing.URL}}, "", broken},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if msg := embeddedScriptGate(c.ctx, "app.py", c.original, c.edited); msg != "" {
@@ -313,7 +319,7 @@ func TestEmbeddedScriptGateBlocksAStoppedRenderLoop(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	msg := embeddedScriptGate(&AgentContext{V3URL: srv.URL}, "app.py",
+	msg := embeddedScriptGate(&AgentContext{runSetup: runSetup{V3URL: srv.URL}}, "app.py",
 		flaskWithScript("            setInterval(draw, 100);"), flaskWithScript("            setTimeout(draw, delay);"))
 	if !strings.HasPrefix(msg, "Your content for app.py stops a render loop") {
 		t.Errorf("the stopped loop was not refused as one:\n%s", msg)
@@ -326,7 +332,7 @@ func TestEmbeddedScriptSkipsWithoutScriptTag(t *testing.T) {
 	calls := 0
 	srv := fakeV3Embedded(t, "'DOWN');", &calls)
 	defer srv.Close()
-	ctx := &AgentContext{V3URL: srv.URL}
+	ctx := &AgentContext{runSetup: runSetup{V3URL: srv.URL}}
 
 	if _, ok := checkEmbeddedScript(ctx, "notes.md", flaskWithScript(strayParenLine), ""); !ok {
 		t.Error("an extension that cannot carry a script must pass")
@@ -354,7 +360,7 @@ func TestCheckFallbackSyntaxCarriesEmbeddedCheck(t *testing.T) {
 	defer v3.Close()
 	sandbox := fakeSyntaxSandbox(t, "") // everything parses
 	defer sandbox.Close()
-	ctx := &AgentContext{V3URL: v3.URL, SandboxURL: sandbox.URL}
+	ctx := &AgentContext{runSetup: runSetup{V3URL: v3.URL, SandboxURL: sandbox.URL}}
 
 	synErr, ok := checkFallbackSyntax(ctx, "app.py", flaskWithScript(strayParenLine))
 	if ok {
@@ -560,7 +566,7 @@ func TestAnUnrelativisablePathOmitsTheFilenameInsteadOfBeingRefused(t *testing.T
 // --- code outside the gates files ---------------------------------------------
 
 func TestSessionManifestNoteAnnouncesOncePerFile(t *testing.T) {
-	ctx := &AgentContext{SessionWrites: map[string]bool{"app.py": true}}
+	ctx := &AgentContext{fileHistory: fileHistory{SessionWrites: map[string]bool{"app.py": true}}}
 	if note := sessionManifestNote(ctx); note != "" {
 		t.Fatalf("single file needs no manifest, got %q", note)
 	}
@@ -589,8 +595,12 @@ func TestBuildSystemPromptIncludesPlan(t *testing.T) {
 		Rationale:  "investigate, change, verify.",
 	}
 	ctx := &AgentContext{
-		WorkingDir: "/workspace",
-		Plan:       plan,
+		runSetup: runSetup{
+			WorkingDir: "/workspace",
+		},
+		planProgress: planProgress{
+			Plan: plan,
+		},
 	}
 	prompt := buildSystemPrompt(ctx)
 
@@ -614,7 +624,7 @@ func TestBuildSystemPromptIncludesPlan(t *testing.T) {
 }
 
 func TestBuildSystemPromptOmitsPlanSectionWhenNoPlan(t *testing.T) {
-	ctx := &AgentContext{WorkingDir: "/workspace"}
+	ctx := &AgentContext{runSetup: runSetup{WorkingDir: "/workspace"}}
 	prompt := buildSystemPrompt(ctx)
 	if strings.Contains(prompt, "## Plan") {
 		t.Error("system prompt has Plan section when ctx.Plan is nil")
@@ -723,7 +733,7 @@ func TestPostOrphanCheckTrustsOnlyAnAnswer(t *testing.T) {
 		{"refused with 503", refused.URL, nil},
 		{"unreachable", unreachable.URL, nil},
 	} {
-		got := postOrphanCheck(&AgentContext{V3URL: c.url}, "todo.py", "old", "new")
+		got := postOrphanCheck(&AgentContext{runSetup: runSetup{V3URL: c.url}}, "todo.py", "old", "new")
 		if !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
 		}

@@ -189,10 +189,12 @@ func TestRevisePlanGuardsEmitNoEvent(t *testing.T) {
 		name string
 		ctx  *AgentContext
 	}{
-		{"nil plan", &AgentContext{Plan: nil}},
+		{"nil plan", &AgentContext{planProgress: planProgress{Plan: nil}}},
 		{"at the revision cap", &AgentContext{
-			Plan:          &wire.Plan{Steps: []wire.PlanStep{{ID: "s1", Action: "read_file", Target: "a.py"}}},
-			PlanRevisions: planMaxRevisions,
+			planProgress: planProgress{
+				Plan:          &wire.Plan{Steps: []wire.PlanStep{{ID: "s1", Action: "read_file", Target: "a.py"}}},
+				PlanRevisions: planMaxRevisions,
+			},
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -406,7 +408,7 @@ func TestWhatSatisfiesTheVerifyStep(t *testing.T) {
 		{"a static check", "python3 -m py_compile app.py", true, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			ctx := &AgentContext{Plan: flaskPlan()}
+			ctx := &AgentContext{planProgress: planProgress{Plan: flaskPlan()}}
 			ctx.PlanStepsSatisfied = []bool{true, true, true, true, false}
 			recordPlanAdherence(ctx, "run_command", runArgs(c.cmd), c.success)
 			if ctx.PlanStepsSatisfied[4] != c.satisfies {
@@ -425,7 +427,7 @@ func TestOtherCommandStepsKeepTheLiteralRule(t *testing.T) {
 		{ID: "s2", Action: "run_command", Target: "pytest tests/test_api.py"},
 		{ID: "s3", Action: "run_command", Target: "pytest"},
 	}}
-	ctx := &AgentContext{Plan: plan}
+	ctx := &AgentContext{planProgress: planProgress{Plan: plan}}
 	ctx.PlanStepsSatisfied = []bool{true, false, false}
 	recordPlanAdherence(ctx, "run_command", runArgs("python -m pytest -q tests/test_models.py"), true)
 	if ctx.PlanStepsSatisfied[1] {

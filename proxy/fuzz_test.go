@@ -270,14 +270,14 @@ func FuzzResolveWorkspacePath(f *testing.F) {
 	} {
 		f.Add(path)
 	}
-	if _, err := resolveWorkspacePath(&AgentContext{WorkingDir: root}, "escape/new.txt"); err == nil {
+	if _, err := resolveWorkspacePath(&AgentContext{runSetup: runSetup{WorkingDir: root}}, "escape/new.txt"); err == nil {
 		f.Fatal("symlink escape seed was accepted")
 	}
 	realRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		f.Fatal(err)
 	}
-	ctx := &AgentContext{WorkingDir: root}
+	ctx := &AgentContext{runSetup: runSetup{WorkingDir: root}}
 	f.Fuzz(func(t *testing.T, path string) {
 		resolved, err := resolveWorkspacePath(ctx, path)
 		if err != nil {
@@ -356,7 +356,7 @@ func FuzzToolCallPathsStayInTheWorkspace(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, toolIndex uint8, args []byte) {
 		tool := tools[int(toolIndex)%len(tools)]
-		ctx := &AgentContext{WorkingDir: root, HostWorkingDir: "/Users/test/project"}
+		ctx := &AgentContext{runSetup: runSetup{WorkingDir: root, HostWorkingDir: "/Users/test/project"}}
 		if validateToolWorkspacePaths(tool, args, ctx) != "" {
 			return
 		}

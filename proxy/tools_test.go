@@ -28,11 +28,15 @@ import (
 // FAILED run referencing it, the next write must fast-path (skip V3).
 func TestIsActiveDebugIteration(t *testing.T) {
 	ctx := &AgentContext{
-		SessionWrites: map[string]bool{"foo.py": true},
-		Messages: []wire.AgentMessage{
-			{Role: "assistant", Content: "..."},
-			{Role: "tool", ToolName: "run_command",
-				Content: `{"success":false,"error":"File \"foo.py\", line 3\nSyntaxError"}`},
+		fileHistory: fileHistory{
+			SessionWrites: map[string]bool{"foo.py": true},
+		},
+		modelExchange: modelExchange{
+			Messages: []wire.AgentMessage{
+				{Role: "assistant", Content: "..."},
+				{Role: "tool", ToolName: "run_command",
+					Content: `{"success":false,"error":"File \"foo.py\", line 3\nSyntaxError"}`},
+			},
 		},
 	}
 	if !isActiveDebugIteration(ctx, "foo.py") {
@@ -429,7 +433,7 @@ func TestBuildResponseFormat_UnknownModeDefaultsToStrict(t *testing.T) {
 }
 
 func TestNormalAgentPromptOmitsRemovedTools(t *testing.T) {
-	ctx := &AgentContext{Messages: []wire.AgentMessage{{Role: "user", Content: "build the project"}}}
+	ctx := &AgentContext{modelExchange: modelExchange{Messages: []wire.AgentMessage{{Role: "user", Content: "build the project"}}}}
 	if prompt := buildSystemPrompt(ctx); strings.Contains(prompt, "plan_tasks") {
 		t.Fatal("prompt still mentions the removed plan_tasks tool")
 	}
@@ -490,10 +494,14 @@ func TestSchemaConstrained_ReachesLlamaServerOverTheWire(t *testing.T) {
 	defer srv.Close()
 
 	ctx := &AgentContext{
-		InferenceURL: srv.URL,
-		Ctx:          context.Background(),
-		Messages: []wire.AgentMessage{
-			{Role: "user", Content: "hi"},
+		runSetup: runSetup{
+			InferenceURL: srv.URL,
+			Ctx:          context.Background(),
+		},
+		modelExchange: modelExchange{
+			Messages: []wire.AgentMessage{
+				{Role: "user", Content: "hi"},
+			},
 		},
 	}
 
@@ -577,10 +585,14 @@ func TestBuildResponseFormat_SchemaMatchesToolRegistry(t *testing.T) {
 
 func newMoveCtx(dir string) *AgentContext {
 	return &AgentContext{
-		WorkingDir:    dir,
-		FilesRead:     map[string]string{},
-		FileReadTimes: map[string]time.Time{},
-		SessionWrites: map[string]bool{},
+		runSetup: runSetup{
+			WorkingDir: dir,
+		},
+		fileHistory: fileHistory{
+			FilesRead:     map[string]string{},
+			FileReadTimes: map[string]time.Time{},
+			SessionWrites: map[string]bool{},
+		},
 	}
 }
 
@@ -694,11 +706,15 @@ HTML = "<div class=\"board\" style=\"width:400px;height:400px\" id=\"game-board-
 def index():
     return render_template_string(HTML)
 `
-	ctx := &AgentContext{Messages: []wire.AgentMessage{
-		{Role: "system", Content: "sys"},
-		{Role: "user", Content: "make a snake game"},
-		storedReadMessage(t, fileContent),
-	}}
+	ctx := &AgentContext{
+		modelExchange: modelExchange{
+			Messages: []wire.AgentMessage{
+				{Role: "system", Content: "sys"},
+				{Role: "user", Content: "make a snake game"},
+				storedReadMessage(t, fileContent),
+			},
+		},
+	}
 	if !fileContentInContext(ctx, fileContent) {
 		t.Errorf("content with quoted HTML line reported as NOT in context — false-negative would make dedup re-serve and loop")
 	}
@@ -708,10 +724,14 @@ def index():
 // dedup re-serves rather than lying that "it's above."
 func TestFileContentInContextDetectsAbsence(t *testing.T) {
 	fileContent := "def compute_subtotal(rows):\n    return sum(r.price for r in rows)\n"
-	ctx := &AgentContext{Messages: []wire.AgentMessage{
-		{Role: "system", Content: "sys"},
-		{Role: "user", Content: "unrelated chatter with no file content"},
-	}}
+	ctx := &AgentContext{
+		modelExchange: modelExchange{
+			Messages: []wire.AgentMessage{
+				{Role: "system", Content: "sys"},
+				{Role: "user", Content: "unrelated chatter with no file content"},
+			},
+		},
+	}
 	if fileContentInContext(ctx, fileContent) {
 		t.Errorf("expected absent verdict when content is not in any message")
 	}
@@ -747,7 +767,7 @@ func TestRunViaSandboxDecodesSuccessfulResponse(t *testing.T) {
 	})
 	defer srv.Close()
 
-	ctx := &AgentContext{SandboxURL: srv.URL}
+	ctx := &AgentContext{runSetup: runSetup{SandboxURL: srv.URL}}
 	out, err := runViaSandbox(ctx, `echo "hello world"`, "/workspace", 5)
 	if err != nil {
 		t.Fatalf("runViaSandbox: %v", err)
@@ -769,7 +789,7 @@ func TestRunViaSandboxSurfacesNonZeroExit(t *testing.T) {
 	})
 	defer srv.Close()
 
-	ctx := &AgentContext{SandboxURL: srv.URL}
+	ctx := &AgentContext{runSetup: runSetup{SandboxURL: srv.URL}}
 	out, err := runViaSandbox(ctx, "python -c 'import flask'", "/workspace", 5)
 	if err != nil {
 		t.Fatalf("runViaSandbox: %v", err)
@@ -793,7 +813,7 @@ func TestRunViaSandbox4xxIsValidationFailure(t *testing.T) {
 	})
 	defer srv.Close()
 
-	ctx := &AgentContext{SandboxURL: srv.URL}
+	ctx := &AgentContext{runSetup: runSetup{SandboxURL: srv.URL}}
 	out, err := runViaSandbox(ctx, "ls", "/etc", 5)
 	if err != nil {
 		t.Fatalf("4xx should NOT return Go error (fallback would trip): %v", err)
@@ -809,7 +829,7 @@ func TestRunViaSandbox4xxIsValidationFailure(t *testing.T) {
 func TestRunViaSandboxUnreachableReturnsError(t *testing.T) {
 	// Sandbox URL that won't accept connections. The caller must surface
 	// this error and must not change the execution target implicitly.
-	ctx := &AgentContext{SandboxURL: "http://127.0.0.1:1"}
+	ctx := &AgentContext{runSetup: runSetup{SandboxURL: "http://127.0.0.1:1"}}
 	_, err := runViaSandbox(ctx, "echo hi", "/workspace", 5)
 	if err == nil {
 		t.Error("expected network error for unreachable sandbox")
@@ -818,8 +838,10 @@ func TestRunViaSandboxUnreachableReturnsError(t *testing.T) {
 
 func TestRunCommandDoesNotFallbackWhenSandboxIsUnavailable(t *testing.T) {
 	ctx := &AgentContext{
-		WorkingDir: "/workspace",
-		SandboxURL: "http://127.0.0.1:1",
+		runSetup: runSetup{
+			WorkingDir: "/workspace",
+			SandboxURL: "http://127.0.0.1:1",
+		},
 	}
 	res, err := runCommandTool().Execute(
 		json.RawMessage(`{"command":"printf fallback-ran"}`), ctx,
@@ -1056,7 +1078,7 @@ func TestCallGraphFooterMarksItselfAsNotFileContent(t *testing.T) {
 			{"name":"mean","kind":"function","start_line":1,"end_line":3,"calls":["sum","len"]}]}`))
 	}))
 	defer v3.Close()
-	ctx := &AgentContext{V3URL: v3.URL, Ctx: context.Background()}
+	ctx := &AgentContext{runSetup: runSetup{V3URL: v3.URL, Ctx: context.Background()}}
 
 	footer := callGraphFooter(ctx, "stats.py", "def mean(v):\n    return sum(v)/len(v)\n")
 	if footer == "" {
@@ -1819,8 +1841,14 @@ func TestFinishedBackgroundNoteIsSilentWithoutNews(t *testing.T) {
 	})
 
 	t.Run("an unreachable sandbox is silent", func(t *testing.T) {
-		ctx := &AgentContext{SandboxURL: "http://127.0.0.1:1",
-			BackgroundJobs: map[string]string{"job-1": "x"}}
+		ctx := &AgentContext{
+			runSetup: runSetup{
+				SandboxURL: "http://127.0.0.1:1",
+			},
+			backgroundWork: backgroundWork{
+				BackgroundJobs: map[string]string{"job-1": "x"},
+			},
+		}
 		if got := finishedBackgroundNote(ctx); got != "" {
 			t.Errorf("a failed listing must not interrupt the loop:\n%s", got)
 		}
@@ -1836,7 +1864,7 @@ func backgroundListingCtx(t *testing.T, jobs map[string]string, body string) (*A
 		w.Write([]byte(body))
 	}))
 	t.Cleanup(srv.Close)
-	return &AgentContext{SandboxURL: srv.URL, BackgroundJobs: jobs}, &hits
+	return &AgentContext{runSetup: runSetup{SandboxURL: srv.URL}, backgroundWork: backgroundWork{BackgroundJobs: jobs}}, &hits
 }
 
 // A refusal the model cannot act on is a loop. It copies old_str into
@@ -1846,10 +1874,16 @@ func backgroundListingCtx(t *testing.T, jobs map[string]string, body string) (*A
 // game" run: refused at turn 11, re-sent at 12 and 13, dead at 757s.
 func TestIdenticalEditRefusalNamesAWayOut(t *testing.T) {
 	dir := t.TempDir()
-	ctx := &AgentContext{WorkingDir: dir,
-		FilesRead:     map[string]string{},
-		BodySeen:      map[string]bool{},
-		FileReadTimes: map[string]time.Time{}}
+	ctx := &AgentContext{
+		runSetup: runSetup{
+			WorkingDir: dir,
+		},
+		fileHistory: fileHistory{
+			FilesRead:     map[string]string{},
+			BodySeen:      map[string]bool{},
+			FileReadTimes: map[string]time.Time{},
+		},
+	}
 	for _, tc := range []struct{ name, want string }{
 		{"game.js", "replace_lines"},
 		{"app.py", "structural_edit"},

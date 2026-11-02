@@ -39,10 +39,10 @@ func TestAnAnswerOnlyRequestIsAQuestionOrAProhibition(t *testing.T) {
 		ctx  *AgentContext
 		want bool
 	}{
-		{&AgentContext{TaskContract: &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeQuestion}}, true},
-		{&AgentContext{HumanTask: "Just explain the parser. Do not change any code."}, true},
-		{&AgentContext{TaskContract: &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork}}, false},
-		{&AgentContext{HumanTask: "Fix the tie-break in the planner."}, false},
+		{&AgentContext{runSetup: runSetup{TaskContract: &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeQuestion}}}, true},
+		{&AgentContext{runSetup: runSetup{HumanTask: "Just explain the parser. Do not change any code."}}, true},
+		{&AgentContext{runSetup: runSetup{TaskContract: &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork}}}, false},
+		{&AgentContext{runSetup: runSetup{HumanTask: "Fix the tie-break in the planner."}}, false},
 	}
 	for i, c := range cases {
 		if got := answerOnlyRequest(c.ctx); got != c.want {
