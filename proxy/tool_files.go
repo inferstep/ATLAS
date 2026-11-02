@@ -10,19 +10,20 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/itigges22/atlas-proxy/internal/wire"
 	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
 func deleteFileTool() *ToolDef {
 	return &ToolDef{
 		Name:        "delete_file",
-		Effect:      ToolEffectDirectMutation,
+		Effect:      wire.ToolEffectDirectMutation,
 		Description: "Delete a file or empty directory. Use for removing files that are no longer needed.",
-		InputSchema: DeleteFileInput{},
+		InputSchema: wire.DeleteFileInput{},
 		ReadOnly:    false,
 		Destructive: true,
-		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*ToolResult, error) {
-			var input DeleteFileInput
+		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*wire.ToolResult, error) {
+			var input wire.DeleteFileInput
 			if err := json.Unmarshal(rawInput, &input); err != nil {
 				return nil, errNoMutation(fmt.Errorf("invalid input: %w", err))
 			}
@@ -60,7 +61,7 @@ func deleteFileTool() *ToolDef {
 
 // removeDeleteTarget removes what delete_file found, checking an approval again
 // right next to the removal.
-func removeDeleteTarget(ctx *AgentContext, rawInput json.RawMessage, shownPath, path string, approved deleteTarget, userApproved bool) *ToolResult {
+func removeDeleteTarget(ctx *AgentContext, rawInput json.RawMessage, shownPath, path string, approved deleteTarget, userApproved bool) *wire.ToolResult {
 	// The approval was granted against an inspected object. Re-inspect
 	// now, next to the removal, and compare: bytes, type, link text,
 	// emptiness. If any of it moved while the prompt was on screen,
@@ -99,16 +100,16 @@ func removeDeleteTarget(ctx *AgentContext, rawInput json.RawMessage, shownPath, 
 	if rmErr := os.Remove(path); rmErr != nil {
 		// The removal was attempted and the entry may or may not
 		// still be there, so the producer says failed, not none.
-		return &ToolResult{
+		return &wire.ToolResult{
 			Success:          false,
 			Error:            fmt.Sprintf("delete_file: %v", rmErr),
-			MutationStatus:   MutationFailed,
-			ValidationKind:   ValidationKindNone,
-			ValidationStatus: ValidationNotApplicable,
+			MutationStatus:   wire.MutationFailed,
+			ValidationKind:   wire.ValidationKindNone,
+			ValidationStatus: wire.ValidationNotApplicable,
 		}
 	}
 
-	out := DeleteFileOutput{Deleted: true}
+	out := wire.DeleteFileOutput{Deleted: true}
 	outBytes, _ := json.Marshal(out)
 	// The approval, the revalidation and the successful removal are
 	// all true at this instant, so they are recorded together rather
@@ -125,10 +126,10 @@ func removeDeleteTarget(ctx *AgentContext, rawInput json.RawMessage, shownPath, 
 	// more than the delete still gets finished. It cannot authorise a
 	// completion: the tombstone rule at the real terminal stands, and
 	// is fail-closed.
-	return &ToolResult{Success: true, Data: outBytes,
-		MutationStatus:   MutationApplied,
-		ValidationKind:   ValidationKindNone,
-		ValidationStatus: ValidationNotApplicable}
+	return &wire.ToolResult{Success: true, Data: outBytes,
+		MutationStatus:   wire.MutationApplied,
+		ValidationKind:   wire.ValidationKindNone,
+		ValidationStatus: wire.ValidationNotApplicable}
 }
 
 // ---------------------------------------------------------------------------
@@ -142,13 +143,13 @@ func removeDeleteTarget(ctx *AgentContext, rawInput json.RawMessage, shownPath, 
 func moveFileTool() *ToolDef {
 	return &ToolDef{
 		Name:        "move_file",
-		Effect:      ToolEffectDirectMutation,
+		Effect:      wire.ToolEffectDirectMutation,
 		Description: "Move or rename a file within the project (e.g. move index.html into templates/, or rename old.py to new.py). Use this to reorganize files — shell `mv`/`cp` are refused. If destination is an existing directory, the file is moved into it keeping its name. Content is preserved exactly.",
-		InputSchema: MoveFileInput{},
+		InputSchema: wire.MoveFileInput{},
 		ReadOnly:    false,
 		Destructive: false,
-		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*ToolResult, error) {
-			var input MoveFileInput
+		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*wire.ToolResult, error) {
+			var input wire.MoveFileInput
 			if err := json.Unmarshal(rawInput, &input); err != nil {
 				return nil, errNoMutation(fmt.Errorf("invalid input: %w", err))
 			}
@@ -193,13 +194,13 @@ func moveFileTool() *ToolDef {
 // relocateFile moves src to dst, by a rename or, across filesystems, by a copy
 // and a removal. It then re-points what the session recorded about the file
 // and reports the move.
-func relocateFile(ctx *AgentContext, input MoveFileInput, src, dst, relDest string, srcInfo os.FileInfo) (*ToolResult, error) {
+func relocateFile(ctx *AgentContext, input wire.MoveFileInput, src, dst, relDest string, srcInfo os.FileInfo) (*wire.ToolResult, error) {
 	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
 		// The source is untouched, but MkdirAll can leave part of the
 		// tree behind, so this is an attempted mutation that errored.
 		return nil, errFailedMutation(
 			fmt.Errorf("move_file: cannot create destination dir: %w", err),
-			ValidationKindNone, ValidationNotApplicable)
+			wire.ValidationKindNone, wire.ValidationNotApplicable)
 	}
 
 	// os.Rename is atomic on the same filesystem; fall back to
@@ -218,7 +219,7 @@ func relocateFile(ctx *AgentContext, input MoveFileInput, src, dst, relDest stri
 			// The destination may hold a partial copy.
 			return nil, errFailedMutation(
 				fmt.Errorf("move_file: cannot write destination: %w", werr),
-				ValidationKindNone, ValidationNotApplicable)
+				wire.ValidationKindNone, wire.ValidationNotApplicable)
 		}
 		// A failure here leaves BOTH copies on disk. The move still
 		// happened, so it is applied; the ledger sees the surviving
@@ -242,13 +243,13 @@ func relocateFile(ctx *AgentContext, input MoveFileInput, src, dst, relDest stri
 		ctx.SessionWrites[relDest] = true
 	}
 
-	out := MoveFileOutput{Moved: true, Source: input.Source, Destination: relDest}
+	out := wire.MoveFileOutput{Moved: true, Source: input.Source, Destination: relDest}
 	outBytes, _ := json.Marshal(out)
 	// Relocation demonstrated. A move preserves content exactly, so
 	// this tool checks nothing: any verdict the bytes had was earned
 	// under the old name and does not travel with them.
-	return &ToolResult{Success: true, Data: outBytes,
-		MutationStatus:   MutationApplied,
-		ValidationKind:   ValidationKindNone,
-		ValidationStatus: ValidationNotApplicable}, nil
+	return &wire.ToolResult{Success: true, Data: outBytes,
+		MutationStatus:   wire.MutationApplied,
+		ValidationKind:   wire.ValidationKindNone,
+		ValidationStatus: wire.ValidationNotApplicable}, nil
 }

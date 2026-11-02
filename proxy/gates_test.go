@@ -14,6 +14,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // --- the structural-unresolved gate -------------------------------------------
@@ -547,7 +549,7 @@ func TestAnUnrelativisablePathOmitsTheFilenameInsteadOfBeingRefused(t *testing.T
 	ctx.SandboxURL = srv.URL
 
 	out := sandboxSyntaxOutcome(ctx, "/etc/passwd.py", "x = 1\n")
-	if out.Status != ValidationPassed {
+	if out.Status != wire.ValidationPassed {
 		t.Errorf("status = %q, want passed — an unscopable path must still get a whole-file check", out.Status)
 	}
 	if len(seen) != 1 || seen[0] != "" {
@@ -577,8 +579,8 @@ func TestSessionManifestNoteAnnouncesOncePerFile(t *testing.T) {
 }
 
 func TestBuildSystemPromptIncludesPlan(t *testing.T) {
-	plan := &Plan{
-		Steps: []PlanStep{
+	plan := &wire.Plan{
+		Steps: []wire.PlanStep{
 			{ID: "s1", Action: "read_file", Target: "app.py", Why: "inspect current routes"},
 			{ID: "s2", Action: "edit_file", Target: "app.py", Why: "add /hello route"},
 			{ID: "s3", Action: "run_command", Target: "curl http://localhost:5000/hello", Why: "verify"},
@@ -624,9 +626,9 @@ func TestBuildSystemPromptOmitsPlanSectionWhenNoPlan(t *testing.T) {
 // observed session burned all three bounces re-sending `done` against that
 // advice after correctly starting the server with run_background.
 func TestBlockedServerStartGetsProbeAdviceNotFixAdvice(t *testing.T) {
-	wrote := func(stderr string) *ToolResult {
-		data, _ := json.Marshal(RunCommandOutput{Stderr: stderr, ExitCode: 1, Outcome: ExecutionCompleted})
-		return &ToolResult{Error: stderr, Data: data}
+	wrote := func(stderr string) *wire.ToolResult {
+		data, _ := json.Marshal(wire.RunCommandOutput{Stderr: stderr, ExitCode: 1, Outcome: wire.ExecutionCompleted})
+		return &wire.ToolResult{Error: stderr, Data: data}
 	}
 	if !blockedServerStart(wrote("Address already in use\nPort 5001 is in use by another program.")) {
 		t.Error("a port that is taken was not recognised as a blocked server start")

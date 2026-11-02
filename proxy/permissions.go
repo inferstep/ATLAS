@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/wire"
 	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
@@ -112,12 +113,12 @@ func shouldDenyToolCall(toolName string, args json.RawMessage) (bool, string) {
 		return false, ""
 	}
 	switch {
-	case tool.Effect == ToolEffectCommandUnobserved:
+	case tool.Effect == wire.ToolEffectCommandUnobserved:
 		if reason := denyCommandReason(ledgerArgPath(args, "command")); reason != "" {
 			return true, reason
 		}
 	case toolName == "move_file":
-		var input MoveFileInput
+		var input wire.MoveFileInput
 		if json.Unmarshal(args, &input) != nil {
 			return false, ""
 		}
@@ -129,7 +130,7 @@ func shouldDenyToolCall(toolName string, args json.RawMessage) (bool, string) {
 		if reason := denyWritePathReason(input.Destination); reason != "" {
 			return true, reason
 		}
-	case tool.Effect == ToolEffectDirectMutation && toolName != "delete_file":
+	case tool.Effect == wire.ToolEffectDirectMutation && toolName != "delete_file":
 		// delete_file has its own per-object approval.
 		if reason := denyWritePathReason(ledgerArgPath(args, "path")); reason != "" {
 			return true, reason
@@ -148,12 +149,12 @@ func describeToolCall(toolName string, args json.RawMessage) string {
 	// A command is shown whole. Approval is the only per-command control, and
 	// a prompt cut at 100 bytes hid the tail of a chain (`... && rm -rf src`).
 	case "run_command":
-		var input RunCommandInput
+		var input wire.RunCommandInput
 		if json.Unmarshal(args, &input) == nil {
 			return "Run command: " + input.Command
 		}
 	case "run_background":
-		var input RunBackgroundInput
+		var input wire.RunBackgroundInput
 		if json.Unmarshal(args, &input) == nil {
 			return "Run in the background: " + input.Command
 		}
@@ -162,12 +163,12 @@ func describeToolCall(toolName string, args json.RawMessage) string {
 			return "Stop background job " + id
 		}
 	case "write_file":
-		var input WriteFileInput
+		var input wire.WriteFileInput
 		if json.Unmarshal(args, &input) == nil {
 			return "Write file: " + input.Path + " (" + formatSize(len(input.Content)) + ")"
 		}
 	case "edit_file":
-		var input EditFileInput
+		var input wire.EditFileInput
 		if json.Unmarshal(args, &input) == nil {
 			return "Edit file: " + input.Path
 		}
@@ -268,7 +269,7 @@ func awaitPermission(ctx *AgentContext, toolName, callID string, args json.RawMe
 	pendingPermissions.Store(key, entry)
 	defer pendingPermissions.CompareAndDelete(key, entry)
 
-	req := PermissionRequest{
+	req := wire.PermissionRequest{
 		ToolName:   toolName,
 		Args:       args,
 		Message:    describeToolCall(toolName, args),
@@ -580,7 +581,7 @@ const deleteHashBufferBytes = 64 * 1024
 // rules for what is deletable. Nothing here opens mutation debt, touches the
 // ledger, tombstones anything, or writes to disk.
 func inspectDeleteTarget(ctx *AgentContext, args json.RawMessage) (deleteTarget, string) {
-	var input DeleteFileInput
+	var input wire.DeleteFileInput
 	if err := json.Unmarshal(args, &input); err != nil {
 		return deleteTarget{}, "delete_file: arguments are not usable"
 	}

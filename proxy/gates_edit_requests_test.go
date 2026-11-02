@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // A write_file over an existing file nobody has looked at is refused, however
@@ -201,7 +203,7 @@ func TestAnEditNeedsAReadUnlessTheSessionsOwnWriteIsOnDisk(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The record writeFileRecorded leaves of the session's own write.
-	observeDeliverable(ctx, ledgerKey(ctx, target), []byte(body), ValidationKindSyntax, ValidationPassed, "")
+	observeDeliverable(ctx, ledgerKey(ctx, target), []byte(body), wire.ValidationKindSyntax, wire.ValidationPassed, "")
 	if !editViewIsCurrent(ctx, target) {
 		t.Fatal("the session's own write, unchanged on disk, is not current")
 	}

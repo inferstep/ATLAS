@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // An edit_file old_str that has stopped matching its file, and keeps going,
@@ -249,7 +251,7 @@ func TestTheStreamIsCutAndTheModelIsToldWhere(t *testing.T) {
 	}))
 	defer srv.Close()
 	ctx.InferenceURL = srv.URL
-	ctx.Messages = []AgentMessage{{Role: "user", Content: "add a toml branch"}}
+	ctx.Messages = []wire.AgentMessage{{Role: "user", Content: "add a toml branch"}}
 
 	content, _, err := callLLMOnceWithGrammar(ctx, ctx.Messages, 0.3, "")
 	if err != nil {

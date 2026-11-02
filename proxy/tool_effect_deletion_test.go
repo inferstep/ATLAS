@@ -16,6 +16,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // --- a successful delete does not end the session ---------------------------
@@ -331,40 +333,40 @@ func TestDemonstratedMoveDoesNotBlockCompletion(t *testing.T) {
 		// Deletions are approved only where the row says so: the other rows
 		// show that an unapproved removal still blocks.
 		approveDeletes bool
-		wantStatus     TerminalStatus
+		wantStatus     wire.TerminalStatus
 	}{
 		{"a validated move completes", "Rename old.py to new.py.",
 			map[string]string{"old.py": delSeed},
 			script(dlMove("old.py", "new.py"), stepDone("renamed old.py to new.py")),
-			true, TerminalCompleted},
+			true, wire.TerminalCompleted},
 		{"several demonstrated moves complete", "Rename a.py to x.py and b.py to y.py.",
 			map[string]string{"a.py": delSeed, "b.py": delSeed},
 			script(dlMove("a.py", "x.py"), dlMove("b.py", "y.py"), stepDone("renamed both")),
-			true, TerminalCompleted},
+			true, wire.TerminalCompleted},
 		// An unapproved deletion never reaches a tombstone (nothing is
 		// removed), so the debt it still owes stops it earlier. The property
 		// is that it cannot complete; which gate says so is not the subject.
 		{"an unapproved delete still cannot complete", "Delete a.py.",
 			map[string]string{"a.py": delSeed},
 			script(dlDel("a.py"), stepDone("deleted a.py")),
-			false, TerminalIncomplete},
+			false, wire.TerminalIncomplete},
 		{"an unapproved unrequested delete still cannot complete", "Make the tests pass.",
 			map[string]string{"a.py": delSeed},
 			script(dlDel("a.py"), stepDone("removed the failing file")),
-			false, TerminalIncomplete},
+			false, wire.TerminalIncomplete},
 		{"a move and a delete together still cannot complete", "Rename a.py to x.py.",
 			map[string]string{"a.py": delSeed, "b.py": delSeed},
 			script(dlMove("a.py", "x.py"), dlDel("b.py"), stepDone("renamed and cleaned up")),
-			false, TerminalIncomplete},
+			false, wire.TerminalIncomplete},
 		{"destination deleted after the move", "Rename old.py to new.py.",
 			map[string]string{"old.py": delSeed},
 			script(dlMove("old.py", "new.py"), dlDel("new.py"), stepDone("renamed")),
-			false, TerminalIncomplete},
+			false, wire.TerminalIncomplete},
 		{"text exit after a demonstrated move", "Rename old.py to new.py.",
 			map[string]string{"old.py": delSeed},
 			script(dlMove("old.py", "new.py"),
 				map[string]interface{}{"type": "text", "content": "Renamed old.py to new.py."}),
-			true, TerminalCompleted},
+			true, wire.TerminalCompleted},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			r := delLoopFixtureApprove(t, c.seed, c.prompt, c.plan, c.approveDeletes)
@@ -418,7 +420,7 @@ func TestMoveTombstoneDemonstrationPredicate(t *testing.T) {
 		// demonstrated is covered by the stale-hash and bad-bytes cases.
 		{"unknown ledger verdict, bytes still demonstrate", "moved:<dst>",
 			func(_ string, _, dst *DeliverableState) {
-				dst.ValidationStatus, dst.ValidatedHash = ValidationUnknown, ""
+				dst.ValidationStatus, dst.ValidatedHash = wire.ValidationUnknown, ""
 			}, false},
 		{"source still exists", "moved:<dst>", func(dir string, _, _ *DeliverableState) {
 			os.WriteFile(filepath.Join(dir, "old.py"), []byte(delSeed), 0o644)
@@ -454,7 +456,7 @@ func TestMoveTombstoneDemonstrationPredicate(t *testing.T) {
 			os.WriteFile(filepath.Join(dir, "new.py"), []byte(delSeed), 0o644)
 			h := hashBytes([]byte(delSeed))
 			dst := &DeliverableState{Path: "new.py", CurrentHash: h, Generation: 1,
-				ValidationKind: ValidationKindSyntax, ValidationStatus: ValidationPassed,
+				ValidationKind: wire.ValidationKindSyntax, ValidationStatus: wire.ValidationPassed,
 				ValidatedHash: h}
 			src := &DeliverableState{Path: "old.py", Generation: 1, Tombstoned: true,
 				RestoreProhibited: true,
@@ -513,7 +515,7 @@ func TestDemonstratedMoveMatrixRemaining(t *testing.T) {
 			"Rename old.py to new.py.",
 			script(dlMove("./old.py", "./new.py"), stepDone("renamed")))
 		r.check(t, "aliases")
-		if r.terminal["status"] != string(TerminalCompleted) {
+		if r.terminal["status"] != string(wire.TerminalCompleted) {
 			t.Errorf("alias spellings did not resolve: %q/%q",
 				r.terminal["status"], r.terminal["reason"])
 		}
@@ -607,17 +609,17 @@ func TestRefusedDeletionCannotAuthoriseCompletion(t *testing.T) {
 		name       string
 		seed       map[string]string
 		plan       func(i int) map[string]interface{}
-		wantStatus TerminalStatus
+		wantStatus wire.TerminalStatus
 		wantReason string
 		wantOnDisk []string
 	}{
 		{"denied deletion then done", map[string]string{"a.py": delSeed},
 			script(dlDel("a.py"), stepDone("removed a.py")),
-			TerminalIncomplete, "unresolved_mutation_debt", []string{"a.py"}},
+			wire.TerminalIncomplete, "unresolved_mutation_debt", []string{"a.py"}},
 
 		{"denied deletion then unrelated success", map[string]string{"a.py": delSeed},
 			script(dlDel("a.py"), dlWrite("report.py", delSeed), stepDone("wrote report.py")),
-			TerminalIncomplete, "unresolved_mutation_debt",
+			wire.TerminalIncomplete, "unresolved_mutation_debt",
 			[]string{"a.py", "report.py"}},
 
 		// A rewrite is not a retirement of a delete debt: that debt retires on
@@ -631,7 +633,7 @@ func TestRefusedDeletionCannotAuthoriseCompletion(t *testing.T) {
 			script(dlDel("a.py"),
 				dlWrite("a.py", "def solve():\n    return 8\n\n\nprint(solve())\n"),
 				stepDone("rewrote a.py")),
-			TerminalIncomplete, "unresolved_mutation_debt", []string{"a.py"}},
+			wire.TerminalIncomplete, "unresolved_mutation_debt", []string{"a.py"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			r := delLoopFixtureApprove(t, c.seed, "Tidy the workspace.", c.plan, false)
@@ -698,54 +700,54 @@ var approvedDeletionRuns = []struct {
 	name       string
 	seed       map[string]string
 	plan       func(i int) map[string]interface{}
-	wantStatus TerminalStatus
+	wantStatus wire.TerminalStatus
 	wantReason string
 	wantGone   []string
 	wantThere  []string
 }{
 	{"one approved deletion", map[string]string{"a.py": delSeed},
 		script(dlDel("a.py"), stepDone("removed a.py")),
-		TerminalCompleted, "approved_deletions_demonstrated",
+		wire.TerminalCompleted, "approved_deletions_demonstrated",
 		[]string{"a.py"}, nil},
 
 	{"two approved deletions", map[string]string{"a.py": delSeed, "b.py": delSeed},
 		script(dlDel("a.py"), dlDel("b.py"), stepDone("removed both")),
-		TerminalCompleted, "approved_deletions_demonstrated",
+		wire.TerminalCompleted, "approved_deletions_demonstrated",
 		[]string{"a.py", "b.py"}, nil},
 
 	{"one approved deletion fails", map[string]string{"a.py": delSeed, "pkg/m.py": delSeed},
 		script(dlDel("a.py"),
 			dlDel("pkg"), // non-empty: refused before asking
 			stepDone("tidied up")),
-		TerminalIncomplete, "unresolved_mutation_debt",
+		wire.TerminalIncomplete, "unresolved_mutation_debt",
 		[]string{"a.py"}, []string{"pkg/m.py"}},
 
 	{"approved delete plus a demonstrated deliverable",
 		map[string]string{"a.py": delSeed},
 		script(dlDel("a.py"), dlWrite("report.py", delSeed), stepDone("done")),
-		TerminalCompleted, "deliverables_parse_only",
+		wire.TerminalCompleted, "deliverables_parse_only",
 		[]string{"a.py"}, []string{"report.py"}},
 
 	{"approved deletion then the path is recreated",
 		map[string]string{"a.py": delSeed},
 		script(dlDel("a.py"), dlWrite("a.py", delSeed), stepDone("removed then rewrote a.py")),
-		TerminalIncomplete, "delete_intent_unestablished",
+		wire.TerminalIncomplete, "delete_intent_unestablished",
 		nil, []string{"a.py"}},
 
 	{"approved symlink deletion leaves the target",
 		map[string]string{"real.py": delSeed, "link.py": delSymlinkTo},
 		script(dlDel("link.py"), stepDone("removed the link")),
-		TerminalCompleted, "approved_deletions_demonstrated",
+		wire.TerminalCompleted, "approved_deletions_demonstrated",
 		[]string{"link.py"}, []string{"real.py"}},
 
 	{"alias spelling is one obligation", map[string]string{"a.py": delSeed},
 		script(dlDel("./a.py"), stepDone("removed a.py")),
-		TerminalCompleted, "approved_deletions_demonstrated",
+		wire.TerminalCompleted, "approved_deletions_demonstrated",
 		[]string{"a.py"}, nil},
 
 	{"deleted, recreated, deleted again with fresh approval", map[string]string{"a.py": delSeed},
 		script(dlDel("a.py"), dlWrite("a.py", delSeed), dlDel("a.py"), stepDone("removed a.py")),
-		TerminalCompleted, "approved_deletions_demonstrated",
+		wire.TerminalCompleted, "approved_deletions_demonstrated",
 		[]string{"a.py"}, nil},
 }
 

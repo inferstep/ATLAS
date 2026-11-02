@@ -30,7 +30,7 @@ import (
 	"github.com/itigges22/atlas-tui/internal/debuglog"
 )
 
-// chatEvent mirrors the SSEEvent shape in proxy/types.go.
+// chatEvent mirrors the SSEEvent shape in proxy/internal/wire/messages.go.
 // Different from Envelope — this is the older, simpler chat protocol.
 type chatEvent struct {
 	Type string          `json:"type"`

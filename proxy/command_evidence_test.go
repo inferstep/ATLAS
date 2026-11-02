@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // The cases below are the ways a check can be miscounted: a parse, a lint or
@@ -192,14 +194,14 @@ func TestHereDocumentsAreNotSplit(t *testing.T) {
 
 // --- what the loop records -----------------------------------------------------
 
-func ranClean(stdout string) *ToolResult {
-	b, _ := json.Marshal(RunCommandOutput{Stdout: stdout})
-	return &ToolResult{Success: true, Data: b}
+func ranClean(stdout string) *wire.ToolResult {
+	b, _ := json.Marshal(wire.RunCommandOutput{Stdout: stdout})
+	return &wire.ToolResult{Success: true, Data: b}
 }
 
-func ranRed(stderr string) *ToolResult {
-	b, _ := json.Marshal(RunCommandOutput{Stderr: stderr, ExitCode: 1})
-	return &ToolResult{Success: false, Data: b, Error: "exit status 1"}
+func ranRed(stderr string) *wire.ToolResult {
+	b, _ := json.Marshal(wire.RunCommandOutput{Stderr: stderr, ExitCode: 1})
+	return &wire.ToolResult{Success: false, Data: b, Error: "exit status 1"}
 }
 
 // A red run after a green one takes the verification back: the latest result
@@ -422,7 +424,7 @@ func TestAHiddenExecutionSettlesNoDebt(t *testing.T) {
 	// TestACleanExecutionSettlesContentDebt).
 	ctx.LedgerMu.Lock()
 	d := ctx.Ledger[key]
-	d.ValidationKind, d.ValidationStatus, d.ValidatedHash = ValidationKindUnknown, ValidationUnknown, ""
+	d.ValidationKind, d.ValidationStatus, d.ValidatedHash = wire.ValidationKindUnknown, wire.ValidationUnknown, ""
 	ctx.LedgerMu.Unlock()
 	st := &runState{mutationDebt: map[string]*mutationDebtEntry{key: {Rel: "app.py", Kind: debtContent}}}
 	settleDebtByExecution(ctx, st, "python3 app.py | tail -5", true)

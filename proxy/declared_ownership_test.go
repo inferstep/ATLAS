@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // Who owns the answer about a candidate.
@@ -387,7 +389,7 @@ func TestDeclaredEmptyDoesNotManufactureCompletion(t *testing.T) {
 	// And the terminal is not persuaded that a request which wrote nothing of
 	// its own is complete.
 	status, reason := finalizeCompletion(w.ctx, &runState{}, "make it fast", "")
-	if status == TerminalCompleted && reason == "no_file_obligation" {
+	if status == wire.TerminalCompleted && reason == "no_file_obligation" {
 		// Acceptable only when the run genuinely owed nothing; the write above
 		// wrote the caller's own baseline, so the ledger has an entry.
 		t.Errorf("status %q reason %q: a refused delivery read as no obligation",

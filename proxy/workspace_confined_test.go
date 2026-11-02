@@ -9,13 +9,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/itigges22/atlas-proxy/internal/wire"
 	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
 // rejectedWrite is the conversation tail that makes the next step name the
 // selectors of path: a write_file refused because the file exists.
-func rejectedWrite(path string) []AgentMessage {
-	return []AgentMessage{
+func rejectedWrite(path string) []wire.AgentMessage {
+	return []wire.AgentMessage{
 		{Role: "user", Content: "fix it"},
 		{Role: "tool", ToolName: "write_file", Content: `{"success":false,"error":"File ` + path +
 			` already exists (41 lines). Use structural_edit"}`},

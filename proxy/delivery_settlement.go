@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // Discharging the obligation that could only be answered after the bytes
@@ -129,8 +131,8 @@ func settleExistence(ctx *AgentContext, o taskObligation,
 	var current string
 	var generation int
 	var tombstoned bool
-	var kind ValidationKind
-	var status ValidationStatus
+	var kind wire.ValidationKind
+	var status wire.ValidationStatus
 	var validatedHash string
 	if d != nil {
 		current, generation, tombstoned = d.CurrentHash, d.Generation, d.Tombstoned
@@ -155,10 +157,10 @@ func settleExistence(ctx *AgentContext, o taskObligation,
 	// verdict whose hash has moved on is historical, and a class the gate
 	// does not govern owes none.
 	if _, gated := syntaxGateLanguages[strings.ToLower(filepath.Ext(resolved))]; gated {
-		if status != ValidationPassed || validatedHash != disk {
+		if status != wire.ValidationPassed || validatedHash != disk {
 			return false, "the structural verdict is not current"
 		}
-		if kind != ValidationKindSyntax && kind != ValidationKindStructural {
+		if kind != wire.ValidationKindSyntax && kind != wire.ValidationKindStructural {
 			return false, "the structural verdict is not current"
 		}
 	}

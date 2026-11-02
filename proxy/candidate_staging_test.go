@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // Staging a candidate and running the client's declared commands against it.
@@ -32,7 +34,7 @@ type stubEffect struct {
 	TimedOut   bool
 	// Outcome overrides how the executor says the command ended. Empty means
 	// the ordinary one: completed, or timed out when TimedOut is set.
-	Outcome ExecutionOutcome
+	Outcome wire.ExecutionOutcome
 	// Truncated makes the executor say it could not describe the workspace.
 	Truncated bool
 	// HTTPStatus, when non-zero, is returned instead of a result.
@@ -48,14 +50,14 @@ type stubEffect struct {
 // omitted it would be an executor too old to speak the vocabulary, which now
 // fails closed -- correct in production, and not what any of these fixtures are
 // about.
-func (e stubEffect) outcome() ExecutionOutcome {
+func (e stubEffect) outcome() wire.ExecutionOutcome {
 	if e.Outcome != "" {
 		return e.Outcome
 	}
 	if e.TimedOut {
-		return ExecutionTimedOut
+		return wire.ExecutionTimedOut
 	}
-	return ExecutionCompleted
+	return wire.ExecutionCompleted
 }
 
 // observation is what the executor reports about the observed path, either

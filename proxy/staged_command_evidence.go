@@ -1,5 +1,7 @@
 package main
 
+import "github.com/itigges22/atlas-proxy/internal/wire"
+
 // Declared commands run against exact candidate bytes, before that candidate
 // ever touches the user's workspace.
 //
@@ -114,7 +116,7 @@ func stagedFulfillmentCurrent(ctx *AgentContext, f stagedCommandFulfillment) boo
 	ctx.LedgerMu.Lock()
 	d := ctx.Ledger[ledgerKey(ctx, f.TargetPath)]
 	var current, validated string
-	var status ValidationStatus
+	var status wire.ValidationStatus
 	var tombstoned bool
 	if d != nil {
 		current, validated, status, tombstoned =
@@ -125,7 +127,7 @@ func stagedFulfillmentCurrent(ctx *AgentContext, f stagedCommandFulfillment) boo
 		return false
 	}
 	return current == f.CandidateHash && validated == f.CandidateHash &&
-		status == ValidationPassed
+		status == wire.ValidationPassed
 }
 
 // stagedCommandSatisfied answers the exact-command question from staged

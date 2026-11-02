@@ -27,6 +27,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 func TestModelsFallsBackToConfiguredModel(t *testing.T) {
@@ -1539,7 +1541,7 @@ func TestComposeGraceAgreesWithTheDefault(t *testing.T) {
 // /events subscriber, and a signal.
 func TestRunServerDrainsAndRunsHooks(t *testing.T) {
 	prev := defaultBroker
-	defaultBroker = &broker{subscribers: map[chan Envelope]struct{}{}}
+	defaultBroker = &broker{subscribers: map[chan wire.Envelope]struct{}{}}
 	defer func() { defaultBroker = prev }()
 
 	released := make(chan struct{})
@@ -1640,7 +1642,7 @@ func TestRunServerDrainsAndRunsHooks(t *testing.T) {
 // that is reported as its own outcome -- not as a listener failure.
 func TestRunServerForcedCloseIsClassified(t *testing.T) {
 	prev := defaultBroker
-	defaultBroker = &broker{subscribers: map[chan Envelope]struct{}{}}
+	defaultBroker = &broker{subscribers: map[chan wire.Envelope]struct{}{}}
 	defer func() { defaultBroker = prev }()
 
 	block := make(chan struct{})
@@ -1699,7 +1701,7 @@ func TestRunServerStartupFailureReturns(t *testing.T) {
 // reported without hanging the process.
 func TestCloseHooksAreBounded(t *testing.T) {
 	prev := defaultBroker
-	defaultBroker = &broker{subscribers: map[chan Envelope]struct{}{}}
+	defaultBroker = &broker{subscribers: map[chan wire.Envelope]struct{}{}}
 	defer func() { defaultBroker = prev }()
 
 	ln, _ := net.Listen("tcp", "127.0.0.1:0")

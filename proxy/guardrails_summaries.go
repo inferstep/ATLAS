@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // unverifiedSummary replaces a completion claim the run's own evidence cannot
@@ -169,11 +171,11 @@ func deliverablesDemonstrablyValid(ctx *AgentContext, expected []string) bool {
 		// serves, and breaks in the browser. Only a demonstrated one: an
 		// embedded check that could not run is no finding (the documented
 		// fail-soft).
-		if checked.Embedded.Status == ValidationFailed {
+		if checked.Embedded.Status == wire.ValidationFailed {
 			return false
 		}
 		status := checked.WholeFile.Status
-		if status == ValidationPassed {
+		if status == wire.ValidationPassed {
 			continue
 		}
 		// A document has no syntax to pass. Requiring one meant a valid
@@ -183,7 +185,7 @@ func deliverablesDemonstrablyValid(ctx *AgentContext, expected []string) bool {
 		// than unsupported code, and the ledger's record still describes the
 		// bytes that are there. This is not a syntax pass and is never
 		// relabelled as one.
-		if status == ValidationNotApplicable && documentDeliverableCurrent(ctx, resolved, content) {
+		if status == wire.ValidationNotApplicable && documentDeliverableCurrent(ctx, resolved, content) {
 			continue
 		}
 		return false
@@ -206,8 +208,8 @@ func documentDeliverableCurrent(ctx *AgentContext, resolved string, content []by
 	key := ledgerKey(ctx, resolved)
 	ctx.LedgerMu.Lock()
 	d := ctx.Ledger[key]
-	var kind ValidationKind
-	var status ValidationStatus
+	var kind wire.ValidationKind
+	var status wire.ValidationStatus
 	var tombstoned bool
 	var current string
 	if d != nil {
@@ -218,7 +220,7 @@ func documentDeliverableCurrent(ctx *AgentContext, resolved string, content []by
 	if d == nil || tombstoned {
 		return false
 	}
-	if kind != ValidationKindNone || status != ValidationNotApplicable {
+	if kind != wire.ValidationKindNone || status != wire.ValidationNotApplicable {
 		return false
 	}
 	return current == hashBytes(content)
@@ -288,7 +290,7 @@ const noChangeNote = "No file was created or changed in this run."
 // run inspected the workspace and is known to have changed nothing. A reply
 // that never looked at the project (a greeting, a general question) is left
 // as it is.
-func withNoChangeNote(ctx *AgentContext, st *runState, status TerminalStatus, summary string) string {
+func withNoChangeNote(ctx *AgentContext, st *runState, status wire.TerminalStatus, summary string) string {
 	if !status.Completed() || st == nil || !st.inspectedWorkspace || !runChangedNothing(ctx, st) {
 		return summary
 	}

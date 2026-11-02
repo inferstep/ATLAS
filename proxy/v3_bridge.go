@@ -4,8 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -14,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // sseDataPrefix starts the data line of a server-sent event.
@@ -50,7 +50,7 @@ type V3ProgressFn func(stage, detail string, data map[string]interface{})
 // callV3GenerateStreaming sends a file generation request to the V3 Python
 // service and streams progress events back via the callback. Returns the
 // final result when the pipeline completes.
-func callV3GenerateStreaming(reqCtx context.Context, v3URL string, req V3GenerateRequest, onProgress V3ProgressFn) (*V3GenerateResponse, error) {
+func callV3GenerateStreaming(reqCtx context.Context, v3URL string, req wire.V3GenerateRequest, onProgress V3ProgressFn) (*wire.V3GenerateResponse, error) {
 	endpoint := v3URL + "/v3/generate"
 	// Bind the agent's request context so a user Ctrl-C (which cancels
 	// ctx.Ctx via /cancel) actually aborts an in-flight V3 run. The
@@ -165,7 +165,7 @@ func capAtHalfTheSessionLeft(reqCtx context.Context, d time.Duration) time.Durat
 
 // newV3GenerateRequest builds the POST of req to the V3 service, with the
 // budget set to the cap this call has.
-func newV3GenerateRequest(reqCtx context.Context, endpoint string, req V3GenerateRequest, effectiveCap time.Duration) (*http.Request, error) {
+func newV3GenerateRequest(reqCtx context.Context, endpoint string, req wire.V3GenerateRequest, effectiveCap time.Duration) (*http.Request, error) {
 	// The service plans against the cap this call actually has, not the
 	// configured ceiling: told nothing, it planned a 300s run inside a call
 	// capAtHalfTheSessionLeft may have cut to a fraction of that.
@@ -196,8 +196,8 @@ func newV3GenerateRequest(reqCtx context.Context, endpoint string, req V3Generat
 // readV3GenerateStream reads the V3 event stream to its end: it passes each
 // progress event to onProgress and returns the result event, or why the
 // result could not be decoded.
-func readV3GenerateStream(scanner *bufio.Scanner, onProgress V3ProgressFn) (*V3GenerateResponse, error) {
-	var result *V3GenerateResponse
+func readV3GenerateStream(scanner *bufio.Scanner, onProgress V3ProgressFn) (*wire.V3GenerateResponse, error) {
+	var result *wire.V3GenerateResponse
 	var resultErr error
 
 	for scanner.Scan() {
@@ -226,10 +226,10 @@ func readV3GenerateStream(scanner *bufio.Scanner, onProgress V3ProgressFn) (*V3G
 
 // decodeV3Result decodes the data line of a result event. A line that is no
 // data line leaves the result and its error as they were.
-func decodeV3Result(dataLine string, result *V3GenerateResponse, resultErr error) (*V3GenerateResponse, error) {
+func decodeV3Result(dataLine string, result *wire.V3GenerateResponse, resultErr error) (*wire.V3GenerateResponse, error) {
 	if strings.HasPrefix(dataLine, sseDataPrefix) {
 		data := strings.TrimPrefix(dataLine, sseDataPrefix)
-		var r V3GenerateResponse
+		var r wire.V3GenerateResponse
 		if err := json.Unmarshal([]byte(data), &r); err != nil {
 			resultErr = fmt.Errorf("V3 sent a result this proxy could not decode "+
 				"(%d bytes): %w", len(data), err)
@@ -264,7 +264,7 @@ func reportV3Progress(line string, onProgress V3ProgressFn) {
 // Plans are cheap-but-not-free: 3 candidate samples × ~5s each = ~15s
 // wall time, mostly dominated by the LLM. Timeout is 5 min — well above
 // expected (15s) and below the agent loop's overall request timeout.
-func callV3PlanStreaming(reqCtx context.Context, v3URL string, req V3PlanRequest, onProgress V3ProgressFn) (*Plan, error) {
+func callV3PlanStreaming(reqCtx context.Context, v3URL string, req wire.V3PlanRequest, onProgress V3ProgressFn) (*wire.Plan, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal plan request: %w", err)
@@ -308,7 +308,7 @@ func callV3PlanStreaming(reqCtx context.Context, v3URL string, req V3PlanRequest
 	// silently drop the plan).
 	scanner.Buffer(make([]byte, 0, 64<<10), 1<<20)
 
-	var plan *Plan
+	var plan *wire.Plan
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -318,7 +318,7 @@ func callV3PlanStreaming(reqCtx context.Context, v3URL string, req V3PlanRequest
 				dataLine := scanner.Text()
 				if strings.HasPrefix(dataLine, sseDataPrefix) {
 					data := strings.TrimPrefix(dataLine, sseDataPrefix)
-					var p Plan
+					var p wire.Plan
 					if json.Unmarshal([]byte(data), &p) == nil {
 						plan = &p
 					}
@@ -363,93 +363,8 @@ func callV3PlanStreaming(reqCtx context.Context, v3URL string, req V3PlanRequest
 //
 // The response boundary owns this: the same file that decodes /v3/generate
 // decides whether what arrived may be read. There is no separate evidence
-// service or helper layer -- one wire representation in types.go, one place
+// service or helper layer -- one wire representation in internal/wire/v3.go, one place
 // that validates it here.
-
-// Closed vocabularies. An unknown value is not a new case to guess at — it
-// means this build and that producer disagree about what the field can say.
-var (
-	evidenceStrengths = map[string]bool{
-		"syntax": true, "runtime": true, "behavioral": true, "oracle": true,
-	}
-	evidenceExecutionStatuses = map[string]bool{
-		"ok": true, "timeout": true, "error": true, "crash": true, "skipped": true,
-	}
-	evidenceSelectionStatuses = map[string]bool{
-		"verified_winner": true, "best_not_closure_eligible": true, "tied": true,
-		"incomparable": true, "ineligible": true, "no_verified_winner": true,
-	}
-)
-
-// Validate reports whether the envelope may be read, and why not when it may
-// not. It is strict on purpose: every rejection here is a case where reading
-// on would mean asserting something the producer did not establish.
-func (e *V3EvidenceEnvelope) Validate() (EvidenceAvailability, string) {
-	if e == nil {
-		return EvidenceAbsent, "no evidence envelope"
-	}
-	if e.WireVersion == "" {
-		return EvidenceUnavailable, "envelope carries no wire version"
-	}
-	if major := strings.SplitN(e.WireVersion, ".", 2)[0]; major != evidenceWireMajor {
-		return EvidenceUnavailable, "unsupported wire version " + e.WireVersion
-	}
-	// Identity must be COMPLETE, matching the producer's own rule: a partial
-	// identity is how unrelated measurements compare equal through blanks.
-	id := e.Identity
-	if id.ContractID == "" || id.ContractVersion == "" || id.ArtifactScope == "" ||
-		id.EvaluationContextHash == "" {
-		return EvidenceUnavailable, "identity incomplete"
-	}
-	if id.CalibrationID == "" && (id.AdapterID == "" || id.AdapterVersion == "") {
-		return EvidenceUnavailable, "identity incomplete: no calibration or adapter"
-	}
-	if !evidenceStrengths[e.Evaluation.EvidenceStrength] {
-		return EvidenceUnavailable, "unknown evidence strength " + e.Evaluation.EvidenceStrength
-	}
-	if !evidenceExecutionStatuses[e.Evaluation.ExecutionStatus] {
-		return EvidenceUnavailable, "unknown execution status " + e.Evaluation.ExecutionStatus
-	}
-	if !evidenceSelectionStatuses[e.Selection.Status] {
-		return EvidenceUnavailable, "unknown selection status " + e.Selection.Status
-	}
-	// Internal contradictions. A producer that claims closure over a run that
-	// did not complete, or over unmet requirements, is a producer whose other
-	// fields cannot be relied on either.
-	if e.Evaluation.ClosureEligible {
-		if e.Evaluation.ExecutionStatus != "ok" {
-			return EvidenceUnavailable, "closure claimed over execution status " +
-				e.Evaluation.ExecutionStatus
-		}
-		if !e.Evaluation.RequirementsComplete {
-			return EvidenceUnavailable, "closure claimed with incomplete requirements"
-		}
-		if !e.Evaluation.Supported {
-			return EvidenceUnavailable, "closure claimed for an unsupported artifact"
-		}
-	}
-	if e.Selection.Status == "verified_winner" && !e.Evaluation.ClosureEligible {
-		return EvidenceUnavailable, "verified winner without closure eligibility"
-	}
-	return EvidenceAvailable, ""
-}
-
-// Available is the single predicate a caller may use before reading fields.
-func (e *V3EvidenceEnvelope) Available() bool {
-	a, _ := e.Validate()
-	return a == EvidenceAvailable
-}
-
-// DescribesBytes reports whether this evidence is about exactly `code`. The
-// producer's own describes_delivered_candidate flag is not consulted: the
-// consumer knows which bytes it is about to write and hashes those.
-func (e *V3EvidenceEnvelope) DescribesBytes(code string) bool {
-	if e == nil || e.Identity.CandidateContentHash == "" {
-		return false
-	}
-	sum := sha256.Sum256([]byte(code))
-	return hex.EncodeToString(sum[:]) == e.Identity.CandidateContentHash
-}
 
 // EvidenceSupportsProvenanceFor is THE gate for replacing the caller's content
 // with a generated candidate and for attaching service provenance to it. Every
@@ -465,12 +380,12 @@ func (e *V3EvidenceEnvelope) DescribesBytes(code string) bool {
 // oracle score and a complete one into one boolean, which is the conflation the
 // envelope exists to replace. A caller may still report them; none of them may
 // authorize anything.
-func EvidenceSupportsProvenanceFor(e *V3EvidenceEnvelope, code string) (bool, string) {
+func EvidenceSupportsProvenanceFor(e *wire.V3EvidenceEnvelope, code string) (bool, string) {
 	if code == "" {
 		return false, "no candidate code"
 	}
 	availability, reason := e.Validate()
-	if availability != EvidenceAvailable {
+	if availability != wire.EvidenceAvailable {
 		return false, reason
 	}
 	if e.Selection.Status != "verified_winner" {
@@ -489,7 +404,7 @@ func EvidenceSupportsProvenanceFor(e *V3EvidenceEnvelope, code string) (bool, st
 // response: may THESE bytes replace the caller's content and carry service
 // provenance. It is the only place that decision is made, so a second caller
 // cannot invent a looser rule.
-func v3DeliveryAuthorized(result *V3GenerateResponse, code string) (bool, string) {
+func v3DeliveryAuthorized(result *wire.V3GenerateResponse, code string) (bool, string) {
 	if result == nil {
 		return false, "no V3 response"
 	}
@@ -500,7 +415,7 @@ func v3DeliveryAuthorized(result *V3GenerateResponse, code string) (bool, string
 // Returned as the decoded structure rather than a summary so nothing is lost
 // on the way to a subscriber; callers must not put it on a ToolResult, which
 // is projected to the model.
-func evidenceTelemetry(e *V3EvidenceEnvelope, unavailableReason string) map[string]interface{} {
+func evidenceTelemetry(e *wire.V3EvidenceEnvelope, unavailableReason string) map[string]interface{} {
 	availability, reason := e.Validate()
 	if reason == "" {
 		reason = unavailableReason

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // Effect classification is a property of the tool, declared on its ToolDef,
@@ -26,7 +28,7 @@ func TestEveryRegisteredToolDeclaresAnEffect(t *testing.T) {
 	}
 	var missing []string
 	for name, def := range toolRegistry {
-		if def.Effect == ToolEffectUnknown {
+		if def.Effect == wire.ToolEffectUnknown {
 			missing = append(missing, name)
 		}
 	}
@@ -40,19 +42,19 @@ func TestEveryRegisteredToolDeclaresAnEffect(t *testing.T) {
 // control: it sends SIGTERM/SIGKILL and performs no filesystem comparison, so
 // a process killed mid-write may leave partial bytes nobody measured.
 func TestEffectDistributionMatchesTheVerifiedAudit(t *testing.T) {
-	want := map[string]ToolEffect{
-		"read_file": ToolEffectReadOnly, "search_files": ToolEffectReadOnly,
-		"list_directory": ToolEffectReadOnly, "find_file": ToolEffectReadOnly,
-		"outline_file": ToolEffectReadOnly, "tail_background": ToolEffectReadOnly,
+	want := map[string]wire.ToolEffect{
+		"read_file": wire.ToolEffectReadOnly, "search_files": wire.ToolEffectReadOnly,
+		"list_directory": wire.ToolEffectReadOnly, "find_file": wire.ToolEffectReadOnly,
+		"outline_file": wire.ToolEffectReadOnly, "tail_background": wire.ToolEffectReadOnly,
 
-		"write_file": ToolEffectDirectMutation, "edit_file": ToolEffectDirectMutation,
-		"structural_edit": ToolEffectDirectMutation, "delete_file": ToolEffectDirectMutation,
-		"move_file": ToolEffectDirectMutation, "insert_after": ToolEffectDirectMutation,
-		"replace_lines": ToolEffectDirectMutation,
+		"write_file": wire.ToolEffectDirectMutation, "edit_file": wire.ToolEffectDirectMutation,
+		"structural_edit": wire.ToolEffectDirectMutation, "delete_file": wire.ToolEffectDirectMutation,
+		"move_file": wire.ToolEffectDirectMutation, "insert_after": wire.ToolEffectDirectMutation,
+		"replace_lines": wire.ToolEffectDirectMutation,
 
-		"run_command":     ToolEffectCommandUnobserved,
-		"run_background":  ToolEffectCommandUnobserved,
-		"stop_background": ToolEffectCommandUnobserved,
+		"run_command":     wire.ToolEffectCommandUnobserved,
+		"run_background":  wire.ToolEffectCommandUnobserved,
+		"stop_background": wire.ToolEffectCommandUnobserved,
 	}
 	for name, expect := range want {
 		def, ok := toolRegistry[name]
@@ -74,7 +76,7 @@ func TestEffectDistributionMatchesTheVerifiedAudit(t *testing.T) {
 
 func TestDirectMutatorsAreNotClassifiableAtTheBoundary(t *testing.T) {
 	for name, def := range toolRegistry {
-		if def.Effect != ToolEffectDirectMutation {
+		if def.Effect != wire.ToolEffectDirectMutation {
 			continue
 		}
 		// A direct mutator's outcome is only knowable at the branch that
@@ -106,16 +108,16 @@ func TestTheBoundaryClassifiesReadOnlyAndCommandTools(t *testing.T) {
 		name string
 		tool string
 		args string
-		want MutationStatus
+		want wire.MutationStatus
 	}{
-		{"read success", "read_file", `{"path":"f.txt"}`, MutationNone},
-		{"read missing file", "read_file", `{"path":"nope.txt"}`, MutationNone},
-		{"list", "list_directory", `{"path":"."}`, MutationNone},
-		{"unknown tool", "no_such_tool", `{}`, MutationNone},
-		{"missing args", "read_file", ``, MutationNone},
-		{"command success", "run_command", `{"command":"true"}`, MutationUnobserved},
-		{"command non-zero exit", "run_command", `{"command":"false"}`, MutationUnobserved},
-		{"command writes then fails", "run_command", `{"command":"echo x > side_effect.txt; exit 3"}`, MutationUnobserved},
+		{"read success", "read_file", `{"path":"f.txt"}`, wire.MutationNone},
+		{"read missing file", "read_file", `{"path":"nope.txt"}`, wire.MutationNone},
+		{"list", "list_directory", `{"path":"."}`, wire.MutationNone},
+		{"unknown tool", "no_such_tool", `{}`, wire.MutationNone},
+		{"missing args", "read_file", ``, wire.MutationNone},
+		{"command success", "run_command", `{"command":"true"}`, wire.MutationUnobserved},
+		{"command non-zero exit", "run_command", `{"command":"false"}`, wire.MutationUnobserved},
+		{"command writes then fails", "run_command", `{"command":"echo x > side_effect.txt; exit 3"}`, wire.MutationUnobserved},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			res := executeToolCall(tc.tool, json.RawMessage(tc.args), ctx)
@@ -137,13 +139,13 @@ func TestTheBoundaryClassifiesReadOnlyAndCommandTools(t *testing.T) {
 // performed it, and an unknown effect has no outcome to give.
 func TestOnlyReadOnlyAndCommandEffectsAreBoundaryClassifiable(t *testing.T) {
 	for _, tc := range []struct {
-		effect ToolEffect
+		effect wire.ToolEffect
 		want   bool
 	}{
-		{ToolEffectReadOnly, true},
-		{ToolEffectCommandUnobserved, true},
-		{ToolEffectDirectMutation, false},
-		{ToolEffectUnknown, false},
+		{wire.ToolEffectReadOnly, true},
+		{wire.ToolEffectCommandUnobserved, true},
+		{wire.ToolEffectDirectMutation, false},
+		{wire.ToolEffectUnknown, false},
 	} {
 		if got := tc.effect.BoundaryClassifiable(); got != tc.want {
 			t.Errorf("%q: BoundaryClassifiable() = %v, want %v", tc.effect, got, tc.want)
@@ -154,28 +156,28 @@ func TestOnlyReadOnlyAndCommandEffectsAreBoundaryClassifiable(t *testing.T) {
 // A branch that already spoke keeps its word: a refused run_command stays
 // refused, and its validation stays what its producer said.
 func TestTheBoundaryKeepsAProducersOwnClassification(t *testing.T) {
-	result := &ToolResult{MutationStatus: MutationRefused, ValidationKind: ValidationKindSyntax, ValidationStatus: ValidationFailed}
-	classifyByEffect(ToolEffectCommandUnobserved, result)
-	if result.MutationStatus != MutationRefused {
-		t.Errorf("MutationStatus = %q, want the producer's %q", result.MutationStatus, MutationRefused)
+	result := &wire.ToolResult{MutationStatus: wire.MutationRefused, ValidationKind: wire.ValidationKindSyntax, ValidationStatus: wire.ValidationFailed}
+	classifyByEffect(wire.ToolEffectCommandUnobserved, result)
+	if result.MutationStatus != wire.MutationRefused {
+		t.Errorf("MutationStatus = %q, want the producer's %q", result.MutationStatus, wire.MutationRefused)
 	}
-	if result.ValidationKind != ValidationKindSyntax {
-		t.Errorf("ValidationKind = %q, want the producer's %q", result.ValidationKind, ValidationKindSyntax)
+	if result.ValidationKind != wire.ValidationKindSyntax {
+		t.Errorf("ValidationKind = %q, want the producer's %q", result.ValidationKind, wire.ValidationKindSyntax)
 	}
-	if result.ValidationStatus != ValidationFailed {
-		t.Errorf("ValidationStatus = %q, want the producer's %q", result.ValidationStatus, ValidationFailed)
+	if result.ValidationStatus != wire.ValidationFailed {
+		t.Errorf("ValidationStatus = %q, want the producer's %q", result.ValidationStatus, wire.ValidationFailed)
 	}
 }
 
 // The boundary leaves a direct mutator's result as it found it, so a missed
 // producer shows as unknown and is not filled in.
 func TestTheBoundaryLeavesADirectMutatorUnclassified(t *testing.T) {
-	result := &ToolResult{}
-	classifyByEffect(ToolEffectDirectMutation, result)
-	if result.MutationStatus != MutationUnknown {
+	result := &wire.ToolResult{}
+	classifyByEffect(wire.ToolEffectDirectMutation, result)
+	if result.MutationStatus != wire.MutationUnknown {
 		t.Errorf("MutationStatus = %q, want it left unknown", result.MutationStatus)
 	}
-	if result.ValidationKind != ValidationKindUnknown {
+	if result.ValidationKind != wire.ValidationKindUnknown {
 		t.Errorf("ValidationKind = %q, want it left unknown", result.ValidationKind)
 	}
 }
@@ -193,7 +195,7 @@ func TestDirectMutatorFailureCarriesItsProducersClassification(t *testing.T) {
 	if res.Success {
 		t.Fatal("deleting a missing file unexpectedly succeeded")
 	}
-	if res.MutationStatus != MutationNone {
+	if res.MutationStatus != wire.MutationNone {
 		t.Errorf("MutationStatus = %q, want none: nothing was removed",
 			res.MutationStatus)
 	}
@@ -214,13 +216,13 @@ func TestDirectMutatorFailureCarriesItsProducersClassification(t *testing.T) {
 func TestWriteFileDirectClassification(t *testing.T) {
 	for _, c := range []struct {
 		name, file, content string
-		wantKind            ValidationKind
-		wantStatus          ValidationStatus
+		wantKind            wire.ValidationKind
+		wantStatus          wire.ValidationStatus
 	}{
 		{"non-code write", "notes.txt", "hello\n",
-			ValidationKindNone, ValidationNotApplicable},
+			wire.ValidationKindNone, wire.ValidationNotApplicable},
 		{"recognized code, unvalidated at this layer", "mod.py", "A = 1\n",
-			ValidationKindSyntax, ValidationNotRun},
+			wire.ValidationKindSyntax, wire.ValidationNotRun},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -234,7 +236,7 @@ func TestWriteFileDirectClassification(t *testing.T) {
 			if !res.Success || res.Error != "" {
 				t.Fatalf("the write was not a plain success: %+v", res)
 			}
-			if res.MutationStatus != MutationApplied {
+			if res.MutationStatus != wire.MutationApplied {
 				t.Errorf("MutationStatus = %q, want applied", res.MutationStatus)
 			}
 			if res.ValidationKind != c.wantKind {
@@ -299,7 +301,7 @@ func TestWriteFileRefusalBeforeMutationLeavesBytes(t *testing.T) {
 		t.Fatalf("prior bytes changed on a refusal: %q", string(got))
 	}
 	// No handler ran, so nothing could have mutated.
-	if res.MutationStatus != MutationNone {
+	if res.MutationStatus != wire.MutationNone {
 		t.Errorf("MutationStatus = %q, want none", res.MutationStatus)
 	}
 	if !res.Classified() {
@@ -325,7 +327,7 @@ func TestAnInvalidWriteReportsSyntaxFailedWhetherItLandsOrNot(t *testing.T) {
 			}
 			_, res := writeWithSyntaxChecker(t, dir, "mod.py", banLoopInvalidBody)
 
-			if res.ValidationKind != ValidationKindSyntax || res.ValidationStatus != ValidationFailed {
+			if res.ValidationKind != wire.ValidationKindSyntax || res.ValidationStatus != wire.ValidationFailed {
 				t.Errorf("validation = %q/%q, want syntax/failed",
 					res.ValidationKind, res.ValidationStatus)
 			}
@@ -344,11 +346,11 @@ func TestAnInvalidWriteLandsOnlyWhereNoHealthyCodeIsReplaced(t *testing.T) {
 		name         string
 		priorValid   bool
 		wantSuccess  bool
-		wantMutation MutationStatus
+		wantMutation wire.MutationStatus
 		wantOnDisk   string
 	}{
-		{"new file lands", false, true, MutationApplied, banLoopInvalidBody},
-		{"overwrite of healthy code is refused", true, false, MutationRefused, banLoopValidBody},
+		{"new file lands", false, true, wire.MutationApplied, banLoopInvalidBody},
+		{"overwrite of healthy code is refused", true, false, wire.MutationRefused, banLoopValidBody},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -373,7 +375,7 @@ func TestAnInvalidWriteLandsOnlyWhereNoHealthyCodeIsReplaced(t *testing.T) {
 // writeWithSyntaxChecker sends one write_file call through executeToolCall,
 // with a syntax checker that fails on "def alpha(n:", and returns the bytes
 // on disk afterwards and the result.
-func writeWithSyntaxChecker(t *testing.T, dir, rel, content string) (string, *ToolResult) {
+func writeWithSyntaxChecker(t *testing.T, dir, rel, content string) (string, *wire.ToolResult) {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/syntax-check") {
@@ -430,7 +432,7 @@ func TestEveryDirectMutatorOutcomeIsClassified(t *testing.T) {
 		// Answers structural_edit's splice request when set.
 		v3 func(w http.ResponseWriter, r *http.Request)
 
-		wantMutation MutationStatus
+		wantMutation wire.MutationStatus
 		// The file this row is about, and its bytes afterwards. An empty
 		// want means it must not exist.
 		path string
@@ -440,137 +442,137 @@ func TestEveryDirectMutatorOutcomeIsClassified(t *testing.T) {
 		skip string
 	}{
 		{name: "malformed args", tool: "write_file", args: `{"path":123}`,
-			wantMutation: MutationNone},
+			wantMutation: wire.MutationNone},
 		{name: "empty path", tool: "write_file", args: `{"path":" ","content":"x"}`,
-			wantMutation: MutationNone},
+			wantMutation: wire.MutationNone},
 		{name: "deny-list target", tool: "write_file",
 			seed: map[string]string{".env": "S=1\n"}, args: `{"path":".env","content":"S=2\n"}`,
-			wantMutation: MutationNone, path: ".env", want: "S=1\n"},
+			wantMutation: wire.MutationNone, path: ".env", want: "S=1\n"},
 		{name: "escapes the workspace", tool: "write_file",
-			args: `{"path":"../out.py","content":"A = 1\n"}`, wantMutation: MutationNone},
+			args: `{"path":"../out.py","content":"A = 1\n"}`, wantMutation: wire.MutationNone},
 		{name: "echoed write", tool: "write_file",
 			seed:         map[string]string{"m.py": strings.Repeat("A = 1\n", 40)},
 			args:         `{"path":"m.py","content":"` + strings.Repeat("A = 1\\n", 40) + `"}`,
-			wantMutation: MutationRefused, path: "m.py", want: strings.Repeat("A = 1\n", 40)},
+			wantMutation: wire.MutationRefused, path: "m.py", want: strings.Repeat("A = 1\n", 40)},
 		{name: "written", tool: "write_file",
 			args:         `{"path":"m.py","content":"A = 1\n"}`,
-			wantMutation: MutationApplied, path: "m.py", want: "A = 1\n"},
+			wantMutation: wire.MutationApplied, path: "m.py", want: "A = 1\n"},
 		{name: "malformed args", tool: "edit_file", args: `{"path":123}`,
-			wantMutation: MutationNone},
+			wantMutation: wire.MutationNone},
 		{name: "empty path", tool: "edit_file", args: `{"path":" ","old_str":"a","new_str":"b"}`,
-			wantMutation: MutationNone},
+			wantMutation: wire.MutationNone},
 		{name: "old_str empty", tool: "edit_file", seed: twoLines, read: []string{"m.py"},
 			args:         `{"path":"m.py","old_str":"","new_str":"b"}`,
-			wantMutation: MutationNone, path: "m.py", want: "A = 1\nB = 2\n"},
+			wantMutation: wire.MutationNone, path: "m.py", want: "A = 1\nB = 2\n"},
 		{name: "file not read", tool: "edit_file", seed: twoLines,
 			args:         `{"path":"m.py","old_str":"A = 1","new_str":"A = 9"}`,
-			wantMutation: MutationNone, path: "m.py", want: "A = 1\nB = 2\n"},
+			wantMutation: wire.MutationNone, path: "m.py", want: "A = 1\nB = 2\n"},
 		{name: "file vanished after the read", tool: "edit_file", seed: twoLines, read: []string{"m.py"},
 			setup:        func(t *testing.T, dir string) { os.Remove(filepath.Join(dir, "m.py")) },
 			args:         `{"path":"m.py","old_str":"A = 1","new_str":"A = 9"}`,
-			wantMutation: MutationNone, path: "m.py"},
+			wantMutation: wire.MutationNone, path: "m.py"},
 		{name: "old_str absent", tool: "edit_file", seed: twoLines, read: []string{"m.py"},
 			args:         `{"path":"m.py","old_str":"ZZZ","new_str":"A = 9"}`,
-			wantMutation: MutationNone, path: "m.py", want: "A = 1\nB = 2\n"},
+			wantMutation: wire.MutationNone, path: "m.py", want: "A = 1\nB = 2\n"},
 		{name: "ambiguous match", tool: "edit_file",
 			seed: map[string]string{"m.py": "A = 1\nA = 1\n"}, read: []string{"m.py"},
 			args:         `{"path":"m.py","old_str":"A = 1","new_str":"A = 9"}`,
-			wantMutation: MutationNone, path: "m.py", want: "A = 1\nA = 1\n"},
+			wantMutation: wire.MutationNone, path: "m.py", want: "A = 1\nA = 1\n"},
 		{name: "no-op edit", tool: "edit_file", seed: twoLines, read: []string{"m.py"},
 			args:         `{"path":"m.py","old_str":"A = 1","new_str":"A = 1"}`,
-			wantMutation: MutationNone, path: "m.py", want: "A = 1\nB = 2\n"},
+			wantMutation: wire.MutationNone, path: "m.py", want: "A = 1\nB = 2\n"},
 		{name: "applied", tool: "edit_file", seed: twoLines, read: []string{"m.py"},
 			args:         `{"path":"m.py","old_str":"A = 1","new_str":"A = 9"}`,
-			wantMutation: MutationApplied, path: "m.py", want: "A = 9\nB = 2\n"},
+			wantMutation: wire.MutationApplied, path: "m.py", want: "A = 9\nB = 2\n"},
 		{name: "malformed args", tool: "insert_after", args: `{"line":"x"}`,
-			wantMutation: MutationNone},
+			wantMutation: wire.MutationNone},
 		{name: "path missing", tool: "insert_after", args: `{"line":1,"content":"B = 2"}`,
-			wantMutation: MutationNone},
+			wantMutation: wire.MutationNone},
 		{name: "content empty", tool: "insert_after", seed: oneLine, read: []string{"m.py"},
 			args:         `{"path":"m.py","line":1,"content":""}`,
-			wantMutation: MutationNone, path: "m.py", want: "A = 1\n"},
+			wantMutation: wire.MutationNone, path: "m.py", want: "A = 1\n"},
 		{name: "file not read", tool: "insert_after", seed: oneLine,
 			args:         `{"path":"m.py","line":1,"content":"B = 2"}`,
-			wantMutation: MutationNone, path: "m.py", want: "A = 1\n"},
+			wantMutation: wire.MutationNone, path: "m.py", want: "A = 1\n"},
 		{name: "file vanished after the read", tool: "insert_after", seed: oneLine, read: []string{"m.py"},
 			setup:        func(t *testing.T, dir string) { os.Remove(filepath.Join(dir, "m.py")) },
 			args:         `{"path":"m.py","line":1,"content":"B = 2"}`,
-			wantMutation: MutationNone, path: "m.py"},
+			wantMutation: wire.MutationNone, path: "m.py"},
 		{name: "line past end", tool: "insert_after", seed: oneLine, read: []string{"m.py"},
 			args:         `{"path":"m.py","line":99,"content":"B = 2"}`,
-			wantMutation: MutationNone, path: "m.py", want: "A = 1\n"},
+			wantMutation: wire.MutationNone, path: "m.py", want: "A = 1\n"},
 		{name: "inserted", tool: "insert_after", seed: oneLine, read: []string{"m.py"},
 			args:         `{"path":"m.py","line":1,"content":"B = 2"}`,
-			wantMutation: MutationApplied, path: "m.py", want: "A = 1\nB = 2\n"},
+			wantMutation: wire.MutationApplied, path: "m.py", want: "A = 1\nB = 2\n"},
 		{name: "inserted at the top", tool: "insert_after", seed: oneLine, read: []string{"m.py"},
 			args:         `{"path":"m.py","line":0,"content":"B = 2"}`,
-			wantMutation: MutationApplied, path: "m.py", want: "B = 2\nA = 1\n"},
+			wantMutation: wire.MutationApplied, path: "m.py", want: "B = 2\nA = 1\n"},
 		{name: "malformed args", tool: "replace_lines", args: `{"start_line":"x"}`,
-			wantMutation: MutationNone},
+			wantMutation: wire.MutationNone},
 		{name: "path missing", tool: "replace_lines", args: `{"start_line":1,"end_line":1}`,
-			wantMutation: MutationNone},
+			wantMutation: wire.MutationNone},
 		{name: "file not read", tool: "replace_lines", seed: twoLines,
 			args:         `{"path":"m.py","start_line":1,"end_line":1,"expected_first_line":"A = 1","expected_last_line":"A = 1","content":"A = 9"}`,
-			wantMutation: MutationNone, path: "m.py", want: "A = 1\nB = 2\n"},
+			wantMutation: wire.MutationNone, path: "m.py", want: "A = 1\nB = 2\n"},
 		{name: "file vanished after the read", tool: "replace_lines", seed: twoLines, read: []string{"m.py"},
 			setup:        func(t *testing.T, dir string) { os.Remove(filepath.Join(dir, "m.py")) },
 			args:         `{"path":"m.py","start_line":1,"end_line":1,"expected_first_line":"A = 1","expected_last_line":"A = 1","content":"A = 9"}`,
-			wantMutation: MutationNone, path: "m.py"},
+			wantMutation: wire.MutationNone, path: "m.py"},
 		{name: "range invalid", tool: "replace_lines", seed: twoLines, read: []string{"m.py"},
 			args:         `{"path":"m.py","start_line":5,"end_line":9,"expected_first_line":"A = 1","expected_last_line":"A = 1","content":"A = 9"}`,
-			wantMutation: MutationNone, path: "m.py", want: "A = 1\nB = 2\n"},
+			wantMutation: wire.MutationNone, path: "m.py", want: "A = 1\nB = 2\n"},
 		{name: "span too large", tool: "replace_lines", seed: hundredLines, read: []string{"m.py"},
 			args:         `{"path":"m.py","start_line":1,"end_line":99,"expected_first_line":"X = 0","expected_last_line":"X = 0","content":"X = 1"}`,
-			wantMutation: MutationNone, path: "m.py", want: strings.Repeat("X = 0\n", 100)},
+			wantMutation: wire.MutationNone, path: "m.py", want: strings.Repeat("X = 0\n", 100)},
 		{name: "anchor mismatch", tool: "replace_lines", seed: twoLines, read: []string{"m.py"},
 			args:         `{"path":"m.py","start_line":1,"end_line":1,"expected_first_line":"WRONG","expected_last_line":"WRONG","content":"A = 9"}`,
-			wantMutation: MutationNone, path: "m.py", want: "A = 1\nB = 2\n"},
+			wantMutation: wire.MutationNone, path: "m.py", want: "A = 1\nB = 2\n"},
 		{name: "replacement identical", tool: "replace_lines", seed: twoLines, read: []string{"m.py"},
 			args:         `{"path":"m.py","start_line":1,"end_line":1,"expected_first_line":"A = 1","expected_last_line":"A = 1","content":"A = 1"}`,
-			wantMutation: MutationNone, path: "m.py", want: "A = 1\nB = 2\n"},
+			wantMutation: wire.MutationNone, path: "m.py", want: "A = 1\nB = 2\n"},
 		{name: "replaced", tool: "replace_lines", seed: twoLines, read: []string{"m.py"},
 			args:         `{"path":"m.py","start_line":1,"end_line":1,"expected_first_line":"A = 1","expected_last_line":"A = 1","content":"A = 9"}`,
-			wantMutation: MutationApplied, path: "m.py", want: "A = 9\nB = 2\n"},
+			wantMutation: wire.MutationApplied, path: "m.py", want: "A = 9\nB = 2\n"},
 		{name: "malformed args", tool: "structural_edit", args: `{"path":123}`,
-			wantMutation: MutationNone},
+			wantMutation: wire.MutationNone},
 		{name: "empty path", tool: "structural_edit", args: `{"path":" ","selector":"function:f","content":"x"}`,
-			wantMutation: MutationNone},
+			wantMutation: wire.MutationNone},
 		{name: "empty selector", tool: "structural_edit", seed: function, read: []string{"m.py"},
 			args:         `{"path":"m.py","selector":" ","content":"x"}`,
-			wantMutation: MutationNone, path: "m.py", want: functionSrc},
+			wantMutation: wire.MutationNone, path: "m.py", want: functionSrc},
 		{name: "file not read", tool: "structural_edit", seed: function,
 			args:         `{"path":"m.py","selector":"function:f","content":"def f():\n    return 2\n"}`,
-			wantMutation: MutationNone, path: "m.py", want: functionSrc},
+			wantMutation: wire.MutationNone, path: "m.py", want: functionSrc},
 		{name: "empty content deletes the node", tool: "structural_edit", seed: function, read: []string{"m.py"},
 			args:         `{"path":"m.py","selector":"function:f","content":"   "}`,
-			wantMutation: MutationNone, path: "m.py", want: functionSrc},
+			wantMutation: wire.MutationNone, path: "m.py", want: functionSrc},
 		{name: "runaway content", tool: "structural_edit", seed: function, read: []string{"m.py"},
 			args:         `{"path":"m.py","selector":"function:f","content":"` + strings.Repeat("x", 9000) + `"}`,
-			wantMutation: MutationNone, path: "m.py", want: functionSrc},
+			wantMutation: wire.MutationNone, path: "m.py", want: functionSrc},
 		{name: "v3 unreachable", tool: "structural_edit", seed: function, read: []string{"m.py"},
 			args:         `{"path":"m.py","selector":"function:f","content":"def f():\n    return 2\n"}`,
-			wantMutation: MutationNone, path: "m.py", want: functionSrc},
+			wantMutation: wire.MutationNone, path: "m.py", want: functionSrc},
 		{name: "selector matched nothing", tool: "structural_edit", seed: function, read: []string{"m.py"},
 			v3:           v3SpliceStub(t, "", false, "selector function:nope not found"),
 			args:         `{"path":"m.py","selector":"function:nope","content":"def nope():\n    pass\n"}`,
-			wantMutation: MutationNone, path: "m.py", want: functionSrc},
+			wantMutation: wire.MutationNone, path: "m.py", want: functionSrc},
 		{name: "splice is a no-op", tool: "structural_edit", seed: function, read: []string{"m.py"},
 			v3:           v3SpliceStub(t, "\x00same", true, ""),
 			args:         `{"path":"m.py","selector":"function:f","content":"def f():\n    return 1\n"}`,
-			wantMutation: MutationNone, path: "m.py", want: functionSrc},
+			wantMutation: wire.MutationNone, path: "m.py", want: functionSrc},
 		{name: "spliced", tool: "structural_edit", seed: function, read: []string{"m.py"},
 			v3:           v3SpliceStub(t, spliced, true, ""),
 			args:         `{"path":"m.py","selector":"function:f","content":"def f():\n    return 2\n"}`,
-			wantMutation: MutationApplied, path: "m.py", want: spliced},
+			wantMutation: wire.MutationApplied, path: "m.py", want: spliced},
 		{name: "malformed args", tool: "delete_file", args: `{"path":123}`,
-			wantMutation: MutationNone},
+			wantMutation: wire.MutationNone},
 		{name: "empty path", tool: "delete_file", args: `{"path":"  "}`,
-			wantMutation: MutationNone},
+			wantMutation: wire.MutationNone},
 		{name: "target absent", tool: "delete_file", args: `{"path":"gone.py"}`,
-			wantMutation: MutationNone, path: "gone.py"},
+			wantMutation: wire.MutationNone, path: "gone.py"},
 		{name: "directory not empty", tool: "delete_file",
 			seed: map[string]string{"pkg/a.py": "A = 1\n"}, args: `{"path":"pkg"}`,
-			wantMutation: MutationRefused, path: "pkg/a.py", want: "A = 1\n"},
+			wantMutation: wire.MutationRefused, path: "pkg/a.py", want: "A = 1\n"},
 		{name: "removal fails", tool: "delete_file",
 			seed: map[string]string{"locked/a.py": "A = 1\n"}, args: `{"path":"locked/a.py"}`,
 			setup: func(t *testing.T, dir string) {
@@ -579,26 +581,26 @@ func TestEveryDirectMutatorOutcomeIsClassified(t *testing.T) {
 				}
 				t.Cleanup(func() { os.Chmod(filepath.Join(dir, "locked"), 0o755) })
 			},
-			wantMutation: MutationFailed, path: "locked/a.py", want: "A = 1\n"},
+			wantMutation: wire.MutationFailed, path: "locked/a.py", want: "A = 1\n"},
 		{name: "removed", tool: "delete_file",
 			seed: map[string]string{"a.py": "A = 1\n"}, args: `{"path":"a.py"}`,
-			wantMutation: MutationApplied, path: "a.py"},
+			wantMutation: wire.MutationApplied, path: "a.py"},
 		{name: "empty directory removed", tool: "delete_file",
 			setup: func(t *testing.T, dir string) { os.Mkdir(filepath.Join(dir, "empty"), 0o755) },
-			args:  `{"path":"empty"}`, wantMutation: MutationApplied, path: "empty"},
+			args:  `{"path":"empty"}`, wantMutation: wire.MutationApplied, path: "empty"},
 		{name: "malformed args", tool: "move_file", args: `{"source":123}`,
-			wantMutation: MutationNone},
+			wantMutation: wire.MutationNone},
 		{name: "missing destination", tool: "move_file", args: `{"source":"a.py","destination":" "}`,
-			wantMutation: MutationNone},
+			wantMutation: wire.MutationNone},
 		{name: "source absent", tool: "move_file", args: `{"source":"gone.py","destination":"new.py"}`,
-			wantMutation: MutationNone, path: "new.py"},
+			wantMutation: wire.MutationNone, path: "new.py"},
 		{name: "same path", tool: "move_file",
 			seed: map[string]string{"a.py": "A = 1\n"}, args: `{"source":"a.py","destination":"./a.py"}`,
-			wantMutation: MutationNone, path: "a.py", want: "A = 1\n"},
+			wantMutation: wire.MutationNone, path: "a.py", want: "A = 1\n"},
 		{name: "destination occupied", tool: "move_file",
 			seed:         map[string]string{"a.py": "A = 1\n", "b.py": "B = 2\n"},
 			args:         `{"source":"a.py","destination":"b.py"}`,
-			wantMutation: MutationRefused, path: "b.py", want: "B = 2\n"},
+			wantMutation: wire.MutationRefused, path: "b.py", want: "B = 2\n"},
 		{name: "cannot create destination dir", tool: "move_file",
 			seed: map[string]string{"a.py": "A = 1\n", "ro/keep": "x"},
 			setup: func(t *testing.T, dir string) {
@@ -608,10 +610,10 @@ func TestEveryDirectMutatorOutcomeIsClassified(t *testing.T) {
 				t.Cleanup(func() { os.Chmod(filepath.Join(dir, "ro"), 0o755) })
 			},
 			args:         `{"source":"a.py","destination":"ro/sub/a.py"}`,
-			wantMutation: MutationFailed, path: "a.py", want: "A = 1\n"},
+			wantMutation: wire.MutationFailed, path: "a.py", want: "A = 1\n"},
 		{name: "renamed", tool: "move_file",
 			seed: map[string]string{"a.py": "A = 1\n"}, args: `{"source":"a.py","destination":"new.py"}`,
-			wantMutation: MutationApplied, path: "new.py", want: "A = 1\n"},
+			wantMutation: wire.MutationApplied, path: "new.py", want: "A = 1\n"},
 		{name: "moved into a directory", tool: "move_file",
 			seed: map[string]string{"a.py": "A = 1\n"},
 			setup: func(t *testing.T, dir string) {
@@ -619,7 +621,7 @@ func TestEveryDirectMutatorOutcomeIsClassified(t *testing.T) {
 			},
 			args: `{"source":"a.py","destination":"sub"}`,
 			// The tool resolves the directory to sub/a.py.
-			wantMutation: MutationApplied, path: "sub/a.py", want: "A = 1\n"},
+			wantMutation: wire.MutationApplied, path: "sub/a.py", want: "A = 1\n"},
 		{name: "cross-device copy path", tool: "move_file",
 			skip: "os.Rename only fails across filesystems; one temp dir cannot straddle two"},
 	} {
@@ -673,8 +675,8 @@ func TestEveryDirectMutatorOutcomeIsClassified(t *testing.T) {
 				t.Errorf("%s = %q, want %q", c.path, got, c.want)
 			}
 			// A pass must survive into the ledger for the bytes that are there.
-			if d := ledgerOf(t, ctx, c.path); d != nil && res.ValidationStatus == ValidationPassed {
-				if k, s := d.CurrentValidation(); s != ValidationPassed || k == ValidationKindUnknown {
+			if d := ledgerOf(t, ctx, c.path); d != nil && res.ValidationStatus == wire.ValidationPassed {
+				if k, s := d.CurrentValidation(); s != wire.ValidationPassed || k == wire.ValidationKindUnknown {
 					t.Errorf("a pass did not survive into the ledger: %v/%v", k, s)
 				}
 			}
@@ -731,7 +733,7 @@ func conversationBytes(t *testing.T, prompts []string) string {
 	var out strings.Builder
 	for i, raw := range prompts {
 		var req struct {
-			Messages []AgentMessage `json:"messages"`
+			Messages []wire.AgentMessage `json:"messages"`
 		}
 		if err := json.Unmarshal([]byte(raw), &req); err != nil {
 			t.Fatalf("request %d is not decodable: %v", i, err)

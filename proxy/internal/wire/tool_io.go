@@ -1,7 +1,7 @@
 // The arguments each tool takes from the model and the output it returns, as
-// the JSON the model reads and writes. write_file's two types are in types.go.
+// the JSON the model reads and writes. write_file's two types are in messages.go.
 
-package main
+package wire
 
 // -- read_file --
 

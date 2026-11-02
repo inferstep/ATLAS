@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"sort"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // Evidence the proxy itself produced, and what it is allowed to say.
@@ -19,7 +21,7 @@ import (
 // kind of obligation, at one strength: structural validity, at syntax. It
 // cannot be talked into anything above that, because the ceiling is on the
 // SOURCE and not on the record: proxy_owned_validation's ceiling is syntax in
-// provenanceCeiling, so even a forged observed strength cannot raise it.
+// ProvenanceCeiling, so even a forged observed strength cannot raise it.
 //
 // Nothing consumes what this produces. authorizedV3Replacement, the write
 // path, the ledger join and terminal completion are unchanged; a structural
@@ -34,10 +36,10 @@ import (
 // and rejected -- and it authorizes nothing. Collapsing the two would make
 // "we checked and it failed" indistinguishable from "we never looked".
 type proxyEvidence struct {
-	Provenance V3EvidenceProvenance
+	Provenance wire.V3EvidenceProvenance
 	// Outcome is ValidationPassed or ValidationFailed. Any other status means
 	// no evidence was produced at all and this value never exists.
-	Outcome ValidationStatus
+	Outcome wire.ValidationStatus
 }
 
 // Authorizes reports whether this evidence could close its obligation.
@@ -45,7 +47,7 @@ type proxyEvidence struct {
 //
 // Not called from any delivery path in this build.
 func (e proxyEvidence) Authorizes() (bool, string) {
-	if e.Outcome != ValidationPassed {
+	if e.Outcome != wire.ValidationPassed {
 		return false, "observation is " + string(e.Outcome)
 	}
 	p := e.Provenance
@@ -141,8 +143,8 @@ func produceSyntaxEvidence(ctx *AgentContext, req syntaxEvidenceRequest) (proxyE
 	}
 
 	generation, stateHash := workspaceIdentity(ctx)
-	p := V3EvidenceProvenance{
-		Source:              ProvenanceProxyOwnedValidation,
+	p := wire.V3EvidenceProvenance{
+		Source:              wire.ProvenanceProxyOwnedValidation,
 		RequestID:           requestID,
 		RouteEntryID:        req.RouteEntryID,
 		InvocationID:        req.InvocationID,

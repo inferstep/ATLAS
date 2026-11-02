@@ -77,9 +77,9 @@ def test_every_tui_handler_has_a_producer():
 
 def test_envelope_types_agree_across_implementations():
     """The 7 typed-envelope types must match across the Go producer
-    (proxy/events.go), the Go consumer (the TUI), and the Python spec
+    (proxy/internal/wire/events.go), the Go consumer (the TUI), and the Python spec
     (atlas/events.py)."""
-    go_src = (REPO / "proxy" / "events.go").read_text()
+    go_src = (REPO / "proxy" / "internal" / "wire" / "events.go").read_text()
     go_types = set(re.findall(r'Evt\w+\s*=\s*"([a-z_]+)"', go_src))
 
     py_src = (REPO / "atlas" / "events.py").read_text()

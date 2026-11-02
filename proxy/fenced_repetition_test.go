@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // A model that sends one fenced call again and again must be seen to repeat
@@ -449,7 +451,7 @@ func TestRepeatedFencedFailureReachesABoundedTerminal(t *testing.T) {
 				t.Fatalf("%d terminal events", census["done"])
 			}
 			st := NormalizeTerminalStatus(terminal["status"])
-			if st != TerminalStopped && st != TerminalIncomplete {
+			if st != wire.TerminalStopped && st != wire.TerminalIncomplete {
 				t.Errorf("terminal status = %q, want an honest stop", terminal["status"])
 			}
 			if st.Completed() {

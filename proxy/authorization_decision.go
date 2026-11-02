@@ -3,6 +3,8 @@ package main
 import (
 	"sort"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // Whether a candidate WOULD be authorized to land, computed and not consulted.
@@ -146,7 +148,7 @@ type authorizationInput struct {
 	// CandidateHash names the exact bytes proposed.
 	CandidateHash string
 	// Identity is what the evidence must bind to.
-	Identity V3EvidenceProvenance
+	Identity wire.V3EvidenceProvenance
 	// RouteEntry names the entry of the candidate-generation route this
 	// decision answers for. It is separate from Identity on purpose: a
 	// refusal reached before any candidate evidence exists has no invocation
@@ -158,7 +160,7 @@ type authorizationInput struct {
 	Evidence []proxyEvidence
 	// Envelope is the service's own record, consulted only for adapter
 	// support and legacy status.
-	Envelope *V3EvidenceEnvelope
+	Envelope *wire.V3EvidenceEnvelope
 	// BaselineWitnessCommand identifies the command whose pass established the
 	// behavioural baseline the candidate would replace, when there is one. It
 	// is "" for a syntax baseline, which has no command behind it, and for a
@@ -215,12 +217,12 @@ type authorizationInput struct {
 func baselinePreservedBy(o taskObligation, witnessCommand string,
 	authorizing []proxyEvidence) (bool, string) {
 	required := o.RequiredStrength
-	if strengthRank(required) < 0 {
+	if wire.StrengthRank(required) < 0 {
 		return false, "unclassified baseline strength"
 	}
 	for _, ev := range authorizing {
 		p := ev.Provenance
-		if strengthRank(p.ObservedStrength) < strengthRank(required) {
+		if wire.StrengthRank(p.ObservedStrength) < wire.StrengthRank(required) {
 			// Weaker evidence never preserves a stronger baseline.
 			continue
 		}
@@ -359,7 +361,7 @@ func endsBeforePrerequisites(d *AuthorizationDecision, in authorizationInput) bo
 	// A record produced before provenance existed carries no authority, and a
 	// service record whose envelope is unusable is not evidence about anything.
 	if in.Envelope != nil {
-		if availability, _ := in.Envelope.Validate(); availability != EvidenceAvailable {
+		if availability, _ := in.Envelope.Validate(); availability != wire.EvidenceAvailable {
 			d.Reason = ReasonLegacyRecord
 			return true
 		}
@@ -414,7 +416,7 @@ func endsOnUnclassifiedObligation(d *AuthorizationDecision, prerequisites []task
 			sort.Strings(d.Missing)
 			return true
 		}
-		if strengthRank(o.RequiredStrength) < 0 {
+		if wire.StrengthRank(o.RequiredStrength) < 0 {
 			d.Reason = ReasonObligationUnknown
 			d.Missing = append(d.Missing, o.ID)
 			sort.Strings(d.Missing)
@@ -512,10 +514,10 @@ func explainMissingPrerequisites(d *AuthorizationDecision, in authorizationInput
 //
 // Ordered so the most specific mismatch wins: a record about a different
 // candidate is a candidate mismatch even though its workspace also differs.
-func evidenceRefusalFor(ev proxyEvidence, asked V3EvidenceProvenance,
+func evidenceRefusalFor(ev proxyEvidence, asked wire.V3EvidenceProvenance,
 	wantCommand string) AuthorizationReason {
 	p := ev.Provenance
-	if _, ok := provenanceCeiling[p.Source]; !ok {
+	if _, ok := wire.CeilingFor(p.Source); !ok {
 		return ReasonProvenanceUntrusted
 	}
 	if p.RequestID != asked.RequestID || p.InvocationID != asked.InvocationID {
@@ -539,14 +541,14 @@ func evidenceRefusalFor(ev proxyEvidence, asked V3EvidenceProvenance,
 		p.WorkspaceStateHash != asked.WorkspaceStateHash {
 		return ReasonWorkspaceStale
 	}
-	if ev.Outcome != ValidationPassed {
+	if ev.Outcome != wire.ValidationPassed {
 		return ReasonEvidenceMissing
 	}
 	if ok, _ := p.MayAuthorize(); !ok {
 		// Source and strength alone. Distinguish "this source may never close
 		// this" from "it could, but did not reach the floor".
-		ceiling := provenanceCeiling[p.Source]
-		if strengthRank(ceiling) < strengthRank(p.RequiredStrength) {
+		ceiling, _ := wire.CeilingFor(p.Source)
+		if wire.StrengthRank(ceiling) < wire.StrengthRank(p.RequiredStrength) {
 			return ReasonProvenanceUntrusted
 		}
 		return ReasonEvidenceTooWeak

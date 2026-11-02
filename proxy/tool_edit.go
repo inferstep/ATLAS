@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/itigges22/atlas-proxy/internal/wire"
 	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
@@ -22,12 +23,12 @@ import (
 func editFileTool() *ToolDef {
 	return &ToolDef{
 		Name:   "edit_file",
-		Effect: ToolEffectDirectMutation,
+		Effect: wire.ToolEffectDirectMutation,
 		Description: "SURGICAL inline string replacement, ONLY. Use ONLY when changing a few lines inside a function (a None check, a regex, a constant). " +
 			"DO NOT use for whole-function rewrites, whole-class rewrites, whole-file replacements, or any change >10 lines — for those, use structural_edit (named node) or write_file (new file). " +
 			"old_str must match exactly once (or replace_all=true). Always read_file before editing. " +
 			"Heuristic: if you're tempted to copy a whole function/class/HTML element into old_str, you have the wrong tool — switch to structural_edit.",
-		InputSchema: EditFileInput{},
+		InputSchema: wire.EditFileInput{},
 		ReadOnly:    false,
 		Destructive: false,
 		Execute:     executeEditFile,
@@ -37,8 +38,8 @@ func editFileTool() *ToolDef {
 // executeEditFile runs one edit_file call: it finds old_str in the file, checks
 // the edit, sends it down the pipeline every content edit shares, and writes
 // what comes back.
-func executeEditFile(rawInput json.RawMessage, ctx *AgentContext) (res *ToolResult, execErr error) {
-	var input EditFileInput
+func executeEditFile(rawInput json.RawMessage, ctx *AgentContext) (res *wire.ToolResult, execErr error) {
+	var input wire.EditFileInput
 	if err := json.Unmarshal(rawInput, &input); err != nil {
 		return nil, errNoMutation(fmt.Errorf("invalid input: %w", err))
 	}
@@ -127,8 +128,8 @@ func executeEditFile(rawInput json.RawMessage, ctx *AgentContext) (res *ToolResu
 	if ctx.AppliedEdits != nil {
 		ctx.AppliedEdits[editKey] = true
 	}
-	result := &ToolResult{Success: true, Data: outBytes,
-		MutationStatus: MutationApplied}
+	result := &wire.ToolResult{Success: true, Data: outBytes,
+		MutationStatus: wire.MutationApplied}
 	// The observation describes exactly the bytes just written: the tool's
 	// own edit. A delivered candidate returned above.
 	overlayValidation(result, observed)
@@ -136,7 +137,7 @@ func executeEditFile(rawInput json.RawMessage, ctx *AgentContext) (res *ToolResu
 }
 
 // editInputRefusal refuses a call whose arguments cannot name an edit.
-func editInputRefusal(input EditFileInput, rawInput json.RawMessage) *ToolResult {
+func editInputRefusal(input wire.EditFileInput, rawInput json.RawMessage) *wire.ToolResult {
 	// Reject empty path — same reasoning as read_file.
 	if strings.TrimSpace(input.Path) == "" {
 		return noMutation("edit_file: path cannot be empty. Use read_file first on the target, then edit_file with the same path.")
@@ -183,7 +184,7 @@ func readFileToEdit(ctx *AgentContext, path, relPath string) (string, error) {
 
 // locateOldStr finds the text of the file that old_str names, and a note for
 // the model when the match needed any tolerance.
-func locateOldStr(content string, input EditFileInput) (string, string, error) {
+func locateOldStr(content string, input wire.EditFileInput) (string, string, error) {
 	// Find old_str. Exact bytes first; a match that needed quote-style
 	// or whitespace tolerance is allowed but reported, so the model
 	// knows which text of the file its new_str replaced.
@@ -256,7 +257,7 @@ func locateOldStr(content string, input EditFileInput) (string, string, error) {
 
 // corruptedOldStrError names what is wrong with an old_str that was not copied
 // faithfully, or returns nil.
-func corruptedOldStrError(content string, input EditFileInput) error {
+func corruptedOldStrError(content string, input wire.EditFileInput) error {
 	if bad := foreignRunes(input.OldStr, content); len(bad) > 0 {
 		return errNoMutation(fmt.Errorf("string to replace not found in file. Your `old_str` contains %s, "+
 			"which appears nowhere in %s. That is a corrupted character, not a mis-copy — most often "+
@@ -299,7 +300,7 @@ func corruptedOldStrError(content string, input EditFileInput) error {
 
 // oldStrMismatchError is the targeted refusal for an old_str the file does not
 // hold.
-func oldStrMismatchError(content string, input EditFileInput) error {
+func oldStrMismatchError(content string, input wire.EditFileInput) error {
 	// Mismatch persists — return targeted error.
 	hasEntities := strings.Contains(input.OldStr, "&lt;") ||
 		strings.Contains(input.OldStr, "&gt;") ||
@@ -337,7 +338,7 @@ func oldStrMismatchError(content string, input EditFileInput) error {
 
 // matchedEditError refuses an edit whose old_str was found but cannot be applied
 // as sent.
-func matchedEditError(content, actualOldStr string, input EditFileInput) error {
+func matchedEditError(content, actualOldStr string, input wire.EditFileInput) error {
 	// Check uniqueness
 	count := strings.Count(content, actualOldStr)
 	if count > 1 && !input.ReplaceAll {
@@ -371,7 +372,7 @@ func matchedEditError(content, actualOldStr string, input EditFileInput) error {
 }
 
 // applyEdit is the file with the edit applied.
-func applyEdit(content, actualOldStr string, input EditFileInput) string {
+func applyEdit(content, actualOldStr string, input wire.EditFileInput) string {
 	if input.ReplaceAll {
 		return strings.ReplaceAll(content, actualOldStr, input.NewStr)
 	}
@@ -379,8 +380,8 @@ func applyEdit(content, actualOldStr string, input EditFileInput) string {
 }
 
 // composedEditRefusal refuses a composed edit that should not go further.
-func composedEditRefusal(ctx *AgentContext, input EditFileInput, content, newContent, actualOldStr,
-	editKey string) *ToolResult {
+func composedEditRefusal(ctx *AgentContext, input wire.EditFileInput, content, newContent, actualOldStr,
+	editKey string) *wire.ToolResult {
 	// Shrinkage guard — same shape as structural_edit's. Catches the
 	// "model emitted a stub for old_str" failure where new_str
 	// is implausibly tiny for a substantial old_str. We compare
@@ -438,7 +439,7 @@ func editFileSyntaxMessage(relPath string) func(string) string {
 }
 
 // editGateRefusal runs edit_file's gates after the syntax gate.
-func editGateRefusal(ctx *AgentContext, path, relPath, content, newContent string) *ToolResult {
+func editGateRefusal(ctx *AgentContext, path, relPath, content, newContent string) *wire.ToolResult {
 	// Structural gate: a parse-clean edit can still introduce
 	// an unresolved direct call (render_template with only
 	// render_template_string imported) that 500s at runtime. Block a
@@ -479,13 +480,13 @@ func writeEditedFile(path, relPath, newContent string, observed checkOutcome) er
 }
 
 // editFileOutput is what edit_file tells the model about the change.
-func editFileOutput(input EditFileInput, content, newContent, actualOldStr string) EditFileOutput {
+func editFileOutput(input wire.EditFileInput, content, newContent, actualOldStr string) wire.EditFileOutput {
 	// Build diff preview against the original on-disk content
 	oldLines := strings.Count(input.OldStr, "\n") + 1
 	newLines := strings.Count(input.NewStr, "\n") + 1
 	preview := buildDiffPreview(content, newContent, actualOldStr, input.NewStr)
 
-	out := EditFileOutput{
+	out := wire.EditFileOutput{
 		OK:           true,
 		DiffPreview:  preview,
 		LinesAdded:   newLines - oldLines,
@@ -710,16 +711,16 @@ func buildDiffPreview(oldContent, newContent, oldStr, newStr string) string {
 func insertAfterTool() *ToolDef {
 	return &ToolDef{
 		Name:   "insert_after",
-		Effect: ToolEffectDirectMutation,
+		Effect: wire.ToolEffectDirectMutation,
 		Description: "Insert new lines into a file AFTER a given line number, without touching anything else. " +
 			"Use this to ADD code — a new branch, function, import, or case — when you are not changing existing lines. " +
 			"`line` is the 1-based number shown by read_file (0 inserts at the top of the file); `content` is only the new text. " +
 			"Prefer this over edit_file when adding rather than replacing: there is no old_str to reproduce, so a long or awkward anchor cannot go wrong. " +
 			"To CHANGE an existing line use edit_file; to replace a whole function use structural_edit.",
-		InputSchema: InsertAfterInput{},
+		InputSchema: wire.InsertAfterInput{},
 		Destructive: false,
-		Execute: func(input json.RawMessage, ctx *AgentContext) (*ToolResult, error) {
-			var in InsertAfterInput
+		Execute: func(input json.RawMessage, ctx *AgentContext) (*wire.ToolResult, error) {
+			var in wire.InsertAfterInput
 			if err := json.Unmarshal(input, &in); err != nil {
 				return nil, errNoMutation(fmt.Errorf("invalid input: %w", err))
 			}
@@ -750,7 +751,7 @@ func insertAfterTool() *ToolDef {
 // insertLinesAfter splices the new lines in after in.Line and sends the result
 // through the edit pipeline. A line out of range, and an insertion that moves
 // statements into another block, are refused.
-func insertLinesAfter(ctx *AgentContext, in InsertAfterInput, path, original string) (*ToolResult, error) {
+func insertLinesAfter(ctx *AgentContext, in wire.InsertAfterInput, path, original string) (*wire.ToolResult, error) {
 	lines := strings.Split(original, "\n")
 	// A trailing newline yields a final empty element; inserting after
 	// it would append past the end, so treat it as the boundary.
@@ -799,8 +800,8 @@ func insertLinesAfter(ctx *AgentContext, in InsertAfterInput, path, original str
 
 // writeInsertion runs the gates every content edit shares over the bytes about
 // to land, writes them, and reports the insertion.
-func writeInsertion(ctx *AgentContext, in InsertAfterInput, path, original, updated string,
-	insert []string, v3Out V3EditMetadata) (*ToolResult, error) {
+func writeInsertion(ctx *AgentContext, in wire.InsertAfterInput, path, original, updated string,
+	insert []string, v3Out V3EditMetadata) (*wire.ToolResult, error) {
 	observed, refusal := editSyntaxObservation(ctx, "insert_after", in.Path, in.Path,
 		original, updated, func(detail string) string {
 			return fallbackSyntaxRejection(in.Path, updated, detail)
@@ -827,12 +828,12 @@ func writeInsertion(ctx *AgentContext, in InsertAfterInput, path, original, upda
 	ctx.RecordFileRead(path, updated)
 	ctx.RecordBodySeen(path)
 	log.Printf("[insert_after] %s +%d lines after line %d", logPath(in.Path), len(insert), in.Line)
-	out, _ := json.Marshal(EditFileOutput{
+	out, _ := json.Marshal(wire.EditFileOutput{
 		OK:          true,
 		DiffPreview: fmt.Sprintf("+%d lines after line %d", len(insert), in.Line),
 	})
-	result := &ToolResult{Success: true, Data: out,
-		MutationStatus: MutationApplied}
+	result := &wire.ToolResult{Success: true, Data: out,
+		MutationStatus: wire.MutationApplied}
 	// The observation describes exactly the bytes just written --
 	// the tool's own edit, an authorized V3 candidate, or a baseline
 	// restored after revocation, whichever runEditPipeline returned.
@@ -1006,18 +1007,18 @@ func lineNumberHistory(ctx *AgentContext, path, relPath, current string) string 
 func replaceLinesTool() *ToolDef {
 	return &ToolDef{
 		Name:   "replace_lines",
-		Effect: ToolEffectDirectMutation,
+		Effect: wire.ToolEffectDirectMutation,
 		Description: "Replace a RANGE OF LINES with new content, addressed by the line numbers read_file printed. " +
 			"Use this to CHANGE existing code spanning more than a line or two: cite `start_line` and `end_line` instead of " +
 			"reproducing the old text, so a long span cannot go wrong in transcription. Both are 1-based and INCLUSIVE. " +
 			"`expected_first_line` / `expected_last_line` are the text of those two lines WITHOUT the \"N<tab>\" prefix; they are " +
 			"compared whitespace-insensitively so an off-by-one is caught instead of silently applied. `content` is only the new text. " +
 			"Use edit_file for a one-line change, insert_after to ADD without replacing, structural_edit for a whole function or class.",
-		InputSchema: ReplaceLinesInput{},
+		InputSchema: wire.ReplaceLinesInput{},
 		ReadOnly:    false,
 		Destructive: false,
-		Execute: func(input json.RawMessage, ctx *AgentContext) (*ToolResult, error) {
-			var in ReplaceLinesInput
+		Execute: func(input json.RawMessage, ctx *AgentContext) (*wire.ToolResult, error) {
+			var in wire.ReplaceLinesInput
 			if err := json.Unmarshal(input, &in); err != nil {
 				return nil, errNoMutation(fmt.Errorf("invalid input: %w", err))
 			}
@@ -1045,7 +1046,7 @@ func replaceLinesTool() *ToolDef {
 // sends the result through the edit pipeline. A range that moved is applied
 // where its lines are now; a range out of bounds, too long, or whose first or
 // last line is not what the call says, is refused.
-func replaceLineRange(ctx *AgentContext, in ReplaceLinesInput, path, original string) (*ToolResult, error) {
+func replaceLineRange(ctx *AgentContext, in wire.ReplaceLinesInput, path, original string) (*wire.ToolResult, error) {
 	fileLines := strings.Split(original, "\n")
 	limit := len(fileLines)
 	if limit > 0 && fileLines[limit-1] == "" {
@@ -1125,8 +1126,8 @@ func replaceLineRange(ctx *AgentContext, in ReplaceLinesInput, path, original st
 
 // writeLineReplacement runs the gates every content edit shares over the bytes
 // about to land, writes them, and reports the lines it replaced.
-func writeLineReplacement(ctx *AgentContext, in ReplaceLinesInput, path, original, updated string,
-	replacement []string, v3Out V3EditMetadata) (*ToolResult, error) {
+func writeLineReplacement(ctx *AgentContext, in wire.ReplaceLinesInput, path, original, updated string,
+	replacement []string, v3Out V3EditMetadata) (*wire.ToolResult, error) {
 	observed, refusal := editSyntaxObservation(ctx, "replace_lines", in.Path, in.Path,
 		original, updated, func(detail string) string {
 			return fallbackSyntaxRejection(in.Path, updated, detail)
@@ -1154,12 +1155,12 @@ func writeLineReplacement(ctx *AgentContext, in ReplaceLinesInput, path, origina
 	ctx.RecordBodySeen(path)
 	replaced := in.EndLine - in.StartLine + 1
 	log.Printf("[replace_lines] %s lines %d-%d: %d -> %d lines", logPath(in.Path), in.StartLine, in.EndLine, replaced, len(replacement))
-	out, _ := json.Marshal(EditFileOutput{
+	out, _ := json.Marshal(wire.EditFileOutput{
 		OK:          true,
 		DiffPreview: fmt.Sprintf("lines %d-%d replaced (%d -> %d lines)", in.StartLine, in.EndLine, replaced, len(replacement)),
 	})
-	result := &ToolResult{Success: true, Data: out,
-		MutationStatus: MutationApplied}
+	result := &wire.ToolResult{Success: true, Data: out,
+		MutationStatus: wire.MutationApplied}
 	// The observation describes exactly the bytes just written --
 	// the tool's own edit, an authorized V3 candidate, or a baseline
 	// restored after revocation, whichever runEditPipeline returned.
@@ -1182,9 +1183,9 @@ func writeLineReplacement(ctx *AgentContext, in ReplaceLinesInput, path, origina
 // caller is about to write, so the caller attaches it to whichever outcome the
 // filesystem produces rather than re-deriving it.
 func editSyntaxObservation(ctx *AgentContext, tool, checkPath, relPath, original, edited string,
-	rejection func(detail string) string) (checkOutcome, *ToolResult) {
+	rejection func(detail string) string) (checkOutcome, *wire.ToolResult) {
 	proposal := fallbackSyntaxOutcomeFor(ctx, checkPath, edited).aggregate()
-	if proposal.Status != ValidationFailed {
+	if proposal.Status != wire.ValidationFailed {
 		return proposal, nil
 	}
 	baseline := fallbackSyntaxOutcomeFor(ctx, checkPath, original).aggregate()
@@ -1195,12 +1196,12 @@ func editSyntaxObservation(ctx *AgentContext, tool, checkPath, relPath, original
 	}
 	log.Printf("[%s] edited content for %s failed the syntax gate: %s",
 		tool, logPath(relPath), truncateStr(proposal.Detail, 120))
-	return proposal, &ToolResult{
+	return proposal, &wire.ToolResult{
 		Success:          false,
 		Error:            rejection(proposal.Detail),
-		MutationStatus:   MutationRefused,
-		ValidationKind:   ValidationKindSyntax,
-		ValidationStatus: ValidationFailed,
+		MutationStatus:   wire.MutationRefused,
+		ValidationKind:   wire.ValidationKindSyntax,
+		ValidationStatus: wire.ValidationFailed,
 		ValidationDetail: proposal.Detail,
 	}
 }
@@ -1228,7 +1229,7 @@ func fencedCallIsExecutable(name string, args json.RawMessage, ctx *AgentContext
 	if trimmed == "" || trimmed == "null" {
 		return false, "the call carried no arguments"
 	}
-	var in WriteFileInput
+	var in wire.WriteFileInput
 	if err := json.Unmarshal(args, &in); err != nil {
 		return false, "the arguments are not the shape " + name + " takes"
 	}
@@ -1244,13 +1245,13 @@ func fencedCallIsExecutable(name string, args json.RawMessage, ctx *AgentContext
 	return true, ""
 }
 
-func structuralRefusal(msg string) *ToolResult {
-	return &ToolResult{
+func structuralRefusal(msg string) *wire.ToolResult {
+	return &wire.ToolResult{
 		Success:          false,
 		Error:            msg,
-		MutationStatus:   MutationRefused,
-		ValidationKind:   ValidationKindStructural,
-		ValidationStatus: ValidationFailed,
+		MutationStatus:   wire.MutationRefused,
+		ValidationKind:   wire.ValidationKindStructural,
+		ValidationStatus: wire.ValidationFailed,
 		ValidationDetail: msg,
 	}
 }

@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // A ToolResult reports separate facts: whether bytes changed (MutationStatus),
@@ -25,18 +27,18 @@ import (
 // classified: Unknown means that no producer set the field.
 func TestMutationStatusValues(t *testing.T) {
 	for _, tc := range []struct {
-		status              MutationStatus
+		status              wire.MutationStatus
 		wire                string
 		applied, classified bool
 	}{
-		{MutationUnknown, "", false, false},
-		{MutationNone, "none", false, true},
-		{MutationApplied, "applied", true, true},
-		{MutationRefused, "refused", false, true},
-		{MutationFailed, "failed", false, true},
+		{wire.MutationUnknown, "", false, false},
+		{wire.MutationNone, "none", false, true},
+		{wire.MutationApplied, "applied", true, true},
+		{wire.MutationRefused, "refused", false, true},
+		{wire.MutationFailed, "failed", false, true},
 		// A command tool can change the workspace without looking. Unobserved
 		// says so: a producer spoke, and nothing was shown to be applied.
-		{MutationUnobserved, "unobserved", false, true},
+		{wire.MutationUnobserved, "unobserved", false, true},
 	} {
 		if string(tc.status) != tc.wire || tc.status.Applied() != tc.applied || tc.status.Classified() != tc.classified {
 			t.Errorf("MutationStatus %q: applied %v, classified %v; want wire %q, applied %v, classified %v",
@@ -45,7 +47,7 @@ func TestMutationStatusValues(t *testing.T) {
 	}
 	// A value from a producer of another version, or with its case or spacing
 	// changed, fails closed.
-	for _, s := range []MutationStatus{"APPLIED", "Applied", " applied", "applied ", "applied_maybe", "yes", "unknown"} {
+	for _, s := range []wire.MutationStatus{"APPLIED", "Applied", " applied", "applied ", "applied_maybe", "yes", "unknown"} {
 		if s.Applied() || s.Classified() {
 			t.Errorf("MutationStatus(%q) reads as applied or classified", s)
 		}
@@ -57,22 +59,22 @@ func TestMutationStatusValues(t *testing.T) {
 // pass.
 func TestValidationStatusValues(t *testing.T) {
 	for _, tc := range []struct {
-		status             ValidationStatus
+		status             wire.ValidationStatus
 		wire               string
 		passed, classified bool
 	}{
-		{ValidationUnknown, "", false, false},
-		{ValidationNotRun, "not_run", false, true},
-		{ValidationNotApplicable, "not_applicable", false, true},
-		{ValidationPassed, "passed", true, true},
-		{ValidationFailed, "failed", false, true},
+		{wire.ValidationUnknown, "", false, false},
+		{wire.ValidationNotRun, "not_run", false, true},
+		{wire.ValidationNotApplicable, "not_applicable", false, true},
+		{wire.ValidationPassed, "passed", true, true},
+		{wire.ValidationFailed, "failed", false, true},
 	} {
 		if string(tc.status) != tc.wire || tc.status.Passed() != tc.passed || tc.status.Classified() != tc.classified {
 			t.Errorf("ValidationStatus %q: passed %v, classified %v; want wire %q, passed %v, classified %v",
 				tc.status, tc.status.Passed(), tc.status.Classified(), tc.wire, tc.passed, tc.classified)
 		}
 	}
-	for _, s := range []ValidationStatus{"PASSED", "Passed", " passed", "passed_ish", "ok", "unknown", "not-run"} {
+	for _, s := range []wire.ValidationStatus{"PASSED", "Passed", " passed", "passed_ish", "ok", "unknown", "not-run"} {
 		if s.Passed() || s.Classified() {
 			t.Errorf("ValidationStatus(%q) reads as passed or classified", s)
 		}
@@ -84,22 +86,22 @@ func TestValidationStatusValues(t *testing.T) {
 // first, so a structural refusal means that the syntax check passed.
 func TestValidationKindValues(t *testing.T) {
 	for _, tc := range []struct {
-		kind       ValidationKind
+		kind       wire.ValidationKind
 		wire       string
 		classified bool
 	}{
-		{ValidationKindUnknown, "", false},
-		{ValidationKindNone, "none", true},
-		{ValidationKindSyntax, "syntax", true},
-		{ValidationKindStructural, "structural", true},
-		{ValidationKindExecution, "execution", true},
+		{wire.ValidationKindUnknown, "", false},
+		{wire.ValidationKindNone, "none", true},
+		{wire.ValidationKindSyntax, "syntax", true},
+		{wire.ValidationKindStructural, "structural", true},
+		{wire.ValidationKindExecution, "execution", true},
 	} {
 		if string(tc.kind) != tc.wire || tc.kind.Classified() != tc.classified {
 			t.Errorf("ValidationKind %q: classified %v; want wire %q, classified %v",
 				tc.kind, tc.kind.Classified(), tc.wire, tc.classified)
 		}
 	}
-	for _, k := range []ValidationKind{"STRUCTURAL", "Structural", " structural"} {
+	for _, k := range []wire.ValidationKind{"STRUCTURAL", "Structural", " structural"} {
 		if k.Classified() {
 			t.Errorf("ValidationKind(%q) reads as classified", k)
 		}
@@ -110,26 +112,26 @@ func TestValidationKindValues(t *testing.T) {
 // older producer has none of them and decodes to Unknown, not to "nothing was
 // done". A check with no outcome is not classified either.
 func TestAResultIsClassifiedOnlyWhenEveryFactIsSet(t *testing.T) {
-	var legacy ToolResult
+	var legacy wire.ToolResult
 	if err := json.Unmarshal([]byte(`{"success":true}`), &legacy); err != nil {
 		t.Fatal(err)
 	}
-	if legacy.MutationStatus != MutationUnknown || legacy.ValidationKind != ValidationKindUnknown ||
-		legacy.ValidationStatus != ValidationUnknown {
+	if legacy.MutationStatus != wire.MutationUnknown || legacy.ValidationKind != wire.ValidationKindUnknown ||
+		legacy.ValidationStatus != wire.ValidationUnknown {
 		t.Errorf("a legacy payload decoded to %+v, want every fact unknown", legacy)
 	}
 	for _, tc := range []struct {
 		name       string
-		res        ToolResult
+		res        wire.ToolResult
 		classified bool
 	}{
-		{"zero value", ToolResult{}, false},
+		{"zero value", wire.ToolResult{}, false},
 		{"legacy payload", legacy, false},
-		{"check without outcome", ToolResult{MutationStatus: MutationApplied, ValidationKind: ValidationKindSyntax}, false},
-		{"explicit none", ToolResult{MutationStatus: MutationNone, ValidationKind: ValidationKindNone,
-			ValidationStatus: ValidationNotRun}, true},
-		{"structural refusal", ToolResult{MutationStatus: MutationRefused, ValidationKind: ValidationKindStructural,
-			ValidationStatus: ValidationFailed}, true},
+		{"check without outcome", wire.ToolResult{MutationStatus: wire.MutationApplied, ValidationKind: wire.ValidationKindSyntax}, false},
+		{"explicit none", wire.ToolResult{MutationStatus: wire.MutationNone, ValidationKind: wire.ValidationKindNone,
+			ValidationStatus: wire.ValidationNotRun}, true},
+		{"structural refusal", wire.ToolResult{MutationStatus: wire.MutationRefused, ValidationKind: wire.ValidationKindStructural,
+			ValidationStatus: wire.ValidationFailed}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.res.Classified() != tc.classified {
@@ -144,14 +146,14 @@ func TestAResultIsClassifiedOnlyWhenEveryFactIsSet(t *testing.T) {
 func TestToolResultJSON(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
-		res           ToolResult
+		res           wire.ToolResult
 		want, omitted []string
 	}{
-		{"legacy success", ToolResult{Success: true},
+		{"legacy success", wire.ToolResult{Success: true},
 			[]string{`"success":true`},
 			[]string{"mutation_status", "validation_status", "validation_kind"}},
-		{"explicit none", ToolResult{Success: true, MutationStatus: MutationNone,
-			ValidationKind: ValidationKindNone, ValidationStatus: ValidationNotRun},
+		{"explicit none", wire.ToolResult{Success: true, MutationStatus: wire.MutationNone,
+			ValidationKind: wire.ValidationKindNone, ValidationStatus: wire.ValidationNotRun},
 			[]string{`"mutation_status":"none"`, `"validation_kind":"none"`, `"validation_status":"not_run"`},
 			nil},
 	} {
@@ -299,7 +301,7 @@ func TestSSEProjectionsExposeOnlyLegacyKeys(t *testing.T) {
 			}
 			switch field.Name {
 			case "Type":
-				if id, ok := kv.Value.(*ast.Ident); ok && id.Name == "EvtToolResult" {
+				if baseName(kv.Value) == "EvtToolResult" {
 					isToolResult = true
 				}
 			case "Payload":
@@ -361,45 +363,45 @@ func TestSSEProjectionsExposeOnlyLegacyKeys(t *testing.T) {
 // `error` are both set and the shape is most likely to drift.
 var representativeResults = []struct {
 	name string
-	res  ToolResult
+	res  wire.ToolResult
 	want string
 }{
-	{"applied", ToolResult{Success: true, Data: json.RawMessage(`{"bytes_written":6}`),
-		MutationStatus: MutationApplied, ValidationKind: ValidationKindSyntax,
-		ValidationStatus: ValidationPassed, ValidationDetail: "parsed"},
+	{"applied", wire.ToolResult{Success: true, Data: json.RawMessage(`{"bytes_written":6}`),
+		MutationStatus: wire.MutationApplied, ValidationKind: wire.ValidationKindSyntax,
+		ValidationStatus: wire.ValidationPassed, ValidationDetail: "parsed"},
 		`{"success":true,"data":{"bytes_written":6}}`},
-	{"refused", ToolResult{Success: false, Error: "edit_file: would not parse",
-		MutationStatus: MutationRefused, ValidationKind: ValidationKindSyntax,
-		ValidationStatus: ValidationFailed, ValidationDetail: "SyntaxError"},
+	{"refused", wire.ToolResult{Success: false, Error: "edit_file: would not parse",
+		MutationStatus: wire.MutationRefused, ValidationKind: wire.ValidationKindSyntax,
+		ValidationStatus: wire.ValidationFailed, ValidationDetail: "SyntaxError"},
 		`{"success":false,"error":"edit_file: would not parse"}`},
-	{"structural refusal", ToolResult{Success: false, Error: "write_file: unresolved call",
-		MutationStatus: MutationRefused, ValidationKind: ValidationKindStructural,
-		ValidationStatus: ValidationFailed, ValidationDetail: "unresolved call: render_template"},
+	{"structural refusal", wire.ToolResult{Success: false, Error: "write_file: unresolved call",
+		MutationStatus: wire.MutationRefused, ValidationKind: wire.ValidationKindStructural,
+		ValidationStatus: wire.ValidationFailed, ValidationDetail: "unresolved call: render_template"},
 		`{"success":false,"error":"write_file: unresolved call"}`},
-	{"none", ToolResult{Success: false, Error: "file not found: gone.py",
-		MutationStatus: MutationNone, ValidationKind: ValidationKindNone,
-		ValidationStatus: ValidationNotApplicable},
+	{"none", wire.ToolResult{Success: false, Error: "file not found: gone.py",
+		MutationStatus: wire.MutationNone, ValidationKind: wire.ValidationKindNone,
+		ValidationStatus: wire.ValidationNotApplicable},
 		`{"success":false,"error":"file not found: gone.py"}`},
-	{"not run", ToolResult{Success: true, Data: json.RawMessage(`{"listed":2}`),
-		MutationStatus: MutationNone, ValidationKind: ValidationKindNone,
-		ValidationStatus: ValidationNotRun},
+	{"not run", wire.ToolResult{Success: true, Data: json.RawMessage(`{"listed":2}`),
+		MutationStatus: wire.MutationNone, ValidationKind: wire.ValidationKindNone,
+		ValidationStatus: wire.ValidationNotRun},
 		`{"success":true,"data":{"listed":2}}`},
-	{"failed", ToolResult{Success: false, Error: "delete_file: permission denied",
-		MutationStatus: MutationFailed, ValidationKind: ValidationKindNone,
-		ValidationStatus: ValidationNotApplicable},
+	{"failed", wire.ToolResult{Success: false, Error: "delete_file: permission denied",
+		MutationStatus: wire.MutationFailed, ValidationKind: wire.ValidationKindNone,
+		ValidationStatus: wire.ValidationNotApplicable},
 		`{"success":false,"error":"delete_file: permission denied"}`},
-	{"unobserved", ToolResult{Success: true, Data: json.RawMessage(`{"exit_code":0}`),
-		MutationStatus: MutationUnobserved, ValidationKind: ValidationKindNone,
-		ValidationStatus: ValidationNotApplicable},
+	{"unobserved", wire.ToolResult{Success: true, Data: json.RawMessage(`{"exit_code":0}`),
+		MutationStatus: wire.MutationUnobserved, ValidationKind: wire.ValidationKindNone,
+		ValidationStatus: wire.ValidationNotApplicable},
 		`{"success":true,"data":{"exit_code":0}}`},
-	{"warned write", ToolResult{Success: true,
+	{"warned write", wire.ToolResult{Success: true,
 		Data:  json.RawMessage(`{"bytes_written":41,"warning":"does not parse"}`),
-		Error: "", MutationStatus: MutationApplied, ValidationKind: ValidationKindSyntax,
-		ValidationStatus: ValidationFailed, ValidationDetail: "SyntaxError: invalid syntax"},
+		Error: "", MutationStatus: wire.MutationApplied, ValidationKind: wire.ValidationKindSyntax,
+		ValidationStatus: wire.ValidationFailed, ValidationDetail: "SyntaxError: invalid syntax"},
 		`{"success":true,"data":{"bytes_written":41,"warning":"does not parse"}}`},
-	{"v3 provenance survives", ToolResult{Success: true, Data: json.RawMessage(`{"ok":true}`),
-		MutationStatus: MutationApplied, ValidationKind: ValidationKindSyntax,
-		ValidationStatus: ValidationPassed,
+	{"v3 provenance survives", wire.ToolResult{Success: true, Data: json.RawMessage(`{"ok":true}`),
+		MutationStatus: wire.MutationApplied, ValidationKind: wire.ValidationKindSyntax,
+		ValidationStatus: wire.ValidationPassed,
 		V3Used:           true, CandidatesTested: 4, WinningScore: 0.75, PhaseSolved: "phase1"},
 		`{"success":true,"data":{"ok":true},"v3_used":true,"candidates_tested":4,"winning_score":0.75,"phase_solved":"phase1"}`},
 }
@@ -419,7 +421,7 @@ func TestModelFacingTextCarriesNoClassification(t *testing.T) {
 			}
 			// The text is the plain JSON of the same result with the
 			// classification fields left unset.
-			legacy := ToolResult{Success: c.res.Success, Data: c.res.Data, Error: c.res.Error,
+			legacy := wire.ToolResult{Success: c.res.Success, Data: c.res.Data, Error: c.res.Error,
 				V3Used: c.res.V3Used, CandidatesTested: c.res.CandidatesTested,
 				WinningScore: c.res.WinningScore, PhaseSolved: c.res.PhaseSolved,
 				VerificationEvidence: c.res.VerificationEvidence}
@@ -440,7 +442,7 @@ func TestInternalResultsStayFullyClassifiedBehindTheProjection(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var back ToolResult
+			var back wire.ToolResult
 			if err := json.Unmarshal(b, &back); err != nil {
 				t.Fatal(err)
 			}
@@ -487,8 +489,7 @@ func TestEveryModelFacingSerializationSiteIsInventoried(t *testing.T) {
 		ast.Inspect(file, func(n ast.Node) bool {
 			switch node := n.(type) {
 			case *ast.CompositeLit:
-				id, ok := node.Type.(*ast.Ident)
-				if !ok || id.Name != "AgentMessage" {
+				if baseName(node.Type) != "AgentMessage" {
 					return true
 				}
 				var role, content string
@@ -589,7 +590,7 @@ func TestEveryModelFacingSerializationSiteIsInventoried(t *testing.T) {
 // changing one expression.
 func TestMarshalTextProjectsRatherThanMarshallingTheReceiver(t *testing.T) {
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "types.go", nil, 0)
+	file, err := parser.ParseFile(fset, "internal/wire/messages.go", nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -612,6 +613,6 @@ func TestMarshalTextProjectsRatherThanMarshallingTheReceiver(t *testing.T) {
 		return false
 	})
 	if !found {
-		t.Fatal("MarshalText not found in types.go")
+		t.Fatal("MarshalText not found in internal/wire/messages.go")
 	}
 }

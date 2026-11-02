@@ -14,6 +14,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // --- The no-op edit over a demonstrably broken artifact ----------------------
@@ -216,10 +218,10 @@ func TestNoopEditOverBrokenArtifactRecovers(t *testing.T) {
 		t.Fatal("the ledger does not describe the bytes on disk")
 	}
 	kind, status := d.CurrentValidation()
-	if status != ValidationPassed {
+	if status != wire.ValidationPassed {
 		t.Errorf("validation on the current hash is %s/%s, want passed", kind, status)
 	}
-	if terminal["status"] != string(TerminalCompleted) ||
+	if terminal["status"] != string(wire.TerminalCompleted) ||
 		terminal["reason"] != "deliverables_demonstrated" {
 		t.Errorf("terminal %q/%q, want completed/deliverables_demonstrated",
 			terminal["status"], terminal["reason"])
@@ -247,7 +249,7 @@ func brokenArtifactLedger(t *testing.T, mutate func(*AgentContext, *DeliverableS
 	h := hashBytes([]byte(brokenSolveSource))
 	d := &DeliverableState{
 		Path: "solve.py", CurrentHash: h, CurrentSize: len(brokenSolveSource), Generation: 1,
-		ValidationKind: ValidationKindSyntax, ValidationStatus: ValidationFailed,
+		ValidationKind: wire.ValidationKindSyntax, ValidationStatus: wire.ValidationFailed,
 		ValidationDetail: "line 1: expected ':'", ValidatedHash: h,
 	}
 	if ctx.Ledger == nil {
@@ -268,16 +270,16 @@ func TestBrokenArtifactRecoveryEntryPredicates(t *testing.T) {
 		mutate func(*AgentContext, *DeliverableState, string)
 	}{
 		{"validation unknown", func(_ *AgentContext, d *DeliverableState, _ string) {
-			d.ValidationStatus, d.ValidationKind = ValidationUnknown, ValidationKindUnknown
+			d.ValidationStatus, d.ValidationKind = wire.ValidationUnknown, wire.ValidationKindUnknown
 		}},
 		{"validation not_run", func(_ *AgentContext, d *DeliverableState, _ string) {
-			d.ValidationStatus = ValidationNotRun
+			d.ValidationStatus = wire.ValidationNotRun
 		}},
 		{"validation not_applicable", func(_ *AgentContext, d *DeliverableState, _ string) {
-			d.ValidationStatus = ValidationNotApplicable
+			d.ValidationStatus = wire.ValidationNotApplicable
 		}},
 		{"current bytes are valid", func(_ *AgentContext, d *DeliverableState, _ string) {
-			d.ValidationStatus = ValidationPassed
+			d.ValidationStatus = wire.ValidationPassed
 		}},
 		{"failure describes older bytes", func(_ *AgentContext, d *DeliverableState, _ string) {
 			d.ValidatedHash = hashBytes([]byte("something else"))
@@ -294,7 +296,7 @@ func TestBrokenArtifactRecoveryEntryPredicates(t *testing.T) {
 		{"a safer checkpoint exists", func(_ *AgentContext, d *DeliverableState, _ string) {
 			good := []byte("def solve():\n    return 7\n")
 			d.CheckpointBytes, d.CheckpointHash = good, hashBytes(good)
-			d.CheckpointKind = ValidationKindSyntax
+			d.CheckpointKind = wire.ValidationKindSyntax
 		}},
 		{"file is gone", func(_ *AgentContext, _ *DeliverableState, path string) {
 			os.Remove(path)
@@ -359,7 +361,7 @@ func TestBrokenArtifactRecoveryArmsOnTheRecurrence(t *testing.T) {
 	h := hashBytes([]byte(brokenSolveSource))
 	ctx.Ledger[ledgerKey(ctx, "other.py")] = &DeliverableState{
 		Path: "other.py", CurrentHash: h, Generation: 1,
-		ValidationKind: ValidationKindSyntax, ValidationStatus: ValidationFailed,
+		ValidationKind: wire.ValidationKindSyntax, ValidationStatus: wire.ValidationFailed,
 		ValidationDetail: "line 1: expected ':'", ValidatedHash: h,
 	}
 	if first := brokenArtifactRecovery(ctx, st, "other.py"); first != "" {
@@ -460,7 +462,7 @@ func TestOneAccidentalNoopEditGetsOnlyTheToolsAnswer(t *testing.T) {
 			t.Fatal("a single no-op drew the recovery")
 		}
 	}
-	if terminal["status"] != string(TerminalCompleted) {
+	if terminal["status"] != string(wire.TerminalCompleted) {
 		t.Errorf("following the tool's own refusal did not complete: %q/%q",
 			terminal["status"], terminal["reason"])
 	}
@@ -468,7 +470,7 @@ func TestOneAccidentalNoopEditGetsOnlyTheToolsAnswer(t *testing.T) {
 		t.Errorf("the correction did not land: %q", got)
 	}
 	d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
-	if _, status := d.CurrentValidation(); status != ValidationPassed {
+	if _, status := d.CurrentValidation(); status != wire.ValidationPassed {
 		t.Errorf("validation on the current hash is %s, want passed", status)
 	}
 	if census["done"] != 1 {
@@ -503,7 +505,7 @@ func TestAModelThatIgnoresTheNoopRecoveryStopsHonestly(t *testing.T) {
 		t.Errorf("the file changed without a model mutation: %q", got)
 	}
 	d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
-	if _, status := d.CurrentValidation(); status != ValidationFailed {
+	if _, status := d.CurrentValidation(); status != wire.ValidationFailed {
 		t.Errorf("the ledger lost the failure on the current bytes: %s", status)
 	}
 	// Nothing safer ever existed to fall back to, which is why this case

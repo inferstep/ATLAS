@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // A fenced call costs a full unconstrained generation per attempt, so the
@@ -54,7 +56,7 @@ func TestPreflightRefusalsAreASubsetOfTheToolsOwn(t *testing.T) {
 			if res.Success {
 				t.Fatalf("the tool accepted what the preflight refused: %s", c.args)
 			}
-			if res.MutationStatus != MutationNone {
+			if res.MutationStatus != wire.MutationNone {
 				t.Errorf("MutationStatus = %q, want none", res.MutationStatus)
 			}
 		})

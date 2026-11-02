@@ -20,6 +20,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // The active edit-test-fix loop: after a successful write of foo.py and a
@@ -27,7 +29,7 @@ import (
 func TestIsActiveDebugIteration(t *testing.T) {
 	ctx := &AgentContext{
 		SessionWrites: map[string]bool{"foo.py": true},
-		Messages: []AgentMessage{
+		Messages: []wire.AgentMessage{
 			{Role: "assistant", Content: "..."},
 			{Role: "tool", ToolName: "run_command",
 				Content: `{"success":false,"error":"File \"foo.py\", line 3\nSyntaxError"}`},
@@ -41,12 +43,12 @@ func TestIsActiveDebugIteration(t *testing.T) {
 		t.Error("first write of a file must not fast-path")
 	}
 	// Last tool action was a read, not a failing run → not iterating.
-	ctx.Messages[1] = AgentMessage{Role: "tool", ToolName: "read_file", Content: "..."}
+	ctx.Messages[1] = wire.AgentMessage{Role: "tool", ToolName: "read_file", Content: "..."}
 	if isActiveDebugIteration(ctx, "foo.py") {
 		t.Error("a read as the last action is not an edit-test-fix loop")
 	}
 	// Run succeeded → task likely done, not iterating.
-	ctx.Messages[1] = AgentMessage{Role: "tool", ToolName: "run_command",
+	ctx.Messages[1] = wire.AgentMessage{Role: "tool", ToolName: "run_command",
 		Content: `{"success":true,"data":{"stdout":"ok"}}`}
 	if isActiveDebugIteration(ctx, "foo.py") {
 		t.Error("a passing run is not an active fix loop")
@@ -427,7 +429,7 @@ func TestBuildResponseFormat_UnknownModeDefaultsToStrict(t *testing.T) {
 }
 
 func TestNormalAgentPromptOmitsRemovedTools(t *testing.T) {
-	ctx := &AgentContext{Messages: []AgentMessage{{Role: "user", Content: "build the project"}}}
+	ctx := &AgentContext{Messages: []wire.AgentMessage{{Role: "user", Content: "build the project"}}}
 	if prompt := buildSystemPrompt(ctx); strings.Contains(prompt, "plan_tasks") {
 		t.Fatal("prompt still mentions the removed plan_tasks tool")
 	}
@@ -490,7 +492,7 @@ func TestSchemaConstrained_ReachesLlamaServerOverTheWire(t *testing.T) {
 	ctx := &AgentContext{
 		InferenceURL: srv.URL,
 		Ctx:          context.Background(),
-		Messages: []AgentMessage{
+		Messages: []wire.AgentMessage{
 			{Role: "user", Content: "hi"},
 		},
 	}
@@ -658,7 +660,7 @@ func TestMoveFileSourceMissing(t *testing.T) {
 // conversation: ToolResult.Data = marshaled ReadFileOutput, then the message
 // content = ToolResult.MarshalText() (json.Marshal of the whole result). This
 // is where the file content gets JSON-escaped.
-func storedReadMessage(t *testing.T, fileContent string) AgentMessage {
+func storedReadMessage(t *testing.T, fileContent string) wire.AgentMessage {
 	t.Helper()
 	// read_file numbers lines; the numbering doesn't affect the probe, but
 	// model the real shape anyway.
@@ -668,10 +670,10 @@ func storedReadMessage(t *testing.T, fileContent string) AgentMessage {
 			strings.Join([]string{itoaTest(i + 1), l}, "\t"), "\n"))
 		numbered.WriteString("\n")
 	}
-	out := ReadFileOutput{Content: numbered.String()}
+	out := wire.ReadFileOutput{Content: numbered.String()}
 	data, _ := json.Marshal(out)
-	res := &ToolResult{Success: true, Data: data}
-	return AgentMessage{Role: "tool", ToolName: "read_file", Content: res.MarshalText()}
+	res := &wire.ToolResult{Success: true, Data: data}
+	return wire.AgentMessage{Role: "tool", ToolName: "read_file", Content: res.MarshalText()}
 }
 
 func itoaTest(n int) string {
@@ -692,7 +694,7 @@ HTML = "<div class=\"board\" style=\"width:400px;height:400px\" id=\"game-board-
 def index():
     return render_template_string(HTML)
 `
-	ctx := &AgentContext{Messages: []AgentMessage{
+	ctx := &AgentContext{Messages: []wire.AgentMessage{
 		{Role: "system", Content: "sys"},
 		{Role: "user", Content: "make a snake game"},
 		storedReadMessage(t, fileContent),
@@ -706,7 +708,7 @@ def index():
 // dedup re-serves rather than lying that "it's above."
 func TestFileContentInContextDetectsAbsence(t *testing.T) {
 	fileContent := "def compute_subtotal(rows):\n    return sum(r.price for r in rows)\n"
-	ctx := &AgentContext{Messages: []AgentMessage{
+	ctx := &AgentContext{Messages: []wire.AgentMessage{
 		{Role: "system", Content: "sys"},
 		{Role: "user", Content: "unrelated chatter with no file content"},
 	}}
@@ -954,7 +956,7 @@ func TestSearchFilesStopsAtTheMatchCap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var out SearchFilesOutput
+	var out wire.SearchFilesOutput
 	if err := json.Unmarshal(res.Data, &out); err != nil {
 		t.Fatal(err)
 	}
@@ -989,7 +991,7 @@ func TestSearchFilesPassesOverAFileItCannotRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var out SearchFilesOutput
+	var out wire.SearchFilesOutput
 	if err := json.Unmarshal(res.Data, &out); err != nil {
 		t.Fatal(err)
 	}
@@ -1033,7 +1035,7 @@ func TestSearchFilesSkipsWhatItDoesNotRead(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var out SearchFilesOutput
+			var out wire.SearchFilesOutput
 			if err := json.Unmarshal(res.Data, &out); err != nil {
 				t.Fatal(err)
 			}
@@ -1104,7 +1106,7 @@ func TestReadFileAttachesTheCallGraphWithoutAFlag(t *testing.T) {
 		if err != nil || res == nil || !res.Success {
 			t.Fatalf("read_file %s failed: %v %+v", path, err, res)
 		}
-		var out ReadFileOutput
+		var out wire.ReadFileOutput
 		if err := json.Unmarshal(res.Data, &out); err != nil {
 			t.Fatal(err)
 		}
@@ -1140,7 +1142,7 @@ func TestReadFileDisclaimsItsLineNumbering(t *testing.T) {
 	if err != nil || res == nil || !res.Success {
 		t.Fatalf("read_file failed: %v %+v", err, res)
 	}
-	var out ReadFileOutput
+	var out wire.ReadFileOutput
 	if err := json.Unmarshal(res.Data, &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -1172,7 +1174,7 @@ func TestInsertAfterPlacesLinesAtTheNamedLine(t *testing.T) {
 	ctx.Ctx = context.Background()
 	ctx.RecordFileRead(path, orig)
 
-	args, _ := json.Marshal(InsertAfterInput{
+	args, _ := json.Marshal(wire.InsertAfterInput{
 		Path: "m.py", Line: 2, Content: "\ndef b():\n    return 2\n"})
 	res, err := insertAfterTool().Execute(json.RawMessage(args), ctx)
 	if err != nil || res == nil || !res.Success {
@@ -1195,7 +1197,7 @@ func TestInsertAfterZeroInsertsAtTheTop(t *testing.T) {
 	ctx.Ctx = context.Background()
 	ctx.RecordFileRead(path, "x = 1\n")
 
-	args, _ := json.Marshal(InsertAfterInput{Path: "m.py", Line: 0, Content: "import os\n"})
+	args, _ := json.Marshal(wire.InsertAfterInput{Path: "m.py", Line: 0, Content: "import os\n"})
 	if _, err := insertAfterTool().Execute(json.RawMessage(args), ctx); err != nil {
 		t.Fatalf("insert_after: %v", err)
 	}
@@ -1219,7 +1221,7 @@ func TestInsertAfterIsSyntaxGated(t *testing.T) {
 	ctx := writeGateCtx(t, "", sb.URL, dir)
 	ctx.RecordFileRead(path, orig)
 
-	args, _ := json.Marshal(InsertAfterInput{Path: "m.py", Line: 1, Content: "BROKEN(\n"})
+	args, _ := json.Marshal(wire.InsertAfterInput{Path: "m.py", Line: 1, Content: "BROKEN(\n"})
 	res, _ := insertAfterTool().Execute(json.RawMessage(args), ctx)
 	if res == nil || res.Success {
 		t.Fatalf("an insert that breaks the file must be refused, got %+v", res)
@@ -1240,13 +1242,13 @@ func TestInsertAfterRejectsOutOfRangeAndUnreadFiles(t *testing.T) {
 	ctx.Ctx = context.Background()
 
 	// Not read yet — same rule edit_file and structural_edit enforce.
-	args, _ := json.Marshal(InsertAfterInput{Path: "m.py", Line: 1, Content: "y = 2\n"})
+	args, _ := json.Marshal(wire.InsertAfterInput{Path: "m.py", Line: 1, Content: "y = 2\n"})
 	if _, err := insertAfterTool().Execute(json.RawMessage(args), ctx); err == nil {
 		t.Error("must require read_file first")
 	}
 
 	ctx.RecordFileRead(path, "x = 1\n")
-	args2, _ := json.Marshal(InsertAfterInput{Path: "m.py", Line: 99, Content: "y = 2\n"})
+	args2, _ := json.Marshal(wire.InsertAfterInput{Path: "m.py", Line: 99, Content: "y = 2\n"})
 	res, _ := insertAfterTool().Execute(json.RawMessage(args2), ctx)
 	if res == nil || res.Success {
 		t.Error("an out-of-range line must be refused")
@@ -1754,7 +1756,7 @@ func TestReplaceLinesAppliesAMovedRangeWhereTheBlockIsNow(t *testing.T) {
 	if got, _ := os.ReadFile(file); string(got) != "# one\n# two\ndef f():\n    return 2\n" {
 		t.Errorf("wrong result:\n%q", got)
 	}
-	var out EditFileOutput
+	var out wire.EditFileOutput
 	if err := json.Unmarshal(res.Data, &out); err != nil {
 		t.Fatal(err)
 	}
@@ -1860,7 +1862,7 @@ func TestIdenticalEditRefusalNamesAWayOut(t *testing.T) {
 		ctx.FilesRead[p] = "const x = 1;\nconst y = 2;\n"
 		ctx.BodySeen[tc.name] = true
 		ctx.FileReadTimes[p] = time.Now().Add(time.Minute)
-		in, _ := json.Marshal(EditFileInput{
+		in, _ := json.Marshal(wire.EditFileInput{
 			Path: tc.name, OldStr: "const x = 1;", NewStr: "const x = 1;"})
 		_, err := getTool("edit_file").Execute(in, ctx)
 		if err == nil {
@@ -1928,9 +1930,9 @@ type editGateCase struct {
 	argsFor func(tool string) []byte
 
 	wantSuccess    bool
-	wantMutation   MutationStatus
-	wantKind       ValidationKind
-	wantStatus     ValidationStatus
+	wantMutation   wire.MutationStatus
+	wantKind       wire.ValidationKind
+	wantStatus     wire.ValidationStatus
 	wantSyntaxReqs int
 	// bytes expected on disk afterwards: "edited" or "original"
 	wantDisk string
@@ -2031,7 +2033,7 @@ func (st *editGateStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func runEditGate(t *testing.T, tool string, c editGateCase) (*ToolResult, string, *editGateStub, []string) {
+func runEditGate(t *testing.T, tool string, c editGateCase) (*wire.ToolResult, string, *editGateStub, []string) {
 	t.Helper()
 	dir := t.TempDir()
 	st := &editGateStub{c: c}
@@ -2108,42 +2110,42 @@ func TestEditToolsClassifyTheirSyntaxGate(t *testing.T) {
 
 		for _, c := range []editGateCase{
 			{name: "proposal passes", original: egOriginal,
-				wantSuccess: true, wantMutation: MutationApplied,
-				wantKind: ValidationKindSyntax, wantStatus: ValidationPassed,
+				wantSuccess: true, wantMutation: wire.MutationApplied,
+				wantKind: wire.ValidationKindSyntax, wantStatus: wire.ValidationPassed,
 				wantSyntaxReqs: 1, wantDisk: "edited"},
 			{name: "checker applicable but unavailable", original: egOriginal,
 				unavailableFor: "import math",
-				wantSuccess:    true, wantMutation: MutationApplied,
-				wantKind: ValidationKindSyntax, wantStatus: ValidationNotRun,
+				wantSuccess:    true, wantMutation: wire.MutationApplied,
+				wantKind: wire.ValidationKindSyntax, wantStatus: wire.ValidationNotRun,
 				wantSyntaxReqs: 1, wantDisk: "edited"},
 			{name: "no sandbox configured", original: egOriginal, noSandbox: true,
-				wantSuccess: true, wantMutation: MutationApplied,
-				wantKind: ValidationKindSyntax, wantStatus: ValidationNotRun,
+				wantSuccess: true, wantMutation: wire.MutationApplied,
+				wantKind: wire.ValidationKindSyntax, wantStatus: wire.ValidationNotRun,
 				wantSyntaxReqs: 0, wantDisk: "edited"},
 			{name: "failed over a failed baseline lands", original: egOriginal,
 				badFor:      broken("import math"), // both sides are broken
-				wantSuccess: true, wantMutation: MutationApplied,
-				wantKind: ValidationKindSyntax, wantStatus: ValidationFailed,
+				wantSuccess: true, wantMutation: wire.MutationApplied,
+				wantKind: wire.ValidationKindSyntax, wantStatus: wire.ValidationFailed,
 				wantSyntaxReqs: 2, wantDisk: "edited"},
 			{name: "failed over a passing baseline is refused", original: egOriginal,
 				badFor:      broken(editedMarker),
-				wantSuccess: false, wantMutation: MutationRefused,
-				wantKind: ValidationKindSyntax, wantStatus: ValidationFailed,
+				wantSuccess: false, wantMutation: wire.MutationRefused,
+				wantKind: wire.ValidationKindSyntax, wantStatus: wire.ValidationFailed,
 				wantSyntaxReqs: 2, wantDisk: "original"},
 			{name: "failed over an unavailable baseline is refused", original: egOriginal,
 				badFor: broken(editedMarker), unavailableCall: 2,
-				wantSuccess: false, wantMutation: MutationRefused,
-				wantKind: ValidationKindSyntax, wantStatus: ValidationFailed,
+				wantSuccess: false, wantMutation: wire.MutationRefused,
+				wantKind: wire.ValidationKindSyntax, wantStatus: wire.ValidationFailed,
 				wantSyntaxReqs: 2, wantDisk: "original"},
 			{name: "passed then the write fails", original: egOriginal,
 				readOnlyDir: true,
-				wantSuccess: false, wantMutation: MutationFailed,
-				wantKind: ValidationKindSyntax, wantStatus: ValidationPassed,
+				wantSuccess: false, wantMutation: wire.MutationFailed,
+				wantKind: wire.ValidationKindSyntax, wantStatus: wire.ValidationPassed,
 				wantSyntaxReqs: 1, wantDisk: "original"},
 			{name: "not_run then the write fails", original: egOriginal,
 				noSandbox: true, readOnlyDir: true,
-				wantSuccess: false, wantMutation: MutationFailed,
-				wantKind: ValidationKindSyntax, wantStatus: ValidationNotRun,
+				wantSuccess: false, wantMutation: wire.MutationFailed,
+				wantKind: wire.ValidationKindSyntax, wantStatus: wire.ValidationNotRun,
 				wantSyntaxReqs: 0, wantDisk: "original"},
 		} {
 			c := c
@@ -2257,9 +2259,9 @@ func TestEditToolsReportTheDecisiveStructuralRefusal(t *testing.T) {
 			if !strings.Contains(res.Error, "missing_helper") {
 				t.Fatalf("refusal came from a different gate: %q", res.Error)
 			}
-			if res.MutationStatus != MutationRefused ||
-				res.ValidationKind != ValidationKindStructural ||
-				res.ValidationStatus != ValidationFailed {
+			if res.MutationStatus != wire.MutationRefused ||
+				res.ValidationKind != wire.ValidationKindStructural ||
+				res.ValidationStatus != wire.ValidationFailed {
 				t.Errorf("got %q/%q/%q, want refused/structural/failed",
 					res.MutationStatus, res.ValidationKind, res.ValidationStatus)
 			}
@@ -2389,9 +2391,9 @@ func TestEditToolsClassifyANotApplicableArtifact(t *testing.T) {
 			if disk != edited[tool] {
 				t.Fatalf("bytes on disk:\n got %q\nwant %q", disk, edited[tool])
 			}
-			if res.MutationStatus != MutationApplied ||
-				res.ValidationKind != ValidationKindNone ||
-				res.ValidationStatus != ValidationNotApplicable {
+			if res.MutationStatus != wire.MutationApplied ||
+				res.ValidationKind != wire.ValidationKindNone ||
+				res.ValidationStatus != wire.ValidationNotApplicable {
 				t.Errorf("got %q/%q/%q, want applied/none/not_applicable",
 					res.MutationStatus, res.ValidationKind, res.ValidationStatus)
 			}
@@ -2785,7 +2787,7 @@ func TestOutlineFileListsSymbolsAndTheirCallEdges(t *testing.T) {
 	ctx := NewAgentContext(dir, Tier2Medium)
 	ctx.V3URL = v3.URL
 
-	var out OutlineOutput
+	var out wire.OutlineOutput
 	res := executeToolCall("outline_file", json.RawMessage(`{"path":"stats.py"}`), ctx)
 	if err := json.Unmarshal(res.Data, &out); err != nil {
 		t.Fatalf("%v: %s", err, res.Error)
@@ -2834,7 +2836,7 @@ func TestFindFileLeavesOutToolFoldersAndCapsItsAnswer(t *testing.T) {
 	}
 	ctx := NewAgentContext(dir, Tier2Medium)
 
-	var out FindFileOutput
+	var out wire.FindFileOutput
 	res := executeToolCall("find_file", json.RawMessage(`{"pattern":"^app.*py$"}`), ctx)
 	if err := json.Unmarshal(res.Data, &out); err != nil {
 		t.Fatalf("%v: %s", err, res.Error)
@@ -2914,7 +2916,7 @@ func TestRunBackgroundRefusesBeforeItStarts(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			ctx := NewAgentContext(t.TempDir(), Tier2Medium)
 			ctx.TrustMode = c.trust
-			args, _ := json.Marshal(RunBackgroundInput{Command: c.command})
+			args, _ := json.Marshal(wire.RunBackgroundInput{Command: c.command})
 
 			res, err := getTool("run_background").Execute(args, ctx)
 
@@ -3056,13 +3058,13 @@ func TestV3ProgressReachesTheClientAndThePipelinePane(t *testing.T) {
 		}
 	}
 	wantPane := []string{
-		string(EvtStageStart) + " v3",
-		string(EvtStageStart) + " v3:phase1",
-		string(EvtMetric) + " v3:phase1",
-		string(EvtStageEnd) + " v3:phase1",
-		string(EvtStageStart) + " v3:no_such_stage",
-		string(EvtStageEnd) + " v3:no_such_stage",
-		string(EvtStageEnd) + " v3",
+		string(wire.EvtStageStart) + " v3",
+		string(wire.EvtStageStart) + " v3:phase1",
+		string(wire.EvtMetric) + " v3:phase1",
+		string(wire.EvtStageEnd) + " v3:phase1",
+		string(wire.EvtStageStart) + " v3:no_such_stage",
+		string(wire.EvtStageEnd) + " v3:no_such_stage",
+		string(wire.EvtStageEnd) + " v3",
 	}
 	if !reflect.DeepEqual(pane, wantPane) {
 		t.Errorf("the pane got %q, want %q", pane, wantPane)
@@ -3076,7 +3078,7 @@ func TestAWriteRequestCarriesTheSessionsFilesAndTheProject(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "written.py"), []byte("y = 2\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	var sent V3GenerateRequest
+	var sent wire.V3GenerateRequest
 	v3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v3/generate" {
 			if err := json.NewDecoder(r.Body).Decode(&sent); err != nil {
@@ -3197,7 +3199,7 @@ func TestCallersBrokenContentIsRefusedWhenV3ProposesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if res.Success || res.MutationStatus != MutationRefused || res.ValidationKind != ValidationKindSyntax {
+	if res.Success || res.MutationStatus != wire.MutationRefused || res.ValidationKind != wire.ValidationKindSyntax {
 		t.Errorf("success %v, %q, %q, want a syntax refusal", res.Success, res.MutationStatus, res.ValidationKind)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -3496,4 +3498,33 @@ func TestStructuralEditRefusesWhatItCannotTrust(t *testing.T) {
 	if got, err := os.ReadFile(path); err != nil || string(got) != changed {
 		t.Errorf("the file holds %q (%v), want %q", got, err, changed)
 	}
+}
+
+// wireFiles names the files that hold what crosses a boundary, and types.go,
+// which holds the state beside it.
+func wireFiles(t *testing.T) []string {
+	t.Helper()
+	files, err := filepath.Glob("internal/wire/*.go")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("internal/wire holds no file: %v", err)
+	}
+	var code []string
+	for _, file := range files {
+		if !strings.HasSuffix(file, "_test.go") {
+			code = append(code, file)
+		}
+	}
+	return append(code, "types.go")
+}
+
+// baseName names what an expression refers to, with or without its package, so
+// a guard over a moved name keeps finding it from this package.
+func baseName(expr ast.Expr) string {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		return e.Name
+	case *ast.SelectorExpr:
+		return e.Sel.Name
+	}
+	return ""
 }

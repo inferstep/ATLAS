@@ -2,6 +2,8 @@ package main
 
 import (
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // Where the evidence producers actually run.
@@ -28,7 +30,7 @@ const (
 // evidenceProducerStatus is the enumerated inventory. A structural guard reads
 // it and fails when a producer's real wiring disagrees with its entry.
 var evidenceProducerStatus = map[string]evidenceProducerAvailability{
-	ProvenanceProxyOwnedValidation: evidenceProducerWired,
+	wire.ProvenanceProxyOwnedValidation: evidenceProducerWired,
 
 	// Staging supplies what this producer needs and nothing else could: the
 	// exact declared command, run against an isolated workspace holding the
@@ -40,7 +42,7 @@ var evidenceProducerStatus = map[string]evidenceProducerAvailability{
 	// calling its own endpoint. The MODEL running the same command through
 	// run_command is a different, untrusted event against the production
 	// workspace after bytes have landed. Neither reaches this producer.
-	ProvenanceClientDeclaredVerification: evidenceProducerWired,
+	wire.ProvenanceClientDeclaredVerification: evidenceProducerWired,
 }
 
 // candidateEvidenceIdentity is the identity a candidate carries through one

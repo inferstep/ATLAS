@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // What a client says about the commands it requires, in types rather than in
@@ -211,7 +213,7 @@ func verificationObservedStrength(ctx *AgentContext, r VerificationRequirement) 
 	if !ok {
 		return VerificationKindRuntime
 	}
-	if strengthRank(ceiling) < strengthRank(declared) {
+	if wire.StrengthRank(ceiling) < wire.StrengthRank(declared) {
 		return ceiling
 	}
 	return declared

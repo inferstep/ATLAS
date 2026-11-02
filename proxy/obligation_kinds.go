@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // What a task obliges, as a closed typed vocabulary.
@@ -182,7 +184,7 @@ func obligationRequiredStrength(kind, baselineStrength string) (string, bool) {
 		return "", false
 	}
 	if obligationDynamicStrengthKinds[kind] {
-		if strengthRank(baselineStrength) < 0 {
+		if wire.StrengthRank(baselineStrength) < 0 {
 			return "", false
 		}
 		// A declared command carries what the client typed about it, and the
@@ -324,9 +326,9 @@ func authorizationFloor(obs []taskObligation) string {
 			continue
 		}
 		if obligationUnsatisfiableKinds[o.Kind] {
-			return evidenceStrengthOrder[len(evidenceStrengthOrder)-1]
+			return wire.StrongestStrength()
 		}
-		if floor == "" || strengthRank(o.RequiredStrength) > strengthRank(floor) {
+		if floor == "" || wire.StrengthRank(o.RequiredStrength) > wire.StrengthRank(floor) {
 			floor = o.RequiredStrength
 		}
 	}
@@ -515,7 +517,7 @@ func baselineWitness(ctx *AgentContext, resolved string) (string, string) {
 		if resolveAgentPath(ctx, key) != resolveAgentPath(ctx, resolved) {
 			continue
 		}
-		if d.ValidationStatus == ValidationPassed && d.ValidatedHash == disk {
+		if d.ValidationStatus == wire.ValidationPassed && d.ValidatedHash == disk {
 			return "syntax", ""
 		}
 	}

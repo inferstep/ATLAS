@@ -5,6 +5,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // A refusal says truthfully why a candidate did not land.
@@ -181,12 +183,12 @@ func TestTheStructuralOutageIsDistinctFromNotBeingAsked(t *testing.T) {
 	ctx := NewAgentContext(dir, Tier2Medium)
 	ctx.SandboxURL = "http://127.0.0.1:1"
 	down := fallbackSyntaxOutcomeFor(ctx, dir+"/solve.py", authPy).aggregate()
-	if down.Status != ValidationNotRun || !down.ProducerUnavailable {
+	if down.Status != wire.ValidationNotRun || !down.ProducerUnavailable {
 		t.Errorf("unreachable sandbox: status=%q unavailable=%v", down.Status, down.ProducerUnavailable)
 	}
 	ctx.SandboxURL = ""
 	none := fallbackSyntaxOutcomeFor(ctx, dir+"/solve.py", authPy).aggregate()
-	if none.Status != ValidationNotRun || !none.ProducerUnavailable {
+	if none.Status != wire.ValidationNotRun || !none.ProducerUnavailable {
 		t.Errorf("no sandbox: status=%q unavailable=%v", none.Status, none.ProducerUnavailable)
 	}
 	notApplicable := fallbackSyntaxOutcomeFor(ctx, dir+"/notes.md", "# notes\n").aggregate()

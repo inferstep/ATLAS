@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // What the observe-only machinery actually writes on a real delivery.
@@ -89,7 +91,7 @@ func TestTheObserversRunAndRecordAttributably(t *testing.T) {
 		}
 		captureEntry := mintRouteEntry(w.ctx)
 		authorizeCandidateDelivery(w.ctx, captureEntry, w.path, w.code, id, nil,
-			[]proxyEvidence{ev}, "selected", nil, checkOutcome{Status: ValidationPassed},
+			[]proxyEvidence{ev}, "selected", nil, checkOutcome{Status: wire.ValidationPassed},
 			testMutationScope(w.ctx, captureEntry, w.path, w.code), automaticIntent{})
 	})
 
@@ -187,8 +189,8 @@ func TestNoObserverBuildsAToolResultOrAnAgentMessage(t *testing.T) {
 			if !ok {
 				return true
 			}
-			if id, ok := lit.Type.(*ast.Ident); ok && bannedTypes[id.Name] {
-				t.Errorf("%s builds a %s", file, id.Name)
+			if name := baseName(lit.Type); bannedTypes[name] {
+				t.Errorf("%s builds a %s", file, name)
 			}
 			return true
 		})
@@ -265,7 +267,7 @@ func TestTheObserversAreSilentWithNoSink(t *testing.T) {
 	}
 	sinkOffEntry := mintRouteEntry(w.ctx)
 	a := authorizeCandidateDelivery(w.ctx, sinkOffEntry, w.path, w.code, id, nil,
-		[]proxyEvidence{ev}, "selected", nil, checkOutcome{Status: ValidationPassed},
+		[]proxyEvidence{ev}, "selected", nil, checkOutcome{Status: wire.ValidationPassed},
 		testMutationScope(w.ctx, sinkOffEntry, w.path, w.code), automaticIntent{})
 	if !a.Decision.Authorized {
 		t.Errorf("the decision changed with the sink off: %q", a.Decision.Reason)

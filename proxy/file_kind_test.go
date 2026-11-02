@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // Issue #365. A file that is not a regular file, opened for reading, waits
@@ -187,7 +189,7 @@ func fileToolCtx(t *testing.T, dir string) *AgentContext {
 // callFileTool runs one registered tool on one workspace, straight to the
 // tool, with no approval step and no agent loop — the issue's own measurement
 // shape.
-func callFileTool(t *testing.T, name string, dir string) (*ToolResult, error) {
+func callFileTool(t *testing.T, name string, dir string) (*wire.ToolResult, error) {
 	t.Helper()
 	tool := getTool(name)
 	if tool == nil {
@@ -198,7 +200,7 @@ func callFileTool(t *testing.T, name string, dir string) (*ToolResult, error) {
 		t.Fatalf("build the call for %s: %v", name, err)
 	}
 	ctx := fileToolCtx(t, dir)
-	var res *ToolResult
+	var res *wire.ToolResult
 	var execErr error
 	withinCap(t, waitCap, name+" on a named pipe", func() {
 		res, execErr = tool.Execute(json.RawMessage(args), ctx)

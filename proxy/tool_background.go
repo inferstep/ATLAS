@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // ---------------------------------------------------------------------------
@@ -32,13 +34,13 @@ import (
 func runBackgroundTool() *ToolDef {
 	return &ToolDef{
 		Name:        "run_background",
-		Effect:      ToolEffectCommandUnobserved,
+		Effect:      wire.ToolEffectCommandUnobserved,
 		Description: "Start a long-running command (server, watcher, etc.) in the background and return a job_id. Use for `python app.py`, `npm start`, `cargo run`, `flask run` — anything that doesn't exit. Returns initial stdout/stderr captured during a brief settle window so you can confirm startup. Pair with run_command/curl to probe the running service, then stop_background to clean up.",
-		InputSchema: RunBackgroundInput{},
+		InputSchema: wire.RunBackgroundInput{},
 		ReadOnly:    false,
 		Destructive: false,
-		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*ToolResult, error) {
-			var input RunBackgroundInput
+		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*wire.ToolResult, error) {
+			var input wire.RunBackgroundInput
 			if err := json.Unmarshal(rawInput, &input); err != nil {
 				return nil, fmt.Errorf("invalid input: %w", err)
 			}
@@ -52,13 +54,13 @@ func runBackgroundTool() *ToolDef {
 			}
 			jobID, pid, err := sandboxStartBackground(ctx, input.Command, cwd)
 			if err != nil {
-				return &ToolResult{Success: false, Error: fmt.Sprintf("sandbox start failed: %v", err)}, nil
+				return &wire.ToolResult{Success: false, Error: fmt.Sprintf("sandbox start failed: %v", err)}, nil
 			}
 			// Settle window — give the process time to bind a port, fail
 			// to import, etc., before we hand back to the model.
 			time.Sleep(settleWindow(input.SettleMs))
 			tail, _ := sandboxTailBackground(ctx, jobID, 50)
-			out := RunBackgroundOutput{
+			out := wire.RunBackgroundOutput{
 				JobID:   jobID,
 				PID:     pid,
 				Stdout:  tail.Stdout,
@@ -75,31 +77,31 @@ func runBackgroundTool() *ToolDef {
 			// on to probe a port nothing is listening on. run_command reports
 			// a failing command as a failure; so does this.
 			if !tail.Running && tail.ExitCode != nil && *tail.ExitCode != 0 {
-				return &ToolResult{Success: false, Data: outBytes,
+				return &wire.ToolResult{Success: false, Data: outBytes,
 					Error: immediateExitMessage(ctx, input.Command, out)}, nil
 			}
-			return &ToolResult{Success: true, Data: outBytes}, nil
+			return &wire.ToolResult{Success: true, Data: outBytes}, nil
 		},
 	}
 }
 
 // backgroundRefusal is the answer to a run_background call that must not start,
 // or nil.
-func backgroundRefusal(ctx *AgentContext, input RunBackgroundInput) *ToolResult {
+func backgroundRefusal(ctx *AgentContext, input wire.RunBackgroundInput) *wire.ToolResult {
 	// Trust gate: same contract as run_command — untrusted mode
 	// refuses all command execution, foreground or background.
 	if !ctx.TrustMode.commandsAllowed() {
-		return &ToolResult{Success: false, Error: untrustedRefusal}
+		return &wire.ToolResult{Success: false, Error: untrustedRefusal}
 	}
 
 	if strings.TrimSpace(input.Command) == "" {
-		return &ToolResult{Success: false, Error: "run_background: command cannot be empty"}
+		return &wire.ToolResult{Success: false, Error: "run_background: command cannot be empty"}
 	}
 	if reason := validateShellCommand(input.Command); reason != "" {
-		return &ToolResult{Success: false, Error: reason}
+		return &wire.ToolResult{Success: false, Error: reason}
 	}
 	if ctx.VerifyOnHost {
-		return &ToolResult{
+		return &wire.ToolResult{
 			Success: false,
 			Error:   "run_background is only available in sandbox mode (ATLAS_VERIFY_IN=sandbox). On the host, use `run_command` with `nohup ... &` and track the PID yourself.",
 		}
@@ -134,18 +136,18 @@ func trackBackgroundJob(ctx *AgentContext, jobID, command string, running bool) 
 func tailBackgroundTool() *ToolDef {
 	return &ToolDef{
 		Name:        "tail_background",
-		Effect:      ToolEffectReadOnly,
+		Effect:      wire.ToolEffectReadOnly,
 		Description: "Read the recent stdout/stderr of a background job started via run_background. Returns the last N lines of each stream (default 50), the run state (running/exited), and the exit code if applicable. Use to check whether a server is still up, watch test runner output, or read the failure traceback after a crash.",
-		InputSchema: TailBackgroundInput{},
+		InputSchema: wire.TailBackgroundInput{},
 		ReadOnly:    true,
 		Destructive: false,
-		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*ToolResult, error) {
-			var input TailBackgroundInput
+		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*wire.ToolResult, error) {
+			var input wire.TailBackgroundInput
 			if err := json.Unmarshal(rawInput, &input); err != nil {
 				return nil, fmt.Errorf("invalid input: %w", err)
 			}
 			if strings.TrimSpace(input.JobID) == "" {
-				return &ToolResult{Success: false, Error: "tail_background: job_id required"}, nil
+				return &wire.ToolResult{Success: false, Error: "tail_background: job_id required"}, nil
 			}
 			lines := 50
 			if input.Lines != nil {
@@ -158,10 +160,10 @@ func tailBackgroundTool() *ToolDef {
 			}
 			out, err := sandboxTailBackground(ctx, input.JobID, lines)
 			if err != nil {
-				return &ToolResult{Success: false, Error: err.Error()}, nil
+				return &wire.ToolResult{Success: false, Error: err.Error()}, nil
 			}
 			outBytes, _ := json.Marshal(out)
-			return &ToolResult{Success: true, Data: outBytes}, nil
+			return &wire.ToolResult{Success: true, Data: outBytes}, nil
 		},
 	}
 }
@@ -169,26 +171,26 @@ func tailBackgroundTool() *ToolDef {
 func stopBackgroundTool() *ToolDef {
 	return &ToolDef{
 		Name:        "stop_background",
-		Effect:      ToolEffectCommandUnobserved,
+		Effect:      wire.ToolEffectCommandUnobserved,
 		Description: "Stop a background job started via run_background. Sends SIGTERM, waits briefly, then SIGKILL if needed. Returns the final stdout/stderr buffer. Always call this when you're done with a background job — leaving them running blocks future job slots.",
-		InputSchema: StopBackgroundInput{},
+		InputSchema: wire.StopBackgroundInput{},
 		ReadOnly:    false,
 		Destructive: true,
-		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*ToolResult, error) {
-			var input StopBackgroundInput
+		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*wire.ToolResult, error) {
+			var input wire.StopBackgroundInput
 			if err := json.Unmarshal(rawInput, &input); err != nil {
 				return nil, fmt.Errorf("invalid input: %w", err)
 			}
 			if strings.TrimSpace(input.JobID) == "" {
-				return &ToolResult{Success: false, Error: "stop_background: job_id required"}, nil
+				return &wire.ToolResult{Success: false, Error: "stop_background: job_id required"}, nil
 			}
 			out, err := sandboxStopBackground(ctx, input.JobID)
 			if err != nil {
-				return &ToolResult{Success: false, Error: err.Error()}, nil
+				return &wire.ToolResult{Success: false, Error: err.Error()}, nil
 			}
 			delete(ctx.BackgroundJobs, input.JobID)
 			outBytes, _ := json.Marshal(out)
-			return &ToolResult{Success: true, Data: outBytes}, nil
+			return &wire.ToolResult{Success: true, Data: outBytes}, nil
 		},
 	}
 }
@@ -233,9 +235,9 @@ func sandboxStartBackground(ctx *AgentContext, command, cwd string) (string, int
 	return out.JobID, out.PID, nil
 }
 
-func sandboxTailBackground(ctx *AgentContext, jobID string, lines int) (TailBackgroundOutput, error) {
+func sandboxTailBackground(ctx *AgentContext, jobID string, lines int) (wire.TailBackgroundOutput, error) {
 	if ctx.SandboxURL == "" {
-		return TailBackgroundOutput{}, fmt.Errorf("ATLAS_SANDBOX_URL not configured")
+		return wire.TailBackgroundOutput{}, fmt.Errorf("ATLAS_SANDBOX_URL not configured")
 	}
 	url := fmt.Sprintf("%s/jobs/%s/output?lines=%d", ctx.SandboxURL, jobID, lines)
 	reqCtx := ctx.Ctx
@@ -244,29 +246,29 @@ func sandboxTailBackground(ctx *AgentContext, jobID string, lines int) (TailBack
 	}
 	req, err := http.NewRequestWithContext(reqCtx, "GET", url, nil)
 	if err != nil {
-		return TailBackgroundOutput{}, err
+		return wire.TailBackgroundOutput{}, err
 	}
 	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
 	if err != nil {
-		return TailBackgroundOutput{}, err
+		return wire.TailBackgroundOutput{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == 404 {
-		return TailBackgroundOutput{}, fmt.Errorf("unknown job_id %q (already cleaned up?)", jobID)
+		return wire.TailBackgroundOutput{}, fmt.Errorf("unknown job_id %q (already cleaned up?)", jobID)
 	}
 	if resp.StatusCode != 200 {
-		return TailBackgroundOutput{}, fmt.Errorf("HTTP %d", resp.StatusCode)
+		return wire.TailBackgroundOutput{}, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	var out TailBackgroundOutput
+	var out wire.TailBackgroundOutput
 	if err := json.NewDecoder(serviceAnswer(resp.Body)).Decode(&out); err != nil {
-		return TailBackgroundOutput{}, err
+		return wire.TailBackgroundOutput{}, err
 	}
 	return out, nil
 }
 
-func sandboxStopBackground(ctx *AgentContext, jobID string) (StopBackgroundOutput, error) {
+func sandboxStopBackground(ctx *AgentContext, jobID string) (wire.StopBackgroundOutput, error) {
 	if ctx.SandboxURL == "" {
-		return StopBackgroundOutput{}, fmt.Errorf("ATLAS_SANDBOX_URL not configured")
+		return wire.StopBackgroundOutput{}, fmt.Errorf("ATLAS_SANDBOX_URL not configured")
 	}
 	url := fmt.Sprintf("%s/jobs/%s/stop", ctx.SandboxURL, jobID)
 	reqCtx := ctx.Ctx
@@ -275,23 +277,23 @@ func sandboxStopBackground(ctx *AgentContext, jobID string) (StopBackgroundOutpu
 	}
 	req, err := http.NewRequestWithContext(reqCtx, "POST", url, nil)
 	if err != nil {
-		return StopBackgroundOutput{}, err
+		return wire.StopBackgroundOutput{}, err
 	}
 	req.Header.Set(headerContentType, contentTypeJSON)
 	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
-		return StopBackgroundOutput{}, err
+		return wire.StopBackgroundOutput{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == 404 {
-		return StopBackgroundOutput{}, fmt.Errorf("unknown job_id %q", jobID)
+		return wire.StopBackgroundOutput{}, fmt.Errorf("unknown job_id %q", jobID)
 	}
 	if resp.StatusCode != 200 {
-		return StopBackgroundOutput{}, fmt.Errorf("HTTP %d", resp.StatusCode)
+		return wire.StopBackgroundOutput{}, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	var out StopBackgroundOutput
+	var out wire.StopBackgroundOutput
 	if err := json.NewDecoder(serviceAnswer(resp.Body)).Decode(&out); err != nil {
-		return StopBackgroundOutput{}, err
+		return wire.StopBackgroundOutput{}, err
 	}
 	return out, nil
 }

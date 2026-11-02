@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/itigges22/atlas-proxy/internal/logsafe"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
@@ -24,13 +25,13 @@ import (
 func structuralEditTool() *ToolDef {
 	return &ToolDef{
 		Name:   "structural_edit",
-		Effect: ToolEffectDirectMutation,
+		Effect: wire.ToolEffectDirectMutation,
 		Description: "REQUIRED tool for whole-function, whole-class, or whole-HTML-element rewrites in existing files. " +
 			"ALWAYS prefer over edit_file when replacing a named node or changing more than ~10 lines — edit_file is the WRONG tool for those cases (it forces you to copy the entire existing block as old_str, wasting tokens and frequently truncating). " +
 			"Selectors v1: python `function:NAME` or `class:NAME` (decorators included automatically); html `<tag>` (top-level element). " +
 			"Selector must match exactly one node; failures return actionable errors. " +
 			"Decision rule: existing file + named-node change (any size) ⇒ structural_edit. New file ⇒ write_file. ≤10 lines inside a function ⇒ edit_file.",
-		InputSchema: StructuralEditInput{},
+		InputSchema: wire.StructuralEditInput{},
 		ReadOnly:    false,
 		Destructive: false,
 		Execute:     executeStructuralEdit,
@@ -40,8 +41,8 @@ func structuralEditTool() *ToolDef {
 // executeStructuralEdit runs one structural_edit call: it checks the call, has
 // the service splice the node in, sends the result down the protected route
 // when that applies, and writes what comes back.
-func executeStructuralEdit(rawInput json.RawMessage, ctx *AgentContext) (res *ToolResult, execErr error) {
-	var input StructuralEditInput
+func executeStructuralEdit(rawInput json.RawMessage, ctx *AgentContext) (res *wire.ToolResult, execErr error) {
+	var input wire.StructuralEditInput
 	if err := json.Unmarshal(rawInput, &input); err != nil {
 		return nil, errNoMutation(fmt.Errorf("invalid input: %w", err))
 	}
@@ -121,16 +122,16 @@ func executeStructuralEdit(rawInput json.RawMessage, ctx *AgentContext) (res *To
 		input.Path, input.Selector, input.Selector, astResp.Language, astResp.OldSize, len(finalContent))
 
 	outBytes, _ := json.Marshal(structuralEditOutput(input, astResp, finalContent, observed))
-	result := &ToolResult{Success: true, Data: outBytes,
-		MutationStatus:   MutationApplied,
-		ValidationKind:   ValidationKindSyntax,
-		ValidationStatus: ValidationNotRun}
+	result := &wire.ToolResult{Success: true, Data: outBytes,
+		MutationStatus:   wire.MutationApplied,
+		ValidationKind:   wire.ValidationKindSyntax,
+		ValidationStatus: wire.ValidationNotRun}
 	overlayValidation(result, observed)
 	return result, nil
 }
 
 // structuralInputRefusal refuses a call that names no file or no node.
-func structuralInputRefusal(input StructuralEditInput) *ToolResult {
+func structuralInputRefusal(input wire.StructuralEditInput) *wire.ToolResult {
 	if strings.TrimSpace(input.Path) == "" {
 		return noMutation("structural_edit: path cannot be empty. Read the file first then structural_edit with the same path.")
 	}
@@ -141,7 +142,7 @@ func structuralInputRefusal(input StructuralEditInput) *ToolResult {
 }
 
 // structuralContentRefusal refuses a replacement that cannot be one node's body.
-func structuralContentRefusal(input StructuralEditInput, source string) *ToolResult {
+func structuralContentRefusal(input wire.StructuralEditInput, source string) *wire.ToolResult {
 	// Empty-content guard. Replacing a node with nothing is a
 	// deletion, not an edit: an omitted `content` field would splice
 	// an empty string over the node and silently delete it. That
@@ -181,7 +182,7 @@ func structuralContentRefusal(input StructuralEditInput, source string) *ToolRes
 }
 
 // withoutRepeatedDoctype is the replacement, without a doctype the file keeps.
-func withoutRepeatedDoctype(input StructuralEditInput) string {
+func withoutRepeatedDoctype(input wire.StructuralEditInput) string {
 	// HTML <html>-selector quirk. structural_edit replaces only the
 	// <html>...</html> element, not the <!DOCTYPE> declaration that
 	// conventionally precedes it. The model often emits a leading
@@ -212,7 +213,7 @@ type structuralSplice struct {
 }
 
 // spliceStructuralEdit has v3-service splice the replacement into the file.
-func spliceStructuralEdit(ctx *AgentContext, input StructuralEditInput, source string) (structuralSplice, error) {
+func spliceStructuralEdit(ctx *AgentContext, input wire.StructuralEditInput, source string) (structuralSplice, error) {
 	// Call v3-service /internal/structural_edit. Stateless transform:
 	// proxy reads + writes (preserving lens-score-before-write),
 	// v3-service is the tree-sitter authority.
@@ -248,7 +249,7 @@ func spliceStructuralEdit(ctx *AgentContext, input StructuralEditInput, source s
 }
 
 // spliceRefusal refuses a splice that failed or would not help.
-func spliceRefusal(ctx *AgentContext, input StructuralEditInput, source string, astResp structuralSplice) *ToolResult {
+func spliceRefusal(ctx *AgentContext, input wire.StructuralEditInput, source string, astResp structuralSplice) *wire.ToolResult {
 	if !astResp.Success {
 		// The selector matched nothing, or the splice would not parse:
 		// either way no replacement content came back to write.
@@ -300,8 +301,8 @@ func spliceRefusal(ctx *AgentContext, input StructuralEditInput, source string, 
 // alternative lands only through the protected route below,
 // otherwise the structurally edited content passes through
 // unchanged.
-func routeStructuralEdit(ctx *AgentContext, input StructuralEditInput, path, source,
-	finalContent string) (string, *ToolResult) {
+func routeStructuralEdit(ctx *AgentContext, input wire.StructuralEditInput, path, source,
+	finalContent string) (string, *wire.ToolResult) {
 	oldTier := classifyFileTier(input.Path, source) // pre-edit content
 	newTier := classifyFileTier(input.Path, finalContent)
 	fileTier := oldTier
@@ -349,7 +350,7 @@ func routeStructuralEdit(ctx *AgentContext, input StructuralEditInput, path, sou
 
 // structuralSyntaxMessage is structural_edit's refusal for a result that does
 // not parse.
-func structuralSyntaxMessage(input StructuralEditInput, finalContent string) func(string) string {
+func structuralSyntaxMessage(input wire.StructuralEditInput, finalContent string) func(string) string {
 	return func(detail string) string {
 		if msg, isEmbedded := embeddedScriptRejectionFor(detail); isEmbedded {
 			return msg
@@ -362,7 +363,7 @@ func structuralSyntaxMessage(input StructuralEditInput, finalContent string) fun
 }
 
 // structuralGateRefusal runs structural_edit's gates after the syntax gate.
-func structuralGateRefusal(ctx *AgentContext, path, relPath, source, finalContent string) *ToolResult {
+func structuralGateRefusal(ctx *AgentContext, path, relPath, source, finalContent string) *wire.ToolResult {
 	// Structural gate: the structural splice guarantees the result
 	// parses, but not that its calls resolve, so a new call with no
 	// matching import would land as verified and fail at runtime.
@@ -391,9 +392,9 @@ func structuralGateRefusal(ctx *AgentContext, path, relPath, source, finalConten
 }
 
 // structuralEditOutput is what structural_edit tells the model about the change.
-func structuralEditOutput(input StructuralEditInput, astResp structuralSplice, finalContent string,
-	observed checkOutcome) StructuralEditOutput {
-	out := StructuralEditOutput{
+func structuralEditOutput(input wire.StructuralEditInput, astResp structuralSplice, finalContent string,
+	observed checkOutcome) wire.StructuralEditOutput {
+	out := wire.StructuralEditOutput{
 		OK:       true,
 		Selector: input.Selector,
 		Language: astResp.Language,
@@ -413,7 +414,7 @@ func structuralEditOutput(input StructuralEditInput, astResp structuralSplice, f
 	// is recorded as broken instead of as unknown. It is the check the
 	// healthy->broken rule already ran on exactly these bytes: a splice
 	// that lands failing was a repair of a file that already failed.
-	if observed.Status == ValidationFailed {
+	if observed.Status == wire.ValidationFailed {
 		log.Printf("[structural_edit] %s landed but does not parse (%s)",
 			logPath(input.Path), logsafe.DiagnosticSummary(observed.Detail))
 		out.Warning = fmt.Sprintf(

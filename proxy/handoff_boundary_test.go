@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // The handoff between a delivered candidate and the turn that follows it.
@@ -378,7 +380,7 @@ func TestCandidateAdoptionDoesNotCertifyTheRequest(t *testing.T) {
 	}
 	// And the completion boundary is not persuaded either.
 	status, reason := finalizeCompletion(w.ctx, &runState{}, handoffRequest, "")
-	if status == TerminalCompleted {
+	if status == wire.TerminalCompleted {
 		t.Errorf("an adopted candidate was read as a finished request (%q)", reason)
 	}
 }
@@ -390,7 +392,7 @@ func TestCandidateAdoptionDoesNotFinishThePlan(t *testing.T) {
 		writeInv(handoffSubmitted),
 		`{"type":"done","summary":"done"}`,
 	})
-	w.ctx.Plan = &Plan{VerifyStep: "s2", Steps: []PlanStep{
+	w.ctx.Plan = &wire.Plan{VerifyStep: "s2", Steps: []wire.PlanStep{
 		{ID: "s1", Action: "write_file", Target: "inv.py"},
 		{ID: "s2", Action: "run_command", Target: "python inv.py"},
 	}}
@@ -421,7 +423,7 @@ func TestALensCorrectiveAboutReplacedBytesIsNotDelivered(t *testing.T) {
 		t.Fatal(err)
 	}
 	args, _ := json.Marshal(map[string]string{"path": "inv.py", "content": handoffSubmitted})
-	s, superseded := deliveredDiffersFromSubmitted(ctx, "write_file", args, &ToolResult{Success: true})
+	s, superseded := deliveredDiffersFromSubmitted(ctx, "write_file", args, &wire.ToolResult{Success: true})
 	if !superseded {
 		t.Fatal("a write whose bytes differ from disk was not reported as superseded")
 	}
@@ -446,11 +448,11 @@ func TestALensCorrectiveAboutReplacedBytesIsNotDelivered(t *testing.T) {
 	}
 	// Identical bytes are not a supersession.
 	same, _ := json.Marshal(map[string]string{"path": "inv.py", "content": handoffDelivered})
-	if _, got := deliveredDiffersFromSubmitted(ctx, "write_file", same, &ToolResult{Success: true}); got {
+	if _, got := deliveredDiffersFromSubmitted(ctx, "write_file", same, &wire.ToolResult{Success: true}); got {
 		t.Error("an unchanged write was reported as superseded")
 	}
 	// Neither is a failed one.
-	if _, got := deliveredDiffersFromSubmitted(ctx, "write_file", args, &ToolResult{Success: false}); got {
+	if _, got := deliveredDiffersFromSubmitted(ctx, "write_file", args, &wire.ToolResult{Success: false}); got {
 		t.Error("a failed write was reported as superseded")
 	}
 }

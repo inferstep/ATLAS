@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // Restoration overwrites a file in the user's workspace, so the bar is
@@ -51,7 +53,7 @@ const (
 func seedCheckpoint(t *testing.T, ctx *AgentContext, dir, rel string) {
 	t.Helper()
 	args, _ := json.Marshal(map[string]string{"path": rel, "content": restoreOK})
-	if res := executeToolCall("write_file", args, ctx); res.ValidationStatus != ValidationPassed {
+	if res := executeToolCall("write_file", args, ctx); res.ValidationStatus != wire.ValidationPassed {
 		t.Fatalf("seed write did not pass: %s/%s (%s)",
 			res.ValidationKind, res.ValidationStatus, res.Error)
 	}
@@ -87,7 +89,7 @@ func TestRestoreReplacesDemonstratedBrokenBytesExactly(t *testing.T) {
 		t.Error("the ledger does not describe the restored bytes exactly")
 	}
 	// The evidence carried over is the one already earned for those bytes.
-	if k, s := d.CurrentValidation(); s != ValidationPassed || k != ValidationKindSyntax {
+	if k, s := d.CurrentValidation(); s != wire.ValidationPassed || k != wire.ValidationKindSyntax {
 		t.Errorf("restored entry reports %v/%v", k, s)
 	}
 	if !d.Recovered {
@@ -124,7 +126,7 @@ func TestRestoreDeclinesEveryIneligibleShape(t *testing.T) {
 		{name: "incomparable validation kinds",
 			mutate: func(t *testing.T, ctx *AgentContext, dir string) {
 				d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
-				d.CheckpointKind = ValidationKindStructural
+				d.CheckpointKind = wire.ValidationKindStructural
 			},
 			wantReason: "not checked the same way"},
 		{name: "checkpoint hash is stale",
@@ -185,7 +187,7 @@ func TestRestoreDecidesOncePerCanonicalPath(t *testing.T) {
 	// Same file, other spelling: the ledger already keys canonically, and the
 	// walk must not produce two decisions for it.
 	observeDeliverable(ctx, "./solve.py", []byte(restoreBroken),
-		ValidationKindSyntax, ValidationFailed, "SyntaxError")
+		wire.ValidationKindSyntax, wire.ValidationFailed, "SyntaxError")
 
 	decisions := restoreSaferDeliverables(ctx)
 	if len(decisions) != 1 {

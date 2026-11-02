@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // The observe-only authorization matrix.
@@ -61,7 +63,7 @@ func (w *authWorld) decide(id candidateEvidenceIdentity, evidence ...proxyEviden
 // authorize runs the live owner, so the matrix describes what production
 // concludes rather than a parallel computation that could drift.
 func (w *authWorld) authorize(id candidateEvidenceIdentity,
-	envelope *V3EvidenceEnvelope, evidence ...proxyEvidence) deliveryAuthorization {
+	envelope *wire.V3EvidenceEnvelope, evidence ...proxyEvidence) deliveryAuthorization {
 	// The real observation, so a row that refuses is refused for the reason
 	// production would give rather than for a zero value.
 	observed := fallbackSyntaxOutcomeFor(w.ctx, w.path, w.code).aggregate()
@@ -74,7 +76,7 @@ func (w *authWorld) authorize(id candidateEvidenceIdentity,
 // authorizeCandidateDeliveryDecision is the live owner's decision, for rows
 // that pass their own path, code or envelope rather than the world's.
 func authorizeCandidateDeliveryDecision(ctx *AgentContext, path, code string,
-	id candidateEvidenceIdentity, envelope *V3EvidenceEnvelope,
+	id candidateEvidenceIdentity, envelope *wire.V3EvidenceEnvelope,
 	evidence []proxyEvidence) AuthorizationDecision {
 	observed := fallbackSyntaxOutcomeFor(ctx, path, code).aggregate()
 	entry := mintRouteEntry(ctx)
@@ -275,7 +277,7 @@ func TestDeclaredCommandThatChangedAnInput(t *testing.T) {
 		t.Fatalf("%d records from %d runs; the row did not reach staging",
 			len(behavioral), w.shellRuns)
 	}
-	if behavioral[0].Outcome == ValidationPassed {
+	if behavioral[0].Outcome == wire.ValidationPassed {
 		t.Error("a command that changed its own inputs was recorded as a pass")
 	}
 	d := w.decide(evID, append([]proxyEvidence{ev}, behavioral...)...)
@@ -295,7 +297,7 @@ func TestDeclaredCommandThatTimedOutInStaging(t *testing.T) {
 	if w.shellRuns != 1 {
 		t.Errorf("the executor ran %d times, want once", w.shellRuns)
 	}
-	if behavioral[0].Outcome == ValidationPassed {
+	if behavioral[0].Outcome == wire.ValidationPassed {
 		t.Error("a timeout was recorded as a pass")
 	}
 	d := w.decide(evID, append([]proxyEvidence{ev}, behavioral...)...)
@@ -324,7 +326,7 @@ func TestDeclaredCommandWithStagingUnavailable(t *testing.T) {
 	w.ctx.SandboxURL = ""
 	behavioral := w.stage(evID)
 	for _, b := range behavioral {
-		if b.Outcome == ValidationPassed {
+		if b.Outcome == wire.ValidationPassed {
 			t.Error("an unavailable executor produced a pass")
 		}
 	}
@@ -355,7 +357,7 @@ func TestTwoDeclaredCommandsWhereOnlyOnePasses(t *testing.T) {
 			t.Error("two records claim the same obligation")
 		}
 		seen[b.Provenance.ObligationID] = true
-		if b.Outcome == ValidationPassed {
+		if b.Outcome == wire.ValidationPassed {
 			passed++
 		}
 	}
@@ -449,7 +451,7 @@ func TestExistingSyntaxBaselineWithEqualEvidence(t *testing.T) {
 	}
 	w.ctx.Ledger[w.path] = &DeliverableState{
 		Path: w.path, CurrentHash: w.hash, Generation: 1,
-		ValidationKind: ValidationKindSyntax, ValidationStatus: ValidationPassed,
+		ValidationKind: wire.ValidationKindSyntax, ValidationStatus: wire.ValidationPassed,
 		ValidatedHash: w.hash,
 	}
 	ev, evID := w.mustObserve(t)
@@ -536,10 +538,10 @@ func TestPreservationNeverPromotesTheEvidenceItCompares(t *testing.T) {
 	syntax, _ := newTaskObligation(ObligationBaselinePreserved, "/w/solve.py", "syntax", true)
 	behavioral, _ := newTaskObligation(ObligationBaselinePreserved, "/w/solve.py", "behavioral", true)
 	oracle, _ := newTaskObligation(ObligationBaselinePreserved, "/w/solve.py", "oracle", true)
-	syntaxEv := proxyEvidence{Outcome: ValidationPassed,
-		Provenance: V3EvidenceProvenance{ObservedStrength: "syntax"}}
-	behavioralEv := proxyEvidence{Outcome: ValidationPassed,
-		Provenance: V3EvidenceProvenance{ObservedStrength: "behavioral",
+	syntaxEv := proxyEvidence{Outcome: wire.ValidationPassed,
+		Provenance: wire.V3EvidenceProvenance{ObservedStrength: "syntax"}}
+	behavioralEv := proxyEvidence{Outcome: wire.ValidationPassed,
+		Provenance: wire.V3EvidenceProvenance{ObservedStrength: "behavioral",
 			CommandIdentity: contentSHA256("python3 solve.py")}}
 	witness := contentSHA256("python3 solve.py")
 
@@ -576,7 +578,7 @@ func TestEvidenceWithOneFieldChanged(t *testing.T) {
 	}{
 		// The model ran its own test and it passed, labelled as what it is.
 		{"model-generated self-test", func(e *proxyEvidence) {
-			e.Provenance.Source = ProvenanceModelGenerated
+			e.Provenance.Source = wire.ProvenanceModelGenerated
 		}, ReasonProvenanceUntrusted},
 		{"unknown source", func(e *proxyEvidence) {
 			e.Provenance.Source = "something_new"
@@ -611,10 +613,10 @@ func TestLegacyOrUnknownEnvelope(t *testing.T) {
 	ev, evID := w.mustObserve(t)
 	for _, tc := range []struct {
 		name     string
-		envelope *V3EvidenceEnvelope
+		envelope *wire.V3EvidenceEnvelope
 	}{
-		{"legacy envelope", &V3EvidenceEnvelope{}},
-		{"unknown wire version", &V3EvidenceEnvelope{WireVersion: "99.0.0"}},
+		{"legacy envelope", &wire.V3EvidenceEnvelope{}},
+		{"unknown wire version", &wire.V3EvidenceEnvelope{WireVersion: "99.0.0"}},
 	} {
 		d := authorizeCandidateDeliveryDecision(w.ctx, w.path, w.code, evID,
 			tc.envelope, []proxyEvidence{ev})

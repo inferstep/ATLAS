@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // A write the model asked for that never landed is mutation debt, and it
@@ -53,7 +55,7 @@ func TestUnrelatedSuccessDoesNotRetireAFailedIntent(t *testing.T) {
 	t.Logf("status=%q reason=%q summary=%.140s",
 		terminal["status"], terminal["reason"], terminal["summary"])
 
-	if terminal["status"] == string(TerminalCompleted) {
+	if terminal["status"] == string(wire.TerminalCompleted) {
 		t.Fatalf("an unrelated success retired the failed intent: reason=%q", terminal["reason"])
 	}
 	if terminal["reason"] != "unresolved_mutation_debt" {
@@ -112,7 +114,7 @@ func TestSamePathValidatedSuccessClearsExactlyOneDebt(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Logf("%s: status=%q reason=%q", c.name, terminal["status"], terminal["reason"])
-			if terminal["status"] != string(TerminalCompleted) {
+			if terminal["status"] != string(wire.TerminalCompleted) {
 				t.Errorf("a resolved path did not complete: status=%q reason=%q",
 					terminal["status"], terminal["reason"])
 			}
@@ -143,7 +145,7 @@ func TestUnvalidatedBytesDoNotClearDebt(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("unvalidated: status=%q reason=%q", terminal["status"], terminal["reason"])
-	if terminal["status"] == string(TerminalCompleted) {
+	if terminal["status"] == string(wire.TerminalCompleted) {
 		t.Errorf("bytes that failed validation cleared the debt")
 	}
 }
@@ -230,7 +232,7 @@ func TestReadOnlyTaskUnaffectedByDebt(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("read-only: status=%q reason=%q", terminal["status"], terminal["reason"])
-	if terminal["status"] != string(TerminalCompleted) {
+	if terminal["status"] != string(wire.TerminalCompleted) {
 		t.Errorf("a question stopped completing: status=%q reason=%q",
 			terminal["status"], terminal["reason"])
 	}
@@ -486,7 +488,7 @@ func TestDebtRecoveryRetiresAMistakenPathAndCompletes(t *testing.T) {
 	if recoveries != 1 {
 		t.Fatalf("recovery fired %d times, want exactly 1", recoveries)
 	}
-	if terminal["status"] != string(TerminalCompleted) {
+	if terminal["status"] != string(wire.TerminalCompleted) {
 		t.Fatalf("structured retirement did not complete: status=%q reason=%q summary=%.140s",
 			terminal["status"], terminal["reason"], terminal["summary"])
 	}
@@ -500,7 +502,7 @@ func TestDebtRecoveryRetiresAMistakenPathAndCompletes(t *testing.T) {
 	if d == nil || d.CurrentHash != hashBytes(bBytes) {
 		t.Error("b.py's ledger hash does not match disk")
 	}
-	if k, s := d.CurrentValidation(); s != ValidationPassed || k != ValidationKindSyntax {
+	if k, s := d.CurrentValidation(); s != wire.ValidationPassed || k != wire.ValidationKindSyntax {
 		t.Errorf("completion over %v/%v", k, s)
 	}
 	if census["done"] != 1 {
@@ -539,7 +541,7 @@ func TestDeletingAUserRequiredPathDoesNotComplete(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("required-path deletion: status=%q reason=%q", terminal["status"], terminal["reason"])
-	if terminal["status"] == string(TerminalCompleted) {
+	if terminal["status"] == string(wire.TerminalCompleted) {
 		t.Fatal("deleting a user-required output completed the run")
 	}
 	if terminal["reason"] != "deliverables_not_demonstrated" {
@@ -570,7 +572,7 @@ func TestAnIgnoredDebtRecoveryStopsHonestly(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("ignored: status=%q reason=%q", terminal["status"], terminal["reason"])
-	if terminal["status"] == string(TerminalCompleted) {
+	if terminal["status"] == string(wire.TerminalCompleted) {
 		t.Fatal("prose retired the work")
 	}
 	if terminal["reason"] != "unresolved_mutation_debt" {
@@ -696,7 +698,7 @@ func TestASamePathCorrectionSettlesDebtWithoutDeletion(t *testing.T) {
 	got, _ := os.ReadFile(filepath.Join(dir, "a.py"))
 	t.Logf("corrected: status=%q reason=%q a.py=%q",
 		terminal["status"], terminal["reason"], string(got))
-	if terminal["status"] != string(TerminalCompleted) {
+	if terminal["status"] != string(wire.TerminalCompleted) {
 		t.Errorf("a corrected path did not complete: status=%q reason=%q",
 			terminal["status"], terminal["reason"])
 	}

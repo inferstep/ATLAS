@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // A declared command and file coverage are two obligations, not one.
@@ -30,7 +32,7 @@ func sepWrite(t *testing.T, ctx *AgentContext, dir, name, body string) string {
 		t.Fatal(err)
 	}
 	ctx.SessionWrites[name] = true
-	observeDeliverable(ctx, name, []byte(body), ValidationKindSyntax, ValidationPassed, "")
+	observeDeliverable(ctx, name, []byte(body), wire.ValidationKindSyntax, wire.ValidationPassed, "")
 	return fileSHA256(ctx, name)
 }
 
@@ -262,13 +264,13 @@ func TestOpaqueCommandsSatisfyTheirOwnObligationWithoutPathInvention(t *testing.
 
 // A run is verification only when it ran to its own end and exited zero.
 func TestATimedOutCommandIsRejectedStructurally(t *testing.T) {
-	if runCommandVerifiable(RunCommandOutput{ExitCode: 0, TimedOut: true}) {
+	if runCommandVerifiable(wire.RunCommandOutput{ExitCode: 0, TimedOut: true}) {
 		t.Fatal("a timed-out run was treated as verification")
 	}
-	if !runCommandVerifiable(RunCommandOutput{ExitCode: 0}) {
+	if !runCommandVerifiable(wire.RunCommandOutput{ExitCode: 0}) {
 		t.Fatal("a clean run was refused")
 	}
-	if runCommandVerifiable(RunCommandOutput{ExitCode: 1}) {
+	if runCommandVerifiable(wire.RunCommandOutput{ExitCode: 1}) {
 		t.Fatal("a nonzero exit was treated as verification")
 	}
 }
@@ -285,7 +287,7 @@ func TestAMutatingCommandIsStampedWithThePostCommandState(t *testing.T) {
 		t.Fatal(err)
 	}
 	recordLedgerEffect("run_command", []byte(`{"command":"./build.sh"}`), ctx,
-		&ToolResult{Success: true})
+		&wire.ToolResult{Success: true})
 
 	afterGen, afterState := workspaceIdentity(ctx)
 	if afterGen == beforeGen && afterState == beforeState {
@@ -306,7 +308,7 @@ func TestAMutatingCommandIsStampedWithThePostCommandState(t *testing.T) {
 
 func TestTheSandboxTimeoutFlagIsDecoded(t *testing.T) {
 	body := `{"success":false,"stdout":"","stderr":"Execution timed out after 5s","exit_code":-1,"elapsed_ms":5000,"timed_out":true}`
-	var out RunCommandOutput
+	var out wire.RunCommandOutput
 	if err := decodeShellResponse(strings.NewReader(body), &out); err != nil {
 		t.Fatal(err)
 	}

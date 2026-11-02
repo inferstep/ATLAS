@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // The ledger records what each call did to the session's deliverables. It
@@ -142,7 +144,7 @@ func TestContentMutatorsCopyTheToolsEvidence(t *testing.T) {
 				t.Errorf("ledger status %q != tool status %q",
 					d.ValidationStatus, res.ValidationStatus)
 			}
-			if d.CheckpointHash != "" && res.ValidationStatus != ValidationPassed {
+			if d.CheckpointHash != "" && res.ValidationStatus != wire.ValidationPassed {
 				t.Error("checkpointed bytes that were never reported as passed")
 			}
 		})
@@ -175,7 +177,7 @@ func TestDeleteRecordsATombstoneOnlyWhenTheFileIsGone(t *testing.T) {
 	if !d.RestoreProhibited {
 		t.Error("a deliberate delete must prohibit automatic restoration")
 	}
-	if _, s := d.CurrentValidation(); s != ValidationUnknown {
+	if _, s := d.CurrentValidation(); s != wire.ValidationUnknown {
 		t.Error("a deleted path still reports a current verdict")
 	}
 }
@@ -201,7 +203,7 @@ func TestMoveTombstonesTheSourceAndObservesTheDestinationFresh(t *testing.T) {
 	if dst.CurrentHash != diskHash(t, filepath.Join(dir, "new.py")) {
 		t.Error("destination hash does not describe the bytes on disk")
 	}
-	if _, s := dst.CurrentValidation(); s == ValidationPassed {
+	if _, s := dst.CurrentValidation(); s == wire.ValidationPassed {
 		t.Error("a rename inherited a verdict earned under the old name")
 	}
 }
@@ -219,7 +221,7 @@ func TestRunCommandRehashesTrackedPaths(t *testing.T) {
 	quietBefore := ledgerOf(t, ctx, "quiet.py").CurrentHash
 
 	c, _ := json.Marshal(map[string]string{"command": "printf 'REWRITTEN\\n' > noisy.py"})
-	if res := executeToolCall("run_command", c, ctx); res.MutationStatus != MutationUnobserved {
+	if res := executeToolCall("run_command", c, ctx); res.MutationStatus != wire.MutationUnobserved {
 		t.Fatalf("run_command classification changed: %q", res.MutationStatus)
 	}
 	if q := ledgerOf(t, ctx, "quiet.py"); q.CurrentHash != quietBefore {
@@ -229,7 +231,7 @@ func TestRunCommandRehashesTrackedPaths(t *testing.T) {
 	if n.CurrentHash != diskHash(t, filepath.Join(dir, "noisy.py")) {
 		t.Error("ledger did not catch up to the command's rewrite")
 	}
-	if _, s := n.CurrentValidation(); s != ValidationUnknown {
+	if _, s := n.CurrentValidation(); s != wire.ValidationUnknown {
 		t.Error("a command-rewritten path kept a verdict about bytes that are gone")
 	}
 }
@@ -409,11 +411,11 @@ func TestDirectMutatorOutcomeTable(t *testing.T) {
 			d := ledgerOf(t, ctx, c.path)
 
 			// (3) a branch that says disk did not change records nothing.
-			if (res.MutationStatus == MutationNone || res.MutationStatus == MutationRefused) && d != nil {
+			if (res.MutationStatus == wire.MutationNone || res.MutationStatus == wire.MutationRefused) && d != nil {
 				t.Errorf("a branch that did not change disk created a ledger entry: %+v", d)
 			}
 			// (4) collected here, judged after all rows ran.
-			if res.MutationStatus == MutationUnknown {
+			if res.MutationStatus == wire.MutationUnknown {
 				unknownMutators = append(unknownMutators, c.name)
 			}
 		})
@@ -483,7 +485,7 @@ func TestDirectMutatorCheckpointsComeOnlyFromAPass(t *testing.T) {
 			if d == nil {
 				return
 			}
-			if d.CheckpointHash != "" && res.ValidationStatus != ValidationPassed {
+			if d.CheckpointHash != "" && res.ValidationStatus != wire.ValidationPassed {
 				t.Errorf("checkpointed bytes reported as %q, not passed", res.ValidationStatus)
 			}
 		})
@@ -645,7 +647,7 @@ func TestLedgerTracksFinalDiskBytesThroughTheAgentLoop(t *testing.T) {
 		t.Errorf("ledger hash %s does not describe the final bytes %s",
 			d.CurrentHash[:12], hashBytes(got)[:12])
 	}
-	if _, s := d.CurrentValidation(); s == ValidationPassed {
+	if _, s := d.CurrentValidation(); s == wire.ValidationPassed {
 		t.Error("a shell rewrite inherited the edit tool's verdict")
 	}
 	for key, entry := range ctx.Ledger {
@@ -726,7 +728,7 @@ func TestCheckpointPromotionThroughTheWriteRoute(t *testing.T) {
 	good := "def f():\n    return 1\n"
 	args, _ := json.Marshal(map[string]string{"path": "solve.py", "content": good})
 	res := executeToolCall("write_file", args, ctx)
-	if res.ValidationStatus != ValidationPassed {
+	if res.ValidationStatus != wire.ValidationPassed {
 		t.Fatalf("the write route did not produce a pass (%s/%s); this test "+
 			"proves nothing without one", res.ValidationKind, res.ValidationStatus)
 	}
@@ -738,7 +740,7 @@ func TestCheckpointPromotionThroughTheWriteRoute(t *testing.T) {
 	// The syntax gate refuses a broken rewrite outright, so disk and the
 	// checkpoint both stand.
 	args2, _ := json.Marshal(map[string]string{"path": "solve.py", "content": "def broken(\n"})
-	if r := executeToolCall("write_file", args2, ctx); r.MutationStatus != MutationRefused {
+	if r := executeToolCall("write_file", args2, ctx); r.MutationStatus != wire.MutationRefused {
 		t.Fatalf("expected the gate to refuse the broken rewrite, got %q", r.MutationStatus)
 	}
 	if got, _ := os.ReadFile(filepath.Join(dir, "solve.py")); string(got) != good {
@@ -762,7 +764,7 @@ func TestCheckpointPromotionThroughTheWriteRoute(t *testing.T) {
 	if d.CurrentHash != diskHash(t, filepath.Join(dir, "solve.py")) {
 		t.Error("current hash does not describe the bytes on disk")
 	}
-	if _, s := d.CurrentValidation(); s == ValidationPassed {
+	if _, s := d.CurrentValidation(); s == wire.ValidationPassed {
 		t.Error("the failing bytes read as passed")
 	}
 }
@@ -816,7 +818,7 @@ func TestWhichMutatorsCanEverPromoteACheckpoint(t *testing.T) {
 				res.ValidationKind, res.ValidationStatus, promoted)
 			// The invariant, whatever the answer: a checkpoint exists only
 			// where the producer said passed for the bytes that landed.
-			if promoted != (res.ValidationStatus == ValidationPassed) {
+			if promoted != (res.ValidationStatus == wire.ValidationPassed) {
 				t.Errorf("checkpoint=%v but validation=%q", promoted, res.ValidationStatus)
 			}
 		})

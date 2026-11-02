@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // The guarantee that matters: a mutating call under a read-only request must
@@ -21,12 +23,12 @@ func TestReadOnlyRequestLeavesTheFileUntouchedThroughRealDispatch(t *testing.T) 
 	ctx := NewAgentContext(dir, Tier0Conversational)
 	ctx.HumanTask = "In orders.py, what does apply_discount do? Just explain — do not change any code."
 
-	args, _ := json.Marshal(WriteFileInput{Path: "orders.py", Content: "CLOBBERED\n"})
+	args, _ := json.Marshal(wire.WriteFileInput{Path: "orders.py", Content: "CLOBBERED\n"})
 	res := executeToolCall("write_file", args, ctx)
 	if res.Success {
 		t.Error("write_file SUCCEEDED under an explicit read-only request")
 	}
-	if res.MutationStatus != MutationNone {
+	if res.MutationStatus != wire.MutationNone {
 		t.Errorf("MutationStatus = %v, want MutationNone", res.MutationStatus)
 	}
 	got, _ := os.ReadFile(target)
@@ -34,7 +36,7 @@ func TestReadOnlyRequestLeavesTheFileUntouchedThroughRealDispatch(t *testing.T) 
 		t.Fatalf("the file was modified under a read-only request:\n%q", string(got))
 	}
 	// Indirect path: a shell command that would rewrite the file in place.
-	sh, _ := json.Marshal(RunCommandInput{Command: "sed -i 's/return/#return/' orders.py"})
+	sh, _ := json.Marshal(wire.RunCommandInput{Command: "sed -i 's/return/#return/' orders.py"})
 	res2 := executeToolCall("run_command", sh, ctx)
 	if res2.Success {
 		t.Error("run_command SUCCEEDED under an explicit read-only request")
@@ -44,7 +46,7 @@ func TestReadOnlyRequestLeavesTheFileUntouchedThroughRealDispatch(t *testing.T) 
 		t.Fatalf("the file was modified by shell under a read-only request:\n%q", string(got2))
 	}
 	// Reading must still work, or the model cannot answer.
-	rd, _ := json.Marshal(ReadFileInput{Path: "orders.py"})
+	rd, _ := json.Marshal(wire.ReadFileInput{Path: "orders.py"})
 	if r := executeToolCall("read_file", rd, ctx); !r.Success {
 		t.Errorf("read_file was refused under a read-only request: %s", r.Error)
 	}

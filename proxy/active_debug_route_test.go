@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // writeRouteSyntaxErrorMark is the text the stub syntax check calls
@@ -250,7 +252,7 @@ func activeDebugSession(dir, rel, servicesURL string, runSucceeded bool) *AgentC
 	if runSucceeded {
 		outcome = `"success":true`
 	}
-	ctx.Messages = []AgentMessage{
+	ctx.Messages = []wire.AgentMessage{
 		{Role: "user", Content: "fix the failing module"},
 		{Role: "assistant", Content: "running it again"},
 		{Role: "tool", ToolName: "run_command", Content: `{` + outcome +
@@ -285,9 +287,9 @@ func TestActiveDebugRoute(t *testing.T) {
 
 		wantSuccess         bool
 		wantDisk            string
-		wantMutation        MutationStatus
-		wantKind            ValidationKind
-		wantStatus          ValidationStatus
+		wantMutation        wire.MutationStatus
+		wantKind            wire.ValidationKind
+		wantStatus          wire.ValidationStatus
 		wantSyntaxCalls     int
 		wantStructuralCalls int
 		wantError           string // the exact error, when set
@@ -300,7 +302,7 @@ func TestActiveDebugRoute(t *testing.T) {
 		{name: "proposal parses",
 			rel: "mod.py", baseline: debugBaselineHealthy, proposal: debugProposalHealthy,
 			wantSuccess: true, wantDisk: debugProposalHealthy,
-			wantMutation: MutationApplied, wantKind: ValidationKindSyntax, wantStatus: ValidationPassed,
+			wantMutation: wire.MutationApplied, wantKind: wire.ValidationKindSyntax, wantStatus: wire.ValidationPassed,
 			wantSyntaxCalls: 1, wantStructuralCalls: 1},
 		// The check applies and cannot run: the write fails open, and the
 		// result says not_run, never passed.
@@ -308,7 +310,7 @@ func TestActiveDebugRoute(t *testing.T) {
 			rel: "mod.py", baseline: debugBaselineHealthy, proposal: debugProposalHealthy,
 			noSandbox:   true,
 			wantSuccess: true, wantDisk: debugProposalHealthy,
-			wantMutation: MutationApplied, wantKind: ValidationKindSyntax, wantStatus: ValidationNotRun,
+			wantMutation: wire.MutationApplied, wantKind: wire.ValidationKindSyntax, wantStatus: wire.ValidationNotRun,
 			wantSyntaxCalls: 0, wantStructuralCalls: 1},
 		// Nothing here can be checked, which is a different fact from a
 		// checker that was unavailable. Applicability is decided locally,
@@ -316,24 +318,24 @@ func TestActiveDebugRoute(t *testing.T) {
 		{name: "no check applies",
 			rel: "engine.rs", baseline: debugRustBaseline, proposal: debugRustProposal,
 			wantSuccess: true, wantDisk: debugRustProposal,
-			wantMutation: MutationApplied, wantKind: ValidationKindNone, wantStatus: ValidationNotApplicable,
+			wantMutation: wire.MutationApplied, wantKind: wire.ValidationKindNone, wantStatus: wire.ValidationNotApplicable,
 			wantSyntaxCalls: 0, wantStructuralCalls: 0},
 		// A repair of a file that already fails may land, and the result
 		// says the landed bytes do not parse.
 		{name: "failed proposal over a broken baseline lands",
 			rel: "mod.py", baseline: debugBaselineBroken, proposal: debugProposalBroken,
 			wantSuccess: true, wantDisk: debugProposalBroken,
-			wantMutation: MutationApplied, wantKind: ValidationKindSyntax, wantStatus: ValidationFailed,
+			wantMutation: wire.MutationApplied, wantKind: wire.ValidationKindSyntax, wantStatus: wire.ValidationFailed,
 			wantSyntaxCalls: 2, wantStructuralCalls: 1, warns: true},
 		{name: "parsing proposal over a broken baseline lands",
 			rel: "mod.py", baseline: debugBaselineBroken, proposal: debugProposalHealthy,
 			wantSuccess: true, wantDisk: debugProposalHealthy,
-			wantMutation: MutationApplied, wantKind: ValidationKindSyntax, wantStatus: ValidationPassed,
+			wantMutation: wire.MutationApplied, wantKind: wire.ValidationKindSyntax, wantStatus: wire.ValidationPassed,
 			wantSyntaxCalls: 1, wantStructuralCalls: 1},
 		{name: "failed proposal over a healthy baseline is refused",
 			rel: "mod.py", baseline: debugBaselineHealthy, proposal: debugProposalBroken,
 			wantSuccess: false, wantDisk: debugBaselineHealthy,
-			wantMutation: MutationRefused, wantKind: ValidationKindSyntax, wantStatus: ValidationFailed,
+			wantMutation: wire.MutationRefused, wantKind: wire.ValidationKindSyntax, wantStatus: wire.ValidationFailed,
 			wantSyntaxCalls: 2, wantStructuralCalls: 0,
 			wantError:  fallbackSyntaxRejection("mod.py", debugProposalBroken, writeRouteSyntaxDetail),
 			wantDetail: writeRouteSyntaxDetail},
@@ -343,7 +345,7 @@ func TestActiveDebugRoute(t *testing.T) {
 			rel: "mod.py", baseline: debugBaselineHealthy, proposal: debugProposalBroken,
 			unavailableFor: writeRouteBaselineMark,
 			wantSuccess:    false, wantDisk: debugBaselineHealthy,
-			wantMutation: MutationRefused, wantKind: ValidationKindSyntax, wantStatus: ValidationFailed,
+			wantMutation: wire.MutationRefused, wantKind: wire.ValidationKindSyntax, wantStatus: wire.ValidationFailed,
 			wantSyntaxCalls: 2, wantStructuralCalls: 0},
 		// The only case that reaches the route's own syntax refusal: a failing
 		// run removed the file, so the baseline reads as "", which parses.
@@ -351,14 +353,14 @@ func TestActiveDebugRoute(t *testing.T) {
 			rel: "mod.py", baseline: debugBaselineHealthy, proposal: debugProposalBroken,
 			fileGone:    true,
 			wantSuccess: false, wantDisk: "",
-			wantMutation: MutationRefused, wantKind: ValidationKindSyntax, wantStatus: ValidationFailed,
+			wantMutation: wire.MutationRefused, wantKind: wire.ValidationKindSyntax, wantStatus: wire.ValidationFailed,
 			wantSyntaxCalls: 2, wantStructuralCalls: 0, wantDetail: writeRouteSyntaxDetail},
 		// Bytes that were checked and passed can still fail to land.
 		{name: "check passes, then the write fails",
 			rel: "ro/mod.py", baseline: debugBaselineHealthy, proposal: debugProposalHealthy,
 			readOnlyDir: true,
 			wantSuccess: false, wantDisk: debugBaselineHealthy,
-			wantMutation: MutationFailed, wantKind: ValidationKindSyntax, wantStatus: ValidationPassed,
+			wantMutation: wire.MutationFailed, wantKind: wire.ValidationKindSyntax, wantStatus: wire.ValidationPassed,
 			wantSyntaxCalls: 1, wantStructuralCalls: 1, errorHas: "cannot write"},
 		// Syntax passed on these bytes and the structural check refused them,
 		// so structural is the deciding verdict.
@@ -366,7 +368,7 @@ func TestActiveDebugRoute(t *testing.T) {
 			rel: "mod.py", baseline: debugBaselineHealthy, proposal: debugProposalUnresolved,
 			introduces:  "missing_helper",
 			wantSuccess: false, wantDisk: debugBaselineHealthy,
-			wantMutation: MutationRefused, wantKind: ValidationKindStructural, wantStatus: ValidationFailed,
+			wantMutation: wire.MutationRefused, wantKind: wire.ValidationKindStructural, wantStatus: wire.ValidationFailed,
 			wantSyntaxCalls: 1, wantStructuralCalls: 2, errorHas: "missing_helper", detailHas: "missing_helper"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -457,7 +459,7 @@ func TestActiveDebugRoute(t *testing.T) {
 			// The model is told when the bytes it landed do not parse, and is
 			// not warned about bytes that do.
 			if tc.wantSuccess {
-				var out WriteFileOutput
+				var out wire.WriteFileOutput
 				if err := json.Unmarshal(res.Data, &out); err != nil {
 					t.Fatalf("write_file output is not WriteFileOutput: %v (%s)", err, res.Data)
 				}
@@ -511,11 +513,11 @@ func TestBaselineAllowsRepairOnlyOnDemonstratedFailure(t *testing.T) {
 		in   checkOutcome
 		want bool
 	}{
-		{"failed", checkOutcome{Status: ValidationFailed, Detail: "SyntaxError"}, true},
-		{"passed", checkOutcome{Status: ValidationPassed}, false},
-		{"not_run", checkOutcome{Status: ValidationNotRun, Detail: "sandbox unreachable"}, false},
-		{"not_applicable", checkOutcome{Status: ValidationNotApplicable}, false},
-		{"unknown", checkOutcome{Status: ValidationUnknown}, false},
+		{"failed", checkOutcome{Status: wire.ValidationFailed, Detail: "SyntaxError"}, true},
+		{"passed", checkOutcome{Status: wire.ValidationPassed}, false},
+		{"not_run", checkOutcome{Status: wire.ValidationNotRun, Detail: "sandbox unreachable"}, false},
+		{"not_applicable", checkOutcome{Status: wire.ValidationNotApplicable}, false},
+		{"unknown", checkOutcome{Status: wire.ValidationUnknown}, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := baselineAllowsRepair(c.in); got != c.want {

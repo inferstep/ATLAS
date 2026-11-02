@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // silentRunWhenOutputPromised reports a verification run that exited 0 while
@@ -432,7 +434,7 @@ func verifiedPhase(phase string) bool {
 // A generic "no such file or directory" is excluded on purpose: a test that
 // fails because the program under test did not create a file says exactly
 // that, and neutralising it would let a genuine failure through.
-func verificationNeverRan(result *ToolResult) bool {
+func verificationNeverRan(result *wire.ToolResult) bool {
 	if result == nil {
 		return false
 	}

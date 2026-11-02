@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // What a task obliges, derived from the validated request and nothing else.
@@ -97,7 +99,7 @@ func TestEveryOtherObligationKindHasAFixedFloor(t *testing.T) {
 			continue
 		}
 		s, ok := obligationRequiredStrength(kind, "")
-		if !ok || strengthRank(s) < 0 {
+		if !ok || wire.StrengthRank(s) < 0 {
 			t.Errorf("%s has no fixed strength: %q/%v", kind, s, ok)
 		}
 		// A fixed floor cannot be raised by handing it a baseline.
@@ -275,7 +277,7 @@ func TestReplacingAValidatedBaselineOwesAtLeastWhatItAlreadyHas(t *testing.T) {
 	}
 	ctx.Ledger[resolved] = &DeliverableState{
 		Path: resolved, CurrentHash: disk, Generation: 1,
-		ValidationKind: ValidationKindSyntax, ValidationStatus: ValidationPassed,
+		ValidationKind: wire.ValidationKindSyntax, ValidationStatus: wire.ValidationPassed,
 		ValidatedHash: disk,
 	}
 	obs := obligationsFor(t, ctx)
@@ -319,7 +321,7 @@ func TestAStaleValidationIsNotABaseline(t *testing.T) {
 	}
 	ctx.Ledger[resolved] = &DeliverableState{
 		Path: resolved, CurrentHash: "stale", Generation: 1,
-		ValidationKind: ValidationKindSyntax, ValidationStatus: ValidationPassed,
+		ValidationKind: wire.ValidationKindSyntax, ValidationStatus: wire.ValidationPassed,
 		ValidatedHash: "some-earlier-hash",
 	}
 	if _, ok := hasKindFor(obligationsFor(t, ctx), ObligationBaselinePreserved, resolved); ok {
@@ -545,7 +547,7 @@ func TestAnExistingSyntaxValidatedArtifactStillOwesPreservation(t *testing.T) {
 	}
 	ctx.Ledger[resolved] = &DeliverableState{
 		Path: resolved, CurrentHash: disk, Generation: 1,
-		ValidationKind: ValidationKindSyntax, ValidationStatus: ValidationPassed,
+		ValidationKind: wire.ValidationKindSyntax, ValidationStatus: wire.ValidationPassed,
 		ValidatedHash: disk,
 	}
 	ctx.TaskContract = mustContract(t, ctx.WorkingDir,
@@ -588,7 +590,7 @@ func TestASyntaxOnlyReplacementCannotDisplaceABehavioralBaseline(t *testing.T) {
 		t.Fatalf("authorization floor %q, want the behavioral the baseline has", got)
 	}
 	// A syntax verifier cannot reach that floor, which is the refusal.
-	if strengthRank("syntax") >= strengthRank(authorizationFloor(obs)) {
+	if wire.StrengthRank("syntax") >= wire.StrengthRank(authorizationFloor(obs)) {
 		t.Error("a compile was allowed to displace a behaviourally covered baseline")
 	}
 }

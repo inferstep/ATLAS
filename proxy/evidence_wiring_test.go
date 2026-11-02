@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // The one production call path, and the one declared absence.
@@ -35,7 +37,7 @@ func TestTheWiredProducerObservesTheDeliveredBytes(t *testing.T) {
 		t.Fatal("the wired producer observed nothing about a declared code output")
 	}
 	p := ev.Provenance
-	if p.Source != ProvenanceProxyOwnedValidation {
+	if p.Source != wire.ProvenanceProxyOwnedValidation {
 		t.Errorf("source %q", p.Source)
 	}
 	if p.CandidateHash != contentSHA256(code) {
@@ -82,7 +84,7 @@ func TestTheWiredProducerRunsNoSecondCheck(t *testing.T) {
 	if !ok {
 		t.Fatal("the producer refused a verdict it was handed")
 	}
-	if ev.Outcome != ValidationPassed {
+	if ev.Outcome != wire.ValidationPassed {
 		t.Errorf("outcome %q: the producer checked again instead of using the verdict", ev.Outcome)
 	}
 }
@@ -98,7 +100,7 @@ func TestTheWiredProducerDistinguishesNegativeFromNotRun(t *testing.T) {
 		if !ok {
 			t.Fatal("a demonstrated failure produced no observation")
 		}
-		if ev.Outcome != ValidationFailed {
+		if ev.Outcome != wire.ValidationFailed {
 			t.Errorf("outcome %q, want failed", ev.Outcome)
 		}
 		if authorized, _ := ev.Authorizes(); authorized {
@@ -110,7 +112,7 @@ func TestTheWiredProducerDistinguishesNegativeFromNotRun(t *testing.T) {
 			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`,
 			"solve.py", code, true)
 		if _, _, ok := observeDeliveredCandidateSyntax(w.ctx, mintRouteEntry(w.ctx), w.path, code,
-			checkOutcome{Status: ValidationNotRun}); ok {
+			checkOutcome{Status: wire.ValidationNotRun}); ok {
 			t.Error("a check that did not run produced a record")
 		}
 	})
@@ -119,7 +121,7 @@ func TestTheWiredProducerDistinguishesNegativeFromNotRun(t *testing.T) {
 			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`,
 			"solve.py", code, true)
 		if _, _, ok := observeDeliveredCandidateSyntax(w.ctx, mintRouteEntry(w.ctx), w.path, code,
-			checkOutcome{Status: ValidationUnknown}); ok {
+			checkOutcome{Status: wire.ValidationUnknown}); ok {
 			t.Error("an unclassified check produced a record")
 		}
 	})
@@ -217,7 +219,7 @@ func TestTwoInvocationsProduceDistinctIdentities(t *testing.T) {
 // owner builds the staging request itself, and the two mechanisms that come
 // close are still not it.
 func TestTheStagingPathExistsAndIsTheOnlyRouteToBehavioralEvidence(t *testing.T) {
-	if got := evidenceProducerStatus[ProvenanceClientDeclaredVerification]; got != evidenceProducerWired {
+	if got := evidenceProducerStatus[wire.ProvenanceClientDeclaredVerification]; got != evidenceProducerWired {
 		t.Fatalf("client-declared verification is declared %q, want wired", got)
 	}
 	files := proxyFiles(t)
@@ -231,7 +233,7 @@ func TestTheStagingPathExistsAndIsTheOnlyRouteToBehavioralEvidence(t *testing.T)
 
 	// The service still cannot run what it was never told about, so a caller
 	// of a V3 endpoint cannot manufacture this authority.
-	types, err := os.ReadFile("types.go")
+	types, err := os.ReadFile("internal/wire/v3.go")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -617,9 +619,9 @@ func TestEachProducerHasExactlyOneEnumeratedCallPath(t *testing.T) {
 	for _, c := range []struct {
 		fn, source, site string
 	}{
-		{"produceSyntaxEvidence", ProvenanceProxyOwnedValidation,
+		{"produceSyntaxEvidence", wire.ProvenanceProxyOwnedValidation,
 			"evidence_wiring.go:observeDeliveredCandidateSyntax"},
-		{"produceDeclaredVerificationEvidence", ProvenanceClientDeclaredVerification,
+		{"produceDeclaredVerificationEvidence", wire.ProvenanceClientDeclaredVerification,
 			"evidence_wiring.go:observeCandidateVerification"},
 	} {
 		sites := callSites(files, c.fn)
@@ -645,7 +647,7 @@ func TestEachProducerHasExactlyOneEnumeratedCallPath(t *testing.T) {
 // appeared alongside them.
 func TestBothProducersAreWiredAndNeitherGainedASecondPath(t *testing.T) {
 	for _, source := range []string{
-		ProvenanceProxyOwnedValidation, ProvenanceClientDeclaredVerification,
+		wire.ProvenanceProxyOwnedValidation, wire.ProvenanceClientDeclaredVerification,
 	} {
 		if got := evidenceProducerStatus[source]; got != evidenceProducerWired {
 			t.Errorf("%s is declared %q, want wired", source, got)
@@ -697,7 +699,7 @@ func TestNoProductionCodeConstructsAProvenanceOutsideTheProducers(t *testing.T) 
 		"syntax_evidence.go":       true,
 		"verification_evidence.go": true,
 		// The type and its methods live here.
-		"types.go": true,
+		"internal/wire/v3.go": true,
 		// The wire decoder materialises what the service sent.
 		"v3_bridge.go": true,
 		// The live owner builds the identity evidence must MATCH, which is the
@@ -714,7 +716,7 @@ func TestNoProductionCodeConstructsAProvenanceOutsideTheProducers(t *testing.T) 
 			if !ok {
 				return true
 			}
-			if id, ok := lit.Type.(*ast.Ident); ok && id.Name == "V3EvidenceProvenance" {
+			if baseName(lit.Type) == "V3EvidenceProvenance" {
 				t.Errorf("%s constructs a V3EvidenceProvenance outside the producers", name)
 			}
 			return true

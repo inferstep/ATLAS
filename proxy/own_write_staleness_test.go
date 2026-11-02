@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // An edit to a file this session wrote must not be refused as "modified since
@@ -27,7 +29,7 @@ func ownWriteCtx(t *testing.T) (*AgentContext, string) {
 	return ctx, dir
 }
 
-func callTool(t *testing.T, ctx *AgentContext, name string, args map[string]interface{}) *ToolResult {
+func callTool(t *testing.T, ctx *AgentContext, name string, args map[string]interface{}) *wire.ToolResult {
 	t.Helper()
 	b, _ := json.Marshal(args)
 	res := executeToolCall(name, b, ctx)
@@ -37,7 +39,7 @@ func callTool(t *testing.T, ctx *AgentContext, name string, args map[string]inte
 	return res
 }
 
-func toolText(res *ToolResult) string {
+func toolText(res *wire.ToolResult) string {
 	return res.Error + " " + string(res.Data)
 }
 

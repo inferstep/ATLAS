@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // The SUCCESSFUL writeFileWithV3 state machine: V3 answered, and the
@@ -209,7 +211,7 @@ type auditCase struct {
 }
 
 type auditResult struct {
-	res    *ToolResult
+	res    *wire.ToolResult
 	disk   string
 	checks []auditCheck
 	events []string
@@ -258,7 +260,7 @@ func runAudit(t *testing.T, c auditCase) auditResult {
 	ctx.V3URL = srv.URL
 	ctx.SandboxURL = srv.URL
 	ctx.SessionWrites[c.rel] = true
-	ctx.Messages = []AgentMessage{
+	ctx.Messages = []wire.AgentMessage{
 		{Role: "user", Content: "build it"},
 		{Role: "tool", ToolName: "read_file", Content: c.prior},
 	}
@@ -450,9 +452,9 @@ type transitionWant struct {
 	checks   []string // "kind:ROLE", in arrival order
 	disk     string   // role of the final on-disk bytes, "" = nothing written
 	success  bool
-	mutation MutationStatus
-	kind     ValidationKind
-	status   ValidationStatus
+	mutation wire.MutationStatus
+	kind     wire.ValidationKind
+	status   wire.ValidationStatus
 	v3Used   bool
 	sse      []string
 }
@@ -483,8 +485,8 @@ func TestFinalByteInvariantTransitions(t *testing.T) {
 			transitionWant{
 				checks:  []string{"syntax:BASE", "syntax:CAND", "syntax:BASE", "structural:BASE"},
 				disk:    "BASE",
-				success: true, mutation: MutationApplied,
-				kind: ValidationKindSyntax, status: ValidationPassed,
+				success: true, mutation: wire.MutationApplied,
+				kind: wire.ValidationKindSyntax, status: wire.ValidationPassed,
 				sse: []string{"v3_progress"}}},
 
 		// An authorized candidate survives every gate: checked once, after
@@ -494,8 +496,8 @@ func TestFinalByteInvariantTransitions(t *testing.T) {
 			transitionWant{
 				checks:  []string{"syntax:BASE", "syntax:CAND", "structural:CAND"},
 				disk:    "CAND",
-				success: true, mutation: MutationApplied,
-				kind: ValidationKindSyntax, status: ValidationPassed,
+				success: true, mutation: wire.MutationApplied,
+				kind: wire.ValidationKindSyntax, status: wire.ValidationPassed,
 				v3Used: true, sse: []string{"v3_progress", "v3_progress"}}},
 
 		// The language-swap gate revokes to the baseline. It selects the baseline
@@ -506,8 +508,8 @@ func TestFinalByteInvariantTransitions(t *testing.T) {
 			transitionWant{
 				checks:  []string{"syntax:BASE", "embedded:BASE", "syntax:BASE", "embedded:BASE", "embedded:BASE"},
 				disk:    "BASE",
-				success: true, mutation: MutationApplied,
-				kind: ValidationKindSyntax, status: ValidationPassed,
+				success: true, mutation: wire.MutationApplied,
+				kind: wire.ValidationKindSyntax, status: wire.ValidationPassed,
 				sse: []string{"v3_progress"}}},
 
 		// Sanitisation rewrites the bytes after the service produced its record,
@@ -522,8 +524,8 @@ func TestFinalByteInvariantTransitions(t *testing.T) {
 			transitionWant{
 				checks:  []string{"syntax:BASE", "syntax:SANI", "syntax:BASE", "structural:BASE"},
 				disk:    "BASE",
-				success: true, mutation: MutationApplied,
-				kind: ValidationKindSyntax, status: ValidationPassed,
+				success: true, mutation: wire.MutationApplied,
+				kind: wire.ValidationKindSyntax, status: wire.ValidationPassed,
 				sse: []string{"v3_progress"}}},
 
 		// The candidate fails its own final-byte check; the baseline parses. The
@@ -535,8 +537,8 @@ func TestFinalByteInvariantTransitions(t *testing.T) {
 			transitionWant{
 				checks:  []string{"syntax:BASE", "syntax:CAND", "syntax:BASE", "structural:BASE"},
 				disk:    "BASE",
-				success: true, mutation: MutationApplied,
-				kind: ValidationKindSyntax, status: ValidationPassed,
+				success: true, mutation: wire.MutationApplied,
+				kind: wire.ValidationKindSyntax, status: wire.ValidationPassed,
 				sse: []string{"v3_progress"}}},
 
 		// Neither the candidate nor the baseline parses: nothing is written, and
@@ -549,8 +551,8 @@ func TestFinalByteInvariantTransitions(t *testing.T) {
 			transitionWant{
 				checks:  []string{"syntax:BASE", "syntax:CAND", "syntax:BASE"},
 				disk:    "",
-				success: false, mutation: MutationRefused,
-				kind: ValidationKindSyntax, status: ValidationFailed,
+				success: false, mutation: wire.MutationRefused,
+				kind: wire.ValidationKindSyntax, status: wire.ValidationFailed,
 				sse: []string{"v3_progress"}}},
 
 		// The structural gate rejects the candidate and the baseline is clean.
@@ -563,8 +565,8 @@ func TestFinalByteInvariantTransitions(t *testing.T) {
 				checks: []string{"syntax:BASE", "syntax:CAND", "structural:CAND",
 					"structural:EMPTY", "syntax:BASE", "structural:BASE"},
 				disk:    "BASE",
-				success: true, mutation: MutationApplied,
-				kind: ValidationKindSyntax, status: ValidationPassed,
+				success: true, mutation: wire.MutationApplied,
+				kind: wire.ValidationKindSyntax, status: wire.ValidationPassed,
 				sse: []string{"v3_progress", "v3_progress"}}},
 
 		// Same, but the baseline does not parse: the revocation's baseline check
@@ -582,8 +584,8 @@ func TestFinalByteInvariantTransitions(t *testing.T) {
 				checks: []string{"syntax:BASE", "syntax:CAND", "structural:CAND",
 					"structural:EMPTY", "syntax:BASE"},
 				disk:    "",
-				success: false, mutation: MutationRefused,
-				kind: ValidationKindSyntax, status: ValidationFailed,
+				success: false, mutation: wire.MutationRefused,
+				kind: wire.ValidationKindSyntax, status: wire.ValidationFailed,
 				sse: []string{"v3_progress"}}},
 
 		// Neither the candidate nor the baseline resolves its calls. Syntax
@@ -595,8 +597,8 @@ func TestFinalByteInvariantTransitions(t *testing.T) {
 				checks: []string{"syntax:BASE", "syntax:CAND", "structural:CAND", "structural:EMPTY",
 					"syntax:BASE", "structural:BASE", "structural:EMPTY"},
 				disk:    "",
-				success: false, mutation: MutationRefused,
-				kind: ValidationKindStructural, status: ValidationFailed,
+				success: false, mutation: wire.MutationRefused,
+				kind: wire.ValidationKindStructural, status: wire.ValidationFailed,
 				sse: []string{"v3_progress"}}},
 
 		// The embedded-script gate revokes the candidate to the baseline. The
@@ -614,8 +616,8 @@ func TestFinalByteInvariantTransitions(t *testing.T) {
 				checks: []string{"syntax:BASE", "embedded:BASE", "syntax:CAND", "embedded:CAND",
 					"embedded:CAND", "embedded:PRIOR", "embedded:BASE", "syntax:BASE", "embedded:BASE"},
 				disk:    "BASE",
-				success: true, mutation: MutationApplied,
-				kind: ValidationKindSyntax, status: ValidationPassed,
+				success: true, mutation: wire.MutationApplied,
+				kind: wire.ValidationKindSyntax, status: wire.ValidationPassed,
 				sse: []string{"v3_progress"}}},
 
 		// The comparative embedded gate condemns the candidate AND the baseline it
@@ -630,8 +632,8 @@ func TestFinalByteInvariantTransitions(t *testing.T) {
 				checks: []string{"syntax:BASE", "embedded:BASE", "syntax:CAND", "embedded:CAND",
 					"embedded:CAND", "embedded:PRIOR", "embedded:BASE", "embedded:PRIOR"},
 				disk:    "",
-				success: false, mutation: MutationRefused,
-				kind: ValidationKindStructural, status: ValidationFailed,
+				success: false, mutation: wire.MutationRefused,
+				kind: wire.ValidationKindStructural, status: wire.ValidationFailed,
 				sse: []string{"v3_progress"}}},
 
 		// The duplicate-main guard refuses whatever is about to land. Structural
@@ -642,8 +644,8 @@ func TestFinalByteInvariantTransitions(t *testing.T) {
 			transitionWant{
 				checks:  []string{"syntax:BASE", "syntax:CAND", "structural:CAND"},
 				disk:    "",
-				success: false, mutation: MutationRefused,
-				kind: ValidationKindStructural, status: ValidationFailed,
+				success: false, mutation: wire.MutationRefused,
+				kind: wire.ValidationKindStructural, status: wire.ValidationFailed,
 				sse: []string{"v3_progress"}}},
 
 		// Cancelled during the post-generation gates, after the final-byte
@@ -657,8 +659,8 @@ func TestFinalByteInvariantTransitions(t *testing.T) {
 			transitionWant{
 				checks:  []string{"syntax:BASE", "syntax:CAND", "structural:CAND"},
 				disk:    "",
-				success: false, mutation: MutationNone,
-				kind: ValidationKindSyntax, status: ValidationPassed,
+				success: false, mutation: wire.MutationNone,
+				kind: wire.ValidationKindSyntax, status: wire.ValidationPassed,
 				sse: []string{"v3_progress"}}},
 
 		// An authorized candidate whose write fails: the licence was spent on
@@ -670,8 +672,8 @@ func TestFinalByteInvariantTransitions(t *testing.T) {
 			transitionWant{
 				checks:  []string{"syntax:BASE", "syntax:CAND", "structural:CAND"},
 				disk:    "",
-				success: false, mutation: MutationRefused,
-				kind: ValidationKindSyntax, status: ValidationPassed,
+				success: false, mutation: wire.MutationRefused,
+				kind: wire.ValidationKindSyntax, status: wire.ValidationPassed,
 				sse: []string{"v3_progress", "v3_progress"}}},
 
 		// The fallback to the model's own bytes fails to land.
@@ -681,8 +683,8 @@ func TestFinalByteInvariantTransitions(t *testing.T) {
 			transitionWant{
 				checks:  []string{"syntax:BASE", "syntax:CAND", "syntax:BASE", "structural:BASE"},
 				disk:    "",
-				success: false, mutation: MutationFailed,
-				kind: ValidationKindSyntax, status: ValidationPassed,
+				success: false, mutation: wire.MutationFailed,
+				kind: wire.ValidationKindSyntax, status: wire.ValidationPassed,
 				sse: []string{"v3_progress"}}},
 	} {
 		c, w := tc.in, tc.want
