@@ -17,7 +17,8 @@ The repository is a set of shelves, kept by these rules.
 
 1. **One subject per shelf.** A folder holds one subject, and its name says
    the subject. A folder with one item is not a shelf: the item goes to the
-   shelf of its subject.
+   shelf of its subject. A Go package is the exception: its folder is a unit
+   of the language, so a package of one file is a shelf of its own.
 2. **The root.** The five services live in `services/` (`proxy`,
    `v3-service`, `geometric-lens`, `sandbox`, `inference`). The terminal UI
    and the editor extensions live in `clients/`. Deployment files live in
@@ -53,10 +54,13 @@ The repository is a set of shelves, kept by these rules.
      has 14 such groups.
    - In a flat Go folder the file-name prefix is the shelf: files on one
      subject share one prefix.
-8. **Gate files move only in a release window.** A file that decides what a
-   check accepts (a workflow, a check script, a baseline) moves only in a
-   release window, and the move compares each list that names such files,
-   old against new.
+8. **Gate files move with care.** A gate file decides what a check accepts:
+   a workflow, a check script, a baseline. One that a check reads from the
+   base branch or from `main`, such as a script a scheduled workflow runs
+   from `main`, moves only in a release window, since until the release the
+   old and the new path are both in use. Any other gate file moves on `dev`
+   with a maintainer's approval. Every such move compares each list that
+   names gate files, old against new.
 
 ## Consequences
 - Each layout change cites this record and does one thing.
@@ -65,8 +69,9 @@ The repository is a set of shelves, kept by these rules.
   name. A list that quietly loses an entry after a move is the failure to
   watch for, so a check over a list of files fails on an empty or missing
   folder rather than passing.
-- Moves that change gate files wait for a release window. The others are
-  small changes on `dev`.
+- A move of a gate file that a check reads from the base branch or from
+  `main` waits for a release window. Other moves are small changes on
+  `dev`, and those that touch a gate file carry a maintainer's approval.
 - Links from outside the repository to `main`, such as the website and the
   extension marketplace pages, change at the release that carries the move.
 - A released version keeps its own paths: a message such as
