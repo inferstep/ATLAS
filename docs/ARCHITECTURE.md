@@ -603,7 +603,7 @@ Defined in `v3-service/planning.py`; `v3-service/main.py` serves the route. The 
    - **−0.5** if a step creates a file that already exists
    - **+0.1 per step** that targets a file the user named (capped at +0.2)
    - **+0.1** for a non-empty `rationale`
-5. Picks the highest-scoring plan; tie-break favours fewer steps (less waffle). A winner whose verify step only starts a server loses that step, so the loop's own verification gate governs.
+5. Picks the highest-scoring plan; tie-break favours fewer steps (less waffle). A winner whose verify step only starts a server loses its `verify_step` mark, though the step stays in the plan, so the loop's own verification gate governs.
 6. If all candidates fail to parse, returns a one-step fallback (`{action: "investigate the request and act"}`) so the agent loop never blocks on planner failure.
 
 API contract documented in [API.md § POST /v3/plan](API.md#post-v3plan).
@@ -621,7 +621,7 @@ The system prompt rendering happens in `buildSystemPrompt`. Plan steps are rende
 
 ##### tui: rendering (Go)
 
-`tui/state.go` defines `planView` (state on the model) plus three `applyPlan*` handlers wired into `tui/model.go`'s chat dispatcher:
+`tui/state.go` defines `planView` (state on the model) plus three `applyPlan*` handlers wired into the chat dispatcher in `tui/events.go`:
 
 | Event | Handler | UI effect |
 |---|---|---|
@@ -629,7 +629,7 @@ The system prompt rendering happens in `buildSystemPrompt`. Plan steps are rende
 | `plan_adherence` (matched) | `applyPlanAdherence` | Flips the matched step's `Satisfied` flag; appends a one-liner `✓ s2 satisfied · edit_file (1/3)`. |
 | `plan_adherence` (unmatched) | `applyPlanAdherence` | **Silent** — off-plan calls only update internal state. Without this filter, every off-plan call would spawn a chat row, drowning out actual progress. |
 | `plan_revise` | `applyPlanRevise` | Sets `Revising=true` on the current plan; appends `Plan revising (rev 1): <reason>`. Next `plan_loaded` (with `revision>0`) replaces it. |
-| `v3_plan` | `formatV3StageEvent` | Renders the planner's own progress (`candidate 1/3 score=0.80`, `plan 1 won`) under a `plan` chat-row meta tag. |
+| `v3_plan` | `formatV3StageEvent` | Renders the planner's own progress (`candidate 1 score=0.80`, `plan 1 won`) under a `plan` chat-row meta tag. |
 
 #### Tunables
 
@@ -638,7 +638,7 @@ Defined in `proxy/gates_plan.go`:
 | Constant | Default | Rationale |
 |---|---|---|
 | `planAutoReviseThreshold` | 5 | Non-recon off-plan tool calls before auto-revise fires (recon tools never extend the streak, so natural exploration doesn't count). Tight enough to catch a wrong plan early; loose enough that a few stray off-plan calls don't trigger thrashing. |
-| `planMaxRevisions` | 2 | Cap on auto-revisions per loop. Past this, the loop runs plan-free for the remainder. Prevents pathological off-plan inputs from looping `/v3/plan` forever. |
+| `planMaxRevisions` | 2 | Cap on auto-revisions per loop. Past this, the last plan stays and only revising stops. A revision that returns the same steps drops the plan. Prevents pathological off-plan inputs from looping `/v3/plan` forever. |
 
 `v3-service/planning.py` constants:
 
@@ -652,7 +652,7 @@ Defined in `proxy/gates_plan.go`:
 Three predicates in `shouldGeneratePlan`:
 
 1. **`ctx.Tier == Tier0Conversational`** — trivial chat ("hi", "thanks") never plans.
-2. **`len(message) < 12`** — short acks ("yes do it", "looks good") that depend on the prior turn's plan don't plan again.
+2. **`len(trimmed) < 12`** — short acks ("yes do it", "looks good") that depend on the prior turn's plan don't plan again.
 3. **`isReadOnlyRequest(message)`** — a request to look ("list the files") needs no plan, and a wrong plan steers the model into editing.
 
 Outside those, every turn plans. Failures (`/v3/plan` 5xx, network error, all candidates unparseable beyond the fallback) degrade silently — the loop runs without `ctx.Plan`, and the agent loop behaves as it does when plan mode is off.

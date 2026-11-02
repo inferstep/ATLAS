@@ -432,7 +432,7 @@ flowchart TD
    - 既に存在するファイルを作成するステップがある: **−0.5**
    - ユーザーが名前を挙げたファイルを対象とするステップごとに **+0.1**（上限 +0.2）
    - `rationale` が空でない: **+0.1**
-5. 最高スコアのプランを選びます。同点の場合はステップ数の少ないプランを優先します。勝者の検証ステップがサーバーを起動するだけなら、そのステップを取り除き、ループ自身の検証ゲートに委ねます。
+5. 最高スコアのプランを選びます。同点の場合はステップ数の少ないプランを優先します（冗長さを避けるため）。勝者の検証ステップがサーバーを起動するだけなら、その `verify_step` の印を外します。ステップ自体はプランに残り、ループ自身の検証ゲートに委ねます。
 6. すべての候補の解析に失敗した場合は、1 ステップのフォールバック（`{action: "investigate the request and act"}`）を返すため、プランナーの失敗でエージェントループが止まることはありません。
 
 API の契約は [API.md § POST /v3/plan](../../API.md#post-v3plan) に記載されています。
@@ -450,7 +450,7 @@ API の契約は [API.md § POST /v3/plan](../../API.md#post-v3plan) に記載�
 
 ##### tui: レンダリング (Go)
 
-`tui/state.go` は `planView`（モデル上の状態）と、`tui/model.go` のチャットディスパッチャーに接続された 3 つの `applyPlan*` ハンドラーを定義します:
+`tui/state.go` は `planView`（モデル上の状態）と、`tui/events.go` のチャットディスパッチャーに接続された 3 つの `applyPlan*` ハンドラーを定義します:
 
 | イベント | ハンドラー | UI への効果 |
 |---|---|---|
@@ -458,7 +458,7 @@ API の契約は [API.md § POST /v3/plan](../../API.md#post-v3plan) に記載�
 | `plan_adherence`（一致） | `applyPlanAdherence` | 一致したステップの `Satisfied` フラグを切り替え、1 行の `✓ s2 satisfied · edit_file (1/3)` を追加します。 |
 | `plan_adherence`（不一致） | `applyPlanAdherence` | **無言** — プラン外のコールは内部状態を更新するだけです。このフィルターがないと、プラン外のコールごとにチャット行が増え、実際の進捗が埋もれてしまいます。 |
 | `plan_revise` | `applyPlanRevise` | 現在のプランに `Revising=true` を設定し、`Plan revising (rev 1): <reason>` を追加します。次の `plan_loaded`（`revision>0`）がそれを置き換えます。 |
-| `v3_plan` | `formatV3StageEvent` | プランナー自身の進捗（`candidate 1/3 score=0.80`、`plan 1 won`）を `plan` チャット行のメタタグの下にレンダリングします。 |
+| `v3_plan` | `formatV3StageEvent` | プランナー自身の進捗（`candidate 1 score=0.80`、`plan 1 won`）を `plan` チャット行のメタタグの下にレンダリングします。 |
 
 #### 調整可能な値
 
@@ -467,7 +467,7 @@ API の契約は [API.md § POST /v3/plan](../../API.md#post-v3plan) に記載�
 | 定数 | デフォルト | 理由 |
 |---|---|---|
 | `planAutoReviseThreshold` | 5 | 自動修正が発動するまでの、偵察以外のプラン外ツールコールの数（偵察ツールは連続回数を延ばさないので、自然な探索は数えられません）。誤ったプランを早く捕まえられる程度に厳しく、はぐれたコールが少しあった程度では空回りと判定しない程度に緩い値です。 |
-| `planMaxRevisions` | 2 | ループごとの自動修正の上限。これを超えると、ループは残りをプランなしで実行します。異常な入力で `/v3/plan` が永遠に繰り返されるのを防ぎます。 |
+| `planMaxRevisions` | 2 | ループごとの自動修正の上限。これを超えると、最後のプランが残り、修正だけが止まります。修正が同じステップを返した場合は、プランを破棄します。プランから外れ続ける異常な入力で `/v3/plan` が永遠に繰り返されるのを防ぎます。 |
 
 `v3-service/planning.py` の定数:
 
@@ -481,7 +481,7 @@ API の契約は [API.md § POST /v3/plan](../../API.md#post-v3plan) に記載�
 `shouldGeneratePlan` の 3 つの条件:
 
 1. **`ctx.Tier == Tier0Conversational`** — 些細なチャット（"hi"、"thanks"）ではプランしません。
-2. **`len(message) < 12`** — 前のターンのプランに依存する短い応答（"yes do it"、"looks good"）では再度プランしません。
+2. **`len(trimmed) < 12`** — 前のターンのプランに依存する短い応答（"yes do it"、"looks good"）では再度プランしません。
 3. **`isReadOnlyRequest(message)`** — 見るだけのリクエスト（"list the files"）にプランは不要で、誤ったプランはモデルを編集へ誘導してしまいます。
 
 それ以外のターンはすべてプランします。失敗（`/v3/plan` の 5xx、ネットワークエラー、フォールバックでも救えないほどすべての候補を解析できない場合）は静かに縮退します。ループは `ctx.Plan` なしで動き、エージェントループはプランモードがオフのときと同じように振る舞います。

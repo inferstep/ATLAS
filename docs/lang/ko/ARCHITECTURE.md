@@ -295,7 +295,7 @@ flowchart TD
    - 이미 있는 파일을 만드는 단계가 있으면 **−0.5**
    - 사용자가 이름을 말한 파일을 대상으로 하는 단계마다 **+0.1**(상한 +0.2)
    - `rationale`이 비어 있지 않으면 **+0.1**
-5. 점수가 가장 높은 계획을 고릅니다. 동점이면 단계가 적은 계획이 우선합니다. 우승 계획의 verify 단계가 서버를 시작하기만 하면 그 단계를 제거하고, 루프 자체의 검증 게이트에 맡깁니다.
+5. 점수가 가장 높은 계획을 고릅니다. 동점이면 단계가 적은 계획이 우선합니다(군더더기를 줄이기 위해). 우승 계획의 verify 단계가 서버를 시작하기만 하면 그 `verify_step` 표시를 떼어 냅니다. 단계 자체는 계획에 남고, 루프 자체의 검증 게이트에 맡깁니다.
 6. 모든 후보의 파싱이 실패하면 한 단계짜리 폴백(`{action: "investigate the request and act"}`)을 반환하므로, 플래너 실패로 에이전트 루프가 멈추는 일은 없습니다.
 
 API 계약은 [API.md § POST /v3/plan](../../API.md#post-v3plan)에 문서화되어 있습니다.
@@ -313,7 +313,7 @@ API 계약은 [API.md § POST /v3/plan](../../API.md#post-v3plan)에 문서화�
 
 ##### tui: 렌더링 (Go)
 
-`tui/state.go`는 `planView`(모델의 상태)와 `tui/model.go`의 채팅 디스패처에 연결된 `applyPlan*` 핸들러 3개를 정의합니다:
+`tui/state.go`는 `planView`(모델의 상태)와 `tui/events.go`의 채팅 디스패처에 연결된 `applyPlan*` 핸들러 3개를 정의합니다:
 
 | 이벤트 | 핸들러 | UI 효과 |
 |---|---|---|
@@ -321,7 +321,7 @@ API 계약은 [API.md § POST /v3/plan](../../API.md#post-v3plan)에 문서화�
 | `plan_adherence` (일치) | `applyPlanAdherence` | 일치한 단계의 `Satisfied` 플래그를 바꾸고, 한 줄짜리 `✓ s2 satisfied · edit_file (1/3)`을 추가합니다. |
 | `plan_adherence` (불일치) | `applyPlanAdherence` | **조용함** — 계획 외 호출은 내부 상태만 갱신합니다. 이 필터가 없으면 계획 외 호출마다 채팅 행이 생겨 실제 진행 상황이 묻힙니다. |
 | `plan_revise` | `applyPlanRevise` | 현재 계획에 `Revising=true`를 설정하고 `Plan revising (rev 1): <reason>`을 추가합니다. 다음 `plan_loaded`(`revision>0`)가 이를 교체합니다. |
-| `v3_plan` | `formatV3StageEvent` | 플래너 자체의 진행 상황(`candidate 1/3 score=0.80`, `plan 1 won`)을 `plan` 채팅 행 메타 태그 아래에 렌더링합니다. |
+| `v3_plan` | `formatV3StageEvent` | 플래너 자체의 진행 상황(`candidate 1 score=0.80`, `plan 1 won`)을 `plan` 채팅 행 메타 태그 아래에 렌더링합니다. |
 
 #### 튜닝 항목
 
@@ -330,7 +330,7 @@ API 계약은 [API.md § POST /v3/plan](../../API.md#post-v3plan)에 문서화�
 | 상수 | 기본값 | 이유 |
 |---|---|---|
 | `planAutoReviseThreshold` | 5 | 자동 수정이 실행되기 전까지의, 정찰이 아닌 계획 외 도구 호출 수입니다(정찰 도구는 연속 횟수를 늘리지 않으므로 자연스러운 탐색은 세지 않습니다). 잘못된 계획을 일찍 잡을 만큼 엄격하고, 빗나간 호출 몇 번으로 헤맴 판정을 하지 않을 만큼 느슨합니다. |
-| `planMaxRevisions` | 2 | 루프당 자동 수정 횟수의 상한입니다. 이를 넘으면 루프는 나머지를 계획 없이 실행합니다. 비정상적인 입력이 `/v3/plan`을 끝없이 반복하는 것을 막습니다. |
+| `planMaxRevisions` | 2 | 루프당 자동 수정 횟수의 상한입니다. 이를 넘으면 마지막 계획이 남고 수정만 멈춥니다. 수정 결과가 같은 단계를 돌려주면 계획을 버립니다. 계획을 벗어나는 비정상적인 입력이 `/v3/plan`을 끝없이 반복하는 것을 막습니다. |
 
 `v3-service/planning.py` 상수:
 
@@ -344,7 +344,7 @@ API 계약은 [API.md § POST /v3/plan](../../API.md#post-v3plan)에 문서화�
 `shouldGeneratePlan`의 세 가지 조건:
 
 1. **`ctx.Tier == Tier0Conversational`** — 사소한 대화("hi", "thanks")는 계획하지 않습니다.
-2. **`len(message) < 12`** — 이전 턴의 계획에 기대는 짧은 응답("yes do it", "looks good")은 다시 계획하지 않습니다.
+2. **`len(trimmed) < 12`** — 이전 턴의 계획에 기대는 짧은 응답("yes do it", "looks good")은 다시 계획하지 않습니다.
 3. **`isReadOnlyRequest(message)`** — 보기만 하는 요청("list the files")에는 계획이 필요 없고, 잘못된 계획은 모델을 편집으로 이끕니다.
 
 그 밖의 모든 턴은 계획합니다. 실패(`/v3/plan` 5xx, 네트워크 오류, 폴백으로도 구할 수 없을 만큼 모든 후보를 파싱할 수 없는 경우)는 조용히 축소 동작합니다. 루프는 `ctx.Plan` 없이 실행되고, 에이전트 루프는 Plan 모드가 꺼져 있을 때와 똑같이 동작합니다.

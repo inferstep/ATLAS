@@ -419,7 +419,7 @@ flowchart TD
    - 某个步骤要创建已存在的文件：**−0.5**
    - 每个以用户点名的文件为目标的步骤 **+0.1**（上限 +0.2）
    - `rationale` 非空：**+0.1**
-5. 选出得分最高的计划；平局时步骤较少者优先。如果获胜计划的验证步骤只启动服务器，就去掉该步骤，交由循环自身的验证门控把关。
+5. 选出得分最高的计划；平局时步骤较少者优先（少些冗余）。如果获胜计划的验证步骤只启动服务器，就去掉其 `verify_step` 标记，但该步骤仍留在计划中，交由循环自身的验证门控把关。
 6. 如果所有候选都解析失败，返回一个单步回退（`{action: "investigate the request and act"}`），这样 agent 循环绝不会因规划器失败而阻塞。
 
 API 契约见 [API.md § POST /v3/plan](../../API.md#post-v3plan)。
@@ -437,7 +437,7 @@ API 契约见 [API.md § POST /v3/plan](../../API.md#post-v3plan)。
 
 ##### tui：渲染（Go）
 
-`tui/state.go` 定义了 `planView`（模型上的状态），以及接入 `tui/model.go` 聊天分发器的三个 `applyPlan*` 处理程序：
+`tui/state.go` 定义了 `planView`（模型上的状态），以及接入 `tui/events.go` 聊天分发器的三个 `applyPlan*` 处理程序：
 
 | 事件 | 处理程序 | UI 效果 |
 |---|---|---|
@@ -445,7 +445,7 @@ API 契约见 [API.md § POST /v3/plan](../../API.md#post-v3plan)。
 | `plan_adherence`（匹配） | `applyPlanAdherence` | 翻转所匹配步骤的 `Satisfied` 标志；追加一行 `✓ s2 satisfied · edit_file (1/3)`。 |
 | `plan_adherence`（未匹配） | `applyPlanAdherence` | **静默** — 偏离计划的调用只更新内部状态。没有这个过滤，每次偏离计划的调用都会产生一个聊天行，淹没真正的进展。 |
 | `plan_revise` | `applyPlanRevise` | 在当前计划上设置 `Revising=true`；追加 `Plan revising (rev 1): <reason>`。下一个 `plan_loaded`（`revision>0`）会替换它。 |
-| `v3_plan` | `formatV3StageEvent` | 在 `plan` 聊天行元标签下渲染规划器自身的进度（`candidate 1/3 score=0.80`、`plan 1 won`）。 |
+| `v3_plan` | `formatV3StageEvent` | 在 `plan` 聊天行元标签下渲染规划器自身的进度（`candidate 1 score=0.80`、`plan 1 won`）。 |
 
 #### 可调项
 
@@ -454,7 +454,7 @@ API 契约见 [API.md § POST /v3/plan](../../API.md#post-v3plan)。
 | 常量 | 默认值 | 理由 |
 |---|---|---|
 | `planAutoReviseThreshold` | 5 | 触发自动修订前，非侦察的偏离计划工具调用次数（侦察工具绝不延长连续计数，因此自然的探索不算在内）。足够严格，能及早发现错误的计划；又足够宽松，几次零星的偏离调用不会被判为折腾。 |
-| `planMaxRevisions` | 2 | 每个循环的自动修订上限。超过之后，循环在剩余部分不再使用计划。防止异常输入让 `/v3/plan` 无休止地循环。 |
+| `planMaxRevisions` | 2 | 每个循环的自动修订上限。超过之后，最后的计划保留，只是不再修订。如果一次修订返回相同的步骤，则丢弃计划。防止偏离计划的异常输入让 `/v3/plan` 无休止地循环。 |
 
 `v3-service/planning.py` 常量：
 
@@ -468,7 +468,7 @@ API 契约见 [API.md § POST /v3/plan](../../API.md#post-v3plan)。
 `shouldGeneratePlan` 中的三个条件：
 
 1. **`ctx.Tier == Tier0Conversational`** — 琐碎的聊天（"hi"、"thanks"）绝不规划。
-2. **`len(message) < 12`** — 依赖上一轮计划的简短回应（"yes do it"、"looks good"）不再重新规划。
+2. **`len(trimmed) < 12`** — 依赖上一轮计划的简短回应（"yes do it"、"looks good"）不再重新规划。
 3. **`isReadOnlyRequest(message)`** — 只是查看的请求（"list the files"）不需要计划，而错误的计划会把模型引向编辑。
 
 除此之外，每一轮都会规划。失败（`/v3/plan` 5xx、网络错误、连回退也救不了的所有候选都无法解析）会静默降级：循环在没有 `ctx.Plan` 的情况下运行，agent 循环的行为与关闭 Plan 模式时相同。
