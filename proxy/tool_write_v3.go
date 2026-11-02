@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/logsafe"
 	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
@@ -668,7 +669,7 @@ func refuseContentThatDoesNotParse(write *v3Write) *ToolResult {
 		// The caller's own content, and it does not parse. Nothing here
 		// authored it and there is no alternative to fall back to.
 		log.Printf("[write_file] fallback content for %s does not parse: %s",
-			logPath(path), safeDiagnosticSummary(deliveredCheck.Detail))
+			logPath(path), logsafe.DiagnosticSummary(deliveredCheck.Detail))
 		return syntaxRefusal(path, write.code, deliveredCheck.Detail)
 	}
 	// A candidate that does not parse is not a candidate. The model's own
@@ -682,7 +683,7 @@ func refuseContentThatDoesNotParse(write *v3Write) *ToolResult {
 		return refusal
 	}
 	log.Printf("[write_file] V3 winner for %s does not parse — writing your version instead (%s)",
-		logPath(path), safeDiagnosticSummary(deliveredCheck.Detail))
+		logPath(path), logsafe.DiagnosticSummary(deliveredCheck.Detail))
 	write.restoreBaseline(baseCheck, "the winner does not parse")
 	return nil
 }
@@ -1292,7 +1293,7 @@ func writeWithoutCandidate(ctx *AgentContext, path, content, message string) (*T
 	if check.Status == ValidationFailed {
 		synErr := check.Detail
 		log.Printf("[write_file] fallback content for %s failed syntax gate: %s",
-			logPath(path), safeDiagnosticSummary(synErr))
+			logPath(path), logsafe.DiagnosticSummary(synErr))
 		// Refused before any byte reached disk, on exactly the content that
 		// would have been written.
 		return &ToolResult{Success: false,

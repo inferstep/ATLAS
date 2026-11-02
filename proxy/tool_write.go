@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/itigges22/atlas-proxy/internal/logsafe"
 	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
@@ -212,7 +213,7 @@ func writeRegressionGate(ctx *AgentContext, input WriteFileInput, path string) (
 				baselineCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, prior).aggregate()
 				if !baselineAllowsRepair(baselineCheck) {
 					log.Printf("[write_file] %s: refusing to regress valid content to invalid (%s)",
-						logPath(input.Path), safeDiagnosticSummary(synErr))
+						logPath(input.Path), logsafe.DiagnosticSummary(synErr))
 					// The check examined input.Content, which is exactly
 					// the content that would have been written, and the
 					// refusal happens before any byte reaches disk.
@@ -253,7 +254,7 @@ func writeFileThroughV3(ctx *AgentContext, input WriteFileInput, path string, fi
 		// the real traceback. See writeNewFileWithWarning.
 		if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
 			log.Printf("[write_file] new file %s does not parse — writing with a warning, skipping V3 (%s)",
-				logPath(input.Path), safeDiagnosticSummary(synErr))
+				logPath(input.Path), logsafe.DiagnosticSummary(synErr))
 			recordCandidateGenerationBypass(ctx, "write_file",
 				bypassProposalFailedSyntaxGuard, fileTier,
 				strings.Count(input.Content, "\n")+1)
@@ -270,7 +271,7 @@ func writeFileThroughV3(ctx *AgentContext, input WriteFileInput, path string, fi
 			}
 			if baselineAllowsRepair(baselineCheck) {
 				log.Printf("[write_file] %s already broken on disk — landing the repair attempt with a warning (%s)",
-					logPath(input.Path), safeDiagnosticSummary(synErr))
+					logPath(input.Path), logsafe.DiagnosticSummary(synErr))
 				recordCandidateGenerationBypass(ctx, "write_file",
 					bypassProposalFailedSyntaxGuard, fileTier,
 					strings.Count(input.Content, "\n")+1)
@@ -278,7 +279,7 @@ func writeFileThroughV3(ctx *AgentContext, input WriteFileInput, path string, fi
 			}
 		}
 		log.Printf("[write_file] %s does not parse — rejecting before V3 (%s)",
-			logPath(input.Path), safeDiagnosticSummary(synErr))
+			logPath(input.Path), logsafe.DiagnosticSummary(synErr))
 		recordCandidateGenerationBypass(ctx, "write_file",
 			bypassProposalFailedSyntaxGuard, fileTier,
 			strings.Count(input.Content, "\n")+1)
@@ -490,7 +491,7 @@ func landDirectWrite(ctx *AgentContext, input WriteFileInput, path string, propo
 	// reconcile the failing run with a write it was told was fine.
 	if proposalCheck.Status == ValidationFailed {
 		log.Printf("[write_file] %s: landing an unparseable rewrite with a warning (%s)",
-			logPath(input.Path), safeDiagnosticSummary(proposalCheck.Detail))
+			logPath(input.Path), logsafe.DiagnosticSummary(proposalCheck.Detail))
 		return preflightWarnedWrite(path, input.Path, input.Content, proposalCheck, ctx)
 	}
 

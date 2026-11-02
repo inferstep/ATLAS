@@ -4,7 +4,9 @@ package main
 
 import (
 	"fmt"
+	"maps"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -129,7 +131,7 @@ func writeProjectFiles(sb *strings.Builder, filesRead map[string]string) {
 		return
 	}
 	sb.WriteString("## Project Files Available\n")
-	for _, path := range sortedKeys(filesRead) {
+	for _, path := range slices.Sorted(maps.Keys(filesRead)) {
 		sb.WriteString(fmt.Sprintf("- %s\n", path))
 	}
 	sb.WriteString("\nUse read_file to inspect these files if needed. To MODIFY any of them, use edit_file — write_file against an existing file (>5 lines) is rejected at the agent layer.\n\n")

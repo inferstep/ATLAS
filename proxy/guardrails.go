@@ -42,9 +42,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -269,7 +271,7 @@ func staleServingJob(ctx *AgentContext) (jobID, path string) {
 	if ctx == nil {
 		return "", ""
 	}
-	for _, id := range sortedKeys(ctx.BackgroundJobs) {
+	for _, id := range slices.Sorted(maps.Keys(ctx.BackgroundJobs)) {
 		started, ok := ctx.BackgroundJobStarted[id]
 		if !ok {
 			continue
@@ -659,7 +661,7 @@ func driftedSinceVerification(ctx *AgentContext, verified map[string]string) str
 	if ctx == nil {
 		return ""
 	}
-	for _, p := range sortedKeys(ctx.SessionWrites) {
+	for _, p := range slices.Sorted(maps.Keys(ctx.SessionWrites)) {
 		want, seen := verified[p]
 		if !seen {
 			return p
