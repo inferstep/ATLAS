@@ -584,7 +584,7 @@ Defined in `proxy/tools.go` and the `proxy/tool_*.go` files beside it. Used by t
 | `tail_background` | Fetch new stdout/stderr lines from a backgrounded job by `job_id`. |
 | `stop_background` | Terminate a backgrounded job by `job_id`. |
 
-**Read-only tools.** `read_file`, `outline_file`, `find_file`, `search_files`, `list_directory` and `tail_background` have no side effects, so they can run in parallel.
+**Read-only tools.** `read_file`, `outline_file`, `find_file`, `search_files`, `list_directory` and `tail_background` have no side effects, so they never prompt for permission.
 
 **Limits the table leaves out.**
 - `read_file` takes an optional `offset` and `limit`.
