@@ -39,6 +39,7 @@ import (
 	"github.com/itigges22/atlas-proxy/internal/logsafe"
 	"github.com/itigges22/atlas-proxy/internal/memoryenvelope"
 	"github.com/itigges22/atlas-proxy/internal/shadowcapture"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
@@ -671,8 +672,6 @@ func (t Tier) String() string {
 // one JSON object per line with stable fields. Both paths still pass
 // through the private-value filter (main() wraps the log writer).
 
-const requestIDHeader = "X-ATLAS-Request-ID"
-
 type ctxKey string
 
 const requestIDKey ctxKey = "atlas-request-id"
@@ -705,11 +704,11 @@ func newServerHandler() http.Handler {
 // ID (client-provided or generated), echoed back and put in the context.
 func withRequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id := strings.TrimSpace(r.Header.Get(requestIDHeader))
+		id := strings.TrimSpace(r.Header.Get(wire.RequestIDHeader))
 		if id == "" {
 			id = newRequestID()
 		}
-		w.Header().Set(requestIDHeader, id)
+		w.Header().Set(wire.RequestIDHeader, id)
 		ctx := context.WithValue(r.Context(), requestIDKey, id)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
@@ -881,9 +880,9 @@ func (t *tokenTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Forward the correlation ID (if the request carries one in context)
 	// so downstream service logs join the same trace.
 	if id := requestIDFromContext(req.Context()); id != "" &&
-		req.Header.Get(requestIDHeader) == "" {
+		req.Header.Get(wire.RequestIDHeader) == "" {
 		req = req.Clone(req.Context())
-		req.Header.Set(requestIDHeader, id)
+		req.Header.Set(wire.RequestIDHeader, id)
 	}
 	if serviceToken != "" && req.Header.Get("Authorization") == "" && isStackAddress(req.URL) {
 		req = req.Clone(req.Context())

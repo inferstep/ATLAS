@@ -188,7 +188,7 @@ func newV3GenerateRequest(reqCtx context.Context, endpoint string, req wire.V3Ge
 	// repeat outside a controlled harness, and nothing downstream may treat it
 	// as unique or as cancellation authority. It never reaches the model.
 	if id := requestIDFromContext(reqCtx); id != "" {
-		httpReq.Header.Set(requestIDHeader, id)
+		httpReq.Header.Set(wire.RequestIDHeader, id)
 	}
 	return httpReq, nil
 }
@@ -283,7 +283,7 @@ func callV3PlanStreaming(reqCtx context.Context, v3URL string, req wire.V3PlanRe
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	if id := requestIDFromContext(reqCtx); id != "" {
-		httpReq.Header.Set(requestIDHeader, id)
+		httpReq.Header.Set(wire.RequestIDHeader, id)
 	}
 
 	// May 10 2026: timeout removed (was 5 min). Plan generation can run

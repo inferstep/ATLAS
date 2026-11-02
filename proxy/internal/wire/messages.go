@@ -1,12 +1,16 @@
 // Package wire holds the shapes that cross a boundary: the model's messages,
-// tool inputs and results, the V3 service's JSON and the /events envelope. It
-// depends on nothing else in the proxy.
+// tool inputs and results, the V3 service's JSON, the /events envelope and the
+// request id header. It depends on nothing else in the proxy.
 package wire
 
 import (
 	"encoding/json"
 	"fmt"
 )
+
+// RequestIDHeader carries a request's correlation id: the proxy reads it from
+// a client, echoes it back, and forwards it to the services it calls.
+const RequestIDHeader = "X-ATLAS-Request-ID"
 
 // SupersededWrite is what a completed write turned out to be.
 type SupersededWrite struct {

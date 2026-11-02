@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 var lensInvocationFormat = regexp.MustCompile(`^proxy-lens:[0-9a-f]{32}$`)
@@ -148,7 +150,7 @@ func TestNewLensRequestCarriesThePairFromContextOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	want, _ := lensInvocationID("req-0011223344556677")
-	if req.Header.Get(requestIDHeader) != "req-0011223344556677" || req.Header.Get(lensInvocationHeader) != want {
+	if req.Header.Get(wire.RequestIDHeader) != "req-0011223344556677" || req.Header.Get(lensInvocationHeader) != want {
 		t.Fatalf("headers %v", req.Header)
 	}
 	if req.Header.Get("Content-Type") != "application/json" {
@@ -156,13 +158,13 @@ func TestNewLensRequestCarriesThePairFromContextOnly(t *testing.T) {
 	}
 	// No request id in the context: neither header. Absent work inherits nothing.
 	bare, _ := newLensRequest(context.Background(), "POST", "http://lens/x", nil)
-	if bare.Header.Get(requestIDHeader) != "" || bare.Header.Get(lensInvocationHeader) != "" {
+	if bare.Header.Get(wire.RequestIDHeader) != "" || bare.Header.Get(lensInvocationHeader) != "" {
 		t.Fatalf("bare request carries identity: %v", bare.Header)
 	}
 	// A malformed request id is forwarded as the request id (unchanged
 	// behaviour) but yields no invocation identity: fail closed at the relay.
 	bad, _ := newLensRequest(lensCtx("bad id"), "POST", "http://lens/x", nil)
-	if bad.Header.Get(requestIDHeader) != "bad id" || bad.Header.Get(lensInvocationHeader) != "" {
+	if bad.Header.Get(wire.RequestIDHeader) != "bad id" || bad.Header.Get(lensInvocationHeader) != "" {
 		t.Fatalf("malformed request id: %v", bad.Header)
 	}
 	// Retry: building the request again yields the identical pair.
@@ -186,7 +188,7 @@ func TestOutboundTransportForwardsRequestIDButNeverAnInvocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if got.Get(requestIDHeader) != "req-0011223344556677" {
+	if got.Get(wire.RequestIDHeader) != "req-0011223344556677" {
 		t.Fatalf("transport dropped the request id: %v", got)
 	}
 	if got.Get(lensInvocationHeader) != "" {
@@ -204,7 +206,7 @@ func (c *lensCapture) server(t *testing.T) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c.mu.Lock()
-		c.pairs = append(c.pairs, [2]string{r.Header.Get(requestIDHeader), r.Header.Get(lensInvocationHeader)})
+		c.pairs = append(c.pairs, [2]string{r.Header.Get(wire.RequestIDHeader), r.Header.Get(lensInvocationHeader)})
 		c.paths = append(c.paths, r.URL.Path)
 		c.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
