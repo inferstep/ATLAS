@@ -459,26 +459,9 @@ docker compose down          # Stop all services (preserves images)
 docker compose down --rmi all  # Stop and remove images (next start rebuilds)
 ```
 
-### ログの確認
+### ログとアップデート
 
-```bash
-docker compose logs -f llama-server    # Follow llama-server logs
-docker compose logs -f geometric-lens  # Follow Lens logs
-docker compose logs -f v3-service      # Follow V3 pipeline logs
-docker compose logs -f atlas-proxy     # Follow proxy logs
-docker compose logs -f sandbox         # Follow sandbox logs
-docker compose logs --tail 50          # Last 50 lines from all services
-```
-
-### アップデート
-
-```bash
-cp .env .env.bak             # config backup (one file holds all your settings)
-git pull
-docker compose pull          # grab fresh :latest images from GHCR
-docker compose up -d         # recreate changed services
-atlas doctor                 # verify: services healthy, model/artifacts intact
-```
+サービスのログの確認は [OPERATIONS.md § Logs](../../OPERATIONS.md#logs)、インストールのアップデートは [OPERATIONS.md § Standard upgrade](../../OPERATIONS.md#standard-upgrade) をご覧ください。
 
 ### アンインストール
 
@@ -872,25 +855,7 @@ mkdir -p secrets     # or set ATLAS_SECRETS_DIR
 
 ### モデルの持ち込み
 
-デフォルト以外の GGUF に差し替えたい場合、`atlas lens` サブコマンドがプローブ + トレーニングのパイプラインをラップするので、基盤のスクリプトを学ぶ必要はありません:
-
-```bash
-# 1. Drop your GGUF in models/ and update .env to point at it, restart llama-server.
-
-# 2. Probe whether the existing artifacts can score it (cheap, no training):
-atlas lens check
-# Reports: compat (artifacts work) | needs-build (different dim) | incompatible
-
-# 3. If 'needs-build', train fresh artifacts at the model's native embedding dim:
-atlas lens build --samples path/to/labeled.json
-# samples format: [{"text": str, "label": 0|1}, ...] where 1 = passing code
-# Canonical training set: huggingface.co/datasets/itigges22/ATLAS
-
-# 4. Re-run check — should now report compat:
-atlas lens check
-```
-
-完全なリファレンス: [CLI.md § atlas lens](../../CLI.md#atlas-lens)。
+デフォルト以外の GGUF に差し替えるには、[CONFIGURATION.md § Adding your own model](../../CONFIGURATION.md#adding-your-own-model-drop-in--unregistered) と [CLI.md § atlas lens](../../CLI.md#atlas-lens) をご覧ください。
 
 ---
 
