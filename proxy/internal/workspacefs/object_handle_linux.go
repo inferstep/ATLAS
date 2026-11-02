@@ -1,6 +1,6 @@
 //go:build linux
 
-package main
+package workspacefs
 
 import (
 	"errors"
@@ -33,27 +33,19 @@ const oPath = 0x200000
 
 var errObjectIdentityUnavailable = errors.New("the object could not be held for approval")
 
-// objectHoldSupported says whether this system can hold an object for a
-// deletion approval. Tests that go through the approval read it.
-const objectHoldSupported = true
-
-// objectHandle is the held reference. It is created by inspection, carried by
+// ObjectHandle is the held reference. It is created by inspection, carried by
 // the approval, and released exactly once by whoever ends the approval's life:
 // the tool after its attempt, the handshake on a refusal, the next grant that
 // replaces it, or the loop's exit.
-type objectHandle struct {
+type ObjectHandle struct {
 	mu       sync.Mutex
 	fd       int
 	dev, ino uint64
 	released bool
 }
 
-// pinObjectFn is the one seam: tests substitute a failing pin to exercise the
-// fail-closed path on a platform where the real one succeeds.
-var pinObjectFn = pinObject
-
-// pinObject takes the reference for the object AT path, following nothing.
-func pinObject(path string) (*objectHandle, error) {
+// PinObject takes the reference for the object AT path, following nothing.
+func PinObject(path string) (*ObjectHandle, error) {
 	fd, err := syscall.Open(path, oPath|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, errObjectIdentityUnavailable
@@ -63,17 +55,17 @@ func pinObject(path string) (*objectHandle, error) {
 		syscall.Close(fd)
 		return nil, errObjectIdentityUnavailable
 	}
-	return &objectHandle{fd: fd, dev: uint64(st.Dev), ino: uint64(st.Ino)}, nil
+	return &ObjectHandle{fd: fd, dev: uint64(st.Dev), ino: uint64(st.Ino)}, nil
 }
 
-// stillTheObjectAt reports whether the entry now at the inspected path IS the
+// StillTheObjectAt reports whether the entry now at the inspected path IS the
 // held object. Two facts, both from the kernel: the held object still has at
 // least one name (its link count, read through the descriptor), and the path's
 // current entry has the held object's device and inode. A recycled number
 // cannot satisfy both, because a number is recycled only after the object that
 // had it lost its last name -- which the first fact rules out. A released or
 // nil handle answers false: no held object, no binding.
-func (h *objectHandle) stillTheObjectAt(now os.FileInfo) bool {
+func (h *ObjectHandle) StillTheObjectAt(now os.FileInfo) bool {
 	if h == nil || now == nil {
 		return false
 	}
@@ -94,9 +86,9 @@ func (h *objectHandle) stillTheObjectAt(now os.FileInfo) bool {
 		uint64(held.Dev) == h.dev && uint64(held.Ino) == h.ino
 }
 
-// release closes the descriptor. Idempotent: a second release is a no-op, and
-// a use after release answers false rather than touching a closed descriptor.
-func (h *objectHandle) release() {
+// Release closes the descriptor. Idempotent: a second Release is a no-op, and
+// a use after Release answers false rather than touching a closed descriptor.
+func (h *ObjectHandle) Release() {
 	if h == nil {
 		return
 	}

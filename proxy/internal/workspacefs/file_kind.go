@@ -1,4 +1,4 @@
-package main
+package workspacefs
 
 import (
 	"errors"
@@ -89,9 +89,9 @@ func openRegularFile(path string) (*os.File, error) {
 	return regularFileHandle(os.OpenFile(path, os.O_RDONLY|openNonBlock, 0))
 }
 
-// readRegularFile returns the content of the regular file at path. Any other
+// ReadRegularFile returns the content of the regular file at path. Any other
 // kind of file, and any failure to open or read it, is an error and no content.
-func readRegularFile(path string) ([]byte, error) {
+func ReadRegularFile(path string) ([]byte, error) {
 	f, err := openRegularFile(path)
 	if err != nil {
 		return nil, err

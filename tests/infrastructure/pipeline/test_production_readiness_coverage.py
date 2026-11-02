@@ -47,6 +47,7 @@ def test_the_test_gates_write_reports_into_the_directory(gates_module, monkeypat
         profile = out.resolve() / f"{name[:-len('-test')]}.out"
         assert f"-coverprofile={profile}" in command
         assert "-covermode=atomic" in command
+        assert "-coverpkg=./..." in command
         # The package pattern stays last, after every flag.
         assert command[-1] == "./..."
         assert command[:3] == ("go", "test", "-json")

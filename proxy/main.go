@@ -38,6 +38,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
 // ---------------------------------------------------------------------------
@@ -89,7 +91,7 @@ func resolveVerifyTarget(workingDir string) string {
 	if workingDir == "" {
 		return target
 	}
-	cfg, err := readConfined(workingDir, filepath.Join(".atlas", "config.toml"))
+	cfg, err := workspacefs.ReadConfined(workingDir, filepath.Join(".atlas", "config.toml"))
 	if err != nil {
 		return target
 	}

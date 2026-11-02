@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
 // ---------------------------------------------------------------------------
@@ -333,6 +335,10 @@ type notAllowedKey struct {
 // denied, the reason that the call reads next.
 var notAllowedReasons sync.Map
 
+// pinObjectFn is the one seam: tests substitute a failing pin to exercise the
+// fail-closed path on a platform where the real one succeeds.
+var pinObjectFn = workspacefs.PinObject
+
 // noteNotAllowed records why a call was not allowed when no user denied it:
 // the proxy refused before it asked, nobody could be asked, the request
 // ended, or nobody answered. Such a call must not read as a denial.
@@ -524,12 +530,12 @@ type deleteTarget struct {
 	// what makes the identity a binding rather than two readings of numbers a
 	// filesystem may recycle. Kept internal -- descriptors, inode and device
 	// numbers never reach the event, the model, the logs, or the wire.
-	handle *objectHandle
+	handle *workspacefs.ObjectHandle
 }
 
 // release lets go of the held object. Safe on a zero target and safe to call
 // more than once; the handle itself is idempotent.
-func (d deleteTarget) release() { d.handle.release() }
+func (d deleteTarget) release() { d.handle.Release() }
 
 // withoutHandle is the target as a record: what was approved and removed,
 // with no reference left to hold.
@@ -553,7 +559,7 @@ func (d deleteTarget) withoutHandle() deleteTarget { d.handle = nil; return d }
 // retargeted, a directory that gained a child (it is no longer empty), a type
 // swapped under the same name.
 func (d deleteTarget) identityMatches(other deleteTarget) bool {
-	if other.info == nil || !d.handle.stillTheObjectAt(other.info) {
+	if other.info == nil || !d.handle.StillTheObjectAt(other.info) {
 		return false
 	}
 	return d.Canonical == other.Canonical && d.Kind == other.Kind &&

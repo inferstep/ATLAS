@@ -33,6 +33,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
 // Agent-loop lens integration. Scores write_file / edit_file content
@@ -784,10 +786,10 @@ func lookAtVector(c vectorCandidate) (size int64, marker string, found bool) {
 		if err != nil || !info.Mode().IsRegular() {
 			return 0, "", false
 		}
-		raw, _ := readRegularFile(c.path + ".model")
+		raw, _ := workspacefs.ReadRegularFile(c.path + ".model")
 		return info.Size(), strings.TrimSpace(string(raw)), true
 	}
-	dir := openConfinedDir(c.root)
+	dir := workspacefs.OpenConfinedDir(c.root)
 	defer dir.Close()
 	info, err := dir.Stat(c.rel)
 	if err != nil {

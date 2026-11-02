@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
 // Asset-graph lint: cross-file coherence checks for small web projects.
@@ -63,7 +65,7 @@ type lintFile struct {
 func assetLintFiles(workingDir string) ([]lintFile, bool) {
 	var files []lintFile
 	count := 0
-	dir := openConfinedDir(workingDir) // reads stay inside the workspace
+	dir := workspacefs.OpenConfinedDir(workingDir) // reads stay inside the workspace
 	defer dir.Close()
 	_ = dir.Walk(func(rel string, entry fs.DirEntry, err error) error { // its one error, "too large", is in count
 		if err != nil {

@@ -1,4 +1,4 @@
-package main
+package workspacefs
 
 import (
 	"errors"
@@ -8,34 +8,34 @@ import (
 	"path/filepath"
 )
 
-// confinedDir reads one folder through os.Root. A name that resolves to
+// ConfinedDir reads one folder through os.Root. A name that resolves to
 // something outside the folder is an error and never a read, whatever the
 // name points at and whenever it was made to point there. A folder that
-// could not be opened gives a confinedDir whose every read fails, so a
+// could not be opened gives a ConfinedDir whose every read fails, so a
 // caller treats it like a folder with nothing readable in it.
-type confinedDir struct{ root *os.Root }
+type ConfinedDir struct{ root *os.Root }
 
 var errConfinedDirClosed = errors.New("folder is not open")
 
-func openConfinedDir(dir string) confinedDir {
+func OpenConfinedDir(dir string) ConfinedDir {
 	if dir == "" {
-		return confinedDir{}
+		return ConfinedDir{}
 	}
 	root, err := os.OpenRoot(dir)
 	if err != nil {
-		return confinedDir{}
+		return ConfinedDir{}
 	}
-	return confinedDir{root: root}
+	return ConfinedDir{root: root}
 }
 
-func (c confinedDir) Close() {
+func (c ConfinedDir) Close() {
 	if c.root != nil {
 		_ = c.root.Close()
 	}
 }
 
 // Stat describes rel, a path relative to the folder.
-func (c confinedDir) Stat(rel string) (os.FileInfo, error) {
+func (c ConfinedDir) Stat(rel string) (os.FileInfo, error) {
 	if c.root == nil {
 		return nil, errConfinedDirClosed
 	}
@@ -46,7 +46,7 @@ func (c confinedDir) Stat(rel string) (os.FileInfo, error) {
 // regular file is read, for the reason file_kind.go gives: a name that holds a
 // named pipe would hold the open until a writer appeared, and this folder's
 // own rule is that a name it cannot read is skipped like one that is absent.
-func (c confinedDir) ReadFile(rel string) ([]byte, error) {
+func (c ConfinedDir) ReadFile(rel string) ([]byte, error) {
 	if c.root == nil {
 		return nil, errConfinedDirClosed
 	}
@@ -62,7 +62,7 @@ func (c confinedDir) ReadFile(rel string) ([]byte, error) {
 }
 
 // ReadDir lists the folder itself.
-func (c confinedDir) ReadDir() ([]fs.DirEntry, error) {
+func (c ConfinedDir) ReadDir() ([]fs.DirEntry, error) {
 	if c.root == nil {
 		return nil, errConfinedDirClosed
 	}
@@ -73,7 +73,7 @@ func (c confinedDir) ReadDir() ([]fs.DirEntry, error) {
 // SkipDir and SkipAll rules of fs.WalkDir. rel is relative to the folder
 // and uses the separator of the operating system. The folder itself is not
 // reported, so its own name never decides what is walked.
-func (c confinedDir) Walk(fn func(rel string, entry fs.DirEntry, err error) error) error {
+func (c ConfinedDir) Walk(fn func(rel string, entry fs.DirEntry, err error) error) error {
 	if c.root == nil {
 		return errConfinedDirClosed
 	}
@@ -85,10 +85,10 @@ func (c confinedDir) Walk(fn func(rel string, entry fs.DirEntry, err error) erro
 	})
 }
 
-// WriteNewFile creates rel, a path relative to the folder, and writes data to
+// writeNewFile creates rel, a path relative to the folder, and writes data to
 // it. A name that is already taken is an error, whatever holds it, so nothing
 // that exists is written over and no link is written through.
-func (c confinedDir) WriteNewFile(rel string, data []byte, perm os.FileMode) error {
+func (c ConfinedDir) writeNewFile(rel string, data []byte, perm os.FileMode) error {
 	if c.root == nil {
 		return errConfinedDirClosed
 	}
@@ -103,54 +103,54 @@ func (c confinedDir) WriteNewFile(rel string, data []byte, perm os.FileMode) err
 	return writeErr
 }
 
-// Remove deletes the name rel itself. For a link that is the link, never the
+// remove deletes the name rel itself. For a link that is the link, never the
 // file it points at.
-func (c confinedDir) Remove(rel string) error {
+func (c ConfinedDir) remove(rel string) error {
 	if c.root == nil {
 		return errConfinedDirClosed
 	}
 	return c.root.Remove(rel)
 }
 
-// readCapped returns the text of rel, cut to maxBytes. It reports false for
-// a folder, for anything else that is not a regular file, for a file over four
-// times maxBytes, and for anything that cannot be read.
-func (c confinedDir) readCapped(rel string, maxBytes int) (string, bool) {
+// ReadUpTo returns the text of rel. It reports false for a folder, for anything
+// else that is not a regular file, for a file over limit bytes, and for anything
+// that cannot be read.
+func (c ConfinedDir) ReadUpTo(rel string, limit int) (string, bool) {
 	info, err := c.Stat(rel)
-	if err != nil || !info.Mode().IsRegular() || info.Size() > int64(maxBytes)*4 {
+	if err != nil || !info.Mode().IsRegular() || info.Size() > int64(limit) {
 		return "", false
 	}
 	data, err := c.ReadFile(rel)
 	if err != nil {
 		return "", false
 	}
-	return contextEntry(string(data), maxBytes), true
+	return string(data), true
 }
 
-// readConfined returns the content of rel inside dir, for a caller that
+// ReadConfined returns the content of rel inside dir, for a caller that
 // reads one file.
-func readConfined(dir, rel string) ([]byte, error) {
-	folder := openConfinedDir(dir)
+func ReadConfined(dir, rel string) ([]byte, error) {
+	folder := OpenConfinedDir(dir)
 	defer folder.Close()
 	return folder.ReadFile(rel)
 }
 
-// mountProbeName is the file the alignment check writes in the workspace and
+// MountProbeName is the file the alignment check writes in the workspace and
 // asks the sandbox to read back.
-const mountProbeName = ".atlas-mount-probe"
+const MountProbeName = ".atlas-mount-probe"
 
-// writeMountProbe puts the probe in the folder dir and returns the call that
+// WriteMountProbe puts the probe in the folder dir and returns the call that
 // removes it again. The name is cleared first and then created new, so a link
 // with that name is removed and never written through.
-func writeMountProbe(dir, token string) (func(), error) {
-	folder := openConfinedDir(dir)
-	_ = folder.Remove(mountProbeName)
-	if err := folder.WriteNewFile(mountProbeName, []byte(token), 0o644); err != nil {
+func WriteMountProbe(dir, token string) (func(), error) {
+	folder := OpenConfinedDir(dir)
+	_ = folder.remove(MountProbeName)
+	if err := folder.writeNewFile(MountProbeName, []byte(token), 0o644); err != nil {
 		folder.Close()
 		return nil, err
 	}
 	return func() {
-		_ = folder.Remove(mountProbeName)
+		_ = folder.remove(MountProbeName)
 		folder.Close()
 	}, nil
 }

@@ -1,4 +1,4 @@
-package main
+package workspacefs
 
 import (
 	"strings"
@@ -27,8 +27,8 @@ func TestValidSandboxSubdir(t *testing.T) {
 		{"sub1", true},
 	}
 	for _, tc := range cases {
-		if got := validSandboxSubdir(tc.name); got != tc.ok {
-			t.Errorf("validSandboxSubdir(%q) = %v, want %v", tc.name, got, tc.ok)
+		if got := ValidSandboxSubdir(tc.name); got != tc.ok {
+			t.Errorf("ValidSandboxSubdir(%q) = %v, want %v", tc.name, got, tc.ok)
 		}
 	}
 }

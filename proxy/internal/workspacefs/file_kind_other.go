@@ -1,6 +1,6 @@
 //go:build !unix
 
-package main
+package workspacefs
 
 // openNonBlock has no equivalent here, so the open is plain and the kind check
 // alone decides. The wait this prevents is the unix one: on these platforms a

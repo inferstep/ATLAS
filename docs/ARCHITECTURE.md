@@ -85,7 +85,7 @@ The K3s deployment path (`scripts/install.sh`, manifests in `templates/`) is CUD
 
 The proxy is the entry point for chat front-ends. It accepts user messages on `/v1/agent` (typed event stream — what the TUI uses) and runs an internal agent loop that calls llama-server, parses tool calls, executes them, and streams events back. The `/v1/chat/completions` endpoint is a transparent passthrough to llama-server; it is kept for SDK compatibility and does not run the agent loop. See [API.md](API.md) for the full event-type catalogue.
 
-Every non-test Go file directly under `proxy/`, with its area of ownership:
+Every non-test Go file of `proxy/`, sub-folders included, with its area of ownership:
 
 | File | Owns |
 |---|---|
@@ -109,8 +109,8 @@ Every non-test Go file directly under `proxy/`, with its area of ownership:
 | `lens_required.go` | Enforces that the geometric Lens is available, tracks Lens failures, and stops runs when scoring is unavailable |
 | `logsafe.go` | Builds privacy-safe tool argument summaries for logs, allowing only approved fields and redacting sensitive content |
 | `memory_envelope.go` | Validates declared deployment memory budgets against the operator-stated host capacity and reports unenforced budget overruns |
-| `object_handle_linux.go` | Holds Linux filesystem objects open during deletion approval so the approved object cannot be replaced before removal |
-| `object_handle_other.go` | Refuses deletion approval on non-Linux platforms because a filesystem object cannot be safely pinned and verified |
+| `internal/workspacefs/object_handle_linux.go` | Holds Linux filesystem objects open during deletion approval so the approved object cannot be replaced before removal |
+| `internal/workspacefs/object_handle_other.go` | Refuses deletion approval on non-Linux platforms because a filesystem object cannot be safely pinned and verified |
 | `mutation_scope.go` | Derives the exact file and edit scope from model tool calls so candidates cannot modify anything outside the requested target |
 | `obligation_kinds.go` | Defines the closed obligation types, required evidence strength, and how each obligation is satisfied |
 | `obligations.go` | Chooses whether run obligations come from the caller’s declared contract or ATLAS’s legacy inference, and keeps that decision bound to the request |
@@ -138,9 +138,9 @@ Every non-test Go file directly under `proxy/`, with its area of ownership:
 | `execution_outcome.go` | Classifies command completion, interruption, and resource exhaustion so an incomplete run cannot count as successful verification |
 | `feasibility_decision.go` | Assesses whether available evidence producers could satisfy the task before generation and records the assessment without controlling generation |
 | `fenced_framing.go` | Recognizes complete fenced file payloads, extracts their contents, and supplies framing grammar and retry guidance |
-| `file_kind.go` | Answers what a path holds, and reads only a regular file: a named pipe would hold the open until a writer appeared, so the kind of the open handle is judged before anything is read |
-| `file_kind_unix.go` | The non-blocking open flag, so a pipe named the way a reader looks opens at once instead of waiting for a writer |
-| `file_kind_other.go` | The same flag where it has no equivalent, leaving the kind check to decide on its own |
+| `internal/workspacefs/file_kind.go` | Answers what a path holds, and reads only a regular file: a named pipe would hold the open until a writer appeared, so the kind of the open handle is judged before anything is read |
+| `internal/workspacefs/file_kind_unix.go` | The non-blocking open flag, so a pipe named the way a reader looks opens at once instead of waiting for a writer |
+| `internal/workspacefs/file_kind_other.go` | The same flag where it has no equivalent, leaving the kind check to decide on its own |
 | `old_str_watch.go` | Stops runaway edit text while it streams when it can no longer match the target file, and supplies recovery guidance |
 | `repair.go` | Tracks syntax repairs left open by session writes, blocks premature completion, and reports unresolved repairs at handoff |
 | `route_disposition.go` | Tracks how each candidate route ended and whether its delivery permission resulted in content reaching disk |
@@ -154,8 +154,8 @@ Every non-test Go file directly under `proxy/`, with its area of ownership:
 | `verification_evidence.go` | Produces evidence from client-declared command observations and tracks which individual verification obligations they satisfy |
 | `verification_requirements.go` | Validates typed client verification requirements and limits evidence strength according to the declared check and the origin of its test assets |
 | `workspace_observation.go` | Observes file changes made by foreground and background commands and records deliverables and deletions in the session ledger |
-| `confined_dir.go` | Reads one folder through `os.Root`: a name that resolves to something outside the folder is an error, never a read, and a name that holds something other than a regular file is skipped like one that is absent |
-| `sandbox_subdir.go` | Allows a `sandbox_subdir` of ASCII letters, digits, dot, underscore and dash, at most 64 characters, and never `.` or `..` |
+| `internal/workspacefs/confined_dir.go` | Reads one folder through `os.Root`: a name that resolves to something outside the folder is an error, never a read, and a name that holds something other than a regular file is skipped like one that is absent |
+| `internal/workspacefs/sandbox_subdir.go` | Allows a `sandbox_subdir` of ASCII letters, digits, dot, underscore and dash, at most 64 characters, and never `.` or `..` |
 | `server_start.go` | Tells a verification command that failed because it is a long-running server (it hit the time limit, or its port was taken) from one that failed because the code is broken |
 | `service_answer.go` | Reads an answer from a service of the stack (llama-server, the V3 service, the lens, the sandbox) up to 64 MiB, so a service that sends without end cannot fill the proxy's memory |
 | `shell_wrapper.go` | The command policy behind `validateShellCommand`: splits compound commands, looks inside execution wrappers (`sh -c`, `eval`, …) up to 16 layers deep, and refuses catastrophic commands and wrappers it cannot check |

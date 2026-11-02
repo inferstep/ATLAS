@@ -1,6 +1,6 @@
 //go:build !linux
 
-package main
+package workspacefs
 
 import (
 	"errors"
@@ -16,14 +16,10 @@ import (
 
 var errObjectIdentityUnavailable = errors.New("the object could not be held for approval on this platform")
 
-// objectHoldSupported says whether this system can hold an object for a
-// deletion approval. Tests that go through the approval read it.
-const objectHoldSupported = false
+type ObjectHandle struct{}
 
-type objectHandle struct{}
-
-var pinObjectFn = pinObject
-
-func pinObject(string) (*objectHandle, error)             { return nil, errObjectIdentityUnavailable }
-func (h *objectHandle) stillTheObjectAt(os.FileInfo) bool { return false }
-func (h *objectHandle) release()                          {}
+func PinObject(string) (*ObjectHandle, error)             { return nil, errObjectIdentityUnavailable }
+func (h *ObjectHandle) StillTheObjectAt(os.FileInfo) bool { return false }
+func (h *ObjectHandle) Release() {
+	// Nothing is held on this platform.
+}

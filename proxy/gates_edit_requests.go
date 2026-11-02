@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
 // isUnreadOverwrite reports whether a write_file would replace an existing
@@ -327,7 +329,7 @@ func editViewIsCurrent(ctx *AgentContext, path string) bool {
 	if ctx.WasFileRead(path) {
 		return true
 	}
-	data, err := readRegularFile(path)
+	data, err := workspacefs.ReadRegularFile(path)
 	if err != nil {
 		// Unreadable or absent: nothing is known about it.
 		return false

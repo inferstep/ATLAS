@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
 // ---------------------------------------------------------------------------
@@ -114,7 +116,7 @@ func writeFileEarlyRefusal(ctx *AgentContext, input WriteFileInput, path string)
 	// and it is where a bad failure starts: the model retyping a long
 	// fixture from memory, degenerating into repetition, and getting
 	// its stream cut mid-JSON.
-	if existing, err := readRegularFile(path); err == nil {
+	if existing, err := workspacefs.ReadRegularFile(path); err == nil {
 		if echoesExistingFile(string(existing), input.Content) ||
 			(ctx.SessionWrites[input.Path] && resendsOwnWrite(string(existing), input.Content)) {
 			log.Printf("[write_file] refusing an echoed write of %s (%d bytes on disk, %d incoming)",
