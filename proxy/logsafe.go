@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 // Diagnostic summaries for operator logs.
@@ -137,4 +138,24 @@ func safeDiagnosticSummary(detail string) string {
 	}
 	return fmt.Sprintf("%s <+%d chars elided sha256:%s>",
 		head, len(detail)-len(head), hashBytes([]byte(detail))[:12])
+}
+
+// escapeControls prints every control character but tab as text, so no logged
+// value can start a line of its own or reach a terminal as a control code. A
+// byte that is not UTF-8 becomes the replacement character.
+func escapeControls(s string) string {
+	var out strings.Builder
+	for _, r := range s {
+		switch {
+		case r == '\n':
+			out.WriteString(`\n`)
+		case r == '\r':
+			out.WriteString(`\r`)
+		case r != '\t' && unicode.IsControl(r):
+			fmt.Fprintf(&out, `\x%02x`, r)
+		default:
+			out.WriteRune(r)
+		}
+	}
+	return out.String()
 }

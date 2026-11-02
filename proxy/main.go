@@ -1333,14 +1333,17 @@ func filterPrivateValues(s string) string {
 // filteringWriter applies the filter to every write — installed as the
 // standard logger's output in main(), so all proxy log lines pass
 // through it. Line-buffered writes from log.Printf arrive whole, so
-// per-write filtering is sound for the standard logger.
+// per-write filtering is sound for the standard logger. Each write is
+// one record, so all of it before its final newline goes through
+// escapeControls.
 type filteringWriter struct {
 	w io.Writer
 }
 
 func (f filteringWriter) Write(p []byte) (int, error) {
 	filtered := filterPrivateValues(string(p))
-	if _, err := f.w.Write([]byte(filtered)); err != nil {
+	record := strings.TrimSuffix(filtered, "\n")
+	if _, err := f.w.Write([]byte(escapeControls(record) + filtered[len(record):])); err != nil {
 		return 0, err
 	}
 	// Report the original length so log.Printf never sees a short write.

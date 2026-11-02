@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"log"
 	"os"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -189,6 +191,59 @@ func TestCredentialFilteringStillApplies(t *testing.T) {
 	})
 	if strings.Contains(out, "SUPERSECRETVALUE1234567890") {
 		t.Fatalf("credential filtering regressed: %s", out)
+	}
+}
+
+// A logged value keeps no control character but tab, so it cannot pass for a
+// record or act on a terminal. Sites that already call logPath escape the same
+// text twice, which must change nothing.
+func TestALoggedValueStaysInsideItsRecord(t *testing.T) {
+	for _, c := range []struct{ name, value, want string }{
+		{"line feed", "a\nb", `a\nb`},
+		{"carriage return", "a\rb", `a\rb`},
+		{"backslash", `a\b`, `a\b`},
+		{"text that reads as an escape", `a\nb`, `a\nb`},
+		{"tab", "a\tb", "a\tb"},
+		{"escape character", "a\x1b[0mb", `a\x1b[0mb`},
+		{"null", "a\x00b", `a\x00b`},
+		{"delete", "a\x7fb", `a\x7fb`},
+		{"control character above ASCII", "a\xc2\x85b", `a\x85b`},
+		{"letter above ASCII", "a\xc3\xa9b", "a\xc3\xa9b"},
+		{"byte that is not UTF-8", "a\xffb", "a\xef\xbf\xbdb"},
+		{"stack trace", "main.f()\n\tmain.go:1\nmain.main()",
+			`main.f()\n` + "\t" + `main.go:1\nmain.main()`},
+	} {
+		want := "name=" + c.want + " status=500\n"
+		once := captureLog(t, func() { log.Printf("name=%s status=500", c.value) })
+		if once != want {
+			t.Errorf("%s: got %q, want %q", c.name, once, want)
+		}
+		twice := captureLog(t, func() { log.Printf("name=%s status=500", logPath(c.value)) })
+		if twice != want {
+			t.Errorf("%s, logPath first: got %q, want %q", c.name, twice, want)
+		}
+	}
+}
+
+// filteringWriter is the one place every log line is filtered and escaped, so
+// nothing in the proxy may reach stdout or stderr around it.
+func TestNothingWritesBesideTheLogFilter(t *testing.T) {
+	output := regexp.MustCompile(`.*(os\.Std(out|err)|fmt\.Print|log\.New\(|log\.SetOutput\().*`)
+	var found []string
+	for _, path := range moduleGoFiles(t) {
+		if !strings.HasSuffix(path, "_test.go") {
+			for _, line := range output.FindAllString(readSourceForTest(t, path), -1) {
+				found = append(found, path+": "+strings.TrimSpace(line))
+			}
+		}
+	}
+	want := []string{
+		"main.go: out := io.Writer(os.Stderr)",
+		"main.go: out = jsonLineWriter{w: os.Stderr}",
+		"main.go: log.SetOutput(filteringWriter{w: out})",
+	}
+	if !slices.Equal(found, want) {
+		t.Errorf("a log output beside filteringWriter:\n got %q\nwant %q", found, want)
 	}
 }
 
