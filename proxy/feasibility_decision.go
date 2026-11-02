@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/itigges22/atlas-proxy/internal/shadowcapture"
 	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
@@ -240,15 +241,15 @@ func anyAdapterMeasures(kind string) bool {
 // recordFeasibilityDecision writes the answer to private telemetry.
 func recordFeasibilityDecision(ctx *AgentContext, entry routeEntry,
 	d FeasibilityDecision, targets int) {
-	sink := activeShadowSink.Load()
-	if !sink.enabled() {
+	sink := shadowcapture.Active()
+	if !sink.Enabled() {
 		return
 	}
 	reason := d.Reason
 	if !feasibilityReasons[reason] {
 		reason = FeasibilityUnknown
 	}
-	sink.submit(map[string]interface{}{
+	sink.Submit(map[string]interface{}{
 		"schema_version": shadowSchemaVersionFeasibility,
 		"record_kind":    "shadow_invocation_feasibility",
 		"request_id":     requestIDOf(ctx),

@@ -3,6 +3,7 @@ package main
 import (
 	"strings"
 
+	"github.com/itigges22/atlas-proxy/internal/shadowcapture"
 	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
@@ -375,12 +376,12 @@ func unmetForAll(declared []taskcontract.TaskObligation, why AuthorizationReason
 // influences_live_decision is false and is a fact about this build, not a
 // hope: no production consumer of provenance exists.
 func recordEvidenceObservation(ctx *AgentContext, ev proxyEvidence) {
-	sink := activeShadowSink.Load()
-	if !sink.enabled() {
+	sink := shadowcapture.Active()
+	if !sink.Enabled() {
 		return
 	}
 	p := ev.Provenance
-	sink.submit(map[string]interface{}{
+	sink.Submit(map[string]interface{}{
 		"schema_version":           shadowSchemaVersionEvidence,
 		"record_kind":              "candidate_evidence_observation",
 		"request_id":               p.RequestID,

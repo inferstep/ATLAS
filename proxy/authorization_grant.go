@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/itigges22/atlas-proxy/internal/shadowcapture"
 	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
@@ -649,11 +650,11 @@ func recordGrantAttempt(ctx *AgentContext, g *authorizationGrant,
 //
 // Identities only, like every other record on this path. Caller holds grantMu.
 func recordGrantEvent(ctx *AgentContext, g *authorizationGrant, event, detail string) {
-	sink := activeShadowSink.Load()
-	if !sink.enabled() {
+	sink := shadowcapture.Active()
+	if !sink.Enabled() {
 		return
 	}
-	sink.submit(map[string]interface{}{
+	sink.Submit(map[string]interface{}{
 		"schema_version":        shadowSchemaVersionEvidence,
 		"record_kind":           "authorization_grant_event",
 		"event":                 event,

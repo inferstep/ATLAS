@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/itigges22/atlas-proxy/internal/shadowcapture"
 	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
@@ -564,8 +565,8 @@ func evidenceRefusalFor(ev proxyEvidence, asked wire.V3EvidenceProvenance,
 // fact about this build: nothing consumes what this returns.
 func recordAuthorizationDecision(ctx *AgentContext, in authorizationInput,
 	d AuthorizationDecision) {
-	sink := activeShadowSink.Load()
-	if !sink.enabled() {
+	sink := shadowcapture.Active()
+	if !sink.Enabled() {
 		return
 	}
 	reason := d.Reason
@@ -574,7 +575,7 @@ func recordAuthorizationDecision(ctx *AgentContext, in authorizationInput,
 		// than as arbitrary prose.
 		reason = ReasonUnknown
 	}
-	sink.submit(map[string]interface{}{
+	sink.Submit(map[string]interface{}{
 		"schema_version":        shadowSchemaVersionAuthorization,
 		"record_kind":           "candidate_authorization_decision",
 		"request_id":            in.Identity.RequestID,

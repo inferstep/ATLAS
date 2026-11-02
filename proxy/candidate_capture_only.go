@@ -3,6 +3,8 @@ package main
 import (
 	"os"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/shadowcapture"
 )
 
 // An acquisition control, not a policy mode.
@@ -87,15 +89,15 @@ func captureOnlyDispositionFor(decision candidatePolicyDecision) string {
 // authorization decision it describes is about to be discarded.
 func recordCaptureOnlySuppression(ctx *AgentContext, entry routeEntry,
 	candidateHash string, d AuthorizationDecision) {
-	sink := activeShadowSink.Load()
-	if !sink.enabled() {
+	sink := shadowcapture.Active()
+	if !sink.Enabled() {
 		return
 	}
 	reason := d.Reason
 	if !authorizationReasons[reason] {
 		reason = ReasonUnknown
 	}
-	sink.submit(map[string]interface{}{
+	sink.Submit(map[string]interface{}{
 		"schema_version":  shadowSchemaVersionCaptureOnly,
 		"record_kind":     "candidate_capture_only_suppression",
 		"request_id":      requestIDOf(ctx),
@@ -119,15 +121,15 @@ func recordCaptureOnlySuppression(ctx *AgentContext, entry routeEntry,
 // acquisition, in the closed vocabulary the analysis reads.
 func recordCaptureOnlyDisposition(ctx *AgentContext, entry routeEntry,
 	candidateHash string, out candidatePolicyOutcome, suppressed bool) {
-	sink := activeShadowSink.Load()
-	if !sink.enabled() {
+	sink := shadowcapture.Active()
+	if !sink.Enabled() {
 		return
 	}
 	disposition := captureOnlyDispositionFor(out.Decision)
 	if !captureOnlyDispositions[disposition] {
 		disposition = CaptureBaselineRetained
 	}
-	sink.submit(map[string]interface{}{
+	sink.Submit(map[string]interface{}{
 		"schema_version": shadowSchemaVersionCaptureOnly,
 		"record_kind":    "candidate_capture_only_disposition",
 		"request_id":     requestIDOf(ctx),

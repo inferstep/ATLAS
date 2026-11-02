@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/shadowcapture"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -30,10 +31,9 @@ func captureShadow(t *testing.T, fn func()) []map[string]interface{} {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sink := newShadowSink(f)
-	go sink.run()
-	prev := activeShadowSink.Swap(sink)
-	defer activeShadowSink.Store(prev)
+	sink := shadowcapture.Start(f)
+	prev := shadowcapture.SetActive(sink)
+	defer shadowcapture.SetActive(prev)
 
 	fn()
 
@@ -43,7 +43,7 @@ func captureShadow(t *testing.T, fn func()) []map[string]interface{} {
 	// submitted late in fn() would be lost, under load, and the goroutine
 	// would never exit. Every assertion in this package about what
 	// production recorded rests on this helper.
-	if err := sink.close(context.Background(), 10*time.Second); err != nil {
+	if err := sink.Close(context.Background(), 10*time.Second); err != nil {
 		t.Fatalf("the capture did not finalise: %v", err)
 	}
 	body, err := os.ReadFile(path)
@@ -250,8 +250,8 @@ func TestNoObserverIndexesTheLedger(t *testing.T) {
 // TestTheObserversAreSilentWithNoSink pins that the whole apparatus costs
 // nothing when capture is off: no record, no panic, same answers.
 func TestTheObserversAreSilentWithNoSink(t *testing.T) {
-	prev := activeShadowSink.Swap(nil)
-	defer activeShadowSink.Store(prev)
+	prev := shadowcapture.SetActive(nil)
+	defer shadowcapture.SetActive(prev)
 
 	w := newAuthWorld(t,
 		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`,
@@ -292,16 +292,16 @@ func TestTheObserversAreSilentWithNoSink(t *testing.T) {
 // count of what it dropped. Neither depends on how fast the writer is.
 func TestTheCaptureHelperLosesNoRecord(t *testing.T) {
 	t.Run("a burst the queue can hold survives whole", func(t *testing.T) {
-		survived, footer := captureBurst(t, shadowQueueDepth)
-		checkCaptureBalances(t, shadowQueueDepth, survived, footer)
-		if survived != shadowQueueDepth {
+		survived, footer := captureBurst(t, shadowcapture.QueueDepth)
+		checkCaptureBalances(t, shadowcapture.QueueDepth, survived, footer)
+		if survived != shadowcapture.QueueDepth {
 			t.Errorf("%d of %d records survived a burst the queue can hold (%v dropped)",
-				survived, shadowQueueDepth, footer["dropped"])
+				survived, shadowcapture.QueueDepth, footer["dropped"])
 		}
 	})
 	t.Run("a larger burst is accounted for in full", func(t *testing.T) {
-		survived, footer := captureBurst(t, 5*shadowQueueDepth)
-		checkCaptureBalances(t, 5*shadowQueueDepth, survived, footer)
+		survived, footer := captureBurst(t, 5*shadowcapture.QueueDepth)
+		checkCaptureBalances(t, 5*shadowcapture.QueueDepth, survived, footer)
 	})
 }
 
@@ -310,9 +310,9 @@ func TestTheCaptureHelperLosesNoRecord(t *testing.T) {
 func captureBurst(t *testing.T, count int) (int, map[string]interface{}) {
 	t.Helper()
 	recs := captureShadow(t, func() {
-		sink := activeShadowSink.Load()
+		sink := shadowcapture.Active()
 		for i := 0; i < count; i++ {
-			sink.submit(map[string]interface{}{
+			sink.Submit(map[string]interface{}{
 				"record_kind": "capture_probe", "seq": i,
 				"influences_live_decision": false,
 			})
@@ -347,9 +347,9 @@ func checkCaptureBalances(t *testing.T, submitted, survived int, footer map[stri
 		t.Errorf("%d records are in the capture and the sink wrote %.0f: "+
 			"the capture lost what the writer had", survived, written)
 	}
-	if survived < shadowQueueDepth {
+	if survived < shadowcapture.QueueDepth {
 		t.Errorf("%d records survived, fewer than the %d the queue holds",
-			survived, shadowQueueDepth)
+			survived, shadowcapture.QueueDepth)
 	}
 	if errs != 0 {
 		t.Errorf("%.0f capture write errors: the descriptor closed under the writer", errs)

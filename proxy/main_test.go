@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -28,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/shadowcapture"
 	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
@@ -1073,8 +1073,7 @@ func TestGuardrailsOwnsTheTaskContractDecisions(t *testing.T) {
 func TestTheObligationOwnerReadsOnlyTheValidatedContract(t *testing.T) {
 	banned := map[string]bool{
 		"json.Unmarshal": true, "Unmarshal": true, "validateTaskContract": true,
-		"contractOutputs": true, "openShadowSink": true, "newShadowSink": true,
-		"emitShadowRequestSnapshot": true,
+		"contractOutputs": true, "emitShadowRequestSnapshot": true,
 	}
 	fset := token.NewFileSet()
 	for _, file := range append(packageFiles(t, "internal/taskcontract"), "obligations.go") {
@@ -1095,6 +1094,10 @@ func TestTheObligationOwnerReadsOnlyTheValidatedContract(t *testing.T) {
 				name = fn.Name
 			case *ast.SelectorExpr:
 				name = fn.Sel.Name
+				// A call into the capture's package is a call to the capture.
+				if pkg, ok := fn.X.(*ast.Ident); ok && shadowProductionSymbols[pkg.Name] {
+					name = pkg.Name
+				}
 			}
 			if banned[name] || shadowProductionSymbols[name] {
 				t.Errorf("the obligation owner calls %s instead of reading the "+
@@ -1777,349 +1780,6 @@ func readShadowRecords(t *testing.T, path string) []map[string]interface{} {
 	return out
 }
 
-// Disabled is the deployed default: nothing opens, nothing is written.
-func TestShadowSinkDisabledByDefault(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("ATLAS_DIAGNOSTIC_DIR", dir)
-	// ATLAS_SHADOW_CAPTURE deliberately unset.
-	sink, err := openShadowSink()
-	if err != nil {
-		t.Fatalf("disabled must not error: %v", err)
-	}
-	if sink != nil {
-		t.Fatal("a sink was opened with no capture configured")
-	}
-	if !sink.enabled() { // nil receiver must answer false, not panic
-		// expected
-	} else {
-		t.Error("a nil sink reports enabled")
-	}
-	entries, _ := os.ReadDir(dir)
-	if len(entries) != 0 {
-		t.Errorf("disabled mode created %d file(s)", len(entries))
-	}
-}
-
-// Initialization refuses anything it cannot own: an existing destination, or
-// one outside the capture root.
-// The capture records how ATLAS judged the requests of each session, so only
-// its owner may read it.
-func TestShadowCaptureFileIsReadableByItsOwnerOnly(t *testing.T) {
-	dir := t.TempDir()
-	shadowEnv(t, dir, "mode.jsonl")
-	sink, err := openShadowSink()
-	if err != nil {
-		t.Fatalf("sink: %v", err)
-	}
-	t.Cleanup(func() { _ = sink.close(context.Background(), time.Second) })
-	info, err := os.Stat(filepath.Join(dir, "mode.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o600 {
-		t.Errorf("the capture file has mode %o, want 600", info.Mode().Perm())
-	}
-}
-
-func TestShadowSinkInitializationRefusals(t *testing.T) {
-	t.Run("existing destination", func(t *testing.T) {
-		dir := t.TempDir()
-		os.WriteFile(filepath.Join(dir, "run.jsonl"), []byte("old\n"), 0o644)
-		shadowEnv(t, dir, "run.jsonl")
-		if _, err := openShadowSink(); err == nil {
-			t.Error("an existing capture was accepted; a mixed run would look like one run")
-		}
-	})
-	for _, escape := range []string{"../outside.jsonl", "/etc/passwd", "sub/../../out.jsonl"} {
-		t.Run("escape "+escape, func(t *testing.T) {
-			dir := t.TempDir()
-			shadowEnv(t, dir, escape)
-			if _, err := openShadowSink(); err == nil {
-				t.Errorf("%q escaped the capture root and was accepted", escape)
-			}
-		})
-	}
-}
-
-// A full queue drops, counts, and never blocks the caller.
-func TestShadowSinkDropsWhenFull(t *testing.T) {
-	dir := t.TempDir()
-	f, err := os.Create(filepath.Join(dir, "run.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The writer is not started, so nothing drains the queue while it fills.
-	sink := newShadowSink(f)
-	for i := 0; i < shadowQueueDepth*4; i++ {
-		sink.submit(map[string]interface{}{"record_kind": "x", "i": i})
-	}
-	go sink.run()
-	if err := sink.close(context.Background(), 5*time.Second); err != nil {
-		t.Fatalf("close: %v", err)
-	}
-	recs := readShadowRecords(t, filepath.Join(dir, "run.jsonl"))
-	footer := recs[len(recs)-1]
-	if footer["record_kind"] != "task_contract_shadow_footer" {
-		t.Fatalf("last record is not a footer: %v", footer["record_kind"])
-	}
-	if footer["dropped"].(float64) <= 0 {
-		t.Error("a saturated queue reported no drops")
-	}
-	if footer["accepted"].(float64) != float64(shadowQueueDepth*4) {
-		t.Errorf("accepted=%v", footer["accepted"])
-	}
-}
-
-// Duplicate request IDs are a capture defect, never merged.
-func TestShadowSinkFlagsDuplicateRequestIDs(t *testing.T) {
-	dir := t.TempDir()
-	shadowEnv(t, dir, "run.jsonl")
-	sink, _ := openShadowSink()
-	sink.noteRequest("req-1")
-	sink.noteRequest("req-2")
-	sink.noteRequest("req-1") // same id twice in one capture
-	sink.close(context.Background(), 5*time.Second)
-	recs := readShadowRecords(t, filepath.Join(dir, "run.jsonl"))
-	footer := recs[len(recs)-1]
-	if footer["duplicate_request_ids"].(float64) != 1 {
-		t.Errorf("duplicate_request_ids=%v, want 1", footer["duplicate_request_ids"])
-	}
-}
-
-// A capture with no footer is detectable as incomplete.
-// An acquisition that never reached its close hook has no footer.
-//
-// The ungraceful fixture changed with the finalisation owner. It used to close
-// the queue and wait for the writer, which is now exactly what a CLEAN close
-// does -- the writer emits the footer after draining -- so closing the queue can
-// no longer stand for a process that died. What a SIGKILL actually leaves is a
-// file whose close hook never ran, which is what this now reads: the records on
-// disk while the sink is still open.
-func TestShadowCaptureWithoutFooterIsIncomplete(t *testing.T) {
-	dir := t.TempDir()
-	shadowEnv(t, dir, "run.jsonl")
-	sink, _ := openShadowSink()
-	sink.submit(map[string]interface{}{"record_kind": "task_contract_shadow_request"})
-	waitWritten(t, sink, 1)
-	recs := readShadowRecords(t, filepath.Join(dir, "run.jsonl"))
-	if len(recs) != 1 {
-		t.Fatalf("%d records before any close, want 1", len(recs))
-	}
-	for _, r := range recs {
-		if r["record_kind"] == "task_contract_shadow_footer" {
-			t.Error("a capture wrote a footer without a close hook")
-		}
-	}
-	sink.close(context.Background(), 5*time.Second)
-}
-
-// waitWritten blocks until the writer has written n records.
-func waitWritten(t *testing.T, s *shadowSink, n int64) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for s.written.Load() < n {
-		if time.Now().After(deadline) {
-			t.Fatalf("writer wrote %d of %d records", s.written.Load(), n)
-		}
-		time.Sleep(time.Millisecond)
-	}
-}
-
-// --- Submission lifecycle: open, closing, closed -----------------------------
-
-// Submissions racing the close hook cannot panic, cannot block, and cannot
-// leave the footer unable to account for them.
-//
-// A "check the flag, then send" pair is not enough on its own: close can land
-// between the check and the send. Admission is therefore held for reading while
-// a submitter decides AND enqueues, and the cutoff takes it for writing, so no
-// submitter is inside when the queue closes.
-func TestShadowSubmitRacesCloseWithoutPanic(t *testing.T) {
-	dir := t.TempDir()
-	shadowEnv(t, dir, "race.jsonl")
-	sink, err := openShadowSink()
-	if err != nil {
-		t.Fatalf("sink: %v", err)
-	}
-	const submitters = 16
-	var wg sync.WaitGroup
-	returned := make(chan struct{}, submitters)
-	start := make(chan struct{})
-	for i := 0; i < submitters; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			<-start
-			for j := 0; j < 64; j++ {
-				sink.submit(map[string]interface{}{
-					"record_kind": "task_contract_shadow_gate", "i": i, "j": j})
-			}
-			returned <- struct{}{}
-		}(i)
-	}
-	close(start)
-	time.Sleep(2 * time.Millisecond) // let submitters get going
-	if err := sink.close(context.Background(), 5*time.Second); err != nil {
-		t.Fatalf("close: %v", err)
-	}
-	done := make(chan struct{})
-	go func() { wg.Wait(); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("a submitter never returned: submission blocked on closure")
-	}
-	if len(returned) != submitters {
-		t.Errorf("%d of %d submitters returned", len(returned), submitters)
-	}
-
-	accepted, written, dropped := sink.accepted.Load(), sink.written.Load(), sink.dropped.Load()
-	refused := sink.refused.Load()
-	t.Logf("accepted=%d written=%d dropped=%d refused=%d", accepted, written, dropped, refused)
-	if accepted != written+dropped {
-		t.Errorf("accepted %d != written %d + dropped %d", accepted, written, dropped)
-	}
-	if accepted+refused != submitters*64 {
-		t.Errorf("accepted %d + refused %d != %d submitted", accepted, refused, submitters*64)
-	}
-	recs := readShadowRecords(t, filepath.Join(dir, "race.jsonl"))
-	footer := recs[len(recs)-1]
-	if footer["record_kind"] != "task_contract_shadow_footer" {
-		t.Fatalf("last record is %v, not the footer", footer["record_kind"])
-	}
-	if got := int64(footer["written"].(float64)); int64(len(recs)-1) != got {
-		t.Errorf("%d records before the footer, footer says %d written", len(recs)-1, got)
-	}
-}
-
-// A record submitted after the cutoff is inert: no panic, not accepted, and
-// not able to contradict a footer that has already been written.
-func TestShadowSubmitAfterCleanCloseIsRefused(t *testing.T) {
-	dir := t.TempDir()
-	shadowEnv(t, dir, "late.jsonl")
-	sink, err := openShadowSink()
-	if err != nil {
-		t.Fatalf("sink: %v", err)
-	}
-	sink.submit(map[string]interface{}{"record_kind": "task_contract_shadow_request"})
-	if err := sink.close(context.Background(), 5*time.Second); err != nil {
-		t.Fatalf("close: %v", err)
-	}
-	before, err := os.ReadFile(filepath.Join(dir, "late.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	sink.submit(map[string]interface{}{"record_kind": "task_contract_shadow_gate"})
-	if got := sink.refused.Load(); got != 1 {
-		t.Errorf("refused=%d, want 1", got)
-	}
-	if got := sink.accepted.Load(); got != 1 {
-		t.Errorf("a post-cutoff record was accepted: accepted=%d", got)
-	}
-	after, err := os.ReadFile(filepath.Join(dir, "late.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(before, after) {
-		t.Error("a post-cutoff record reached the finalised file")
-	}
-	// Closing again is idempotent and reports the same outcome.
-	if err := sink.close(context.Background(), time.Second); err != nil {
-		t.Errorf("second close: %v", err)
-	}
-}
-
-// --- Single-owner finalisation -----------------------------------------------
-
-// A clean close: the writer drains, emits the footer as the final line, closes
-// the descriptor, and stops. Nothing else writes to the file.
-func TestShadowCleanCloseFinalisesExactlyOnce(t *testing.T) {
-	dir := t.TempDir()
-	shadowEnv(t, dir, "clean.jsonl")
-	before := runtime.NumGoroutine()
-	sink, err := openShadowSink()
-	if err != nil {
-		t.Fatalf("sink: %v", err)
-	}
-	for i := 0; i < 50; i++ {
-		sink.submit(map[string]interface{}{
-			"record_kind": "task_contract_shadow_gate", "i": i})
-	}
-	if err := sink.close(context.Background(), 5*time.Second); err != nil {
-		t.Fatalf("close: %v", err)
-	}
-	recs := readShadowRecords(t, filepath.Join(dir, "clean.jsonl"))
-	footer := recs[len(recs)-1]
-	if footer["record_kind"] != "task_contract_shadow_footer" {
-		t.Fatalf("last record is %v", footer["record_kind"])
-	}
-	for _, r := range recs[:len(recs)-1] {
-		if r["record_kind"] == "task_contract_shadow_footer" {
-			t.Error("more than one footer")
-		}
-	}
-	if got := int64(footer["written"].(float64)); got != 50 || int64(len(recs)-1) != got {
-		t.Errorf("footer written=%d, file holds %d records", got, len(recs)-1)
-	}
-	if got := footer["accepted"].(float64); got != 50 {
-		t.Errorf("accepted=%v", got)
-	}
-	// The writer is finished and owns nothing further.
-	select {
-	case <-sink.done:
-	default:
-		t.Error("the writer goroutine is still running after a clean close")
-	}
-	if _, err := sink.f.Write([]byte("x")); err == nil {
-		t.Error("the descriptor is still open after a clean close")
-	}
-	deadline := time.Now().Add(2 * time.Second)
-	for runtime.NumGoroutine() > before && time.Now().Before(deadline) {
-		runtime.Gosched()
-	}
-	if after := runtime.NumGoroutine(); after > before {
-		t.Errorf("goroutines %d -> %d after a clean close", before, after)
-	}
-}
-
-// A writer that cannot finish within the hook's deadline leaves a file with no
-// footer. The hook returns bounded and says the capture is incomplete; nothing
-// manufactures a footer that a reader could mistake for a full acquisition.
-//
-// The writer here is simply never started, which is the same thing the hook can
-// observe as a writer blocked in a filesystem call: no progress before the
-// deadline. A write already inside a blocking syscall cannot be interrupted
-// portably, so the hook never tries -- see the comment on close().
-func TestShadowBlockedWriterDeadlineWritesNoFooter(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "stuck.jsonl")
-	f, err := os.Create(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	sink := newShadowSink(f) // writer never started: nothing drains the queue
-	sink.submit(map[string]interface{}{"record_kind": "task_contract_shadow_request"})
-
-	started := time.Now()
-	err = sink.close(context.Background(), 150*time.Millisecond)
-	elapsed := time.Since(started)
-	if err == nil {
-		t.Error("a capture that never finalised reported success")
-	}
-	if elapsed > 3*time.Second {
-		t.Errorf("the close hook took %v, well past its deadline", elapsed)
-	}
-	b, rerr := os.ReadFile(path)
-	if rerr != nil {
-		t.Fatal(rerr)
-	}
-	if strings.Contains(string(b), "task_contract_shadow_footer") {
-		t.Error("a timed-out close manufactured a footer")
-	}
-	t.Logf("incomplete capture: %d bytes, err=%v, elapsed=%v", len(b), err, elapsed)
-}
-
 // shadowLoopRun drives the real agent loop with capture optionally enabled and
 // returns the emitted records plus everything a causal comparison needs.
 func shadowLoopRun(t *testing.T, capture bool, contract *taskcontract.TaskContract, prompt string,
@@ -2128,22 +1788,22 @@ func shadowLoopRun(t *testing.T, capture bool, contract *taskcontract.TaskContra
 	capDir := t.TempDir()
 	if capture {
 		shadowEnv(t, capDir, "run.jsonl")
-		sink, err := openShadowSink()
+		sink, err := openShadowCapture()
 		if err != nil {
 			t.Fatalf("sink: %v", err)
 		}
-		activeShadowSink.Store(sink)
+		shadowcapture.SetActive(sink)
 		t.Cleanup(func() {
-			sink.close(context.Background(), 5*time.Second)
-			activeShadowSink.Store(nil)
+			sink.Close(context.Background(), 5*time.Second)
+			shadowcapture.SetActive(nil)
 		})
 	} else {
-		activeShadowSink.Store(nil)
+		shadowcapture.SetActive(nil)
 	}
 	recs, events, disk, term, prompts := shadowLoopDrive(t, "req-shadow-1", contract, prompt, plan)
 	if capture {
-		if s := activeShadowSink.Load(); s != nil {
-			s.close(context.Background(), 5*time.Second)
+		if s := shadowcapture.Active(); s != nil {
+			s.Close(context.Background(), 5*time.Second)
 			recs = readShadowRecords(t, filepath.Join(capDir, "run.jsonl"))
 		}
 	}
@@ -2462,7 +2122,7 @@ func excerpt(v string, lo, hi int) string {
 // Capture off costs a run nothing: no sink, no goroutine, no allocation on the
 // gate path, and the gate still returns exactly what production asked for.
 func TestShadowDisabledCostsNothing(t *testing.T) {
-	activeShadowSink.Store(nil)
+	shadowcapture.SetActive(nil)
 	before := runtime.NumGoroutine()
 	_, _, _, term, _ := shadowLoopRun(t, false, &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork},
 		"Create app.py.", shadowWorkPlan)
@@ -2559,12 +2219,12 @@ func TestShadowGateFollowsInspectionNotRequestText(t *testing.T) {
 func TestShadowRejectedContractProducesNoSnapshot(t *testing.T) {
 	capDir := t.TempDir()
 	shadowEnv(t, capDir, "reject.jsonl")
-	sink, err := openShadowSink()
+	sink, err := openShadowCapture()
 	if err != nil {
 		t.Fatalf("sink: %v", err)
 	}
-	activeShadowSink.Store(sink)
-	defer activeShadowSink.Store(nil)
+	shadowcapture.SetActive(sink)
+	defer shadowcapture.SetActive(nil)
 
 	dir := t.TempDir()
 	for _, bad := range []string{
@@ -2580,7 +2240,7 @@ func TestShadowRejectedContractProducesNoSnapshot(t *testing.T) {
 			t.Fatalf("%s was accepted", bad)
 		}
 	}
-	sink.close(context.Background(), 5*time.Second)
+	sink.Close(context.Background(), 5*time.Second)
 	for _, r := range readShadowRecords(t, filepath.Join(capDir, "reject.jsonl")) {
 		if r["record_kind"] != "task_contract_shadow_footer" {
 			t.Errorf("a rejected contract produced %v", r["record_kind"])
@@ -2732,12 +2392,12 @@ func isCallTo(call *ast.CallExpr, name string) bool {
 
 // shadowProductionSymbols is the explicit inventory of every production symbol
 // the capture owns. It is a list rather than a name pattern because a pattern
-// misses the ones that do not start with the word -- activeShadowSink is the
-// live sink pointer and a prefix rule lets it through.
+// misses the ones that do not start with the word -- contractOutputs is the
+// capture's and a prefix rule lets it through. The sink itself lives in
+// internal/shadowcapture, so the package name stands for all of it: reading
+// shadowcapture.Active names the identifier shadowcapture here.
 var shadowProductionSymbols = map[string]bool{
-	"activeShadowSink": true, "shadowSink": true, "newShadowSink": true,
-	"openShadowSink": true, "shadowCaptureRoot": true, "shadowQueueDepth": true,
-	"maxTrackedShadowRequests": true, "shadowSchemaVersion": true,
+	"shadowcapture": true, "openShadowCapture": true, "shadowSchemaVersion": true,
 	"shadowGateSite": true, "shadowGateSeq": true, "shadowGate": true,
 	"shadowHash": true, "shadowHashes": true, "shadowCanonicalSet": true,
 	"shadowCompareSets": true, "contractOutputs": true,
@@ -2760,17 +2420,9 @@ var shadowGuardEntryPoints = map[string]bool{
 
 // shadowGuardOwners is keyed by receiver-qualified identity, so a future
 // (*broker).close or (*ledger).submit cannot inherit an exemption written for
-// the sink's methods.
+// one of the owners.
 var shadowGuardOwners = map[string]bool{
-	"(*shadowSink).enabled":     true,
-	"(*shadowSink).run":         true,
-	"(*shadowSink).finalize":    true,
-	"(*shadowSink).submit":      true,
-	"(*shadowSink).noteRequest": true,
-	"(*shadowSink).close":       true,
-	"openShadowSink":            true,
-	"newShadowSink":             true,
-	"shadowCaptureRoot":         true,
+	"openShadowCapture":         true,
 	"emitShadowRequestSnapshot": true,
 	"observeActionDemand":       true,
 	// The observe-only writers. Each WRITES one record to the capture and
@@ -2851,7 +2503,7 @@ func shadowGuardViolations(files map[string]*ast.File) []string {
 // function fd, of file name, names.
 //
 // The signature is walked as well as the body. Taking a shadow value as a
-// parameter is how a non-owner would read a counter without ever naming an
+// parameter is how a non-owner would read the capture without ever naming an
 // inventory symbol in its body -- the unauthorized-read fixture below is
 // exactly that shape.
 func shadowReadsIn(name, owner string, fd *ast.FuncDecl) []string {
@@ -2882,7 +2534,7 @@ func TestShadowGuardRejectsAnUnauthorizedRead(t *testing.T) {
 	cases := map[string]string{
 		"tier selection": `package main
 func pickTier() int {
-	if activeShadowSink.Load() != nil {
+	if shadowcapture.Active() != nil {
 		return 1
 	}
 	return 0
@@ -2899,8 +2551,8 @@ func mayComplete(s *runState) bool {
 	return s.shadowGate.n > 0
 }`,
 		"terminal status": `package main
-func status(s *shadowSink) string {
-	if s.dropped.Load() > 0 {
+func status(s *shadowcapture.Sink) string {
+	if s.Enabled() {
 		return "failed"
 	}
 	return "completed"
@@ -2924,9 +2576,8 @@ func status(s *shadowSink) string {
 	// guard is discriminating between owners rather than banning the word.
 	fset := token.NewFileSet()
 	f, _ := parser.ParseFile(fset, "owned.go", `package main
-func openShadowSink() (*shadowSink, error) {
-	_ = activeShadowSink.Load()
-	return nil, nil
+func recordGrantEvent() {
+	_ = shadowcapture.Active()
 }`, 0)
 	if got := shadowGuardViolations(map[string]*ast.File{"owned.go": f}); len(got) != 0 {
 		t.Errorf("the guard flagged an owner: %v", got)
@@ -2940,7 +2591,7 @@ func openShadowSink() (*shadowSink, error) {
 // capture is defective, and it says so in its own counters.
 func TestShadowWriterErrorLeavesTheRunUnchanged(t *testing.T) {
 	contract := &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork, ExpectedOutputs: strsPtr("app.py")}
-	activeShadowSink.Store(nil)
+	shadowcapture.SetActive(nil)
 	_, evOff, diskOff, termOff, promptOff := shadowLoopDrive(t, "req-writer-err",
 		contract, "Create app.py.", shadowWorkPlan)
 
@@ -2951,22 +2602,16 @@ func TestShadowWriterErrorLeavesTheRunUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.Close()
-	sink := newShadowSink(f)
-	go sink.run()
-	activeShadowSink.Store(sink)
-	defer activeShadowSink.Store(nil)
+	sink := shadowcapture.Start(f)
+	shadowcapture.SetActive(sink)
+	defer shadowcapture.SetActive(nil)
 
 	_, evOn, diskOn, termOn, promptOn := shadowLoopDrive(t, "req-writer-err",
 		contract, "Create app.py.", shadowWorkPlan)
-	closeErr := sink.close(context.Background(), 5*time.Second)
-
-	t.Logf("accepted=%d written=%d errors=%d closeErr=%v",
-		sink.accepted.Load(), sink.written.Load(), sink.errors.Load(), closeErr)
-	if sink.errors.Load() == 0 {
+	// The sink's own counts of a failing writer are checked in its package; here
+	// the failed close shows the fixture really made the writer fail.
+	if err := sink.Close(context.Background(), 5*time.Second); err == nil {
 		t.Fatal("the fixture did not actually make the writer fail")
-	}
-	if sink.written.Load() != 0 {
-		t.Errorf("a failing writer reported %d records written", sink.written.Load())
 	}
 	if termOff != termOn {
 		t.Errorf("terminal differs: %q vs %q", termOff, termOn)
@@ -2992,12 +2637,12 @@ func TestShadowWriterErrorLeavesTheRunUnchanged(t *testing.T) {
 func TestShadowConcurrentRequestsKeepIndependentSequences(t *testing.T) {
 	dir := t.TempDir()
 	shadowEnv(t, dir, "concurrent.jsonl")
-	sink, err := openShadowSink()
+	sink, err := openShadowCapture()
 	if err != nil {
 		t.Fatalf("sink: %v", err)
 	}
-	activeShadowSink.Store(sink)
-	defer activeShadowSink.Store(nil)
+	shadowcapture.SetActive(sink)
+	defer shadowcapture.SetActive(nil)
 
 	const requests = 6
 	var wg sync.WaitGroup
@@ -3010,7 +2655,7 @@ func TestShadowConcurrentRequestsKeepIndependentSequences(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
-	if err := sink.close(context.Background(), 10*time.Second); err != nil {
+	if err := sink.Close(context.Background(), 10*time.Second); err != nil {
 		t.Fatalf("close: %v", err)
 	}
 
@@ -3078,19 +2723,19 @@ func TestLegacyHeuristicDecisionsAreUnchangedByCapture(t *testing.T) {
 		}
 		return out
 	}
-	activeShadowSink.Store(nil)
+	shadowcapture.SetActive(nil)
 	off := decide()
 
 	dir := t.TempDir()
 	shadowEnv(t, dir, "corpus.jsonl")
-	sink, err := openShadowSink()
+	sink, err := openShadowCapture()
 	if err != nil {
 		t.Fatalf("sink: %v", err)
 	}
-	activeShadowSink.Store(sink)
+	shadowcapture.SetActive(sink)
 	defer func() {
-		sink.close(context.Background(), 5*time.Second)
-		activeShadowSink.Store(nil)
+		sink.Close(context.Background(), 5*time.Second)
+		shadowcapture.SetActive(nil)
 	}()
 	on := decide()
 
@@ -3133,7 +2778,7 @@ func modePlanInspectThenDone(i int) map[string]interface{} {
 func modeTerminal(t *testing.T, contract *taskcontract.TaskContract, prompt string,
 	plan func(int) map[string]interface{}) string {
 	t.Helper()
-	activeShadowSink.Store(nil)
+	shadowcapture.SetActive(nil)
 	_, _, _, term, _ := shadowLoopDrive(t, "req-mode", contract, prompt, plan)
 	return term
 }
@@ -3241,7 +2886,7 @@ func TestActionDemandDecisionTable(t *testing.T) {
 // request bytes as before this migration. The Step 3B corpus said nothing about
 // clients that send no contract, so nothing about them changes.
 func TestContractlessRequestIsUnchanged(t *testing.T) {
-	activeShadowSink.Store(nil)
+	shadowcapture.SetActive(nil)
 	for _, tc := range []struct {
 		name   string
 		prompt string
@@ -3315,7 +2960,7 @@ func TestWorkContractStripsAConfidentClaimWithNoAction(t *testing.T) {
 		return map[string]interface{}{"type": "done",
 			"summary": "All done — I have fully implemented and tested the change."}
 	}
-	activeShadowSink.Store(nil)
+	shadowcapture.SetActive(nil)
 	_, ev, _, term, _ := shadowLoopDrive(t, "req-claim",
 		&taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork}, "app.py numbers", plan)
 	if term != "incomplete/action_demanded_unmet" {
@@ -3375,7 +3020,7 @@ func TestBothActionDemandSitesShareOneDecision(t *testing.T) {
 			ctx := NewAgentContext(t.TempDir(), Tier2Medium)
 			ctx.TaskContract = mode
 			st := &runState{inspectedWorkspace: inspected}
-			activeShadowSink.Store(nil)
+			shadowcapture.SetActive(nil)
 			one := observeActionDemand(ctx, st, shadowGateActionDemanded, a)
 			two := observeActionDemand(ctx, st, shadowGateActionGate, a)
 			if one != two || one != a.Required {
@@ -3388,20 +3033,20 @@ func TestBothActionDemandSitesShareOneDecision(t *testing.T) {
 // 14. Capture on and capture off produce the same live result.
 func TestTaskModePolicyIsIndependentOfShadowCapture(t *testing.T) {
 	contract := &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork}
-	activeShadowSink.Store(nil)
+	shadowcapture.SetActive(nil)
 	_, evOff, diskOff, termOff, promptOff := shadowLoopDrive(t, "req-cap", contract,
 		"app.py numbers", modePlanDoneNow)
 
 	dir := t.TempDir()
 	shadowEnv(t, dir, "policy.jsonl")
-	sink, err := openShadowSink()
+	sink, err := openShadowCapture()
 	if err != nil {
 		t.Fatalf("sink: %v", err)
 	}
-	activeShadowSink.Store(sink)
+	shadowcapture.SetActive(sink)
 	defer func() {
-		sink.close(context.Background(), 5*time.Second)
-		activeShadowSink.Store(nil)
+		sink.Close(context.Background(), 5*time.Second)
+		shadowcapture.SetActive(nil)
 	}()
 	_, evOn, diskOn, termOn, promptOn := shadowLoopDrive(t, "req-cap", contract,
 		"app.py numbers", modePlanDoneNow)
@@ -3525,15 +3170,15 @@ func validateGateRecord(rec map[string]interface{}) []string {
 func TestGateRecordsDeclareTheirOwnSchemaVersion(t *testing.T) {
 	dir := t.TempDir()
 	shadowEnv(t, dir, "schema.jsonl")
-	sink, err := openShadowSink()
+	sink, err := openShadowCapture()
 	if err != nil {
 		t.Fatalf("sink: %v", err)
 	}
-	activeShadowSink.Store(sink)
-	defer activeShadowSink.Store(nil)
+	shadowcapture.SetActive(sink)
+	defer shadowcapture.SetActive(nil)
 	shadowLoopDrive(t, "req-schema", &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork},
 		"app.py numbers", modePlanDoneNow)
-	sink.close(context.Background(), 5*time.Second)
+	sink.Close(context.Background(), 5*time.Second)
 
 	recs := readShadowRecords(t, filepath.Join(dir, "schema.jsonl"))
 	gates := recordsOfKind(recs, "task_contract_shadow_gate")
@@ -3671,11 +3316,14 @@ func TestSchemaVersionOwnershipIsPerRecordKind(t *testing.T) {
 		t.Error("a shared shadowSchemaVersion constant is back; versions are per record kind")
 	}
 	intake, _ := os.ReadFile("task_intake.go")
-	for _, want := range []string{"shadowSchemaVersionRequest", "shadowSchemaVersionGate",
-		"shadowSchemaVersionFooter"} {
+	for _, want := range []string{"shadowSchemaVersionRequest", "shadowSchemaVersionGate"} {
 		if !strings.Contains(string(intake), want) {
 			t.Errorf("%s is missing", want)
 		}
+	}
+	capture, _ := os.ReadFile("internal/shadowcapture/sink.go")
+	if !strings.Contains(string(capture), "schemaVersionFooter") {
+		t.Error("the footer's schemaVersionFooter is missing")
 	}
 }
 

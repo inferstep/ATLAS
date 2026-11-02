@@ -506,10 +506,10 @@ func TestAttributionBuildsNothingWithTheSinkOff(t *testing.T) {
 	body := string(src)
 	fn := body[strings.Index(body, "func (l *routeLifecycle) recordAttribution("):]
 	fn = fn[:strings.Index(fn, "\n}")]
-	guard := strings.Index(fn, "if !sink.enabled() {")
+	guard := strings.Index(fn, "if !sink.Enabled() {")
 	derive := strings.Index(fn, "deriveAutomaticRefusal(")
 	build := strings.Index(fn, "map[string]interface{}{")
-	submit := strings.Index(fn, "sink.submit(")
+	submit := strings.Index(fn, "sink.Submit(")
 	if guard < 0 || derive < 0 || build < 0 || submit < 0 || guard > derive || guard > build || build > submit {
 		t.Error("recordAttribution derives or builds before checking the sink")
 	}
