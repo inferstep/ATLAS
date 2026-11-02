@@ -53,3 +53,4 @@ governs was removed). Git keeps the earlier wording.
 | [0009](0009-embedding-convention-owned-client-side.md) | The lens owns its embedding convention | Accepted |
 | [0010](0010-lens-capacity-boundary-is-typed.md) | The embedding capacity limit is a typed boundary, not a score | Accepted |
 | [0011](0011-the-lens-is-required.md) | The lens is required | Accepted, revised 2026-09 |
+| [0012](0012-repository-layout.md) | The repository is laid out like a library | Accepted |
