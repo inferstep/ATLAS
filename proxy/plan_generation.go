@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"maps"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -260,7 +262,7 @@ func isSourceExtension(ext string) bool {
 // own order would make which files the planner sees a matter of chance.
 func addFilesReadToPlanContext(ctx *AgentContext, pctx map[string]string, limit int) {
 	files := ctx.SnapshotFilesRead()
-	for _, path := range sortedKeys(files) {
+	for _, path := range slices.Sorted(maps.Keys(files)) {
 		if len(pctx) >= limit {
 			break
 		}

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/logsafe"
 )
 
 // fencedWatchdog arms the fenced sub-call's progress watchdog on cancel, with
@@ -408,7 +410,7 @@ func (f *fencedFetch) settle(a fencedAnswer, attempt int) (string, bool, error) 
 	log.Printf("[agent] fenced attempt %d for %s produced no usable block (%s, %d chars, cut=%q, session failures %d/%d): %q",
 		attempt+1, path, framing, len(reply), ctx.LastStreamCut,
 		ctx.FencedFailures[fencedKey(ctx, path)], maxFencedFailuresPerPath,
-		safeTextSummary(reply))
+		logsafe.TextSummary(reply))
 	f.msgs = append(f.msgs, AgentMessage{Role: "assistant", Content: reply},
 		AgentMessage{Role: "user", Content: fencedRetryNote(framing, tag)})
 	return "", false, nil

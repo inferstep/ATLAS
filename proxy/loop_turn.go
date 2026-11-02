@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/logsafe"
 )
 
 // maxContentLoopRecoveries bounds how often a run answers a repetition
@@ -545,7 +547,7 @@ func (loop *agentLoop) recoverFromParseFailure(turn int, response string, parseE
 	}
 	category, feedback := parseFailureFeedback(ctx, response, ctx.LastStreamCut)
 	log.Printf("[agent] parse error: %v | category=%s raw_len=%d | raw %s",
-		parseErr, category, len(response), safeTextSummary(response))
+		parseErr, category, len(response), logsafe.TextSummary(response))
 	ctx.Stream("error", map[string]string{
 		"error":    "failed to parse model response",
 		"category": category,
@@ -699,7 +701,7 @@ func logModelTurn(ctx *AgentContext, turn int, parsed ModelResponse, response st
 	// breakpoints.
 	logEvent("info",
 		fmt.Sprintf("[agent] turn=%d type=%s name=%s args=%s",
-			turn, parsed.Type, parsed.Name, safeArgsSummary(parsed.Name, parsed.Args)),
+			turn, parsed.Type, parsed.Name, logsafe.ArgsSummary(parsed.Name, parsed.Args)),
 		requestIDFromContext(ctx.Ctx), nil)
 
 	// When a tool_call still has no args after liftMissingArgs,
@@ -708,7 +710,7 @@ func logModelTurn(ctx *AgentContext, turn int, parsed ModelResponse, response st
 	if parsed.Type == "tool_call" && (len(parsed.Args) == 0 || string(parsed.Args) == "null") {
 		// The shape is the diagnosis; the text is model output. A size and
 		// a stable hash correlate two occurrences without reproducing one.
-		log.Printf("[agent] turn=%d EMPTY ARGS — model output %s", turn, safeTextSummary(response))
+		log.Printf("[agent] turn=%d EMPTY ARGS — model output %s", turn, logsafe.TextSummary(response))
 	}
 }
 

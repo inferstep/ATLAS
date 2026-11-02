@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/itigges22/atlas-proxy/internal/logsafe"
 	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
@@ -414,7 +415,7 @@ func structuralEditOutput(input StructuralEditInput, astResp structuralSplice, f
 	// that lands failing was a repair of a file that already failed.
 	if observed.Status == ValidationFailed {
 		log.Printf("[structural_edit] %s landed but does not parse (%s)",
-			logPath(input.Path), safeDiagnosticSummary(observed.Detail))
+			logPath(input.Path), logsafe.DiagnosticSummary(observed.Detail))
 		out.Warning = fmt.Sprintf(
 			"the edit landed, but %s does not parse now (%s). Run it and "+
 				"read the real traceback, then fix that line.",

@@ -8,6 +8,8 @@ import (
 	"log"
 	"strings"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/logsafe"
 )
 
 // maxTotalFailures bounds a whole run's failed tool calls, independent of the
@@ -820,7 +822,7 @@ func nudgeAfterV3Delivery(ctx *AgentContext, parsed ModelResponse, result *ToolR
 				parsed.Name, logPath(superseded.Path),
 				len(superseded.Delivered), len(superseded.Submitted))
 		} else {
-			log.Printf("[agent] V3 delivered %s on %s (shown working: %v)", parsed.Name, safeArgsSummary(parsed.Name, parsed.Args), shown)
+			log.Printf("[agent] V3 delivered %s on %s (shown working: %v)", parsed.Name, logsafe.ArgsSummary(parsed.Name, parsed.Args), shown)
 		}
 	}
 }

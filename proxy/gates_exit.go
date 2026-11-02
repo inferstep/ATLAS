@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"maps"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -754,7 +756,7 @@ func (s *runState) runFirstGateAtExit(ctx *AgentContext) (string, string) {
 	// terminal integrity condition, not a rewrite throttle. Without this a
 	// session whose prompt carried no verification wording could end with a
 	// file that never parsed and was never run, reported as success.
-	for _, p := range sortedKeys(s.pendingWarnedRun) {
+	for _, p := range slices.Sorted(maps.Keys(s.pendingWarnedRun)) {
 		if s.repairOpenFor(ctx, p) {
 			// The repair gate owns a file that still does not parse.
 			continue

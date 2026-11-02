@@ -107,7 +107,8 @@ Every non-test Go file of `proxy/`, sub-folders included, with its area of owner
 | `lens.go` | Lens scoring calls, the `VerificationRecord` the loop keeps for each verification run (passing or failed, with its evidence kind), calibration status |
 | `lens_identity.go` | Creates and attaches the proxy-owned invocation identity used for direct Lens service calls |
 | `lens_required.go` | Enforces that the geometric Lens is available, tracks Lens failures, and stops runs when scoring is unavailable |
-| `logsafe.go` | Builds privacy-safe tool argument summaries for logs, allowing only approved fields and redacting sensitive content |
+| `internal/logsafe/logsafe.go` | Builds privacy-safe tool argument summaries for logs, allowing only approved fields and redacting sensitive content |
+| `internal/logsafe/filter.go` | The writer every log line passes through: masks credential-shaped values, then prints control characters as text |
 | `memory_envelope.go` | Validates declared deployment memory budgets against the operator-stated host capacity and reports unenforced budget overruns |
 | `internal/workspacefs/object_handle_linux.go` | Holds Linux filesystem objects open during deletion approval so the approved object cannot be replaced before removal |
 | `internal/workspacefs/object_handle_other.go` | Refuses deletion approval on non-Linux platforms because a filesystem object cannot be safely pinned and verified |
@@ -159,7 +160,6 @@ Every non-test Go file of `proxy/`, sub-folders included, with its area of owner
 | `server_start.go` | Tells a verification command that failed because it is a long-running server (it hit the time limit, or its port was taken) from one that failed because the code is broken |
 | `service_answer.go` | Reads an answer from a service of the stack (llama-server, the V3 service, the lens, the sandbox) up to 64 MiB, so a service that sends without end cannot fill the proxy's memory |
 | `shell_wrapper.go` | The command policy behind `validateShellCommand`: splits compound commands, looks inside execution wrappers (`sh -c`, `eval`, …) up to 16 layers deep, and refuses catastrophic commands and wrappers it cannot check |
-| `sorted_keys.go` | Gives a map's keys in sorted order, so a text for the model names the same keys on every run |
 
 ### Agent Loop Flow
 
