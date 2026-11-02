@@ -338,6 +338,7 @@ func TestCanonicalAliasesStillDedupe(t *testing.T) {
 func TestGatesReadTheDecisionNotTheRawKnowledgeFields(t *testing.T) {
 	for _, file := range append(append([]string{"guardrails.go", "gates.go",
 		"gates_asset_lint.go", "gates_background_jobs.go", "internal/shellcmd/shell_wrapper.go",
+		"internal/shellcmd/destructive.go",
 		"gates_completion.go", "gates_edit_requests.go", "gates_ledger.go", "gates_plan.go",
 		"gates_syntax_rejection.go", "gates_workspace_alignment.go",
 		"guardrails_write.go", "guardrails_tool_hints.go", "guardrails_shell.go",
