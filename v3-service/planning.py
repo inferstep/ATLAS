@@ -490,10 +490,7 @@ def generate_plan(
 
     def emit(stage: str, detail: str = "", **data):
         if progress_callback:
-            try:
-                progress_callback(stage, detail, **data)
-            except TypeError:
-                progress_callback(stage, detail)
+            progress_callback(stage, detail, **data)
 
     emit("plan_start", f"generating {n_candidates} candidate plans")
 

@@ -26,6 +26,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/itigges22/atlas-tui/internal/debuglog"
 )
 
 type envelopeMsg struct {
@@ -766,7 +767,7 @@ func (m tuiModel) handleEnvelope(msg envelopeMsg) (tea.Model, tea.Cmd) {
 	// surface a misleading FAIL/ERROR row. The chat already shows
 	// "turn cancelled" — that's the single user-visible signal.
 	if m.userCancelled && envelopeLooksCancelled(msg.ev) {
-		dlog("event", "suppressed_cancel", map[string]interface{}{
+		debuglog.Log("event", "suppressed_cancel", map[string]interface{}{
 			"type": msg.ev.Type, "stage": msg.ev.Stage,
 		})
 		return m, waitForEnvelope(m.events)
@@ -776,7 +777,7 @@ func (m tuiModel) handleEnvelope(msg envelopeMsg) (tea.Model, tea.Cmd) {
 	if len(m.envelope) > m.maxLines {
 		m.envelope = m.envelope[len(m.envelope)-m.maxLines:]
 	}
-	dlog("event", msg.ev.Type, map[string]interface{}{
+	debuglog.Log("event", msg.ev.Type, map[string]interface{}{
 		"stage": msg.ev.Stage, "payload": msg.ev.Payload,
 	})
 	return m, waitForEnvelope(m.events)
@@ -808,16 +809,16 @@ func (m tuiModel) handleChatStream(msg chatStreamMsg) (tea.Model, tea.Cmd) {
 				Body: p.Err,
 			})
 		}
-		dlog("turn", "ended", map[string]interface{}{"err": p.Err})
+		debuglog.Log("turn", "ended", map[string]interface{}{"err": p.Err})
 		// Snapshot the completed turn so a later --continue/--resume
 		// reloads the full transcript.
 		m.saveSession()
 	} else {
-		// Skip dlog for llm_token — at ~30 tok/s a long generation
+		// Skip the debug log for llm_token — at ~30 tok/s a long generation
 		// produces thousands of entries and crowds out actually
 		// interesting events when reading the file.
 		if msg.ev.Type != "llm_token" {
-			dlog("chat", msg.ev.Type, map[string]interface{}{
+			debuglog.Log("chat", msg.ev.Type, map[string]interface{}{
 				"data": json.RawMessage(msg.ev.Data),
 			})
 		}
@@ -848,7 +849,7 @@ func (m tuiModel) handleSlashResult(msg slashResultMsg) (tea.Model, tea.Cmd) {
 		Role: role, Meta: msg.command, Body: body,
 		Success: msg.err == nil,
 	})
-	dlog("slash", "result", map[string]interface{}{
+	debuglog.Log("slash", "result", map[string]interface{}{
 		"command": msg.command, "ok": msg.err == nil,
 		"output_len": len(msg.output),
 	})

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/itigges22/atlas-tui/internal/debuglog"
 )
 
 // handlePermKey answers the permission modal. y=allow once, a=allow for the
@@ -35,7 +36,7 @@ func (m tuiModel) handlePermKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			Role: roleSystem, Meta: "permission",
 			Body: "allowed " + pp.toolName, Echo: true,
 		})
-		dlog("permission", "allow_once", map[string]interface{}{"tool": pp.toolName})
+		debuglog.Log("permission", "allow_once", map[string]interface{}{"tool": pp.toolName})
 		return m, m.postPermissionCmd(pp.sessionID, pp.toolCallID, "allow", "once")
 	case "a":
 		if m.sessionAllowedTools == nil {
@@ -47,13 +48,13 @@ func (m tuiModel) handlePermKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			Role: roleSystem, Meta: "permission",
 			Body: "allowed " + pp.toolName + " for session", Echo: true,
 		})
-		dlog("permission", "allow_session", map[string]interface{}{"tool": pp.toolName})
+		debuglog.Log("permission", "allow_session", map[string]interface{}{"tool": pp.toolName})
 		return m, m.postPermissionCmd(pp.sessionID, pp.toolCallID, "allow", "session")
 	case "n", "esc":
 		// The proxy emits a permission_denied event once the deny lands, which
 		// renders the transcript row — no local row here (avoids a duplicate).
 		m.pendingPerm = nil
-		dlog("permission", "deny", map[string]interface{}{"tool": pp.toolName})
+		debuglog.Log("permission", "deny", map[string]interface{}{"tool": pp.toolName})
 		return m, m.postPermissionCmd(pp.sessionID, pp.toolCallID, "deny", "once")
 	}
 	// Swallow any other key while the modal is up.
@@ -198,7 +199,7 @@ func (m tuiModel) submitInput() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.input.Reset()
-	dlog("user", "input", map[string]interface{}{"text": text})
+	debuglog.Log("user", "input", map[string]interface{}{"text": text})
 	// Bash mode: leading "!" runs as a shell command in the
 	// working dir, output appears as a system row. Same path
 	// as /run but with the conversational shorthand devs
@@ -226,7 +227,7 @@ func (m tuiModel) submitInput() (tea.Model, tea.Cmd) {
 	}
 	// Slash commands intercepted before agent send.
 	if consumed, slashCmd, quit := m.handleSlash(text); consumed {
-		dlog("slash", "dispatched", map[string]interface{}{
+		debuglog.Log("slash", "dispatched", map[string]interface{}{
 			"input": text, "quit": quit,
 		})
 		if quit {
@@ -243,7 +244,7 @@ func (m tuiModel) submitInput() (tea.Model, tea.Cmd) {
 		Role: roleUser, Body: text,
 	})
 	m.lastUserMsg = text
-	dlog("turn", "started", map[string]interface{}{
+	debuglog.Log("turn", "started", map[string]interface{}{
 		"session_id": "(set in sendChatCmd)",
 		"len":        len(text),
 	})
@@ -294,7 +295,7 @@ func (m *tuiModel) startSelection(msg tea.MouseMsg) {
 		m.selPane = pane.name
 		m.selStartX, m.selStartY = msg.X, msg.Y
 		m.selEndX, m.selEndY = msg.X, msg.Y
-		dlog("mouse", "press", map[string]interface{}{
+		debuglog.Log("mouse", "press", map[string]interface{}{
 			"x": msg.X, "y": msg.Y, "pane": pane.name,
 			"paneTopY": pane.topY, "paneBottomY": pane.bottomY,
 			"viewStart": pane.viewStart, "lines": len(pane.lines),
@@ -322,7 +323,7 @@ func (m tuiModel) copySelection() (tea.Model, tea.Cmd) {
 	text := extractPaneSelection(selPane,
 		m.selStartY, m.selEndY,
 		m.selStartX, m.selEndX)
-	dlog("mouse", "release", map[string]interface{}{
+	debuglog.Log("mouse", "release", map[string]interface{}{
 		"pane":   selPane,
 		"startX": m.selStartX, "startY": m.selStartY,
 		"endX": m.selEndX, "endY": m.selEndY,

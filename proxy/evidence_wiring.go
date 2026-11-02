@@ -12,9 +12,10 @@ import (
 // to prove inertness, and useless past it. This file is the one place either
 // producer is invoked on a live request.
 //
-// Nothing here changes what lands. Records go to the private shadow sink and
-// to nowhere else: no SSE event, no ToolResult, no model-visible text, and no
-// input to any delivery, completion or generation decision.
+// The evidence these return feeds the delivery decision, and a staged pass also
+// reaches the completion gate through recordStagedCommandFulfillment. The
+// records themselves go to the private shadow sink and to nowhere else: no SSE
+// event, no ToolResult, no model-visible text.
 
 // evidenceProducerAvailability says, for each trusted source, that a live
 // production path produces it on this build. A producer with no caller fails
@@ -101,9 +102,8 @@ func proposedCandidateIdentity(ctx *AgentContext, entry routeEntry, code string)
 // just reported on exactly those bytes. Nothing is re-checked and no second
 // sandbox call is made -- the verdict is handed over, not recomputed.
 //
-// Returns the evidence for the caller's own inspection in tests. Production
-// ignores the return value: the record goes to private telemetry and the
-// delivery decision above is unchanged.
+// Returns the evidence for the caller's delivery decision. The record also goes
+// to private telemetry.
 func observeDeliveredCandidateSyntax(ctx *AgentContext, entry routeEntry, path, code string,
 	outcome checkOutcome) (proxyEvidence, candidateEvidenceIdentity, bool) {
 	if ctx == nil || ctx.TaskContract == nil {
@@ -241,7 +241,7 @@ func observeCandidateVerification(ctx *AgentContext, path, code string,
 		if r.MutatedTarget || r.MutatedWorkspace {
 			mutated = true
 		}
-		if r.Outcome != stagingExitedZero || r.MutatedTarget || r.MutatedWorkspace {
+		if !r.passedClean() {
 			unmet[o.ID] = stagingUnmetReason(r)
 		}
 		// The same execution, kept for the completion gate as well as the

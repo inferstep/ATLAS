@@ -26,6 +26,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/itigges22/atlas-tui/internal/debuglog"
 )
 
 // chatEvent mirrors the SSEEvent shape in proxy/internal/wire/messages.go.
@@ -725,7 +727,7 @@ func streamEventsWithReconnect(ctx context.Context, eventsURL string, out chan<-
 			backoff = initialBackoff
 		}
 		// Connection died; back off and retry.
-		dlog("conn", "events_disconnected", map[string]interface{}{
+		debuglog.Log("conn", "events_disconnected", map[string]interface{}{
 			"err": fmt.Sprintf("%v", err), "backoff_ms": backoff.Milliseconds(),
 		})
 		select {

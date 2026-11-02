@@ -256,7 +256,7 @@ func TestAnExactCommandPassesAgainstTheExactCandidate(t *testing.T) {
 	if !res.WorkspaceDestroyed {
 		t.Error("the overlay was not reported destroyed")
 	}
-	if got := res.authorizingOutcomes(); len(got) != 1 {
+	if got := cleanPasses(res); len(got) != 1 {
 		t.Errorf("authorizing %v, want the one command", got)
 	}
 	// The staged bytes were the candidate, and the executor saw them.
@@ -279,7 +279,7 @@ func TestAFailingCommandAuthorizesNothing(t *testing.T) {
 	if res.Commands[0].ExitStatus != 1 {
 		t.Errorf("exit status %d", res.Commands[0].ExitStatus)
 	}
-	if got := res.authorizingOutcomes(); len(got) != 0 {
+	if got := cleanPasses(res); len(got) != 0 {
 		t.Errorf("a failing command authorized %v", got)
 	}
 }
@@ -296,7 +296,7 @@ func TestACommandThatRewritesTheCandidateAuthorizesNothing(t *testing.T) {
 	if !res.Commands[0].MutatedTarget {
 		t.Error("the mutation was not recorded")
 	}
-	if len(res.authorizingOutcomes()) != 0 {
+	if len(cleanPasses(res)) != 0 {
 		t.Error("a command that rewrote its own subject authorized")
 	}
 	if valid, why := res.validateAgainst(req); !valid {
@@ -330,7 +330,7 @@ func TestARunThatProvesNothingAuthorizesNothing(t *testing.T) {
 			if res.Commands[0].Outcome != tc.want {
 				t.Errorf("outcome %q, want %q", res.Commands[0].Outcome, tc.want)
 			}
-			if got := res.authorizingOutcomes(); len(got) != 0 {
+			if got := cleanPasses(res); len(got) != 0 {
 				t.Errorf("it authorized %v", got)
 			}
 		})
@@ -365,7 +365,7 @@ func TestARefusedCommandNeverReachesTheExecutor(t *testing.T) {
 			if seen := stub.commandsSeen(); len(seen) != 0 {
 				t.Errorf("a refused command was executed: %v", seen)
 			}
-			if got := res.authorizingOutcomes(); len(got) != 0 {
+			if got := cleanPasses(res); len(got) != 0 {
 				t.Errorf("a refused command authorized %v", got)
 			}
 		})
@@ -391,7 +391,7 @@ func TestATargetOutsideTheWorkspaceNeverReachesTheExecutor(t *testing.T) {
 	if seen := stub.commandsSeen(); len(seen) != 0 {
 		t.Errorf("a refused command was executed: %v", seen)
 	}
-	if got := res.authorizingOutcomes(); len(got) != 0 {
+	if got := cleanPasses(res); len(got) != 0 {
 		t.Errorf("a refused command authorized %v", got)
 	}
 }
@@ -453,7 +453,7 @@ func TestTwoCommandsWhereOnlyOnePasses(t *testing.T) {
 	if !res.Complete {
 		t.Error("both commands ran; the set is complete even though one failed")
 	}
-	got := res.authorizingOutcomes()
+	got := cleanPasses(res)
 	if len(got) != 1 || got[0] != req.Commands[0].ObligationID {
 		t.Errorf("authorizing %v, want only the passing command", got)
 	}
@@ -478,7 +478,7 @@ func TestCommandsRunInOrderAndKeepTheirOwnIdentity(t *testing.T) {
 		}
 		ids[c.CommandIdentity] = true
 	}
-	if len(res.authorizingOutcomes()) != 3 {
+	if len(cleanPasses(res)) != 3 {
 		t.Error("three passing commands did not produce three authorizations")
 	}
 	// Each result names its own obligation: one command's pass never stands
@@ -722,7 +722,7 @@ func TestTheExecutorCannotDeclareItsOwnResultTrusted(t *testing.T) {
 	if res.Commands[0].Outcome != stagingUnobservable {
 		t.Errorf("outcome %q; the executor's own claim was believed", res.Commands[0].Outcome)
 	}
-	if len(res.authorizingOutcomes()) != 0 {
+	if len(cleanPasses(res)) != 0 {
 		t.Error("an executor granted itself authority")
 	}
 	blob, _ := json.Marshal(res)

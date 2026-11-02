@@ -50,7 +50,7 @@ func recordStagedCommandFulfillment(ctx *AgentContext, o taskObligation,
 	if ctx == nil {
 		return
 	}
-	if r.Outcome != stagingExitedZero || r.MutatedTarget || r.MutatedWorkspace {
+	if !r.passedClean() {
 		return
 	}
 	if o.Kind != ObligationDeclaredCommand || r.ObligationID != o.ID {
