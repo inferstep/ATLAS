@@ -9,26 +9,9 @@ import (
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
-// What a task obliges, as a closed typed vocabulary.
-//
-// obligations.go decided WHOSE list a run owes -- the caller's or the
-// heuristic's. It says nothing about what sort of thing each item is or how
-// strongly it must be shown, so a path and a command arrived as the same
-// untyped string and any evidence about either looked equally good.
-//
-// This file names the sorts and their floors. Three things stay separate:
-//
-//	KIND      what sort of thing is owed (a closed set)
-//	STRENGTH  how strong the evidence closing it must be
-//	SUBJECT   the exact thing it is owed about, carried as a hash
-//
-// The subject is a hash and never the text. A declared verification command
-// is a subject, and a command string in an operator log is a content leak; a
-// uniform rule that never carries text cannot leak one by exception.
-//
-// This is the only copy of the vocabulary. The V3 service never receives
-// task obligations -- V3GenerateRequest has no field for them -- so nothing
-// there names a kind.
+// What a request obliges, derived from its decisions and the ledger, and
+// whether a delivery has settled it. The obligation vocabulary is in
+// internal/taskcontract/obligation_kinds.go.
 
 // --- the three roles, read off a derived obligation set ----------------------
 
@@ -127,41 +110,10 @@ func deriveTaskObligations(ctx *AgentContext, outputs, verification taskcontract
 	}
 
 	if outputs.KnowledgeSpecified {
-		for _, p := range outputs.Items {
-			resolved := resolveAgentPath(ctx, p)
-			if resolved == "" {
-				continue
-			}
-			// Existence is owed for every declared output.
-			add(taskcontract.ObligationArtifactExists, resolved, "")
-			// Structural validity is owed only for artifact classes the
-			// proxy's own gate already governs. There is no second table:
-			// this is the same map live completion policy consults.
-			if _, gated := syntaxGateLanguages[strings.ToLower(filepath.Ext(resolved))]; gated {
-				add(taskcontract.ObligationSyntacticValidity, resolved, "")
-			}
-			// Replacing an artifact that already carries current evidence
-			// owes at least what that evidence already reached.
-			if s := baselineEvidenceStrength(ctx, resolved); s != "" {
-				add(taskcontract.ObligationBaselinePreserved, resolved, s)
-			}
-		}
+		addOutputObligations(ctx, outputs.Items, add)
 	}
-
 	if verification.KnowledgeSpecified {
-		for _, cmd := range verification.Items {
-			if strings.TrimSpace(cmd) == "" {
-				continue
-			}
-			// The floor is the client's typed declaration for this exact
-			// command, and the legacy answer -- runtime -- for one declared
-			// without a type. Nothing here reads the command's text.
-			req, ok := verification.Typed[cmd]
-			if !ok {
-				req = taskcontract.LegacyVerificationRequirement(cmd)
-			}
-			add(taskcontract.ObligationDeclaredCommand, cmd, req.DeclaredStrength())
-		}
+		addCommandObligations(verification, add)
 	}
 
 	sort.SliceStable(out, func(i, j int) bool {
@@ -171,6 +123,46 @@ func deriveTaskObligations(ctx *AgentContext, outputs, verification taskcontract
 		return out[i].ID < out[j].ID
 	})
 	return out
+}
+
+// addOutputObligations adds what each declared output owes.
+func addOutputObligations(ctx *AgentContext, outputs []string, add func(kind, subject, baseline string)) {
+	for _, p := range outputs {
+		resolved := resolveAgentPath(ctx, p)
+		if resolved == "" {
+			continue
+		}
+		// Existence is owed for every declared output.
+		add(taskcontract.ObligationArtifactExists, resolved, "")
+		// Structural validity is owed only for artifact classes the
+		// proxy's own gate already governs. There is no second table:
+		// this is the same map live completion policy consults.
+		if _, gated := syntaxGateLanguages[strings.ToLower(filepath.Ext(resolved))]; gated {
+			add(taskcontract.ObligationSyntacticValidity, resolved, "")
+		}
+		// Replacing an artifact that already carries current evidence
+		// owes at least what that evidence already reached.
+		if s := baselineEvidenceStrength(ctx, resolved); s != "" {
+			add(taskcontract.ObligationBaselinePreserved, resolved, s)
+		}
+	}
+}
+
+// addCommandObligations adds what each declared verification command owes.
+func addCommandObligations(verification taskcontract.ObligationDecision, add func(kind, subject, baseline string)) {
+	for _, cmd := range verification.Items {
+		if strings.TrimSpace(cmd) == "" {
+			continue
+		}
+		// The floor is the client's typed declaration for this exact
+		// command, and the legacy answer -- runtime -- for one declared
+		// without a type. Nothing here reads the command's text.
+		req, ok := verification.Typed[cmd]
+		if !ok {
+			req = taskcontract.LegacyVerificationRequirement(cmd)
+		}
+		add(taskcontract.ObligationDeclaredCommand, cmd, req.DeclaredStrength())
+	}
 }
 
 // baselineEvidenceStrength is how strongly the artifact ALREADY on disk is

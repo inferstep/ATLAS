@@ -124,6 +124,26 @@ func settleExistence(ctx *AgentContext, o taskcontract.TaskObligation,
 		return false, "bytes on disk are not the delivered bytes"
 	}
 
+	if why := ledgerDisagrees(ctx, resolved, disk, s.PriorGeneration); why != "" {
+		return false, why
+	}
+
+	// Every declared command the task requires must have been covered by the
+	// delivery that is being settled. One that appeared afterwards is a
+	// stronger obligation than the delivery answered, and an older delivery
+	// does not discharge it.
+	if !coversDeclaredCommands(s, obs) {
+		return false, "a declared command is not covered by the delivery"
+	}
+	if !s.BaselinePreserved {
+		return false, "the delivery did not preserve the baseline it replaced"
+	}
+	return true, ""
+}
+
+// ledgerDisagrees says why the session's own record does not confirm the
+// delivered bytes on disk, or "" when it does.
+func ledgerDisagrees(ctx *AgentContext, resolved, disk string, priorGeneration int) string {
 	// The session's own record agrees, and it moved: a ledger that still
 	// holds the pre-delivery generation never saw this write, and one that
 	// holds other bytes is a record about something that is no longer there.
@@ -142,16 +162,16 @@ func settleExistence(ctx *AgentContext, o taskcontract.TaskObligation,
 	ctx.LedgerMu.Unlock()
 
 	if d == nil {
-		return false, "the ledger does not confirm the bytes on disk"
+		return "the ledger does not confirm the bytes on disk"
 	}
 	if tombstoned {
-		return false, "the artifact was deliberately removed"
+		return "the artifact was deliberately removed"
 	}
 	if current != disk {
-		return false, "the ledger does not confirm the bytes on disk"
+		return "the ledger does not confirm the bytes on disk"
 	}
-	if generation <= s.PriorGeneration {
-		return false, "the ledger never recorded this delivery"
+	if generation <= priorGeneration {
+		return "the ledger never recorded this delivery"
 	}
 
 	// The structural verdict is about THESE bytes, not an older set. A
@@ -159,17 +179,18 @@ func settleExistence(ctx *AgentContext, o taskcontract.TaskObligation,
 	// does not govern owes none.
 	if _, gated := syntaxGateLanguages[strings.ToLower(filepath.Ext(resolved))]; gated {
 		if status != wire.ValidationPassed || validatedHash != disk {
-			return false, "the structural verdict is not current"
+			return "the structural verdict is not current"
 		}
 		if kind != wire.ValidationKindSyntax && kind != wire.ValidationKindStructural {
-			return false, "the structural verdict is not current"
+			return "the structural verdict is not current"
 		}
 	}
+	return ""
+}
 
-	// Every declared command the task requires must have been covered by the
-	// delivery that is being settled. One that appeared afterwards is a
-	// stronger obligation than the delivery answered, and an older delivery
-	// does not discharge it.
+// coversDeclaredCommands reports whether the delivery covered every declared
+// command the task requires.
+func coversDeclaredCommands(s *deliverySettlement, obs []taskcontract.TaskObligation) bool {
 	met := map[string]bool{}
 	for _, id := range s.MetCommands {
 		met[id] = true
@@ -179,13 +200,10 @@ func settleExistence(ctx *AgentContext, o taskcontract.TaskObligation,
 			continue
 		}
 		if !met[req.ID] {
-			return false, "a declared command is not covered by the delivery"
+			return false
 		}
 	}
-	if !s.BaselinePreserved {
-		return false, "the delivery did not preserve the baseline it replaced"
-	}
-	return true, ""
+	return true
 }
 
 // settlementStatus is the whole-request answer: which post-delivery
