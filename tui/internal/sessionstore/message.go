@@ -1,9 +1,10 @@
 package sessionstore
 
-type chatRole int
+// Role is who a chat row is from.
+type Role int
 
 const (
-	RoleUser chatRole = iota
+	RoleUser Role = iota
 	RoleAssistant
 	RoleTool
 	RoleSystem
@@ -11,7 +12,7 @@ const (
 
 // ChatMessage is one row in the chat history.
 type ChatMessage struct {
-	Role chatRole
+	Role Role
 	Body string
 	// Meta — for tool: the tool name; for system: severity tag.
 	Meta string
