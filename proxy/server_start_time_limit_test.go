@@ -25,7 +25,7 @@ func resultOfRunCommand(t *testing.T, shellAnswer string) *wire.ToolResult {
 		_, _ = w.Write([]byte(shellAnswer))
 	}))
 	defer sandbox.Close()
-	ctx := &AgentContext{WorkingDir: "/workspace", SandboxURL: sandbox.URL}
+	ctx := &AgentContext{runSetup: runSetup{WorkingDir: "/workspace", SandboxURL: sandbox.URL}}
 	result, err := runCommandTool().Execute(json.RawMessage(`{"command":"python app.py"}`), ctx)
 	if err != nil {
 		t.Fatalf("run_command: %v", err)
@@ -51,7 +51,7 @@ const shellAnswerForATestThatFailed = `{"success":false,"stdout":"","stderr":"As
 
 func TestTheGateGivesAServerThatTheTimeLimitStoppedTheAdviceForAServer(t *testing.T) {
 	state := &runState{}
-	ctx := &AgentContext{WorkingDir: t.TempDir()}
+	ctx := &AgentContext{runSetup: runSetup{WorkingDir: t.TempDir()}}
 	state.observeFailedCheck(ctx, 1, "python app.py", commandEvidence{},
 		resultOfRunCommand(t, shellAnswerForAServerStoppedAtTheTimeLimit))
 	if !state.serverStartBlocked {
@@ -67,7 +67,7 @@ func TestTheGateGivesAServerThatTheTimeLimitStoppedTheAdviceForAServer(t *testin
 
 func TestTheGateGivesATestThatFailedTheAdviceForARedTest(t *testing.T) {
 	state := &runState{}
-	ctx := &AgentContext{WorkingDir: t.TempDir()}
+	ctx := &AgentContext{runSetup: runSetup{WorkingDir: t.TempDir()}}
 	state.observeFailedCheck(ctx, 1, "pytest", commandEvidence{}, resultOfRunCommand(t, shellAnswerForATestThatFailed))
 	if state.serverStartBlocked {
 		t.Fatal("a test that failed was taken for a server that never exits")

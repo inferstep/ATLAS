@@ -743,9 +743,13 @@ func TestARepeatingProseTailIsALoop(t *testing.T) {
 
 func llmTestCtx(url string) *AgentContext {
 	return &AgentContext{
-		InferenceURL: url,
-		Ctx:          context.Background(),
-		Messages:     []wire.AgentMessage{{Role: "user", Content: "hi"}},
+		runSetup: runSetup{
+			InferenceURL: url,
+			Ctx:          context.Background(),
+		},
+		modelExchange: modelExchange{
+			Messages: []wire.AgentMessage{{Role: "user", Content: "hi"}},
+		},
 	}
 }
 
@@ -968,15 +972,17 @@ func TestBuildPlanReminderNoPlan(t *testing.T) {
 
 func TestBuildPlanReminderRendersProgress(t *testing.T) {
 	ctx := &AgentContext{
-		Plan: &wire.Plan{
-			Steps: []wire.PlanStep{
-				{ID: "s1", Action: "read_file", Target: "app.py"},
-				{ID: "s2", Action: "structural_edit", Target: "templates/dashboard.html"},
-				{ID: "s3", Action: "run_command", Target: "curl localhost:5000/dashboard"},
+		planProgress: planProgress{
+			Plan: &wire.Plan{
+				Steps: []wire.PlanStep{
+					{ID: "s1", Action: "read_file", Target: "app.py"},
+					{ID: "s2", Action: "structural_edit", Target: "templates/dashboard.html"},
+					{ID: "s3", Action: "run_command", Target: "curl localhost:5000/dashboard"},
+				},
+				VerifyStep: "s3",
 			},
-			VerifyStep: "s3",
+			PlanStepsSatisfied: []bool{true, false, false},
 		},
-		PlanStepsSatisfied: []bool{true, false, false},
 	}
 	got := buildPlanReminder(ctx)
 	if got == "" {
@@ -991,11 +997,13 @@ func TestBuildPlanReminderRendersProgress(t *testing.T) {
 
 func TestBuildPlanReminderAllSatisfied(t *testing.T) {
 	ctx := &AgentContext{
-		Plan: &wire.Plan{
-			Steps:      []wire.PlanStep{{ID: "s1"}, {ID: "s2"}},
-			VerifyStep: "s2",
+		planProgress: planProgress{
+			Plan: &wire.Plan{
+				Steps:      []wire.PlanStep{{ID: "s1"}, {ID: "s2"}},
+				VerifyStep: "s2",
+			},
+			PlanStepsSatisfied: []bool{true, true},
 		},
-		PlanStepsSatisfied: []bool{true, true},
 	}
 	got := buildPlanReminder(ctx)
 	for _, s := range []string{"plan complete", "2/2", "s2"} {
@@ -1009,8 +1017,10 @@ func TestBuildPlanReminderLazyInitsSatisfied(t *testing.T) {
 	// PlanStepsSatisfied can be nil at first turn — the reminder
 	// should lazily initialize it so it doesn't panic.
 	ctx := &AgentContext{
-		Plan: &wire.Plan{
-			Steps: []wire.PlanStep{{ID: "s1", Action: "read_file", Target: "app.py"}},
+		planProgress: planProgress{
+			Plan: &wire.Plan{
+				Steps: []wire.PlanStep{{ID: "s1", Action: "read_file", Target: "app.py"}},
+			},
 		},
 	}
 	got := buildPlanReminder(ctx)
@@ -1250,7 +1260,7 @@ func TestShouldGeneratePlanGates(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := &AgentContext{Tier: tc.tier}
+			ctx := &AgentContext{runSetup: runSetup{Tier: tc.tier}}
 			if got := shouldGeneratePlan(ctx, tc.msg); got != tc.want {
 				t.Errorf("shouldGeneratePlan(%q, tier=%v) = %v, want %v",
 					tc.msg, tc.tier, got, tc.want)
@@ -1782,7 +1792,7 @@ func TestStepExclusions(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := &AgentContext{Messages: tc.messages}
+			ctx := &AgentContext{modelExchange: modelExchange{Messages: tc.messages}}
 			gotTools, gotExt := stepExclusions(ctx)
 			if !equalStringSlices(gotTools, tc.wantTools) {
 				t.Errorf("stepExclusions() tools = %v, want %v", gotTools, tc.wantTools)
@@ -2206,9 +2216,13 @@ func TestWriteFileV3CancelDuringGateWritesNothing(t *testing.T) {
 // to identify — an observed session spent its remaining turns on that conflict.
 // The failure must name the model's own job.
 func TestOwnBackgroundJobHintNamesTheCulprit(t *testing.T) {
-	ctx := &AgentContext{BackgroundJobs: map[string]string{
-		"7216f34ccea3": "python app.py",
-	}}
+	ctx := &AgentContext{
+		backgroundWork: backgroundWork{
+			BackgroundJobs: map[string]string{
+				"7216f34ccea3": "python app.py",
+			},
+		},
+	}
 	hint := ownBackgroundJobHint(ctx, "Address already in use\nPort 5001 is in use by another program.")
 	if !strings.Contains(hint, "7216f34ccea3") || !strings.Contains(hint, "python app.py") {
 		t.Errorf("hint must name the job id and its command, got %q", hint)
@@ -2219,7 +2233,7 @@ func TestOwnBackgroundJobHintNamesTheCulprit(t *testing.T) {
 }
 
 func TestOwnBackgroundJobHintSilentWhenUnrelated(t *testing.T) {
-	ctx := &AgentContext{BackgroundJobs: map[string]string{"abc": "python app.py"}}
+	ctx := &AgentContext{backgroundWork: backgroundWork{BackgroundJobs: map[string]string{"abc": "python app.py"}}}
 	if h := ownBackgroundJobHint(ctx, "ModuleNotFoundError: No module named 'flask'"); h != "" {
 		t.Errorf("unrelated failure must not get a job hint, got %q", h)
 	}
@@ -2236,7 +2250,7 @@ func TestOwnBackgroundJobHintSilentWithNoJobs(t *testing.T) {
 // The defect was that they did so silently: the next turn hits a bound port
 // with no explanation and the user is never told anything is still running.
 func TestLiveBackgroundJobNoteNamesRunningJobs(t *testing.T) {
-	ctx := &AgentContext{BackgroundJobs: map[string]string{"7216f34ccea3": "python app.py"}}
+	ctx := &AgentContext{backgroundWork: backgroundWork{BackgroundJobs: map[string]string{"7216f34ccea3": "python app.py"}}}
 	note := liveBackgroundJobNote(ctx)
 	if !strings.Contains(note, "7216f34ccea3") || !strings.Contains(note, "python app.py") {
 		t.Errorf("note must name the job and its command, got %q", note)
@@ -2316,7 +2330,9 @@ func TestWriteFileRejectsUnparseableContentWithoutCallingV3(t *testing.T) {
 func TestBounceToolCallEmitsAMatchingResult(t *testing.T) {
 	var events []string
 	ctx := &AgentContext{
-		StreamFn: func(evt string, data interface{}) { events = append(events, evt) },
+		runSetup: runSetup{
+			StreamFn: func(evt string, data interface{}) { events = append(events, evt) },
+		},
 	}
 	st := &runState{turn: 3, response: "{}", pendingToolCall: "write_file"}
 	st.bounceToolCall(ctx, "write_file", "write_file is for creating files")
@@ -2353,7 +2369,9 @@ func TestBounceToolCallEmitsAMatchingResult(t *testing.T) {
 func TestPlainBounceEmitsNoToolResult(t *testing.T) {
 	var events []string
 	ctx := &AgentContext{
-		StreamFn: func(evt string, data interface{}) { events = append(events, evt) },
+		runSetup: runSetup{
+			StreamFn: func(evt string, data interface{}) { events = append(events, evt) },
+		},
 	}
 	st := &runState{turn: 1, response: "{}"}
 	st.bounce(ctx, "verification_gate", "run the tests first")
@@ -2470,7 +2488,7 @@ func TestShortOldStrMismatchKeepsNormalAdvice(t *testing.T) {
 // The model listed the directory as asked, then followed the plan into
 // editing the file it found. A wrong plan is worse than no plan.
 func TestReadOnlyRequestsGetNoPlan(t *testing.T) {
-	ctx := &AgentContext{Tier: Tier1Simple}
+	ctx := &AgentContext{runSetup: runSetup{Tier: Tier1Simple}}
 	for _, m := range []string{
 		"Yes, please list the files",
 		"please list the files in this directory",
@@ -3409,13 +3427,13 @@ func TestTheSystemPromptSaysWhatTheProjectRuns(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			prompt := buildSystemPrompt(&AgentContext{WorkingDir: t.TempDir(), Project: tc.project})
+			prompt := buildSystemPrompt(&AgentContext{runSetup: runSetup{WorkingDir: t.TempDir(), Project: tc.project}})
 			if !strings.Contains(prompt, tc.want) {
 				t.Errorf("the system prompt does not hold %q", tc.want)
 			}
 		})
 	}
-	if prompt := buildSystemPrompt(&AgentContext{WorkingDir: t.TempDir()}); strings.Contains(prompt, "## Project Context") {
+	if prompt := buildSystemPrompt(&AgentContext{runSetup: runSetup{WorkingDir: t.TempDir()}}); strings.Contains(prompt, "## Project Context") {
 		t.Error("a project nothing was detected for has a project section")
 	}
 }
@@ -3426,7 +3444,7 @@ func TestTheSystemPromptNamesTheProjectsToolchain(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	prompt := buildSystemPrompt(&AgentContext{WorkingDir: dir})
+	prompt := buildSystemPrompt(&AgentContext{runSetup: runSetup{WorkingDir: dir}})
 
 	want := "## Toolchains\n- **go** — runner `go run .`, install `go mod download`, tests `go test ./...`"
 	if !strings.Contains(prompt, want) {

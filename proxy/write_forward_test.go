@@ -26,7 +26,7 @@ import (
 
 func TestBrokenContentToANewFileLandsWithAWarning(t *testing.T) {
 	root := t.TempDir()
-	ctx := &AgentContext{WorkingDir: root, SessionWrites: map[string]bool{}, BodySeen: map[string]bool{}}
+	ctx := &AgentContext{runSetup: runSetup{WorkingDir: root}, fileHistory: fileHistory{SessionWrites: map[string]bool{}, BodySeen: map[string]bool{}}}
 	path := filepath.Join(root, "solve.py")
 	res, err := writeNewFileWithWarning(path, "solve.py", "def f(:\n", "SyntaxError: invalid syntax (line 1)", ctx)
 	if err != nil || res == nil || !res.Success {
@@ -120,7 +120,7 @@ func TestAWorkingFileIsStillProtectedFromBrokenContent(t *testing.T) {
 // the verification snapshot is drift, and so is a file the snapshot never saw.
 func TestDriftAfterVerificationIsNamed(t *testing.T) {
 	dir := t.TempDir()
-	ctx := &AgentContext{WorkingDir: dir, SessionWrites: map[string]bool{"solve.py": true}}
+	ctx := &AgentContext{runSetup: runSetup{WorkingDir: dir}, fileHistory: fileHistory{SessionWrites: map[string]bool{"solve.py": true}}}
 	if err := os.WriteFile(filepath.Join(dir, "solve.py"), []byte("print(1)\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +146,7 @@ func TestDriftAfterVerificationIsNamed(t *testing.T) {
 // With two changed files, the artifact gate names the first in sorted order,
 // every time, so one run never gets two different texts.
 func TestOfTwoChangedFilesTheSameOneIsNamedEachTime(t *testing.T) {
-	ctx := &AgentContext{WorkingDir: t.TempDir(), SessionWrites: map[string]bool{"b.py": true, "a.py": true}}
+	ctx := &AgentContext{runSetup: runSetup{WorkingDir: t.TempDir()}, fileHistory: fileHistory{SessionWrites: map[string]bool{"b.py": true, "a.py": true}}}
 	for try := 1; try <= 100; try++ {
 		if got := driftedSinceVerification(ctx, map[string]string{}); got != "a.py" {
 			t.Fatalf("try %d: %q, want a.py", try, got)
