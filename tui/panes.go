@@ -807,31 +807,49 @@ type fullScreenLayout struct {
 	inputH, eventsH, pipelineH, permMax, chatH int
 }
 
-func layoutFullScreen(p *pipelineState, events []proxyclient.Envelope, chat []chatMessage,
-	inputView, inputValue, inputMode string,
-	renderer *glamour.TermRenderer, header string,
-	turnActive bool, spinnerFrame int,
-	chatScroll, eventsScroll, pipelineScroll int,
-	files []fileEntry, modified map[string]bool, fileScroll int, fileRoot string,
-	lastTurnTokens, totalTokens, maxTokens int,
-	hideFiles, hidePipeline, hideEvents bool,
-	sel selectionState,
-	calibrationBadge string,
-	perm *permPrompt,
-	width, height int) (string, int) {
+// fullScreenView is everything one full-screen render draws from, read off the
+// model by View.
+type fullScreenView struct {
+	pipeline *pipelineState
+	events   []proxyclient.Envelope
+	chat     []chatMessage
+	renderer *glamour.TermRenderer
+	header   string
 
+	turnActive   bool
+	spinnerFrame int
+
+	inputView, inputValue, inputMode string
+
+	chatScroll, eventsScroll, pipelineScroll int
+
+	files      []fileEntry
+	modified   map[string]bool
+	fileScroll int
+	fileRoot   string
+
+	lastTurnTokens, totalTokens, maxTokens int
+
+	hideFiles, hidePipeline, hideEvents bool
+
+	sel              selectionState
+	calibrationBadge string
+	perm             *permPrompt
+}
+
+func layoutFullScreen(v fullScreenView, width, height int) (string, int) {
 	if width <= 0 || height <= 0 {
 		return "", 0
 	}
 
-	sidebarW, innerW := layoutColumnWidths(width, hideFiles)
+	sidebarW, innerW := layoutColumnWidths(width, v.hideFiles)
 
 	// Input box: 6 rows by default (title + 3 textarea rows + 2 border).
 	// bash/slash mode adds a one-row hint banner above, so reserve one
 	// extra row. help mode shows the multi-line slashCommandHelp body —
 	// count its lines so the box doesn't bleed into the chat pane.
 	inputH := 6
-	switch inputMode {
+	switch v.inputMode {
 	case "bash", "slash":
 		inputH = 7
 	case "help":
@@ -848,39 +866,39 @@ func layoutFullScreen(p *pipelineState, events []proxyclient.Envelope, chat []ch
 			inputH = cap
 		}
 	}
-	eventsH, pipelineH, permMax, chatH := layoutPaneHeights(p, perm, hidePipeline, hideEvents,
+	eventsH, pipelineH, permMax, chatH := layoutPaneHeights(v.pipeline, v.perm, v.hidePipeline, v.hideEvents,
 		innerW, inputH, height)
 	layout := fullScreenLayout{width: width, height: height,
-		hidePipeline: hidePipeline, hideEvents: hideEvents, sidebarW: sidebarW, innerW: innerW,
+		hidePipeline: v.hidePipeline, hideEvents: v.hideEvents, sidebarW: sidebarW, innerW: innerW,
 		inputH: inputH, eventsH: eventsH, pipelineH: pipelineH, permMax: permMax, chatH: chatH}
 
 	// Reset pane snapshots — populated by each pane's render below.
 	paneSnaps = paneSnaps[:0]
 
-	pipelineBox, pipelineAll, pipelineViewStart := renderPipelineBox(layout, p, pipelineScroll, sel,
-		calibrationBadge)
-	chatBox, chatTopY, chatContentH, totalLines, viewStart, chatAll := renderChatBox(layout, chat,
-		renderer, chatScroll, turnActive, spinnerFrame, sel)
+	pipelineBox, pipelineAll, pipelineViewStart := renderPipelineBox(layout, v.pipeline, v.pipelineScroll, v.sel,
+		v.calibrationBadge)
+	chatBox, chatTopY, chatContentH, totalLines, viewStart, chatAll := renderChatBox(layout, v.chat,
+		v.renderer, v.chatScroll, v.turnActive, v.spinnerFrame, v.sel)
 	rightLeftX, rightRightX, eventsTopY := snapshotPipelineAndChat(layout, pipelineAll,
 		pipelineViewStart, chatTopY, chatContentH, viewStart, chatAll)
-	eventsBox := renderEventsBox(layout, events, eventsScroll, sel, eventsTopY, rightLeftX, rightRightX)
+	eventsBox := renderEventsBox(layout, v.events, v.eventsScroll, v.sel, eventsTopY, rightLeftX, rightRightX)
 
-	statsLine := renderStatsPane(p, width, lastTurnTokens, totalTokens, maxTokens)
-	inputBox := renderInputBox(layout, inputMode, inputValue, inputView)
-	rightCol := joinRightColumn(layout, pipelineBox, chatBox, eventsBox, statsLine, perm, inputBox)
+	statsLine := renderStatsPane(v.pipeline, width, v.lastTurnTokens, v.totalTokens, v.maxTokens)
+	inputBox := renderInputBox(layout, v.inputMode, v.inputValue, v.inputView)
+	rightCol := joinRightColumn(layout, pipelineBox, chatBox, eventsBox, statsLine, v.perm, inputBox)
 
 	// No sidebar on narrow terminals — return the right column at full
 	// width with the header on top.
 	if sidebarW == 0 {
-		return lipgloss.JoinVertical(lipgloss.Left, header, rightCol), totalLines
+		return lipgloss.JoinVertical(lipgloss.Left, v.header, rightCol), totalLines
 	}
 
-	filesBox := renderFilesSidebar(layout, files, modified, fileRoot, fileScroll, sel)
+	filesBox := renderFilesSidebar(layout, v.files, v.modified, v.fileRoot, v.fileScroll, v.sel)
 
 	// Sidebar on the right (after rightCol) per user preference —
 	// keeps the chat anchored on the left where the eye starts.
 	body := lipgloss.JoinHorizontal(lipgloss.Top, rightCol, filesBox)
-	return lipgloss.JoinVertical(lipgloss.Left, header, body), totalLines
+	return lipgloss.JoinVertical(lipgloss.Left, v.header, body), totalLines
 }
 
 // layoutColumnWidths splits the terminal's width between the right column

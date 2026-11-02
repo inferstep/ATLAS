@@ -1196,17 +1196,34 @@ func (m tuiModel) View() string {
 			startX: m.selStartX, endX: m.selEndX,
 		}
 	}
-	out, totalChatLines := layoutFullScreen(&m.state, m.envelope, m.chat,
-		m.input.View(), m.input.Value(), m.inputMode,
-		m.chatRenderer, header, m.turnActive, m.spinnerFrame,
-		m.chatScroll, m.eventsScroll, m.pipelineScroll,
-		m.fileEntries, m.modifiedFiles, m.fileScanScroll, m.workingDir,
-		m.lastTurnTokens, m.totalTokensSession, m.maxContextTokens,
-		m.hideFiles, m.hidePipeline, m.hideEvents,
-		sel,
-		renderCalibrationBadge(m.calibration),
-		m.pendingPerm,
-		width, height)
+	out, totalChatLines := layoutFullScreen(fullScreenView{
+		pipeline:         &m.state,
+		events:           m.envelope,
+		chat:             m.chat,
+		renderer:         m.chatRenderer,
+		header:           header,
+		turnActive:       m.turnActive,
+		spinnerFrame:     m.spinnerFrame,
+		inputView:        m.input.View(),
+		inputValue:       m.input.Value(),
+		inputMode:        m.inputMode,
+		chatScroll:       m.chatScroll,
+		eventsScroll:     m.eventsScroll,
+		pipelineScroll:   m.pipelineScroll,
+		files:            m.fileEntries,
+		modified:         m.modifiedFiles,
+		fileScroll:       m.fileScanScroll,
+		fileRoot:         m.workingDir,
+		lastTurnTokens:   m.lastTurnTokens,
+		totalTokens:      m.totalTokensSession,
+		maxTokens:        m.maxContextTokens,
+		hideFiles:        m.hideFiles,
+		hidePipeline:     m.hidePipeline,
+		hideEvents:       m.hideEvents,
+		sel:              sel,
+		calibrationBadge: renderCalibrationBadge(m.calibration),
+		perm:             m.pendingPerm,
+	}, width, height)
 	// View is supposed to be pure, but we need to know the rendered
 	// line count to clamp PgUp / mouse-wheel-up. Stashing it on the
 	// model via a field write inside View is technically a side-effect
