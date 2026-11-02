@@ -20,6 +20,9 @@ from xml.etree import ElementTree
 
 
 ROOT = Path(__file__).resolve().parent.parent
+COMPOSE_FILE = "docker-compose.yml"
+ALL_GO_PACKAGES = "./..."
+NO_GO = "Go is not installed"
 PYTHON_TARGETS = (
     "atlas",
     "tests",
@@ -165,15 +168,15 @@ def _compose_gates() -> dict[str, Gate]:
     don't exist in this checkout are skipped.
     """
     combos: dict[str, tuple[str, ...]] = {
-        "compose": ("docker-compose.yml",),
-        "compose-rocm": ("docker-compose.yml", "compose/docker-compose.rocm.yml"),
-        "compose-vulkan": ("docker-compose.yml", "compose/docker-compose.vulkan.yml"),
+        "compose": (COMPOSE_FILE,),
+        "compose-rocm": (COMPOSE_FILE, "compose/docker-compose.rocm.yml"),
+        "compose-vulkan": (COMPOSE_FILE, "compose/docker-compose.vulkan.yml"),
         "compose-cpu": (
-            "docker-compose.yml",
+            COMPOSE_FILE,
             "compose/docker-compose.vulkan.yml",
             "compose/docker-compose.cpu.yml",
         ),
-        "compose-macos": ("docker-compose.yml", "compose/docker-compose.macos.yml"),
+        "compose-macos": (COMPOSE_FILE, "compose/docker-compose.macos.yml"),
     }
     gates: dict[str, Gate] = {}
     for name, files in combos.items():
@@ -296,34 +299,34 @@ def _go_gates(go_env: dict[str, str]) -> dict[str, Gate]:
             # machine, and it still bounds a real hang inside one job. A CI
             # panic here should be read from its goroutine dump: one young
             # running test means budget, a test stuck for minutes means hang.
-            ("go", "test", "-race", "-count=1", "-timeout", "20m", "./..."),
+            ("go", "test", "-race", "-count=1", "-timeout", "20m", ALL_GO_PACKAGES),
             cwd=ROOT / "proxy",
             available=lambda: _command_available("go"),
-            unavailable_reason="Go is not installed",
+            unavailable_reason=NO_GO,
             env=go_env,
         ),
         "go-tui-test": Gate(
             "go-tui-test",
-            ("go", "test", "-race", "-count=1", "./..."),
+            ("go", "test", "-race", "-count=1", ALL_GO_PACKAGES),
             cwd=ROOT / "tui",
             available=lambda: _command_available("go"),
-            unavailable_reason="Go is not installed",
+            unavailable_reason=NO_GO,
             env=go_env,
         ),
         "go-proxy-vet": Gate(
             "go-proxy-vet",
-            ("go", "vet", "./..."),
+            ("go", "vet", ALL_GO_PACKAGES),
             cwd=ROOT / "proxy",
             available=lambda: _command_available("go"),
-            unavailable_reason="Go is not installed",
+            unavailable_reason=NO_GO,
             env=go_env,
         ),
         "go-tui-vet": Gate(
             "go-tui-vet",
-            ("go", "vet", "./..."),
+            ("go", "vet", ALL_GO_PACKAGES),
             cwd=ROOT / "tui",
             available=lambda: _command_available("go"),
-            unavailable_reason="Go is not installed",
+            unavailable_reason=NO_GO,
             env=go_env,
         ),
     }
@@ -336,10 +339,10 @@ def _static_check_gates(python: str, go_env: dict[str, str]) -> dict[str, Gate]:
         "go-proxy-staticcheck": Gate(
             "go-proxy-staticcheck",
             ("go", "run", "honnef.co/go/tools/cmd/staticcheck@2026.1",
-             "./..."),
+             ALL_GO_PACKAGES),
             cwd=ROOT / "proxy",
             available=lambda: _command_available("go"),
-            unavailable_reason="Go is not installed",
+            unavailable_reason=NO_GO,
             env=go_env,
         ),
         "mypy-typed": Gate(
@@ -361,10 +364,10 @@ def _static_check_gates(python: str, go_env: dict[str, str]) -> dict[str, Gate]:
         "go-tui-staticcheck": Gate(
             "go-tui-staticcheck",
             ("go", "run", "honnef.co/go/tools/cmd/staticcheck@2026.1",
-             "./..."),
+             ALL_GO_PACKAGES),
             cwd=ROOT / "tui",
             available=lambda: _command_available("go"),
-            unavailable_reason="Go is not installed",
+            unavailable_reason=NO_GO,
             env=go_env,
         ),
         "ruff": Gate(
@@ -421,14 +424,8 @@ def _gates(pytest_paths: Sequence[str]) -> dict[str, Gate]:
     }
 
 
-def _go_test_report(stream: str) -> tuple[str, str]:
-    """From the output of `go test -json`: what go test prints without -json, and the results as JUnit XML.
-
-    The text is what each package said for itself (its `ok` or `FAIL` line,
-    its coverage, a build error) after the output of every test that failed.
-    A line that is not an event is kept as text, so nothing go test says is
-    lost. Every other judgement reads the text, as it does without -json.
-    """
+def _go_test_events(stream: str) -> tuple[list, dict, dict]:
+    """From `go test -json`: the lines no test owns, each test's output, and how each test ended."""
     said, by_test, ended = [], defaultdict(list), {}
     for line in stream.splitlines():
         try:
@@ -443,8 +440,13 @@ def _go_test_report(stream: str) -> tuple[str, str]:
             (by_test[key] if key[1] else said).append(event.get("Output", "").rstrip("\n"))
         elif key[1] and event["Action"] in ("pass", "fail", "skip"):
             ended[key] = (event["Action"], float(event.get("Elapsed") or 0.0))
+    return said, by_test, ended
+
+
+def _junit_xml(by_test: dict, ended: dict) -> str:
+    """The ended tests as JUnit XML, a suite for each package."""
     suites = ElementTree.Element("testsuites")
-    for package in sorted({package for package, _ in ended}):
+    for package in sorted({key[0] for key in ended}):
         cases = {test: result for (pkg, test), result in ended.items() if pkg == package}
         suite = ElementTree.SubElement(suites, "testsuite", name=package, tests=str(len(cases)),
                                        failures=str(sum(1 for action, _ in cases.values() if action == "fail")),
@@ -457,8 +459,20 @@ def _go_test_report(stream: str) -> tuple[str, str]:
                 text = "\n".join(by_test[(package, test)])
                 ElementTree.SubElement(case, "failure", message="the test failed").text = re.sub(
                     r"[^\x09\x0a\x0d\x20-\ud7ff\ue000-\ufffd]", "", text)
+    return ElementTree.tostring(suites, encoding="unicode")
+
+
+def _go_test_report(stream: str) -> tuple[str, str]:
+    """From the output of `go test -json`: what go test prints without -json, and the results as JUnit XML.
+
+    The text is what each package said for itself (its `ok` or `FAIL` line,
+    its coverage, a build error) after the output of every test that failed.
+    A line that is not an event is kept as text, so nothing go test says is
+    lost. Every other judgement reads the text, as it does without -json.
+    """
+    said, by_test, ended = _go_test_events(stream)
     failed = [line for key, (action, _) in ended.items() if action == "fail" for line in by_test[key]]
-    return "\n".join(failed + said), ElementTree.tostring(suites, encoding="unicode")
+    return "\n".join(failed + said), _junit_xml(by_test, ended)
 
 
 def _ran_no_test(command: Sequence[str], output: str) -> str:

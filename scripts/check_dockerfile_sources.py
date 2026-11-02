@@ -36,6 +36,29 @@ COMPOSE = ROOT / "docker-compose.yml"
 DEFAULT_CONTEXT = None
 
 
+def _build_block(text: str, start: int, indent: int) -> str:
+    """One `build:` block, up to the next key at the same or lower indent."""
+    block = []
+    for line in text[start:].splitlines():
+        if line.strip() and (len(line) - len(line.lstrip())) <= indent:
+            break
+        block.append(line)
+    return "\n".join(block)
+
+
+def _dockerfile_path(context: str, blob: str) -> str:
+    """The repo-relative Dockerfile of the `build:` block `blob`."""
+    dockerfile = re.search(r'^\s*dockerfile:\s*(\S+)', blob, re.MULTILINE)
+    if dockerfile:
+        df = dockerfile.group(1).strip().strip('"\'')
+        # `dockerfile:` is relative to the context.
+        df_path = (Path(context) / df) if not df.startswith("/") else Path(df)
+    else:
+        df_path = Path(context) / "Dockerfile"
+    # Only a leading `./`: lstrip("./") also ate a hidden directory's dot (#277).
+    return re.sub(r"^(?:\./)+", "", Path(df_path).as_posix())
+
+
 def compose_contexts() -> dict[str, str]:
     """Map dockerfile path -> build context, both repo-relative.
 
@@ -46,29 +69,35 @@ def compose_contexts() -> dict[str, str]:
         return {}
     text = COMPOSE.read_text(encoding="utf-8")
     out: dict[str, str] = {}
-    # Each `build:` block, up to the next key at the same or lower indent.
     for m in re.finditer(r'^(\s+)build:\s*$', text, re.MULTILINE):
-        indent = len(m.group(1))
-        block = []
-        for line in text[m.end():].splitlines():
-            if line.strip() and (len(line) - len(line.lstrip())) <= indent:
-                break
-            block.append(line)
-        blob = "\n".join(block)
+        blob = _build_block(text, m.end(), len(m.group(1)))
         ctx = re.search(r'^\s*context:\s*(\S+)', blob, re.MULTILINE)
-        dockerfile = re.search(r'^\s*dockerfile:\s*(\S+)', blob, re.MULTILINE)
         if not ctx:
             continue
         context = ctx.group(1).strip().strip('"\'')
-        if dockerfile:
-            df = dockerfile.group(1).strip().strip('"\'')
-            # `dockerfile:` is relative to the context.
-            df_path = (Path(context) / df) if not df.startswith("/") else Path(df)
-        else:
-            df_path = Path(context) / "Dockerfile"
-        # Only a leading `./`: lstrip("./") also ate a hidden directory's dot (#277).
-        out[re.sub(r"^(?:\./)+", "", Path(df_path).as_posix())] = context
+        out[_dockerfile_path(context, blob)] = context
     return out
+
+
+def _statement_at(lines: list[str], i: int) -> tuple[str, int]:
+    """The statement that starts at line `i`, with its continuations joined, and the index of its last line."""
+    stmt = lines[i]
+    while stmt.rstrip().endswith("\\") and i + 1 < len(lines):
+        i += 1
+        stmt = stmt.rstrip()[:-1] + " " + lines[i]
+    return stmt.strip(), i
+
+
+def _sources_of(stmt: str) -> list[str]:
+    """The sources of a COPY or ADD that can be looked up; none for any other statement."""
+    if not re.match(r'^(COPY|ADD)\s', stmt, re.IGNORECASE):
+        return []
+    # Skip cross-stage copies: the source is inside another stage.
+    if re.search(r'--from=', stmt, re.IGNORECASE):
+        return []
+    parts = [p for p in stmt.split()[1:] if not p.startswith("--")]
+    # Last token is the destination.
+    return [src for src in parts[:-1] if not any(c in src for c in "*?[$")]
 
 
 def copy_sources(dockerfile: Path) -> list[tuple[int, str]]:
@@ -77,26 +106,21 @@ def copy_sources(dockerfile: Path) -> list[tuple[int, str]]:
     lines = dockerfile.read_text(encoding="utf-8").splitlines()
     i = 0
     while i < len(lines):
-        raw = lines[i]
-        # Join line continuations.
-        stmt = raw
-        while stmt.rstrip().endswith("\\") and i + 1 < len(lines):
-            i += 1
-            stmt = stmt.rstrip()[:-1] + " " + lines[i]
-        stripped = stmt.strip()
-        if re.match(r'^(COPY|ADD)\s', stripped, re.IGNORECASE):
-            # Skip cross-stage copies: the source is inside another stage.
-            if re.search(r'--from=', stripped, re.IGNORECASE):
-                i += 1
-                continue
-            parts = [p for p in stripped.split()[1:] if not p.startswith("--")]
-            # Last token is the destination.
-            for src in parts[:-1]:
-                if any(c in src for c in "*?[$"):
-                    continue
-                out.append((i + 1, src))
+        stmt, i = _statement_at(lines, i)
+        out += [(i + 1, src) for src in _sources_of(stmt)]
         i += 1
     return out
+
+
+def _check_dockerfile(df: Path, contexts: dict[str, str]) -> tuple[int, list[str]]:
+    """How many COPY sources `df` names, and a line for each that does not exist."""
+    rel = df.relative_to(ROOT).as_posix()
+    context = contexts.get(rel, DEFAULT_CONTEXT)
+    base = (ROOT / context).resolve() if context else df.parent
+    where = f"context={context}" if context else "context=<dockerfile dir>"
+    sources = copy_sources(df)
+    return len(sources), [f"{rel}:{lineno}: COPY source {src!r} does not exist ({where})"
+                          for lineno, src in sources if not (base / src).exists()]
 
 
 def main() -> int:
@@ -107,14 +131,9 @@ def main() -> int:
     for df in sorted(ROOT.rglob("Dockerfile*")):
         if any(p in df.parts for p in (".git", "node_modules", ".ua")):
             continue
-        rel = df.relative_to(ROOT).as_posix()
-        context = contexts.get(rel, DEFAULT_CONTEXT)
-        base = (ROOT / context).resolve() if context else df.parent
-        for lineno, src in copy_sources(df):
-            checked += 1
-            if not (base / src).exists():
-                where = f"context={context}" if context else "context=<dockerfile dir>"
-                problems.append(f"{rel}:{lineno}: COPY source {src!r} does not exist ({where})")
+        count, missing = _check_dockerfile(df, contexts)
+        checked += count
+        problems += missing
 
     if problems:
         print(f"check_dockerfile_sources: {len(problems)} missing COPY source(s):",

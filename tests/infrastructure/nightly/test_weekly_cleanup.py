@@ -375,11 +375,15 @@ def test_when_the_tests_fail_with_the_pieces_together_none_of_the_module_is_offe
     assert [entry["holds"] for entry in run.tested() if entry["in"] == "proxy"] == [["new_any", "new_rangeint"], [], ["new_any", "new_rangeint"]]
 
 
-def test_the_tests_of_a_module_run_with_the_flags_of_the_go_test_jobs(made):
+def test_the_tests_of_a_module_run_with_the_flags_of_the_go_test_jobs(made, monkeypatch):
     run = made().make()
     assert [["go", *call["args"]] for call in run.calls("test")] == [cleanup.GO_TEST, cleanup.GO_TEST]
-    gates = (ROOT / "scripts" / "production-readiness.py").read_text(encoding="utf-8")
-    assert "(" + ", ".join(f'"{word}"' for word in cleanup.GO_TEST) + ")," in gates, "the Go test gate runs other flags"
+    spec = importlib.util.spec_from_file_location("production_readiness", ROOT / "scripts" / "production-readiness.py")
+    gates = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, gates)  # the dataclasses resolve their annotations through it
+    spec.loader.exec_module(gates)
+    command = gates._gates(("tests/cli",))["go-proxy-test"].command
+    assert list(command) == cleanup.GO_TEST, "the Go test gate runs other flags"
     assert "-race" in cleanup.GO_TEST
     assert "-count=1" in cleanup.GO_TEST
 
