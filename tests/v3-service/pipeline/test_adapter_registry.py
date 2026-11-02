@@ -59,45 +59,11 @@ def test_every_adapter_declares_support_explicitly(adapter):
 
 
 @pytest.mark.parametrize("adapter", ALL_FIVE)
-def test_every_declared_capability_has_an_evaluator(adapter):
-    caps = set(A._capabilities(adapter))
-    evals = set(A.evaluators_for(adapter))
-    missing = sorted(caps - evals)
-    assert not missing, (
-        f"{adapter} claims it can measure {missing} with nothing that computes them")
-
-
-@pytest.mark.parametrize("adapter", ALL_FIVE)
-def test_no_evaluator_without_a_declared_capability(adapter):
-    caps = set(A._capabilities(adapter))
-    extra = sorted(set(A.evaluators_for(adapter)) - caps)
-    assert not extra, (
-        f"{adapter} evaluates {extra} without declaring it measurable")
-
-
-@pytest.mark.parametrize("adapter", ALL_FIVE)
 def test_requirements_are_declared_not_derived_from_capability(adapter):
     """An obligation is the TASK's. An adapter that reads its own reach and
     calls the result a requirement has decided what the user needed."""
     assert adapter in A.REQUIREMENT_DECLARATION, (
         f"{adapter} has no declared requirement set")
-
-
-@pytest.mark.parametrize("adapter", ALL_FIVE)
-def test_every_requirement_is_measurable_or_registered_unmeasurable(adapter):
-    caps = set(A._capabilities(adapter))
-    declared = {r["id"] for r in A._requirements(adapter)}
-    quarantined = set(A.unmeasurable_requirements(adapter))
-    orphan = sorted(declared - caps - quarantined)
-    assert not orphan, (
-        f"{adapter} requires {orphan} with no evaluator and no registered "
-        "reason; a requirement it cannot measure must be declared as such")
-
-
-@pytest.mark.parametrize("adapter", ALL_FIVE)
-def test_a_criterion_is_never_both_measurable_and_unmeasurable(adapter):
-    both = sorted(set(A._capabilities(adapter)) & set(A.unmeasurable_requirements(adapter)))
-    assert not both, f"{adapter} declares {both} as both measurable and not"
 
 
 # --- no adapter requires what it cannot measure -----------------------------
@@ -112,9 +78,8 @@ def test_no_adapter_demands_a_criterion_it_cannot_measure():
     over-declare.
     """
     for adapter in A.ALL_ADAPTERS:
-        assert not A.unmeasurable_requirements(adapter), (
-            f"{adapter} still quarantines "
-            f"{sorted(A.unmeasurable_requirements(adapter))}")
+        unmeasurable = A.REGISTRY[adapter].get("unmeasurable")
+        assert not unmeasurable, f"{adapter} still quarantines {sorted(unmeasurable)}"
         declared = {cid for cid, _ in A.REQUIREMENT_DECLARATION[adapter]}
         assert declared <= set(A._capabilities(adapter)), (
             f"{adapter} requires {sorted(declared - set(A._capabilities(adapter)))} "
@@ -147,6 +112,18 @@ def test_an_adapter_declaring_an_unevaluable_criterion_fails_the_registry():
                 "unmeasurable": [],
             }})
     assert "a_thing_nobody_computes" in str(exc.value)
+
+
+def test_an_evaluator_without_a_declared_capability_fails_the_registry():
+    with pytest.raises(A.AdapterRegistryError, match="without declaring it measurable"):
+        A.check_registry({
+            "fake_adapter": {
+                "support": A.SUPPORT_ALWAYS,
+                "capabilities": [],
+                "requirements": [],
+                "evaluators": {"a_thing_nobody_declared": None},
+                "unmeasurable": [],
+            }})
 
 
 def test_an_adapter_requiring_something_unregistered_fails_the_registry():

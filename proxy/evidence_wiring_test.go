@@ -635,10 +635,6 @@ func TestEachProducerHasExactlyOneEnumeratedCallPath(t *testing.T) {
 			if _, ok := sites[c.site]; !ok {
 				t.Errorf("%s is called from %v, want %s", c.fn, sites, c.site)
 			}
-		case evidenceProducerUnavailable:
-			if len(sites) != 0 {
-				t.Errorf("%s is declared unavailable but is called from %v", c.fn, sites)
-			}
 		default:
 			t.Errorf("%s has no availability declaration", c.source)
 		}

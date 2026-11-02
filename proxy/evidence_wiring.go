@@ -4,12 +4,11 @@ import (
 	"strings"
 )
 
-// Where the evidence producers actually run, and where they cannot.
+// Where the evidence producers actually run.
 //
 // The producers landed with no production caller: correct for a slice that had
 // to prove inertness, and useless past it. This file is the one place either
-// producer is invoked on a live request, and the one place the missing
-// producer is recorded as missing rather than quietly absent.
+// producer is invoked on a live request.
 //
 // Nothing here changes what lands. Records go to the private shadow sink and
 // to nowhere else: no SSE event, no ToolResult, no model-visible text, and no
@@ -26,10 +25,6 @@ type evidenceProducerAvailability string
 const (
 	// evidenceProducerWired: exactly one live production call path exists.
 	evidenceProducerWired evidenceProducerAvailability = "wired"
-	// evidenceProducerUnavailable: the mechanism this producer would observe
-	// does not exist in this build. Named here so the absence is a registered
-	// fact rather than an oversight.
-	evidenceProducerUnavailable evidenceProducerAvailability = "unavailable"
 )
 
 // evidenceProducerStatus is the enumerated inventory. A structural guard reads
