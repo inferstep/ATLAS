@@ -1,9 +1,8 @@
-package main
+package memoryenvelope
 
 import (
 	"fmt"
 	"log"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,8 +23,8 @@ import (
 // assumed to be fine, it is reported as unvalidated, and the per-command
 // contract carries the safety on its own until someone declares one.
 
-// memoryBudget is one component's budget, as the operator declared it.
-type memoryBudget struct {
+// Budget is one component's budget, as the operator declared it.
+type Budget struct {
 	Name  string
 	Bytes int64
 	// Enforced is whether a cgroup limit actually holds this component to
@@ -35,14 +34,14 @@ type memoryBudget struct {
 	Enforced bool
 }
 
-// memoryEnvelope is the whole declaration.
-type memoryEnvelope struct {
+// Envelope is the whole declaration.
+type Envelope struct {
 	HostBytes int64
 	// Reserve is what must remain for the kernel, the container daemon,
 	// logging, monitoring and an orderly shutdown. It is a budget like any
 	// other and it is never the leftover.
 	ReserveBytes int64
-	Budgets      []memoryBudget
+	Budgets      []Budget
 	// PerCommandBytes is the ceiling one untrusted command may reach. It must
 	// leave room inside the sandbox's own budget for the executor and the
 	// output it buffers, so a single command cannot consume the container.
@@ -53,14 +52,14 @@ type memoryEnvelope struct {
 	Concurrency int
 }
 
-func (e memoryEnvelope) declared() bool { return e.HostBytes > 0 }
+func (e Envelope) declared() bool { return e.HostBytes > 0 }
 
 // total is every simultaneously reachable HARD maximum, plus the reserve.
 //
 // Unenforced budgets are excluded on purpose. A component with no cgroup limit
 // has no maximum to add: its real ceiling is the host, and folding an expected
 // figure in here would turn a measurement into a promise.
-func (e memoryEnvelope) total() int64 {
+func (e Envelope) total() int64 {
 	sum := e.ReserveBytes
 	for _, b := range e.Budgets {
 		if b.Enforced {
@@ -71,7 +70,7 @@ func (e memoryEnvelope) total() int64 {
 }
 
 // remainder is what is left for everything that is NOT held to a limit.
-func (e memoryEnvelope) remainder() int64 { return e.HostBytes - e.total() }
+func (e Envelope) remainder() int64 { return e.HostBytes - e.total() }
 
 // unenforcedOverruns names each unbounded component whose declared expectation
 // does not fit in what the enforced budgets leave.
@@ -81,7 +80,7 @@ func (e memoryEnvelope) remainder() int64 { return e.HostBytes - e.total() }
 // component that outgrows the remainder is a different problem with a
 // different fix (validate a limit for it, or give it a smaller model), and
 // disabling execution would not make the machine any safer.
-func (e memoryEnvelope) unenforcedOverruns() []string {
+func (e Envelope) unenforcedOverruns() []string {
 	var out []string
 	rem := e.remainder()
 	for _, b := range e.Budgets {
@@ -98,10 +97,10 @@ func (e memoryEnvelope) unenforcedOverruns() []string {
 	return out
 }
 
-// logEnvelopeOverruns writes each overrun to the log once, at startup, so an
+// LogOverruns writes each overrun to the log once, at startup, so an
 // operator can see it before the kernel has to act on it. An envelope nobody
 // declared has no remainder to compare against.
-func logEnvelopeOverruns(e memoryEnvelope) {
+func LogOverruns(e Envelope) {
 	if !e.declared() {
 		return
 	}
@@ -112,7 +111,7 @@ func logEnvelopeOverruns(e memoryEnvelope) {
 
 // validate reports every way the declaration cannot hold. All of them, not the
 // first: an operator fixing one number wants to see the others.
-func (e memoryEnvelope) validate() []string {
+func (e Envelope) validate() []string {
 	var problems []string
 	if e.HostBytes <= 0 {
 		return []string{"host memory is not declared"}
@@ -164,10 +163,10 @@ func humanBytes(n int64) string {
 	return strconv.FormatInt(n, 10) + " B"
 }
 
-// envBytes reads a size that may carry a k/m/g suffix, the way compose writes
+// parseBytes reads a size that may carry a k/m/g suffix, the way compose writes
 // them, so one value can be shared by the compose file and this check.
-func envBytes(name string) int64 {
-	raw := strings.TrimSpace(strings.ToLower(os.Getenv(name)))
+func parseBytes(value string) int64 {
+	raw := strings.TrimSpace(strings.ToLower(value))
 	if raw == "" {
 		return 0
 	}
@@ -187,28 +186,30 @@ func envBytes(name string) int64 {
 	return n * mult
 }
 
-// envelopeFromEnv reads the operator's declaration.
+// FromSettings reads the operator's declaration. setting returns the value of
+// one named setting, "" when it is unset.
 //
 // Absent ATLAS_HOST_MEMORY_BYTES nothing is declared and nothing is checked:
 // an envelope this build guessed at would be this build asserting something
 // the operator never said.
-func envelopeFromEnv() memoryEnvelope {
-	e := memoryEnvelope{
-		HostBytes:       envBytes("ATLAS_HOST_MEMORY_BYTES"),
-		ReserveBytes:    envBytes("ATLAS_HOST_RESERVE_BYTES"),
-		PerCommandBytes: envBytes("ATLAS_EXEC_MEMORY_BYTES"),
-		SandboxBytes:    envBytes("ATLAS_SANDBOX_MEM"),
+func FromSettings(setting func(name string) string) Envelope {
+	bytesOf := func(name string) int64 { return parseBytes(setting(name)) }
+	e := Envelope{
+		HostBytes:       bytesOf("ATLAS_HOST_MEMORY_BYTES"),
+		ReserveBytes:    bytesOf("ATLAS_HOST_RESERVE_BYTES"),
+		PerCommandBytes: bytesOf("ATLAS_EXEC_MEMORY_BYTES"),
+		SandboxBytes:    bytesOf("ATLAS_SANDBOX_MEM"),
 		Concurrency:     1,
 	}
-	if n, err := strconv.Atoi(os.Getenv("ATLAS_EXEC_CONCURRENCY")); err == nil && n > 0 {
+	if n, err := strconv.Atoi(setting("ATLAS_EXEC_CONCURRENCY")); err == nil && n > 0 {
 		e.Concurrency = n
 	}
 	for name, key := range map[string]string{
 		"lens": "ATLAS_LENS_MEM", "v3-service": "ATLAS_V3_MEM",
 		"proxy": "ATLAS_PROXY_MEM", "sandbox": "ATLAS_SANDBOX_MEM",
 	} {
-		if b := envBytes(key); b > 0 {
-			e.Budgets = append(e.Budgets, memoryBudget{Name: name, Bytes: b, Enforced: true})
+		if b := bytesOf(key); b > 0 {
+			e.Budgets = append(e.Budgets, Budget{Name: name, Bytes: b, Enforced: true})
 		}
 	}
 	// The inference service is declared in two parts, because what it is
@@ -220,24 +221,24 @@ func envelopeFromEnv() memoryEnvelope {
 	// the whole system depends on. ATLAS_LLAMA_BUDGET_BYTES is the measured
 	// expectation, used for accounting so the arithmetic stays honest about
 	// the largest term rather than omitting it.
-	if enforced := envBytes("ATLAS_LLAMA_MEM"); enforced > 0 {
-		e.Budgets = append(e.Budgets, memoryBudget{
+	if enforced := bytesOf("ATLAS_LLAMA_MEM"); enforced > 0 {
+		e.Budgets = append(e.Budgets, Budget{
 			Name: "inference", Bytes: enforced, Enforced: true})
-	} else if expected := envBytes("ATLAS_LLAMA_BUDGET_BYTES"); expected > 0 {
-		e.Budgets = append(e.Budgets, memoryBudget{
+	} else if expected := bytesOf("ATLAS_LLAMA_BUDGET_BYTES"); expected > 0 {
+		e.Budgets = append(e.Budgets, Budget{
 			Name: "inference", Bytes: expected, Enforced: false})
 	}
 	sort.Slice(e.Budgets, func(i, j int) bool { return e.Budgets[i].Name < e.Budgets[j].Name })
 	return e
 }
 
-// executionEnvelopeRefusal is the message the execution path answers with when
+// ExecutionRefusal is the message the execution path answers with when
 // the declared envelope cannot hold, or "" when execution may proceed.
 //
 // Refusing the EXECUTION PATH rather than the process: a proxy that will not
 // start leaves an operator with no way to read the diagnosis, and reading a
 // file or answering a question was never the unsafe part.
-func executionEnvelopeRefusal(e memoryEnvelope) string {
+func ExecutionRefusal(e Envelope) string {
 	if !e.declared() {
 		return ""
 	}

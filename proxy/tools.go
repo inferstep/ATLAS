@@ -48,6 +48,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/memoryenvelope"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -338,7 +339,7 @@ func runCommandTool() *ToolDef {
 			// kernel picks a victim, which is exactly how the inference server
 			// died. Refusing here rather than at startup keeps the diagnosis
 			// readable: reading a file was never the unsafe part.
-			if refusal := executionEnvelopeRefusal(envelopeFromEnv()); refusal != "" {
+			if refusal := memoryenvelope.ExecutionRefusal(declaredMemoryEnvelope()); refusal != "" {
 				log.Printf("[run_command] %s", refusal)
 				return &wire.ToolResult{
 					Success: false,

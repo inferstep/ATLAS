@@ -111,7 +111,7 @@ K3s デプロイパス（`scripts/install.sh`、`templates/` 内のマニフェ�
 | `internal/logsafe/logsafe.go` | ログ向けのプライバシーセーフなツール引数サマリを構築する。承認済みフィールドのみを許可し、機微な内容をマスクする |
 | `internal/logsafe/filter.go` | すべてのログ行が通るライター。資格情報に見える値をマスクし、制御文字をテキストとして出力する |
 | `internal/shadowcapture/sink.go` | 非公開のシャドーキャプチャ。リクエストが宣言した内容と ATLAS がその文から読み取った内容を比べるレコードを、1 つのゴルーチンがファイルに書き、どの判断もそれを読まない。`ATLAS_SHADOW_CAPTURE` がファイルを指定しない限りオフ |
-| `memory_envelope.go` | 宣言されたデプロイのメモリ予算をオペレーター申告のホスト容量と照合し、未強制の予算超過を報告する |
+| `internal/memoryenvelope/envelope.go` | 宣言されたデプロイのメモリ予算をオペレーター申告のホスト容量と照合し、未強制の予算超過を報告する |
 | `internal/workspacefs/object_handle_linux.go` | 削除承認の間、Linux のファイルシステムオブジェクトを開いたまま保持し、承認されたオブジェクトが除去前に差し替えられないようにする |
 | `internal/workspacefs/object_handle_other.go` | 非 Linux プラットフォームでは、ファイルシステムオブジェクトを安全にピン留めして検証できないため、削除承認を拒否する |
 | `mutation_scope.go` | モデルのツールコールから正確なファイル・編集スコープを導出し、候補が要求対象以外を変更できないようにする |
