@@ -3517,11 +3517,13 @@ func packageFiles(t *testing.T, folder string) []string {
 	return code
 }
 
-// wireFiles names the files that hold what crosses a boundary, and types.go,
-// which holds the state beside it.
+// wireFiles names the files that hold what crosses a boundary, the task
+// contract a client sends among them, and types.go, which holds the state
+// beside it.
 func wireFiles(t *testing.T) []string {
 	t.Helper()
-	return append(packageFiles(t, "internal/wire"), "types.go")
+	files := append(packageFiles(t, "internal/wire"), packageFiles(t, "internal/taskcontract")...)
+	return append(files, "types.go")
 }
 
 // calledName names a bare call or a call through one of the proxy's packages.
