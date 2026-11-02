@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/itigges22/atlas-tui/internal/proxyclient"
+	"github.com/itigges22/atlas-tui/internal/sessionstore"
 )
 
 // The done row shows the run's status and reason, not only its summary
@@ -36,7 +37,7 @@ func TestTheDoneRowShowsStatusAndReason(t *testing.T) {
 	if !strings.Contains(strings.Join(lines[1:], "\n"), "mod.py still does not parse") {
 		t.Errorf("the summary is not under the header: %q", lines)
 	}
-	if got := renderChatMessage(chatMessage{Role: roleSystem, Meta: "done", Status: "timed_out",
+	if got := renderChatMessage(sessionstore.ChatMessage{Role: sessionstore.RoleSystem, Meta: "done", Status: "timed_out",
 		Reason: "work_deadline"}, nil, 80); !strings.Contains(got[0], "done · timed out · work_deadline") {
 		t.Errorf("timed_out renders as %q", got[0])
 	}

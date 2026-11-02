@@ -15,6 +15,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/itigges22/atlas-tui/internal/proxyclient"
+	"github.com/itigges22/atlas-tui/internal/sessionstore"
 )
 
 func TestFormatDemoModelLabel(t *testing.T) {
@@ -211,8 +212,8 @@ func TestDemoLiveAndOutputViewsUseResolvedTitles(t *testing.T) {
 
 	assertTitles("live", m.View())
 	m.outputMode = true
-	m.rawChild.chat = append(m.rawChild.chat, chatMessage{
-		Role: roleAssistant, Meta: "raw model", Body: "raw response survives",
+	m.rawChild.chat = append(m.rawChild.chat, sessionstore.ChatMessage{
+		Role: sessionstore.RoleAssistant, Meta: "raw model", Body: "raw response survives",
 	})
 	assertTitles("output", m.View())
 	if output := m.View(); !strings.Contains(output, "raw response") || !strings.Contains(output, "survives") {

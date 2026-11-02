@@ -9,6 +9,7 @@ import (
 
 	"github.com/charmbracelet/glamour"
 	"github.com/itigges22/atlas-tui/internal/proxyclient"
+	"github.com/itigges22/atlas-tui/internal/sessionstore"
 )
 
 // windowTitle is a harmless sequence that would set the terminal window's title.
@@ -36,22 +37,22 @@ func TestTextFromTheProxyReachesTheTerminalWithItsControlsMarked(t *testing.T) {
 		shown  string
 	}{
 		{"the model's text", func() string {
-			return strings.Join(renderChatMessage(chatMessage{Role: roleAssistant, Body: windowTitle}, nil, 80), "\n")
+			return strings.Join(renderChatMessage(sessionstore.ChatMessage{Role: sessionstore.RoleAssistant, Body: windowTitle}, nil, 80), "\n")
 		}, mark},
 		{"a character reference in the model's markdown", func() string {
-			return strings.Join(renderChatMessage(chatMessage{Role: roleAssistant, Body: "a &#27;&#91;1mword b"}, markdown, 80), "\n")
+			return strings.Join(renderChatMessage(sessionstore.ChatMessage{Role: sessionstore.RoleAssistant, Body: "a &#27;&#91;1mword b"}, markdown, 80), "\n")
 		}, mark + "[1mword"},
 		{"a character reference in a fenced code block", func() string {
-			return strings.Join(renderChatMessage(chatMessage{Role: roleAssistant, Body: "```\n&#169;\n```"}, markdown, 80), "\n")
+			return strings.Join(renderChatMessage(sessionstore.ChatMessage{Role: sessionstore.RoleAssistant, Body: "```\n&#169;\n```"}, markdown, 80), "\n")
 		}, "&#169;"},
 		{"the markdown renderer's output", func() string {
 			return visibleControlsKeepingStyles("\x1b[1mbold\x1b[0m" + windowTitle)
 		}, "\x1b[1mbold\x1b[0m" + mark},
 		{"a tool result", func() string {
-			return strings.Join(renderChatMessage(chatMessage{Role: roleTool, Meta: "← run_command", Body: windowTitle}, nil, 80), "\n")
+			return strings.Join(renderChatMessage(sessionstore.ChatMessage{Role: sessionstore.RoleTool, Meta: "← run_command", Body: windowTitle}, nil, 80), "\n")
 		}, mark},
 		{"the status of a done row", func() string {
-			return strings.Join(renderChatMessage(chatMessage{Role: roleSystem, Meta: "done", Status: windowTitle}, nil, 80), "\n")
+			return strings.Join(renderChatMessage(sessionstore.ChatMessage{Role: sessionstore.RoleSystem, Meta: "done", Status: windowTitle}, nil, 80), "\n")
 		}, mark},
 		{"the approval prompt's message", func() string {
 			return strings.Join(permPromptLines(&permPrompt{toolName: "write_file", message: windowTitle}, 60, 20), "\n")

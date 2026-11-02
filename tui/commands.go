@@ -28,6 +28,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/itigges22/atlas-tui/internal/proxyclient"
+	"github.com/itigges22/atlas-tui/internal/sessionstore"
 )
 
 // copyToClipboard writes s to the system clipboard. Tries in order:
@@ -93,7 +94,7 @@ func copyToClipboard(s string) (err error) {
 
 // collectLastMessages returns the body of the last n chat messages
 // joined with blank lines. Used by /copy / /yank.
-func collectLastMessages(chat []chatMessage, n int) string {
+func collectLastMessages(chat []sessionstore.ChatMessage, n int) string {
 	if n <= 0 || len(chat) == 0 {
 		return ""
 	}
@@ -189,7 +190,7 @@ func (m *tuiModel) handleSlash(input string) (consumed bool, cmd tea.Cmd, quit b
 
 	// Echo the input as a "you" row so the chat reflects what was sent.
 	// Echo rows are display-only — buildChatHistory never forwards them.
-	m.chat = append(m.chat, chatMessage{Role: roleUser, Body: input, Echo: true})
+	m.chat = append(m.chat, sessionstore.ChatMessage{Role: sessionstore.RoleUser, Body: input, Echo: true})
 
 	parts := strings.Fields(input)
 	cmdName := parts[0]
@@ -258,8 +259,8 @@ func (m *tuiModel) handleSlash(input string) (consumed bool, cmd tea.Cmd, quit b
 
 	// Unknown slash command — show help instead of sending to the
 	// agent (a typo'd /diff shouldn't trigger an LLM call).
-	m.chat = append(m.chat, chatMessage{
-		Role: roleSystem, Meta: "unknown",
+	m.chat = append(m.chat, sessionstore.ChatMessage{
+		Role: sessionstore.RoleSystem, Meta: "unknown",
 		Body: fmt.Sprintf("unknown command %q. Type /help for the list.", cmdName),
 	})
 	return true, nil, false
@@ -267,8 +268,8 @@ func (m *tuiModel) handleSlash(input string) (consumed bool, cmd tea.Cmd, quit b
 
 // slashHelp shows the list of slash commands (/help or /?).
 func (m *tuiModel) slashHelp() (consumed bool, cmd tea.Cmd, quit bool) {
-	m.chat = append(m.chat, chatMessage{
-		Role: roleSystem, Meta: "help", Body: slashCommandHelp,
+	m.chat = append(m.chat, sessionstore.ChatMessage{
+		Role: sessionstore.RoleSystem, Meta: "help", Body: slashCommandHelp,
 	})
 	return true, nil, false
 }
@@ -284,8 +285,8 @@ func (m *tuiModel) slashDemo(args []string) (consumed bool, cmd tea.Cmd, quit bo
 		case "short", "medium", "long":
 			length = args[0]
 		default:
-			m.chat = append(m.chat, chatMessage{
-				Role: roleSystem, Meta: "error",
+			m.chat = append(m.chat, sessionstore.ChatMessage{
+				Role: sessionstore.RoleSystem, Meta: "error",
 				Body: "usage: /demo [short|medium|long]",
 			})
 			return true, nil, false
@@ -309,8 +310,8 @@ func (m *tuiModel) slashCommit(args []string) (consumed bool, cmd tea.Cmd, quit 
 // slashRun runs a shell command in the working dir (/run <cmd>).
 func (m *tuiModel) slashRun(args []string) (consumed bool, cmd tea.Cmd, quit bool) {
 	if len(args) == 0 {
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "error",
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: "error",
 			Body: "/run requires a command (e.g. /run pytest -k snake)",
 		})
 		return true, nil, false
@@ -324,7 +325,7 @@ func (m *tuiModel) slashRun(args []string) (consumed bool, cmd tea.Cmd, quit boo
 func (m *tuiModel) slashReview() (consumed bool, cmd tea.Cmd, quit bool) {
 	// List the files the last pass wrote, with any per-file verdicts.
 	if len(m.lastPassFiles) == 0 {
-		m.chat = append(m.chat, chatMessage{Role: roleSystem, Meta: "review",
+		m.chat = append(m.chat, sessionstore.ChatMessage{Role: sessionstore.RoleSystem, Meta: "review",
 			Body: "No files written in the last pass to review."})
 		return true, nil, false
 	}
@@ -333,7 +334,7 @@ func (m *tuiModel) slashReview() (consumed bool, cmd tea.Cmd, quit bool) {
 	for _, f := range m.lastPassFiles {
 		fmt.Fprintf(&b, "  · %s\n", f)
 	}
-	m.chat = append(m.chat, chatMessage{Role: roleSystem, Meta: "review", Body: strings.TrimRight(b.String(), "\n")})
+	m.chat = append(m.chat, sessionstore.ChatMessage{Role: sessionstore.RoleSystem, Meta: "review", Body: strings.TrimRight(b.String(), "\n")})
 	return true, nil, false
 }
 
@@ -342,12 +343,12 @@ func (m *tuiModel) slashReview() (consumed bool, cmd tea.Cmd, quit bool) {
 func (m *tuiModel) slashRedo(args []string) (consumed bool, cmd tea.Cmd, quit bool) {
 	// Ask the agent to regenerate a file from the last pass.
 	if len(args) == 0 {
-		m.chat = append(m.chat, chatMessage{Role: roleSystem, Meta: "error",
+		m.chat = append(m.chat, sessionstore.ChatMessage{Role: sessionstore.RoleSystem, Meta: "error",
 			Body: "usage: /redo <path> [reason]"})
 		return true, nil, false
 	}
 	if m.turnActive {
-		m.chat = append(m.chat, chatMessage{Role: roleSystem, Meta: "error",
+		m.chat = append(m.chat, sessionstore.ChatMessage{Role: sessionstore.RoleSystem, Meta: "error",
 			Body: "A turn is in progress — wait for it to finish before /redo."})
 		return true, nil, false
 	}
@@ -357,7 +358,7 @@ func (m *tuiModel) slashRedo(args []string) (consumed bool, cmd tea.Cmd, quit bo
 	if reason != "" {
 		redo += " Reason: " + reason
 	}
-	m.chat = append(m.chat, chatMessage{Role: roleUser, Body: redo})
+	m.chat = append(m.chat, sessionstore.ChatMessage{Role: sessionstore.RoleUser, Body: redo})
 	return true, m.sendChatCmd(redo + m.contextSuffix()), false
 }
 
@@ -379,15 +380,15 @@ func (m *tuiModel) slashAsk(input string, args []string) (consumed bool, cmd tea
 	// the same sentence can be sent either way. The command word itself is
 	// stripped -- the model sees only the message.
 	if len(args) == 0 {
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "error",
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: "error",
 			Body: "/ask requires a message (e.g. /ask what does solve.py do?)",
 		})
 		return true, nil, false
 	}
 	question := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(input), "/ask"))
 	m.pendingTaskMode = proxyclient.TaskModeQuestion
-	m.chat = append(m.chat, chatMessage{Role: roleUser, Body: question})
+	m.chat = append(m.chat, sessionstore.ChatMessage{Role: sessionstore.RoleUser, Body: question})
 	m.lastUserMsg = question
 	return true, m.sendChatCmd(question + m.contextSuffix()), false
 }
@@ -398,8 +399,8 @@ func (m *tuiModel) slashCompact() (consumed bool, cmd tea.Cmd, quit bool) {
 	// proxy's history-trimming kicks in at 12 messages; this lets
 	// the user trigger an explicit summarization.
 	compactMsg := "Summarize the conversation so far in 3-4 sentences and respond with only that summary, no tool calls."
-	m.chat = append(m.chat, chatMessage{
-		Role: roleSystem, Meta: "compact",
+	m.chat = append(m.chat, sessionstore.ChatMessage{
+		Role: sessionstore.RoleSystem, Meta: "compact",
 		Body: "Asking agent to compact conversation…",
 	})
 	return true, m.sendChatCmd(compactMsg), false
@@ -408,8 +409,8 @@ func (m *tuiModel) slashCompact() (consumed bool, cmd tea.Cmd, quit bool) {
 // slashHide hides one pane, or all of them (/hide <pane>).
 func (m *tuiModel) slashHide(args []string) (consumed bool, cmd tea.Cmd, quit bool) {
 	if len(args) == 0 {
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "error",
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: "error",
 			Body: "/hide files | pipeline | events | all",
 		})
 		return true, nil, false
@@ -421,8 +422,8 @@ func (m *tuiModel) slashHide(args []string) (consumed bool, cmd tea.Cmd, quit bo
 // slashShow shows one pane, or all of them (/show <pane>).
 func (m *tuiModel) slashShow(args []string) (consumed bool, cmd tea.Cmd, quit bool) {
 	if len(args) == 0 {
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "error",
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: "error",
 			Body: "/show files | pipeline | events | all",
 		})
 		return true, nil, false
@@ -448,21 +449,21 @@ func (m *tuiModel) slashMouse(args []string) (consumed bool, cmd tea.Cmd, quit b
 		want = "off"
 	}
 	if want != "on" && want != "off" {
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "error",
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: "error",
 			Body: "/mouse on | off  (no arg = off)",
 		})
 		return true, nil, false
 	}
 	if want == "off" {
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "mouse",
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: "mouse",
 			Body: "mouse capture OFF — drag-highlight to select, then your terminal's own hotkey copies (Ctrl+Shift+C on Linux, Cmd+C on Mac, right-click → Copy elsewhere). Wheel scroll won't work until /mouse on. Tip: launch with ATLAS_TUI_MOUSE=off atlas tui to default to this.",
 		})
 		return true, tea.DisableMouse, false
 	}
-	m.chat = append(m.chat, chatMessage{
-		Role: roleSystem, Meta: "mouse",
+	m.chat = append(m.chat, sessionstore.ChatMessage{
+		Role: sessionstore.RoleSystem, Meta: "mouse",
 		Body: "mouse capture ON — wheel scrolls chat. Hold Shift/Option while dragging to override capture for one selection.",
 	})
 	return true, tea.EnableMouseCellMotion, false
@@ -500,8 +501,8 @@ func (m *tuiModel) slashCopy(args []string) (consumed bool, cmd tea.Cmd, quit bo
 // user considers in-scope. Returns nil cmd — purely state mutation.
 func (m *tuiModel) cmdAddContext(paths []string) tea.Cmd {
 	if len(paths) == 0 {
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "error",
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: "error",
 			Body: "/add requires at least one path",
 		})
 		return nil
@@ -517,14 +518,14 @@ func (m *tuiModel) cmdAddContext(paths []string) tea.Cmd {
 		}
 	}
 	if len(added) == 0 {
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "context",
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: "context",
 			Body: "no new files added (all already in context)",
 		})
 		return nil
 	}
-	m.chat = append(m.chat, chatMessage{
-		Role: roleSystem, Meta: "context",
+	m.chat = append(m.chat, sessionstore.ChatMessage{
+		Role: sessionstore.RoleSystem, Meta: "context",
 		Body: fmt.Sprintf("added to context: %s", strings.Join(added, ", ")),
 	})
 	return nil
@@ -532,8 +533,8 @@ func (m *tuiModel) cmdAddContext(paths []string) tea.Cmd {
 
 func (m *tuiModel) cmdDropContext(paths []string) tea.Cmd {
 	if len(paths) == 0 {
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "error",
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: "error",
 			Body: "/drop requires at least one path",
 		})
 		return nil
@@ -546,14 +547,14 @@ func (m *tuiModel) cmdDropContext(paths []string) tea.Cmd {
 		}
 	}
 	if len(dropped) == 0 {
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "context",
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: "context",
 			Body: "nothing dropped (none of those paths were in context)",
 		})
 		return nil
 	}
-	m.chat = append(m.chat, chatMessage{
-		Role: roleSystem, Meta: "context",
+	m.chat = append(m.chat, sessionstore.ChatMessage{
+		Role: sessionstore.RoleSystem, Meta: "context",
 		Body: fmt.Sprintf("dropped from context: %s", strings.Join(dropped, ", ")),
 	})
 	return nil
@@ -561,8 +562,8 @@ func (m *tuiModel) cmdDropContext(paths []string) tea.Cmd {
 
 func (m *tuiModel) cmdListContext() tea.Cmd {
 	if len(m.contextFiles) == 0 {
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "context",
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: "context",
 			Body: "no files in context",
 		})
 		return nil
@@ -572,8 +573,8 @@ func (m *tuiModel) cmdListContext() tea.Cmd {
 		paths = append(paths, p)
 	}
 	sort.Strings(paths)
-	m.chat = append(m.chat, chatMessage{
-		Role: roleSystem, Meta: "context",
+	m.chat = append(m.chat, sessionstore.ChatMessage{
+		Role: sessionstore.RoleSystem, Meta: "context",
 		Body: "files in context:\n  " + strings.Join(paths, "\n  "),
 	})
 	return nil
@@ -599,14 +600,14 @@ func (m *tuiModel) applyPaneVisibility(name string, hide bool) {
 		m.hidePipeline = hide
 		m.hideEvents = hide
 	default:
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "error",
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: "error",
 			Body: fmt.Sprintf("unknown pane %q. Use: files, pipeline, events, all.", name),
 		})
 		return
 	}
-	m.chat = append(m.chat, chatMessage{
-		Role: roleSystem, Meta: "panes",
+	m.chat = append(m.chat, sessionstore.ChatMessage{
+		Role: sessionstore.RoleSystem, Meta: "panes",
 		Body: fmt.Sprintf("%s %s", name, verb),
 	})
 }

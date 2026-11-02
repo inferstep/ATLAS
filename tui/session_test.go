@@ -1,15 +1,13 @@
-// Tests for session persistence — round-trip save/load, listing order, cwd
-// filtering, malformed-file tolerance, and the model's own saves.
+// Tests for the model's own session saves. The store's tests are in
+// internal/sessionstore.
 
 package main
 
 import (
-	"os"
-	"path/filepath"
-	"reflect"
-	"strings"
 	"testing"
 	"time"
+
+	"github.com/itigges22/atlas-tui/internal/sessionstore"
 )
 
 // isolateSessions points os.UserCacheDir at a temp dir of this test, so the
@@ -23,108 +21,20 @@ func isolateSessions(t *testing.T) {
 	t.Setenv("HOME", dir)
 }
 
-func TestSaveLoadRoundTrip(t *testing.T) {
-	isolateSessions(t)
-	sess := Session{
-		ID:        "sess-1",
-		Cwd:       "/work/proj",
-		Mode:      "accept-edits",
-		CreatedAt: "2026-07-01T10:00:00Z",
-		UpdatedAt: "2026-07-01T10:05:00Z",
-		Title:     "fix the bug",
-		Messages: []chatMessage{
-			{Role: roleUser, Body: "fix the bug"},
-			{Role: roleAssistant, Body: "done"},
-			{Role: roleSystem, Body: "· turn", Meta: "turn", Echo: true},
-		},
-	}
-	if err := saveSession(sess); err != nil {
-		t.Fatalf("saveSession: %v", err)
-	}
-	got, err := loadSession("sess-1")
-	if err != nil {
-		t.Fatalf("loadSession: %v", err)
-	}
-	// Every field and every row comes back, with its role and flags.
-	if !reflect.DeepEqual(*got, sess) {
-		t.Errorf("loaded %+v, want what was saved: %+v", *got, sess)
-	}
-}
-
-// listSessions returns every saved session newest first, and skips a file
-// that does not hold one.
-func TestListSessionsNewestFirstSkippingMalformed(t *testing.T) {
-	isolateSessions(t)
-	for _, s := range []Session{
-		{ID: "a", UpdatedAt: "2026-07-01T10:00:00Z", Messages: []chatMessage{{Role: roleUser, Body: "a"}}},
-		{ID: "b", UpdatedAt: "2026-07-01T12:00:00Z", Messages: []chatMessage{{Role: roleUser, Body: "b"}}},
-		{ID: "c", UpdatedAt: "2026-07-01T11:00:00Z", Messages: []chatMessage{{Role: roleUser, Body: "c"}}},
-	} {
-		if err := saveSession(s); err != nil {
-			t.Fatal(err)
-		}
-	}
-	dir, err := sessionsDir()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "broken.json"), []byte("{not json"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	got, err := listSessions()
-	if err != nil {
-		t.Fatalf("listSessions: %v", err)
-	}
-	var ids []string
-	for _, s := range got {
-		ids = append(ids, s.ID)
-	}
-	if strings.Join(ids, ",") != "b,c,a" {
-		t.Errorf("listSessions = %v, want b,c,a", ids)
-	}
-}
-
-func TestMostRecentForCwd(t *testing.T) {
-	isolateSessions(t)
-	for _, s := range []Session{
-		{ID: "a", Cwd: "/one", UpdatedAt: "2026-07-01T10:00:00Z", Messages: []chatMessage{{Role: roleUser, Body: "x"}}},
-		{ID: "b", Cwd: "/two", UpdatedAt: "2026-07-01T12:00:00Z", Messages: []chatMessage{{Role: roleUser, Body: "x"}}},
-		{ID: "c", Cwd: "/one", UpdatedAt: "2026-07-01T13:00:00Z", Messages: []chatMessage{{Role: roleUser, Body: "x"}}},
-	} {
-		if err := saveSession(s); err != nil {
-			t.Fatal(err)
-		}
-	}
-	got, err := mostRecentForCwd("/one")
-	if err != nil {
-		t.Fatalf("mostRecentForCwd: %v", err)
-	}
-	if got == nil || got.ID != "c" {
-		t.Fatalf("mostRecentForCwd(/one) = %+v, want id c", got)
-	}
-	none, err := mostRecentForCwd("/nowhere")
-	if err != nil {
-		t.Fatalf("mostRecentForCwd err: %v", err)
-	}
-	if none != nil {
-		t.Errorf("mostRecentForCwd(/nowhere) = %+v, want nil", none)
-	}
-}
-
 // A model persists per turn and reloads exactly.
 func TestModelSaveSessionRoundTrip(t *testing.T) {
 	isolateSessions(t)
 	m := newTUIModel("http://test")
 	m.persistEnabled = true
 	m.mode = "yolo"
-	m.chat = []chatMessage{
-		{Role: roleUser, Body: "first ask"},
-		{Role: roleAssistant, Body: "a reply"},
+	m.chat = []sessionstore.ChatMessage{
+		{Role: sessionstore.RoleUser, Body: "first ask"},
+		{Role: sessionstore.RoleAssistant, Body: "a reply"},
 	}
 	m.saveSession()
-	got, err := loadSession(m.sessionUID)
+	got, err := sessionstore.Load(m.sessionUID)
 	if err != nil {
-		t.Fatalf("loadSession: %v", err)
+		t.Fatalf("Load: %v", err)
 	}
 	if got.Mode != "yolo" {
 		t.Errorf("mode = %q, want yolo", got.Mode)
@@ -157,16 +67,16 @@ func TestSaveSessionRespectsGuards(t *testing.T) {
 	isolateSessions(t)
 	m := newTUIModel("http://test")
 	m.persistEnabled = false
-	m.chat = []chatMessage{{Role: roleUser, Body: "x"}}
+	m.chat = []sessionstore.ChatMessage{{Role: sessionstore.RoleUser, Body: "x"}}
 	m.saveSession()
-	if _, err := loadSession(m.sessionUID); err == nil {
+	if _, err := sessionstore.Load(m.sessionUID); err == nil {
 		t.Error("disabled persistence should not write a file")
 	}
 
 	m.persistEnabled = true
 	m.chat = nil
 	m.saveSession()
-	if _, err := loadSession(m.sessionUID); err == nil {
+	if _, err := sessionstore.Load(m.sessionUID); err == nil {
 		t.Error("empty transcript should not write a file")
 	}
 }
@@ -176,7 +86,7 @@ func TestStartNewSessionPreservesPriorFile(t *testing.T) {
 	isolateSessions(t)
 	m := newTUIModel("http://test")
 	m.persistEnabled = true
-	m.chat = []chatMessage{{Role: roleUser, Body: "keep me"}}
+	m.chat = []sessionstore.ChatMessage{{Role: sessionstore.RoleUser, Body: "keep me"}}
 	m.saveSession()
 	oldID := m.sessionUID
 
@@ -185,7 +95,7 @@ func TestStartNewSessionPreservesPriorFile(t *testing.T) {
 		t.Fatal("startNewSession should mint a new id")
 	}
 	// The prior session's file is still on disk and intact.
-	prior, err := loadSession(oldID)
+	prior, err := sessionstore.Load(oldID)
 	if err != nil {
 		t.Fatalf("prior session file was lost: %v", err)
 	}

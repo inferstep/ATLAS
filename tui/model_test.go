@@ -17,6 +17,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/itigges22/atlas-tui/internal/proxyclient"
+	"github.com/itigges22/atlas-tui/internal/sessionstore"
 )
 
 // keyMsg builds a tea.KeyMsg matching what the runtime sends for a
@@ -60,8 +61,8 @@ func withStages(t *testing.T, width, height, n int) tuiModel {
 	}
 	for i := 0; i < height; i++ {
 		m.chat = append(m.chat,
-			chatMessage{Role: roleUser, Body: fmt.Sprintf("ask %d", i)},
-			chatMessage{Role: roleAssistant, Body: fmt.Sprintf("reply %d", i)})
+			sessionstore.ChatMessage{Role: sessionstore.RoleUser, Body: fmt.Sprintf("ask %d", i)},
+			sessionstore.ChatMessage{Role: sessionstore.RoleAssistant, Body: fmt.Sprintf("reply %d", i)})
 	}
 	return m
 }
@@ -122,9 +123,9 @@ func TestEnterMidTurnShowsToast(t *testing.T) {
 
 func TestCtrlLClearsChat(t *testing.T) {
 	m := sized(80, 30)
-	m.chat = []chatMessage{
-		{Role: roleUser, Body: "hi"},
-		{Role: roleAssistant, Body: "hello"},
+	m.chat = []sessionstore.ChatMessage{
+		{Role: sessionstore.RoleUser, Body: "hi"},
+		{Role: sessionstore.RoleAssistant, Body: "hello"},
 	}
 	updated, _ := m.Update(keyMsg("ctrl+l"))
 	mu := updated.(tuiModel)
@@ -204,7 +205,7 @@ func TestChatStreamMsgAppendsAssistantText(t *testing.T) {
 		Type: "text", Data: json.RawMessage(`{"content": "hello world"}`),
 	}})
 	m = updated.(tuiModel)
-	if len(m.chat) != 1 || m.chat[0].Role != roleAssistant || m.chat[0].Body != "hello world" {
+	if len(m.chat) != 1 || m.chat[0].Role != sessionstore.RoleAssistant || m.chat[0].Body != "hello world" {
 		t.Errorf("chat = %+v, want one assistant row saying hello world", m.chat)
 	}
 }
@@ -244,7 +245,7 @@ func TestTurnDoneMarkerEndsTheTurn(t *testing.T) {
 				t.Fatalf("chat = %+v, want %d row(s)", mu.chat, len(c.rows))
 			}
 			for i, want := range c.rows {
-				if mu.chat[i].Role != roleSystem || mu.chat[i].Body != want {
+				if mu.chat[i].Role != sessionstore.RoleSystem || mu.chat[i].Body != want {
 					t.Errorf("row %d = %+v, want a system row %q", i, mu.chat[i], want)
 				}
 			}
@@ -279,7 +280,7 @@ func TestUpdateReturnsWhatEachHandlerChanged(t *testing.T) {
 	}{
 		{"a slash command's result", slashResultMsg{command: "/run", output: "done"},
 			func(m tuiModel) interface{} { return m.chat },
-			[]chatMessage{{Role: roleSystem, Meta: "/run", Body: "done", Success: true}}, false},
+			[]sessionstore.ChatMessage{{Role: sessionstore.RoleSystem, Meta: "/run", Body: "done", Success: true}}, false},
 		{"a file scan", scanFilesMsg{entries: []fileEntry{{RelPath: "a.go"}}, at: time.Now()},
 			func(m tuiModel) interface{} { return m.fileEntries },
 			[]fileEntry{{RelPath: "a.go"}}, false},
@@ -442,6 +443,23 @@ func TestChatBoxShowsTheTurnInFlightAndTheScroll(t *testing.T) {
 	}
 }
 
+// A tool row's header marks its result, and a V3 model call is tagged v3.
+func TestChatRowHeaders(t *testing.T) {
+	for _, tc := range []struct {
+		row  sessionstore.ChatMessage
+		want string
+	}{
+		{sessionstore.ChatMessage{Role: sessionstore.RoleTool, Meta: "← read_file", Success: true}, "✓ tool · ← read_file"},
+		{sessionstore.ChatMessage{Role: sessionstore.RoleTool, Meta: "← read_file"}, "✗ tool · ← read_file"},
+		{sessionstore.ChatMessage{Role: sessionstore.RoleSystem, Meta: "v3-llm", Body: "call 2"}, "· v3 · call 2"},
+	} {
+		got := ansi.Strip(renderChatMessage(tc.row, nil, 80)[0])
+		if !strings.Contains(got, tc.want) {
+			t.Errorf("role %d %q renders as %q, want %q", tc.row.Role, tc.row.Meta, got, tc.want)
+		}
+	}
+}
+
 func TestRenderHelpHintRespectsMaxLines(t *testing.T) {
 	out := renderHelpHint(80, 9)
 	if got := len(strings.Split(out, "\n")); got != 9 {
@@ -537,7 +555,7 @@ func TestChatStreamRendersProxyInterventionEvents(t *testing.T) {
 			m := sized(80, 30)
 			updated, _ := m.Update(chatStreamMsg{ev: proxyclient.ChatEvent{Type: tc.typ, Data: json.RawMessage(tc.payload)}})
 			mu := updated.(tuiModel)
-			if len(mu.chat) != 1 || mu.chat[0].Role != roleSystem {
+			if len(mu.chat) != 1 || mu.chat[0].Role != sessionstore.RoleSystem {
 				t.Fatalf("chat = %+v, want one system row", mu.chat)
 			}
 			if !strings.Contains(mu.chat[0].Body, tc.want) {
@@ -686,35 +704,35 @@ func TestMouseScrollsAndSelectsThePaneUnderIt(t *testing.T) {
 func TestBuildChatHistory(t *testing.T) {
 	cases := []struct {
 		name string
-		chat []chatMessage
+		chat []sessionstore.ChatMessage
 		want []proxyclient.HistoryMessage
 	}{
 		{"empty chat", nil, nil},
-		{"tool and system rows are left out", []chatMessage{
-			{Role: roleUser, Body: "first ask"},
-			{Role: roleAssistant, Body: "first reply"},
-			{Role: roleTool, Body: "list_directory result", Meta: "list_directory"},
-			{Role: roleSystem, Body: "spinner update", Meta: "llm"},
-			{Role: roleUser, Body: "current message — being sent now"},
+		{"tool and system rows are left out", []sessionstore.ChatMessage{
+			{Role: sessionstore.RoleUser, Body: "first ask"},
+			{Role: sessionstore.RoleAssistant, Body: "first reply"},
+			{Role: sessionstore.RoleTool, Body: "list_directory result", Meta: "list_directory"},
+			{Role: sessionstore.RoleSystem, Body: "spinner update", Meta: "llm"},
+			{Role: sessionstore.RoleUser, Body: "current message — being sent now"},
 		}, []proxyclient.HistoryMessage{
 			{Role: "user", Content: "first ask"},
 			{Role: "assistant", Content: `{"content":"first reply","type":"text"}`},
 		}},
-		{"echo rows are left out", []chatMessage{
-			{Role: roleUser, Body: "real ask"},
-			{Role: roleAssistant, Body: "real reply"},
-			{Role: roleUser, Body: "/review", Echo: true}, // slash echo
-			{Role: roleUser, Body: "! ls", Echo: true},    // bash echo
-			{Role: roleUser, Body: "current"},
+		{"echo rows are left out", []sessionstore.ChatMessage{
+			{Role: sessionstore.RoleUser, Body: "real ask"},
+			{Role: sessionstore.RoleAssistant, Body: "real reply"},
+			{Role: sessionstore.RoleUser, Body: "/review", Echo: true}, // slash echo
+			{Role: sessionstore.RoleUser, Body: "! ls", Echo: true},    // bash echo
+			{Role: sessionstore.RoleUser, Body: "current"},
 		}, []proxyclient.HistoryMessage{
 			{Role: "user", Content: "real ask"},
 			{Role: "assistant", Content: `{"content":"real reply","type":"text"}`},
 		}},
-		{"empty rows are left out", []chatMessage{
-			{Role: roleUser, Body: "real ask"},
-			{Role: roleAssistant, Body: ""},
-			{Role: roleAssistant, Body: "real reply"},
-			{Role: roleUser, Body: "current"},
+		{"empty rows are left out", []sessionstore.ChatMessage{
+			{Role: sessionstore.RoleUser, Body: "real ask"},
+			{Role: sessionstore.RoleAssistant, Body: ""},
+			{Role: sessionstore.RoleAssistant, Body: "real reply"},
+			{Role: sessionstore.RoleUser, Body: "current"},
 		}, []proxyclient.HistoryMessage{
 			{Role: "user", Content: "real ask"},
 			{Role: "assistant", Content: `{"content":"real reply","type":"text"}`},
@@ -736,10 +754,10 @@ func TestBuildChatHistoryCapsAt40(t *testing.T) {
 	// 30 user/assistant pairs = 60 rows, plus the just-sent user row.
 	for i := 0; i < 30; i++ {
 		m.chat = append(m.chat,
-			chatMessage{Role: roleUser, Body: "u"},
-			chatMessage{Role: roleAssistant, Body: "a"})
+			sessionstore.ChatMessage{Role: sessionstore.RoleUser, Body: "u"},
+			sessionstore.ChatMessage{Role: sessionstore.RoleAssistant, Body: "a"})
 	}
-	m.chat = append(m.chat, chatMessage{Role: roleUser, Body: "current"})
+	m.chat = append(m.chat, sessionstore.ChatMessage{Role: sessionstore.RoleUser, Body: "current"})
 	got := m.buildChatHistory()
 	if len(got) != 40 {
 		t.Errorf("buildChatHistory cap = %d, want 40", len(got))

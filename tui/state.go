@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/itigges22/atlas-tui/internal/proxyclient"
+	"github.com/itigges22/atlas-tui/internal/sessionstore"
 )
 
 // stageStatus tracks one logical pipeline stage's lifecycle.
@@ -312,7 +313,7 @@ func (p *planView) stepLines() []string {
 
 // applyPlanLoaded replaces m.plan with the freshly-loaded plan.
 // Called from the SSE event handler when "plan_loaded" arrives.
-func applyPlanLoaded(m *tuiModel, data json.RawMessage) (chatMessage, bool) {
+func applyPlanLoaded(m *tuiModel, data json.RawMessage) (sessionstore.ChatMessage, bool) {
 	var p struct {
 		Steps        []planStep `json:"steps"`
 		VerifyStep   string     `json:"verify_step"`
@@ -321,7 +322,7 @@ func applyPlanLoaded(m *tuiModel, data json.RawMessage) (chatMessage, bool) {
 		Revision     int        `json:"revision"`
 	}
 	if err := json.Unmarshal(data, &p); err != nil || len(p.Steps) == 0 {
-		return chatMessage{}, false
+		return sessionstore.ChatMessage{}, false
 	}
 	view := &planView{
 		Steps:        p.Steps,
@@ -344,8 +345,8 @@ func applyPlanLoaded(m *tuiModel, data json.RawMessage) (chatMessage, bool) {
 	if p.Revision > 0 {
 		meta = fmt.Sprintf("plan rev %d", p.Revision)
 	}
-	return chatMessage{
-		Role: roleSystem,
+	return sessionstore.ChatMessage{
+		Role: sessionstore.RoleSystem,
 		Meta: meta,
 		Body: strings.Join(lines, "\n"),
 	}, true
