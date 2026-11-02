@@ -2417,9 +2417,9 @@ contributor setup, on top of the changes since 3.1.3 listed further down.
 
 - New issue forms for bugs, features, tasks, docs, spikes and RFCs, and a
   fuller pull request template. [CONTRIBUTING](.github/CONTRIBUTING.md) is
-  rewritten as the path from an issue to a release. [GOVERNANCE](docs/GOVERNANCE.md)
+  rewritten as the path from an issue to a release. [GOVERNANCE](.github/GOVERNANCE.md)
   describes the trust ladder and the RFC flow. New
-  [TRIAGE](docs/GOVERNANCE.md#triage) and [INCIDENT_RESPONSE](docs/INCIDENT_RESPONSE.md)
+  [TRIAGE](.github/GOVERNANCE.md#triage) and [INCIDENT_RESPONSE](docs/project/INCIDENT_RESPONSE.md)
   guides.
 - The public [Roadmap board](https://github.com/orgs/inferstep/projects/1)
   has a Start Here view. The atlas-bot handles `/claim` and `/unclaim`,

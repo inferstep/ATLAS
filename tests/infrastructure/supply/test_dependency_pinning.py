@@ -7,7 +7,7 @@ carry an `==` pin. The proxy's Alpine `apk` packages are pinned too.
 OS-level `apt` packages on the debian-slim images are not individually
 pinned (that fights distro security patching); the digest-pinned base is
 their reproducibility control, enforced here and explained in
-docs/CONTAINER_PACKAGING.md.
+docs/project/CONTAINER_PACKAGING.md.
 
 The check is configuration parsing only — it installs nothing and
 reaches no network.
@@ -127,7 +127,7 @@ def test_production_bases_are_digest_pinned():
     package versions are not individually pinned across the board — that
     fights distro security patching — so the digest-pinned base plus the
     pinned Python/apk layers above are the reproducibility mechanism.
-    See docs/CONTAINER_PACKAGING.md."""
+    See docs/project/CONTAINER_PACKAGING.md."""
     offenders = []
     for rel in DOCKERFILES:
         for line in (REPO / rel).read_text().splitlines():

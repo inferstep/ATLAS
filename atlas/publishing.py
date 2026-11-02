@@ -500,7 +500,7 @@ def publish_preflight(kind: str, dry_run: bool, color: bool) -> bool:
     _safe_print("  Publish does TWO things in one command:")
     _safe_print("    1. Uploads the artifact to a HuggingFace repo you own")
     _safe_print("    2. Opens a registry PR against github.com/inferstep/ATLAS")
-    _safe_print("  Full walkthrough: docs/PUBLISHING.md")
+    _safe_print("  Full walkthrough: docs/project/PUBLISHING.md")
     _safe_print("")
 
     token_ok = bool(hf_token())

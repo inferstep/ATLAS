@@ -37,7 +37,7 @@ Task-oriented index for everything under `docs/`. The
   [adding your own model](CONFIGURATION.md#adding-your-own-model-drop-in--unregistered).
 - [OPERATIONS.md](OPERATIONS.md) — health, logs, runbooks, upgrade,
   rollback, backup/restore.
-- [PUBLISHING.md](PUBLISHING.md) — share trained Lens / ASA artifacts
+- [PUBLISHING.md](project/PUBLISHING.md) — share trained Lens / ASA artifacts
   (HuggingFace upload + registry PR).
 
 ### Integrate with ATLAS
@@ -98,15 +98,15 @@ Task-oriented index for everything under `docs/`. The
   measured baselines.
 - [RELEASE.md](RELEASE.md) — the release contract, verification levels,
   versioning, and the release and hotfix steps.
-- [GOVERNANCE.md § Triage](GOVERNANCE.md#triage) — how new issues become Ready work.
-- [INCIDENT_RESPONSE.md](INCIDENT_RESPONSE.md) — what to do when a key
+- [GOVERNANCE.md § Triage](../.github/GOVERNANCE.md#triage) — how new issues become Ready work.
+- [INCIDENT_RESPONSE.md](project/INCIDENT_RESPONSE.md) — what to do when a key
   leaks, a release is bad, or automation misbehaves.
-- [CONTAINER_PACKAGING.md](CONTAINER_PACKAGING.md) — image accounts,
+- [CONTAINER_PACKAGING.md](project/CONTAINER_PACKAGING.md) — image accounts,
   writable dirs, dependency pinning.
-- [GOVERNANCE.md](GOVERNANCE.md), [MAINTAINERS.md](MAINTAINERS.md),
+- [GOVERNANCE.md](../.github/GOVERNANCE.md), [MAINTAINERS.md](project/MAINTAINERS.md),
   [../.github/SECURITY.md](../.github/SECURITY.md),
   [CODE_OF_CONDUCT.md](../.github/CODE_OF_CONDUCT.md), [../LICENSE](../LICENSE)
-- [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) — the third-party work
+- [THIRD_PARTY_NOTICES.md](project/THIRD_PARTY_NOTICES.md) — the third-party work
   ATLAS uses and its licenses.
 - READMEs beside code are not listed one-by-one here: they live in the tree
   next to what they describe (see the [repository map](#repository-map)).
@@ -148,7 +148,7 @@ the [repository map](#repository-map) if you're looking for code rather than doc
   model's own embeddings; per-model trained bundle
   ([ARCHITECTURE.md](ARCHITECTURE.md), [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md)).
 - **ASA** — activation-steering control vector nudging tool selection;
-  per-model, always on wherever a vector is installed ([CLI.md](CLI.md), [PUBLISHING.md](PUBLISHING.md)).
+  per-model, always on wherever a vector is installed ([CLI.md](CLI.md), [PUBLISHING.md](project/PUBLISHING.md)).
 - **Sandbox** — isolated multi-language execution used for verification
   ([ARCHITECTURE.md](ARCHITECTURE.md), [API.md](API.md)).
 - **GBNF grammar enforcement** — token-level constrained decoding that strongly
@@ -175,15 +175,15 @@ In order, each building on the last:
 12. [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md) — claims and their evidence
 13. [OPERATIONS.md](OPERATIONS.md) — running it long-term
 14. [../.github/CONTRIBUTING.md](../.github/CONTRIBUTING.md) (its Development workflow),
-    [RELEASE.md](RELEASE.md), [PUBLISHING.md](PUBLISHING.md),
-    [CONTAINER_PACKAGING.md](CONTAINER_PACKAGING.md) — working on it
+    [RELEASE.md](RELEASE.md), [PUBLISHING.md](project/PUBLISHING.md),
+    [CONTAINER_PACKAGING.md](project/CONTAINER_PACKAGING.md) — working on it
 16. [../CHANGELOG.md](../CHANGELOG.md) — how it got here
 
 ---
 
 ## Repository map
 
-What each top-level folder owns. For how the pieces work together see
+Where things live: what each top-level folder owns. For how the pieces work together see
 [ARCHITECTURE.md](ARCHITECTURE.md); for the full API surface see [API.md](API.md).
 
 | Directory | Owns | More |
@@ -191,17 +191,21 @@ What each top-level folder owns. For how the pieces work together see
 | `proxy/` | Go agent loop: `/v1/agent`, grammar-constrained tool calls, gates, V3 routing, OpenAI passthrough | [proxy/README.md](../proxy/README.md) |
 | `tui/` | Bubbletea terminal client — the canonical chat front-end, consumes proxy SSE streams | — |
 | `extensions/` | IDE clients over the proxy HTTP API; `extensions/vscode/` is the VS Code extension (chat sidebar, permission flow, diff review) and `extensions/jetbrains/` the JetBrains plugin (chat and permission cards in the tool window, diff review for predicted and applied file changes, the workspace-mismatch checks, a proxy status bar, model/V3 progress, notifications, actions and settings with the token in the IDE credential store; verified by Plugin Verifier on IDEA, PyCharm, WebStorm and GoLand) | [extensions/vscode/README.md](../extensions/vscode/README.md), [extensions/jetbrains/README.md](../extensions/jetbrains/README.md) |
-| `atlas/` | Python CLI package: `atlas` subcommand dispatch (init, doctor, tier, model, onboard, lens, asa, publish, bench, compose, tui, upgrade, rollback, diagnostics, artifact, config); `atlas/bench/` is the benchmark harness | [atlas/bench/README.md](../atlas/bench/README.md) |
+| `atlas/` | Python CLI package: `atlas` subcommand dispatch (init, doctor, tier, model, onboard, lens, asa, publish, bench, compose, tui, upgrade, rollback, diagnostics, artifact, config). It is the product's own package and stays at the root, where `pyproject.toml` builds it. `atlas/bench/` is the user-facing `atlas bench` command | [atlas/bench/README.md](../atlas/bench/README.md) |
 | `v3-service/` | Python HTTP service for the V3 generation pipeline (`stages/` holds the pipeline stage modules, `graph/` the call-graph layer) and the tree-sitter structural tooling | — |
 | `geometric-lens/` | Scoring (C(x)/G(x)), ASA control-vector build | [asa_calibration/README.md](../geometric-lens/asa_calibration/README.md) |
 | `sandbox/` | Isolated multi-language code execution and shell, with workspace containment | — |
 | `inference/` | llama-server Docker builds (CUDA / ROCm / Vulkan) and model-neutral entrypoints | — |
 | `benchmark/` | Created at runtime, not tracked — dataset caches and run results. The runner/harness code is `atlas/bench/` | — |
 | `compose/` | Docker Compose overlays (rocm, vulkan, cpu, macos) layered on the root `docker-compose.yml`, and the dev-mode override example | — |
-| `scripts/` | Install, deploy, K3s, and CI/release automation | — |
-| `.github/` | CI workflows, `CODEOWNERS`, `dependabot.yml`, `allowed_signers` for signed release tags, issue templates, the contributor guide (`CONTRIBUTING.md`) and the security policy (`SECURITY.md`) | — |
+| `scripts/` | Install, deploy, K3s, and CI/release automation; `scripts/eval/` is the maintainers' evaluation | [scripts/eval/README.md](../scripts/eval/README.md) |
+| `.github/` | CI workflows, `CODEOWNERS`, `dependabot.yml`, `allowed_signers` for signed release tags, issue templates, and the community files GitHub reads: the contributor guide (`CONTRIBUTING.md`), the governance page (`GOVERNANCE.md`), the code of conduct and the security policy (`SECURITY.md`) | — |
 | `templates/` | K3s manifest templates rendered from `atlas.conf` via envsubst | — |
-| `tests/` | Cross-cutting test suite: `cli/`, `concurrency/`, `contracts/` (doc-link, version and config gates), `e2e/` (the acceptance suite CI runs), `infrastructure/`, `perf/`, `v3/`, `v3-service/` | — |
+| `tests/` | The Python tests, by subject: `cli/`, `concurrency/`, `contracts/` (doc-link, version and config gates), `e2e/` (the acceptance suite CI runs), `infrastructure/`, `perf/`, `v3/`, `v3-service/`. Go tests sit beside their code (`*_test.go` in `proxy/` and `tui/`), the extensions' tests in `extensions/vscode/test/` and `extensions/jetbrains/src/test/`, and `geometric-lens/tests/` beside its service, which has its own lock file | — |
+| `docs/` | The pages, listed above by what you are trying to do. `project/` holds how the project is run and shipped, `adr/` the decision records, `lang/` the ja, ko and zh-CN copies, `quality/` the checks on a pull request, and `schemas/` the API's machine-readable schemas. `reports/` is data: the raw traces of the withdrawn V3.0 ablation result, kept so the withdrawal can be checked. `images/` and `demo/` hold files the README and the TUI demo read | [adr/README.md](adr/README.md) |
+| `diagnostics/` | Where diagnostic captures are written at run time; git holds only a placeholder | [OPERATIONS.md](OPERATIONS.md) |
 
 Root also holds the base Compose file `docker-compose.yml`, `atlas.conf.example` (K3s), `pyproject.toml`
-(the `atlas` CLI entry point), and the standard `.env.example`.
+(the `atlas` CLI entry point), and the standard `.env.example`. Dependencies are declared in `pyproject.toml` (the `atlas`
+package), `.github/requirements/` (the CI locks), a `requirements*.txt` in each Python service, a `go.mod` in `proxy/` and
+`tui/`, and the extensions' `package.json` and `build.gradle.kts`.

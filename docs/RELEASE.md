@@ -174,7 +174,7 @@ time by what the release contains (semantic versioning):
 
 **Breaking** means a change to a CLI flag, a config key, the API or SSE
 contract, or on-disk state, or dropping a supported backend. Breaking
-changes need an RFC (see [GOVERNANCE](GOVERNANCE.md#proposals-rfc--adr--epic)).
+changes need an RFC (see [GOVERNANCE](../.github/GOVERNANCE.md#proposals-rfc--adr--epic)).
 
 Image tags drop the `v`: the git tag `v3.2.0` publishes `:3.2.0`,
 `:v3.2.0` and `:3.2`. A release candidate `v3.2.0-rc.1` publishes
@@ -193,7 +193,7 @@ release.
 ## The release step
 
 No account can push to `dev`, `staging` or `main`, and no account can skip
-a required check ([GOVERNANCE](GOVERNANCE.md#change-flow)). The merge
+a required check ([GOVERNANCE](../.github/GOVERNANCE.md#change-flow)). The merge
 button of a pull request squashes or rebases, so it makes new commits. A
 release needs the commit itself to land in two cases:
 
