@@ -90,7 +90,7 @@ func TestAJSONRecordStaysWholeWithAControlCharacterInIt(t *testing.T) {
 	}
 }
 
-// filteringWriter is the one place every log line is filtered and escaped, so
+// logsafe.Writer is the one place every log line is filtered and escaped, so
 // nothing in the proxy may reach stdout or stderr around it.
 func TestNothingWritesBesideTheLogFilter(t *testing.T) {
 	output := regexp.MustCompile(`.*(os\.Std(out|err)|fmt\.Print|log\.New\(|\.SetOutput\().*`)
@@ -108,7 +108,7 @@ func TestNothingWritesBesideTheLogFilter(t *testing.T) {
 		"main.go: log.SetOutput(logsafe.Writer{W: out})",
 	}
 	if !slices.Equal(found, want) {
-		t.Errorf("a log output beside filteringWriter:\n got %q\nwant %q", found, want)
+		t.Errorf("a log output beside logsafe.Writer:\n got %q\nwant %q", found, want)
 	}
 }
 

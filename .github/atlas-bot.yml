@@ -72,6 +72,7 @@ pull_requests:
     proxy/authorization_*: the guards
     proxy/shell_wrapper.go: the guards
     proxy/internal/workspacefs/*: the guards
+    proxy/internal/logsafe/*: the guards
     sandbox/executor_server.py: the guards
     sandbox/executor_models.py: the guards
     sandbox/executor_parsers.py: the guards
