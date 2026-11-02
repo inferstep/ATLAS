@@ -496,14 +496,15 @@ func workspaceRelativeName(ctx *AgentContext, path string) (string, bool) {
 	return filepath.ToSlash(rel), true
 }
 
+// requestNotBuilt is the detail of a check that could not build its request.
+const requestNotBuilt = "request could not be built"
+
 // sandboxSyntaxOutcome is the whole-file half of checkFallbackSyntax: the
 // sandbox's /syntax-check in the file's own language. APPLICABILITY IS EVALUATED
 // FIRST: the extension decides whether this check applies at all, before any
 // service availability question, so a missing sandbox cannot mask genuinely
 // non-applicable content. That changes the structured evidence only -- the
 // allow/refuse decision is identical either way.
-// requestNotBuilt is the detail of a check that could not build its request.
-const requestNotBuilt = "request could not be built"
 
 func sandboxSyntaxOutcome(ctx *AgentContext, path, content string) checkOutcome {
 	meta, gated := syntaxGateLanguages[strings.ToLower(filepath.Ext(path))]
