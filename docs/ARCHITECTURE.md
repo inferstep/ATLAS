@@ -91,14 +91,14 @@ Every non-test Go file directly under `proxy/`, with its area of ownership:
 |---|---|
 | `main.go` | HTTP server, routes, auth, passthrough, error envelope, private-value log filter |
 | `agent.go` | `runAgentLoop`, the fenced fetch and toolchain detection |
-| `llm_call.go`, `model_reply.go` | One call to llama-server, and reading what the model sent back |
+| `llm_call.go`, `model_reply.go` | One call to llama-server, and reading what the model sent back. `model_reply.go` decodes a JSON escape in model text, a UTF-16 surrogate pair as one character; `\b` and `\f` stay letters, so no backspace or form feed reaches a terminal |
 | `system_prompt.go`, `task_tier.go` | The system prompt and context budget; the tier a message earns |
 | `agent_handler.go` | The `/v1/agent` and `/cancel` endpoints |
-| `plan_generation.go`, `task_intake.go` | Whether a request earns a plan and what the planner is shown; the task contract a request declares |
+| `plan_generation.go`, `task_intake.go` | Whether a request earns a plan and what the planner is shown, including the files a run has read, added to a revised plan's context in sorted order of their paths, up to a limit; the task contract a request declares |
 | `run_end.go`, `recovery.go` | How a run ends: its terminal, time budget and summary; what a stuck model is shown and the work a run still owes |
 | `fenced_channel.go` | The sub-call that fetches a file body, and what it may spend |
 | `gates_exit.go` | The exit gates and the run state they read |
-| `loop_turn.go`, `loop_checks.go`, `loop_results.go` | One turn of the loop: the model call and its reply, the checks before a tool runs, and its result with the stuck-loop breakers |
+| `loop_turn.go`, `loop_checks.go`, `loop_results.go` | One turn of the loop: the model call and its reply, the checks before a tool runs, and its result with the stuck-loop breakers. `loop_turn.go` also prompts a run to act or answer after repeated read-only calls, according to what the request requires |
 | `tools.go`, `tool_*.go` | The 16 tool definitions + executors, tier classification, tool-call grammar |
 | `gates*.go` | Honesty/plan gates: claim-check, structural, syntax, embedded-script, plan-adherence, plan-reminder, asset lint |
 | `detectors.go` | Stuck-pattern detectors: tool repetition, reasoning repetition, traceback localization |
@@ -115,7 +115,7 @@ Every non-test Go file directly under `proxy/`, with its area of ownership:
 | `obligation_kinds.go` | Defines the closed obligation types, required evidence strength, and how each obligation is satisfied |
 | `obligations.go` | Chooses whether run obligations come from the caller’s declared contract or ATLAS’s legacy inference, and keeps that decision bound to the request |
 | `command_evidence.go` | What a shell command demonstrates: execution, probe, static check or nothing, and whether the command line reports that part's exit status |
-| `guardrails*.go` | Per-tool steering guards (shrinkage, missing-command/module steers, doctype strip) |
+| `guardrails*.go` | Per-tool steering guards (shrinkage, missing-command/module steers, doctype strip). `guardrails_reply.go` normalizes introductory phrases so completion checks can recognize replies that merely announce future work |
 | `events.go` | Typed-envelope broker (`/events`) and SSE plumbing |
 | `v3_bridge.go` | SSE client for v3-service `/v3/generate` + `/v3/plan` |
 | `types.go` | Shared types, tiers, turn caps |
@@ -136,7 +136,6 @@ Every non-test Go file directly under `proxy/`, with its area of ownership:
 | `edit_route_delivery.go` | Carries edit-tool candidates through authorization and delivery, preserving the originating tool’s result format and fallback content |
 | `evidence_wiring.go` | Connects syntax and declared-command evidence producers to candidate routes, assigns candidate identities, and records available or missing evidence |
 | `execution_outcome.go` | Classifies command completion, interruption, and resource exhaustion so an incomplete run cannot count as successful verification |
-| `exploration_budget.go` | Prompts a run to act or answer after repeated read-only calls, according to what the request requires |
 | `feasibility_decision.go` | Assesses whether available evidence producers could satisfy the task before generation and records the assessment without controlling generation |
 | `fenced_framing.go` | Recognizes complete fenced file payloads, extracts their contents, and supplies framing grammar and retry guidance |
 | `file_kind.go` | Answers what a path holds, and reads only a regular file: a named pipe would hold the open until a writer appeared, so the kind of the open handle is judged before anything is read |
@@ -144,7 +143,6 @@ Every non-test Go file directly under `proxy/`, with its area of ownership:
 | `file_kind_other.go` | The same flag where it has no equivalent, leaving the kind check to decide on its own |
 | `old_str_watch.go` | Stops runaway edit text while it streams when it can no longer match the target file, and supplies recovery guidance |
 | `repair.go` | Tracks syntax repairs left open by session writes, blocks premature completion, and reports unresolved repairs at handoff |
-| `reply_lead_ins.go` | Normalizes introductory phrases so completion checks can recognize replies that merely announce future work |
 | `route_disposition.go` | Tracks how each candidate route ended and whether its delivery permission resulted in content reaching disk |
 | `route_entry.go` | Creates a unique identity for each candidate-generation attempt so its evidence, authorization, and delivery records can be linked |
 | `staged_command_evidence.go` | Credits staged verification toward completion only while its candidate bytes, workspace, and delivery remain current |
@@ -157,8 +155,6 @@ Every non-test Go file directly under `proxy/`, with its area of ownership:
 | `verification_requirements.go` | Validates typed client verification requirements and limits evidence strength according to the declared check and the origin of its test assets |
 | `workspace_observation.go` | Observes file changes made by foreground and background commands and records deliverables and deletions in the session ledger |
 | `confined_dir.go` | Reads one folder through `os.Root`: a name that resolves to something outside the folder is an error, never a read, and a name that holds something other than a regular file is skipped like one that is absent |
-| `json_escape.go` | Decodes a JSON escape in model text, a UTF-16 surrogate pair as one character; `\b` and `\f` stay letters, so no backspace or form feed reaches a terminal |
-| `plan_context.go` | Adds the files a run has read to a revised plan's context, in sorted order of their paths, up to a limit |
 | `sandbox_subdir.go` | Allows a `sandbox_subdir` of ASCII letters, digits, dot, underscore and dash, at most 64 characters, and never `.` or `..` |
 | `server_start.go` | Tells a verification command that failed because it is a long-running server (it hit the time limit, or its port was taken) from one that failed because the code is broken |
 | `service_answer.go` | Reads an answer from a service of the stack (llama-server, the V3 service, the lens, the sandbox) up to 64 MiB, so a service that sends without end cannot fill the proxy's memory |
