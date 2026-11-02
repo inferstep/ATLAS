@@ -319,7 +319,7 @@ These safety detectors run in place of a per-tier turn cap. Each fires independe
 | Exploration-budget | 4 consecutive read-only calls → nudge; 5+ → stronger nudge; the read always runs | `proxy/loop_turn.go` |
 | Path-aware error-loop | 3 consecutive failures of the same kind on the **same** path (rotating paths don't trip) | `proxy/loop_results.go` (`consecutiveErrors >= 3` + path match) |
 | Action gate | Turn emits `done` but the user prompt has action-intent and no successful write/edit/structural_edit fired this loop | `proxy/gates_exit.go` (action_gate) |
-| Verification gate | Turn emits `done` after a fix-intent prompt, or after a failed run, with no passing verification run since; or a work request's code has no current run showing it works. A parse, lint, build or a run whose exit status the command hides does not count | `proxy/gates_exit.go` (verification_gate), `proxy/command_evidence.go` |
+| Verification gate | Turn emits `done` after a fix-intent prompt, or after a failed run, with no passing verification run since; or a work request's code has no current run showing it works. A parse, lint, build or a run whose exit status the command hides does not count | `proxy/gates_exit.go` (verification_gate), `proxy/internal/shellcmd/command_evidence.go` |
 | Claim-check gate | `done` summary makes universal claims (`works perfectly`, `tested all routes`) without backing evidence, OR the prompt asks for multi-issue work | `proxy/gates_exit.go` + `proxy/gates_completion.go` |
 
 ### Plan-mode auto-revision (plan_adherence)
