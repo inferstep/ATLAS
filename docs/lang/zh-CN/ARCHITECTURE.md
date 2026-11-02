@@ -431,7 +431,7 @@ API 契约见 [API.md § POST /v3/plan](../../API.md#post-v3plan)。
 | `proxy/v3_bridge.go` | `callV3PlanStreaming(reqCtx, v3URL, req, onProgress)` — 打开 SSE 流，把进度事件转发给回调，并从 `event: result` 帧返回最终的 `Plan`。`reqCtx` 绑定 agent 的请求上下文，因此 `/cancel` 会中止进行中的计划。与 V3 流水线运行所用的 `callV3GenerateStreaming` 结构相同。 |
 | `proxy/types.go` | `V3PlanRequest`、`Plan`、`PlanStep` 类型。`AgentContext` 增加 `Plan`、`PlanStepsSatisfied[]`、`PlanOffStreak`、`PlanRevisions`。 |
 | `proxy/plan_generation.go` | `samplePlanContext()` 为规划器遍历优先文件（app.py、templates/index.html、package.json 等）。`shouldGeneratePlan()` 依据层级、消息长度以及是否为只读请求来判断。`generatePlan()` 运行桥接，丢弃逐 token 的噪声，并携带完整步骤列表发出 `plan_loaded`。 |
-| `proxy/gates_plan.go` | `matchPlanStep()`（工具名加路径后缀的宽松匹配）、`recordPlanAdherence()`（按工具调用记账；侦察工具 — `read_file`/`list_directory`/`find_file`/`search_files` — 是中性的：不满足任何步骤，也绝不延长 `off_streak`）、`revisePlan()`（把 `FilesRead` 作为额外上下文带入并重新生成）。 |
+| `proxy/gates_plan.go` | `matchPlanStep()`（工具名加路径后缀的宽松匹配）、`recordPlanAdherence()`（按工具调用记账；不匹配任何步骤的侦察调用 — `read_file`/`list_directory`/`find_file`/`search_files` — 是中性的：绝不延长 `off_streak`）、`revisePlan()`（把 `FilesRead` 作为额外上下文带入并重新生成）。 |
 
 系统提示的渲染在 `buildSystemPrompt` 中完成。计划步骤渲染为编号列表，`✓` 标记只出现在验证步骤上，并把验证步骤标明为验证门控针对 `done` 所守护的“修复证据”步骤。（逐步骤的 ☐/✓/⚐ 字形属于 TUI 渲染，见下文。）
 
