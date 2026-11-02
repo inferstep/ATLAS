@@ -126,7 +126,8 @@ Every non-test Go file directly under `proxy/`, with its area of ownership:
 | `automatic_delivery.go` | Checks whether the exact V3-selected candidate meets the safety and identity requirements for automatic delivery |
 | `candidate_capture_only.go` | Prevents candidate delivery during capture-only measurement runs and records the suppression |
 | `candidate_delivery.go` | Authorizes candidate delivery, consumes its one-use permission, rechecks current workspace state, and writes the approved bytes |
-| `candidate_policy.go` | Defines the fixed candidate policy, its possible outcomes, and the private record of each decision; reports where delivered content came from and which policy allowed it to reach disk |
+| `candidate_policy.go` | Defines the fixed candidate policy, its possible outcomes, and the private record of each decision |
+| `candidate_provenance.go` | Reports where delivered content came from and which policy allowed it to reach disk |
 | `candidate_reachability.go` | Determines and records why a mutation bypassed candidate generation, including eligibility and remaining time |
 | `candidate_staging.go` | Runs client-declared verification commands against candidate files in an isolated sandbox copy and checks the returned observations |
 | `cut_call.go` | Builds recovery guidance from complete fields in a truncated tool call and the current file, without executing the incomplete call |

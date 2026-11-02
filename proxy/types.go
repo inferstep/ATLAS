@@ -129,7 +129,7 @@ type ToolResult struct {
 	VerificationEvidence []V3VerificationEvidence `json:"verification_evidence,omitempty"`
 
 	// DeliveryProvenance says WHERE the bytes that landed came from, from the
-	// closed vocabulary in candidate_policy.go. It is a server-side fact
+	// closed vocabulary in candidate_provenance.go. It is a server-side fact
 	// for the terminal, not part of modelFacingResult: the user needs to know
 	// whether they are reading the model's own work, a candidate a declared
 	// check passed, or one they approved themselves, and the model does not

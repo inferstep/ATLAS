@@ -962,11 +962,12 @@ from what is available then.
 
 | File | What it owns |
 | --- | --- |
-| `proxy/candidate_policy.go` | the rule, the decision vocabulary, the telemetry record, and what the terminal is told about delivered bytes |
+| `proxy/candidate_policy.go` | the rule, the decision vocabulary, the telemetry record |
 | `proxy/advisory_policy.go` | the veto vocabulary, the signal set, and the policy owner (`decideCandidatePolicy`) |
 | `proxy/candidate_delivery.go` | which basis holds, the vetoes, and the one delivery owner; the live authorization owner and the grant consumer |
 | `proxy/authorization_grant.go` | the grant check (`grantFor`) and the one mint; the one-time grant: minting, consumption, retirement |
 | `proxy/automatic_delivery.go` | whether the exact selected candidate may land, and the grant basis |
+| `proxy/candidate_provenance.go` | what the terminal is told about delivered bytes |
 | `proxy/verification_requirements.go` | typed verification requirements and asset authority |
 | `proxy/evidence_wiring.go` | the staged declared-verification producer; the producer inventory and the two production call paths |
 | `proxy/tool_write_v3.go` | the new-file route: proposal, staging, policy, delivery |
