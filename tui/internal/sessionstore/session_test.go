@@ -38,11 +38,11 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		},
 	}
 	if err := Save(sess); err != nil {
-		t.Fatalf("saveSession: %v", err)
+		t.Fatalf("Save: %v", err)
 	}
 	got, err := Load("sess-1")
 	if err != nil {
-		t.Fatalf("loadSession: %v", err)
+		t.Fatalf("Load: %v", err)
 	}
 	// Every field and every row comes back, with its role and flags.
 	if !reflect.DeepEqual(*got, sess) {
@@ -72,14 +72,14 @@ func TestListSessionsNewestFirstSkippingMalformed(t *testing.T) {
 	}
 	got, err := List()
 	if err != nil {
-		t.Fatalf("listSessions: %v", err)
+		t.Fatalf("List: %v", err)
 	}
 	var ids []string
 	for _, s := range got {
 		ids = append(ids, s.ID)
 	}
 	if strings.Join(ids, ",") != "b,c,a" {
-		t.Errorf("listSessions = %v, want b,c,a", ids)
+		t.Errorf("List = %v, want b,c,a", ids)
 	}
 }
 
@@ -96,16 +96,16 @@ func TestMostRecentForCwd(t *testing.T) {
 	}
 	got, err := MostRecentForCwd("/one")
 	if err != nil {
-		t.Fatalf("mostRecentForCwd: %v", err)
+		t.Fatalf("MostRecentForCwd: %v", err)
 	}
 	if got == nil || got.ID != "c" {
-		t.Fatalf("mostRecentForCwd(/one) = %+v, want id c", got)
+		t.Fatalf("MostRecentForCwd(/one) = %+v, want id c", got)
 	}
 	none, err := MostRecentForCwd("/nowhere")
 	if err != nil {
-		t.Fatalf("mostRecentForCwd err: %v", err)
+		t.Fatalf("MostRecentForCwd err: %v", err)
 	}
 	if none != nil {
-		t.Errorf("mostRecentForCwd(/nowhere) = %+v, want nil", none)
+		t.Errorf("MostRecentForCwd(/nowhere) = %+v, want nil", none)
 	}
 }

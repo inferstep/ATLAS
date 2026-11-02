@@ -34,7 +34,7 @@ func TestModelSaveSessionRoundTrip(t *testing.T) {
 	m.saveSession()
 	got, err := sessionstore.Load(m.sessionUID)
 	if err != nil {
-		t.Fatalf("loadSession: %v", err)
+		t.Fatalf("Load: %v", err)
 	}
 	if got.Mode != "yolo" {
 		t.Errorf("mode = %q, want yolo", got.Mode)

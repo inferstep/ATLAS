@@ -10,9 +10,8 @@ import (
 // testHome is the folder the whole test run uses in place of the user's own.
 var testHome string
 
-// TestMain keeps every test away from the real user folders. A test that
-// drives the model can save a session without asking for a folder of its own,
-// and the session folder hangs off os.UserCacheDir, which reads
+// TestMain keeps every test away from the real user folders. The store's tests
+// save sessions, and the session folder hangs off os.UserCacheDir, which reads
 // $XDG_CACHE_HOME on Linux and $HOME on macOS. Both point at one temporary
 // folder for the run; isolateSessions gives a single test a fresh one.
 func TestMain(m *testing.M) {
@@ -49,7 +48,7 @@ func TestIsolateSessionsGivesATestItsOwnFolder(t *testing.T) {
 		t.Fatalf("sessions folder %q is still the shared folder of the run", first)
 	}
 	if err := Save(Session{ID: "only-here", Messages: []ChatMessage{{Role: RoleUser, Body: "x"}}}); err != nil {
-		t.Fatalf("saveSession: %v", err)
+		t.Fatalf("Save: %v", err)
 	}
 	isolateSessions(t)
 	second, err := sessionsDir()
@@ -61,7 +60,7 @@ func TestIsolateSessionsGivesATestItsOwnFolder(t *testing.T) {
 	}
 	sessions, err := List()
 	if err != nil {
-		t.Fatalf("listSessions: %v", err)
+		t.Fatalf("List: %v", err)
 	}
 	if len(sessions) != 0 {
 		t.Fatalf("a fresh folder lists %d session(s), want 0", len(sessions))
