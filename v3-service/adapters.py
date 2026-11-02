@@ -265,12 +265,7 @@ class LLMAdapter:
 
     def _emit(self, stage: str, detail: str = "", **data):
         if self._progress:
-            try:
-                self._progress(stage, detail, **data)
-            except TypeError:
-                # Older two-arg callbacks don't accept **data — call back
-                # to the legacy signature so we stay compatible.
-                self._progress(stage, detail)
+            self._progress(stage, detail, **data)
 
     def __call__(self, prompt: str, temperature: float,
                  max_tokens: int, seed: Optional[int],

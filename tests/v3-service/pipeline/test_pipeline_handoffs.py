@@ -9,12 +9,14 @@ adapter faked; the `service` fixture fails every candidate, so a run goes
 through every phase unless a test changes that.
 """
 
+import io
 from types import SimpleNamespace
 
 import pytest
 
 import adapters
 import graph
+import main
 import pipeline as v3pipeline
 import scoring
 from graph.extract import available as graph_extraction_available
@@ -268,3 +270,25 @@ def test_a_repair_is_checked_against_the_self_tests_phase_three_generated(servic
 
     assert [e["detail"] for e in result["events"] if e["stage"] == "self_test_verify"] == ["0/2 passed"]
     assert result["phase_solved"] == "pr_cot"
+
+
+class _OpenStream:
+    """What the two stream openers need from a handler."""
+    send_response = send_header = end_headers = staticmethod(lambda *_: None)
+
+    def __init__(self):
+        self.wfile = io.BytesIO()
+
+
+@pytest.mark.parametrize("opener", ["_open_generate_stream", "_open_plan_stream"])
+def test_a_progress_value_json_cannot_say_does_not_stop_the_run(opener):
+    stream = _OpenStream()
+    emit = getattr(main.V3Handler, opener)(stream)
+
+    emit("phase", "lost", unserializable=object())
+    emit("phase", "next")
+
+    written = stream.wfile.getvalue().decode()
+    assert "next" in written
+    assert "lost" not in written
+
