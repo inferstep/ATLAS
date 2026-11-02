@@ -76,15 +76,15 @@ func IsVerificationKind(strength string) bool {
 	return verificationKinds[strength]
 }
 
-// VerificationExpectsExitZero is the only expectation this build can observe.
+// verificationExpectsExitZero is the only expectation this build can observe.
 // The executor reports an exit status, hashes either side and a closed
 // outcome; it returns no output, so nothing here can compare what a command
 // printed. A closed vocabulary of one is still a vocabulary: an expectation
 // this build cannot observe is refused at the boundary rather than silently
 // treated as exit_zero.
-const VerificationExpectsExitZero = "exit_zero"
+const verificationExpectsExitZero = "exit_zero"
 
-var verificationExpectations = map[string]bool{VerificationExpectsExitZero: true}
+var verificationExpectations = map[string]bool{verificationExpectsExitZero: true}
 
 // Where the things a command runs against came from.
 //
@@ -168,7 +168,7 @@ func LegacyVerificationRequirement(command string) VerificationRequirement {
 	return VerificationRequirement{
 		Command:        command,
 		Kind:           VerificationKindRuntime,
-		Expects:        VerificationExpectsExitZero,
+		Expects:        verificationExpectsExitZero,
 		AssetAuthority: AssetAuthorityWorkspaceObserved,
 	}
 }
@@ -212,7 +212,7 @@ func (r VerificationRequirement) DeclaredStrength() string { return r.Kind }
 // dropping it would leave the caller believing it declared an obligation that
 // no longer exists. Returns the stored form in canonical order.
 func ValidateVerificationRequirements(in *TaskContract) ([]VerificationRequirement, error) {
-	reqs := in.TypedVerificationRequirements()
+	reqs := in.typedVerificationRequirements()
 	if len(reqs) == 0 {
 		if in.VerificationRequirementsVersion != 0 {
 			return nil, fmt.Errorf(
@@ -262,7 +262,7 @@ func VerificationRequirementsFor(tc *TaskContract) map[string]VerificationRequir
 	if tc == nil {
 		return out
 	}
-	for _, r := range tc.TypedVerificationRequirements() {
+	for _, r := range tc.typedVerificationRequirements() {
 		out[r.Command] = r
 	}
 	for _, c := range tc.VerificationCommands() {

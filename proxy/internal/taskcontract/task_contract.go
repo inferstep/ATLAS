@@ -163,8 +163,8 @@ type TaskContract struct {
 	CandidatePolicy string `json:"candidate_policy,omitempty"`
 }
 
-// TypedVerificationRequirements is the declared typed set, or nil.
-func (tc *TaskContract) TypedVerificationRequirements() []VerificationRequirement {
+// typedVerificationRequirements is the declared typed set, or nil.
+func (tc *TaskContract) typedVerificationRequirements() []VerificationRequirement {
 	if tc == nil || tc.VerificationRequirements == nil {
 		return nil
 	}
