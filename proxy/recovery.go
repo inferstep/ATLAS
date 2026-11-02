@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -906,7 +907,7 @@ func settleMutationDebt(ctx *AgentContext, st *runState) {
 // validationSettles reports whether a path's CURRENT validation is good enough
 // to call the work demonstrated: a pass, or a genuine not_applicable from a
 // producer that deliberately checked nothing because nothing applies.
-func validationSettles(d *DeliverableState) bool {
+func validationSettles(d *taskcontract.DeliverableState) bool {
 	if d == nil || d.Tombstoned || d.CurrentHash == "" {
 		return false
 	}

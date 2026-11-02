@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -269,7 +270,7 @@ func TestCaptureOnlyIsOperatorOwnedAndFailsClosed(t *testing.T) {
 // caller that sends one has it dropped rather than obeyed. And the model
 // never sees it.
 func TestNoTaskContractOrToolResultCarriesTheCaptureControl(t *testing.T) {
-	var in TaskContract
+	var in taskcontract.TaskContract
 	if err := json.Unmarshal([]byte(
 		`{"task_mode":"work","candidate_capture_only":true}`), &in); err != nil {
 		t.Fatal(err)

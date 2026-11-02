@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -60,7 +61,7 @@ func (e proxyEvidence) Authorizes() (bool, string) {
 type syntaxEvidenceRequest struct {
 	// Obligation must be a structural-validity obligation. Anything else is
 	// refused rather than downgraded.
-	Obligation taskObligation
+	Obligation taskcontract.TaskObligation
 	// Path is the artifact the validator evaluated, used only to pick the
 	// language the existing gate already assigns.
 	Path string
@@ -113,7 +114,7 @@ func produceSyntaxEvidence(ctx *AgentContext, req syntaxEvidenceRequest) (proxyE
 	// One kind, one strength. A syntax pass may describe a syntax obligation
 	// and nothing else -- not a declared command, not an example, not the
 	// claim that a baseline's behaviour survived.
-	if req.Obligation.Kind != ObligationSyntacticValidity {
+	if req.Obligation.Kind != taskcontract.ObligationSyntacticValidity {
 		return proxyEvidence{}, false
 	}
 	if req.Obligation.RequiredStrength != "syntax" {

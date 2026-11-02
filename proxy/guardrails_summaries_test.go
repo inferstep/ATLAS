@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -66,7 +67,7 @@ func TestACompletedRunThatChangedNothingSaysSo(t *testing.T) {
 	for _, c := range []struct {
 		name       string
 		st         *runState
-		ledger     map[string]*DeliverableState // nil: nothing recorded
+		ledger     map[string]*taskcontract.DeliverableState // nil: nothing recorded
 		unobserved bool
 		status     wire.TerminalStatus
 		summary    string
@@ -81,9 +82,9 @@ func TestACompletedRunThatChangedNothingSaysSo(t *testing.T) {
 		{name: "a tool wrote a file", st: &runState{inspectedWorkspace: true, madeProductiveChange: true}, status: wire.TerminalCompleted,
 			summary: "Done.", want: "Done."},
 		{name: "the shell wrote a file", st: &runState{inspectedWorkspace: true}, status: wire.TerminalCompleted,
-			ledger: map[string]*DeliverableState{"out.txt": {Generation: 1}}, summary: "Done.", want: "Done."},
+			ledger: map[string]*taskcontract.DeliverableState{"out.txt": {Generation: 1}}, summary: "Done.", want: "Done."},
 		{name: "the shell removed a file", st: &runState{inspectedWorkspace: true}, status: wire.TerminalCompleted,
-			ledger: map[string]*DeliverableState{"old.txt": {Tombstoned: true}}, summary: "Done.", want: "Done."},
+			ledger: map[string]*taskcontract.DeliverableState{"old.txt": {Tombstoned: true}}, summary: "Done.", want: "Done."},
 		{name: "shell effects went unobserved", st: &runState{inspectedWorkspace: true}, status: wire.TerminalCompleted,
 			unobserved: true, summary: "Done.", want: "Done."},
 		{name: "the run did not complete", st: &runState{inspectedWorkspace: true}, status: wire.TerminalIncomplete,

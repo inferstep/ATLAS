@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -460,7 +461,7 @@ func serverWorld(t *testing.T, script []string) *bgWorld {
 // "work"} and nothing else.
 func contractWork(t *testing.T, ctx *AgentContext) {
 	t.Helper()
-	tc, err := validateTaskContract(&TaskContract{TaskMode: TaskModeWork}, ctx.WorkingDir)
+	tc, err := validateTaskContract(&taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork}, ctx.WorkingDir)
 	if err != nil {
 		t.Fatal(err)
 	}

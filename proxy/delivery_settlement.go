@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -94,8 +95,8 @@ func deliverySettlementFor(ctx *AgentContext, resolved string) *deliverySettleme
 // in the order in which the answer stops being possible: was there a delivery
 // at all, is the artifact still there, is it the same artifact, does the
 // session's own record agree, and was the delivery entitled to what it did.
-func settleExistence(ctx *AgentContext, o taskObligation,
-	obs []taskObligation) (bool, string) {
+func settleExistence(ctx *AgentContext, o taskcontract.TaskObligation,
+	obs []taskcontract.TaskObligation) (bool, string) {
 	resolved := resolveAgentPath(ctx, o.Subject)
 
 	// A settlement record exists only where a grant was validly consumed and
@@ -173,8 +174,8 @@ func settleExistence(ctx *AgentContext, o taskObligation,
 	for _, id := range s.MetCommands {
 		met[id] = true
 	}
-	for _, req := range authorizationPrerequisites(obs) {
-		if req.Kind != ObligationDeclaredCommand || !req.Required {
+	for _, req := range taskcontract.AuthorizationPrerequisites(obs) {
+		if req.Kind != taskcontract.ObligationDeclaredCommand || !req.Required {
 			continue
 		}
 		if !met[req.ID] {
@@ -195,9 +196,9 @@ func settleExistence(ctx *AgentContext, o taskObligation,
 // settling existence has to read the declared commands the task states, and a
 // caller that handed over only the existence obligations would be asking the
 // question with the answer already removed.
-func settlementStatus(ctx *AgentContext, obs []taskObligation,
+func settlementStatus(ctx *AgentContext, obs []taskcontract.TaskObligation,
 	only map[string]bool) (settled, owed []string, why string) {
-	for _, o := range postDeliverySettlement(obs) {
+	for _, o := range taskcontract.PostDeliverySettlement(obs) {
 		if !o.Required || (only != nil && !only[o.ID]) {
 			continue
 		}
@@ -232,7 +233,7 @@ func postDeliverySettlementOwed(ctx *AgentContext) (bool, string) {
 	// that question -- claiming it here too would be a second rule for one
 	// obligation.
 	delivered := map[string]bool{}
-	for _, o := range postDeliverySettlement(obs) {
+	for _, o := range taskcontract.PostDeliverySettlement(obs) {
 		if !o.Required {
 			continue
 		}

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -28,14 +29,14 @@ import (
 // decodeContractOverHTTP puts a body through the real request decoder and the
 // real validator, so `[]` versus absent is decided where production decides it
 // and not by a test constructing a struct.
-func decodeContractOverHTTP(t *testing.T, dir, body string) *TaskContract {
+func decodeContractOverHTTP(t *testing.T, dir, body string) *taskcontract.TaskContract {
 	t.Helper()
-	var captured *TaskContract
+	var captured *taskcontract.TaskContract
 	var decodeErr error
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Message      string        `json:"message"`
-			TaskContract *TaskContract `json:"task_contract,omitempty"`
+			Message      string                     `json:"message"`
+			TaskContract *taskcontract.TaskContract `json:"task_contract,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			decodeErr = err
@@ -159,7 +160,7 @@ func TestQuestionModeDeclaresNeitherClass(t *testing.T) {
 		`{"task_mode":"question","verification_knowledge":"declared","verification":["pytest -q"]}`,
 	} {
 		var req struct {
-			TaskContract *TaskContract `json:"task_contract,omitempty"`
+			TaskContract *taskcontract.TaskContract `json:"task_contract,omitempty"`
 		}
 		if err := json.Unmarshal([]byte(`{"task_contract":`+body+`}`), &req); err != nil {
 			t.Fatalf("%s: %v", body, err)

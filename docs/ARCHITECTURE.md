@@ -125,6 +125,9 @@ Every non-test Go file of `proxy/`, sub-folders included, with its area of owner
 | `internal/wire/tool_io.go` | Each tool's arguments and output, as the JSON the model reads and writes |
 | `internal/wire/tool_classification.go` | The closed words a tool result uses for what happened |
 | `internal/wire/events.go` | The `/events` envelope |
+| `internal/taskcontract/task_contract.go` | The task contract and the deliverable record: what a request asked for |
+| `internal/taskcontract/obligation_kinds.go` | The closed obligation words, the strength each needs, and how one is built |
+| `internal/taskcontract/verification_requirements.go` | The typed client verification requirements, the record of a run, and their checks |
 | `advisory_policy.go` | Decides whether to keep the model’s proposal or deliver a candidate, applying hard vetoes before verification and selection rules |
 | `authorization_decision.go` | Checks whether candidate evidence satisfies the task’s authorization requirements, including target scope and preservation of the existing file’s verified behavior |
 | `authorization_grant.go` | Creates, consumes, and retires one-use permissions bound to an exact candidate, target, and workspace state |

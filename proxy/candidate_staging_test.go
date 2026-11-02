@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -222,7 +223,7 @@ func liveStagingReq(t *testing.T, ctx *AgentContext, commands ...string) staging
 	for i, text := range commands {
 		req.Commands = append(req.Commands, stagingCommand{
 			Text: text, Identity: contentSHA256(text),
-			ObligationID: ObligationDeclaredCommand + ":" + contentSHA256(text)[:32],
+			ObligationID: taskcontract.ObligationDeclaredCommand + ":" + contentSHA256(text)[:32],
 			Index:        i, Count: len(commands),
 		})
 	}

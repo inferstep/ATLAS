@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -913,7 +914,7 @@ func finalizeCompletion(ctx *AgentContext, st *runState, userMessage, completedR
 	// mutation is a chat turn, not a completion claim, so it stays honest even
 	// when everything else is satisfied. Bounded continuation is a later slice.
 	if tc := ctx.TaskContract; completedReason == "text_reply" && tc != nil &&
-		tc.TaskMode == TaskModeWork && st.madeProductiveChange {
+		tc.TaskMode == taskcontract.TaskModeWork && st.madeProductiveChange {
 		return wire.TerminalIncomplete, "work_not_declared_complete"
 	}
 	if reason := st.replyIncompleteReason(); reason != "" {

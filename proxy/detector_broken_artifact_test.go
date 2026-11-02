@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -238,7 +239,7 @@ func TestNoopEditOverBrokenArtifactRecovers(t *testing.T) {
 // session-written file on disk whose exact current bytes carry a demonstrated
 // syntax failure, with the model having actually seen them. mutate then
 // breaks one clause of that state.
-func brokenArtifactLedger(t *testing.T, mutate func(*AgentContext, *DeliverableState, string)) (*AgentContext, *runState) {
+func brokenArtifactLedger(t *testing.T, mutate func(*AgentContext, *taskcontract.DeliverableState, string)) (*AgentContext, *runState) {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "solve.py")
@@ -247,13 +248,13 @@ func brokenArtifactLedger(t *testing.T, mutate func(*AgentContext, *DeliverableS
 	ctx.RecordFileRead(path, brokenSolveSource)
 	ctx.RecordBodySeen(path)
 	h := hashBytes([]byte(brokenSolveSource))
-	d := &DeliverableState{
+	d := &taskcontract.DeliverableState{
 		Path: "solve.py", CurrentHash: h, CurrentSize: len(brokenSolveSource), Generation: 1,
 		ValidationKind: wire.ValidationKindSyntax, ValidationStatus: wire.ValidationFailed,
 		ValidationDetail: "line 1: expected ':'", ValidatedHash: h,
 	}
 	if ctx.Ledger == nil {
-		ctx.Ledger = map[string]*DeliverableState{}
+		ctx.Ledger = map[string]*taskcontract.DeliverableState{}
 	}
 	ctx.Ledger[ledgerKey(ctx, "solve.py")] = d
 	if mutate != nil {
@@ -267,46 +268,46 @@ func brokenArtifactLedger(t *testing.T, mutate func(*AgentContext, *DeliverableS
 func TestBrokenArtifactRecoveryEntryPredicates(t *testing.T) {
 	for _, c := range []struct {
 		name   string
-		mutate func(*AgentContext, *DeliverableState, string)
+		mutate func(*AgentContext, *taskcontract.DeliverableState, string)
 	}{
-		{"validation unknown", func(_ *AgentContext, d *DeliverableState, _ string) {
+		{"validation unknown", func(_ *AgentContext, d *taskcontract.DeliverableState, _ string) {
 			d.ValidationStatus, d.ValidationKind = wire.ValidationUnknown, wire.ValidationKindUnknown
 		}},
-		{"validation not_run", func(_ *AgentContext, d *DeliverableState, _ string) {
+		{"validation not_run", func(_ *AgentContext, d *taskcontract.DeliverableState, _ string) {
 			d.ValidationStatus = wire.ValidationNotRun
 		}},
-		{"validation not_applicable", func(_ *AgentContext, d *DeliverableState, _ string) {
+		{"validation not_applicable", func(_ *AgentContext, d *taskcontract.DeliverableState, _ string) {
 			d.ValidationStatus = wire.ValidationNotApplicable
 		}},
-		{"current bytes are valid", func(_ *AgentContext, d *DeliverableState, _ string) {
+		{"current bytes are valid", func(_ *AgentContext, d *taskcontract.DeliverableState, _ string) {
 			d.ValidationStatus = wire.ValidationPassed
 		}},
-		{"failure describes older bytes", func(_ *AgentContext, d *DeliverableState, _ string) {
+		{"failure describes older bytes", func(_ *AgentContext, d *taskcontract.DeliverableState, _ string) {
 			d.ValidatedHash = hashBytes([]byte("something else"))
 		}},
-		{"disk moved under the ledger", func(_ *AgentContext, _ *DeliverableState, path string) {
+		{"disk moved under the ledger", func(_ *AgentContext, _ *taskcontract.DeliverableState, path string) {
 			os.WriteFile(path, []byte("def solve():\n    return 7\n"), 0o644)
 		}},
-		{"file was never read", func(ctx *AgentContext, _ *DeliverableState, path string) {
+		{"file was never read", func(ctx *AgentContext, _ *taskcontract.DeliverableState, path string) {
 			ctx.BodySeen = map[string]bool{}
 		}},
-		{"not written by this session", func(_ *AgentContext, d *DeliverableState, _ string) {
+		{"not written by this session", func(_ *AgentContext, d *taskcontract.DeliverableState, _ string) {
 			d.Generation = 0
 		}},
-		{"a safer checkpoint exists", func(_ *AgentContext, d *DeliverableState, _ string) {
+		{"a safer checkpoint exists", func(_ *AgentContext, d *taskcontract.DeliverableState, _ string) {
 			good := []byte("def solve():\n    return 7\n")
 			d.CheckpointBytes, d.CheckpointHash = good, hashBytes(good)
 			d.CheckpointKind = wire.ValidationKindSyntax
 		}},
-		{"file is gone", func(_ *AgentContext, _ *DeliverableState, path string) {
+		{"file is gone", func(_ *AgentContext, _ *taskcontract.DeliverableState, path string) {
 			os.Remove(path)
 		}},
-		{"no budget to act on it", func(ctx *AgentContext, _ *DeliverableState, _ string) {
+		{"no budget to act on it", func(ctx *AgentContext, _ *taskcontract.DeliverableState, _ string) {
 			c, cancel := context.WithDeadline(context.Background(), time.Now().Add(5*time.Second))
 			t.Cleanup(cancel)
 			ctx.Ctx = c
 		}},
-		{"work context already ended", func(ctx *AgentContext, _ *DeliverableState, _ string) {
+		{"work context already ended", func(ctx *AgentContext, _ *taskcontract.DeliverableState, _ string) {
 			c, cancel := context.WithCancel(context.Background())
 			cancel()
 			ctx.Ctx = c
@@ -359,7 +360,7 @@ func TestBrokenArtifactRecoveryArmsOnTheRecurrence(t *testing.T) {
 	os.WriteFile(other, []byte(brokenSolveSource), 0o644)
 	ctx.RecordBodySeen(other)
 	h := hashBytes([]byte(brokenSolveSource))
-	ctx.Ledger[ledgerKey(ctx, "other.py")] = &DeliverableState{
+	ctx.Ledger[ledgerKey(ctx, "other.py")] = &taskcontract.DeliverableState{
 		Path: "other.py", CurrentHash: h, Generation: 1,
 		ValidationKind: wire.ValidationKindSyntax, ValidationStatus: wire.ValidationFailed,
 		ValidationDetail: "line 1: expected ':'", ValidatedHash: h,

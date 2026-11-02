@@ -4,6 +4,8 @@ package main
 
 import (
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 )
 
 // classifyAgentTier decides whether a request is conversational.
@@ -69,8 +71,8 @@ func classifyAgentTier(message string) Tier {
 // entries.json") was capped at the conversational turn limit and never
 // planned. A declared question keeps the classifier's tier: some questions
 // need the project read at length, and the tier only scales effort.
-func declaredTier(tc *TaskContract, classified Tier) Tier {
-	if tc != nil && tc.TaskMode == TaskModeWork && classified == Tier0Conversational {
+func declaredTier(tc *taskcontract.TaskContract, classified Tier) Tier {
+	if tc != nil && tc.TaskMode == taskcontract.TaskModeWork && classified == Tier0Conversational {
 		return Tier2Medium
 	}
 	return classified

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -114,11 +115,11 @@ func TestLegacyVerificationCannotProduceBehavioralAuthority(t *testing.T) {
 		map[string]stubEffect{"pytest -q": {}}, false)
 	obs := requestObligations(w.ctx)
 	for _, o := range obs {
-		if o.Kind == ObligationDeclaredCommand && o.RequiredStrength == VerificationKindBehavioral {
+		if o.Kind == taskcontract.ObligationDeclaredCommand && o.RequiredStrength == taskcontract.VerificationKindBehavioral {
 			t.Fatal("an untyped command declared behavioral strength")
 		}
 	}
-	if authorizationFloor(obs) == VerificationKindBehavioral {
+	if taskcontract.AuthorizationFloor(obs) == taskcontract.VerificationKindBehavioral {
 		t.Fatal("an untyped command raised the floor to behavioral")
 	}
 }
@@ -269,7 +270,7 @@ func TestCandidateWeakerThanBaselineIsRejected(t *testing.T) {
 	if err := os.WriteFile(w.path, []byte(routeBaseline), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	w.ctx.VerificationEvidence = append(w.ctx.VerificationEvidence, VerificationRecord{
+	w.ctx.VerificationEvidence = append(w.ctx.VerificationEvidence, taskcontract.VerificationRecord{
 		Command: "pytest -q",
 		Covered: map[string]string{w.path: contentSHA256(routeBaseline)}, Turn: 1,
 	})
@@ -277,7 +278,7 @@ func TestCandidateWeakerThanBaselineIsRejected(t *testing.T) {
 	// there is nothing for the candidate to be weaker than.
 	var preserved bool
 	for _, o := range requestObligations(w.ctx) {
-		if o.Kind == ObligationBaselinePreserved && o.RequiredStrength == "behavioral" {
+		if o.Kind == taskcontract.ObligationBaselinePreserved && o.RequiredStrength == "behavioral" {
 			preserved = true
 		}
 	}
@@ -298,8 +299,8 @@ func TestCandidateWeakerThanBaselineIsRejected(t *testing.T) {
 
 // The hidden evaluator has no representation anywhere the policy can reach.
 func TestHiddenEvaluatorCannotInfluenceThePolicy(t *testing.T) {
-	for _, f := range []string{"candidate_policy.go", "advisory_policy.go",
-		"candidate_provenance.go", "verification_requirements.go"} {
+	for _, f := range append(packageFiles(t, "internal/taskcontract"), "candidate_policy.go", "advisory_policy.go",
+		"candidate_provenance.go", "verification_requirements.go") {
 		src, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)
@@ -319,7 +320,7 @@ func TestHiddenEvaluatorCannotInfluenceThePolicy(t *testing.T) {
 // ATLAS_CANDIDATE_POLICY changes nothing.
 func TestNothingSelectsTheRule(t *testing.T) {
 	for _, value := range []string{"strict", "advisory", "automatic_v3", "yolo"} {
-		var in TaskContract
+		var in taskcontract.TaskContract
 		if err := json.Unmarshal([]byte(`{"task_mode":"work","candidate_policy":"`+value+`"}`), &in); err != nil {
 			t.Fatal(err)
 		}

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -50,9 +51,9 @@ func syntaxEvidenceCtx(t *testing.T, srv *httptest.Server) *AgentContext {
 	return ctx
 }
 
-func syntaxObligation(t *testing.T, subject string) taskObligation {
+func syntaxObligation(t *testing.T, subject string) taskcontract.TaskObligation {
 	t.Helper()
-	o, ok := newTaskObligation(ObligationSyntacticValidity, subject, "", true)
+	o, ok := taskcontract.NewTaskObligation(taskcontract.ObligationSyntacticValidity, subject, "", true)
 	if !ok {
 		t.Fatalf("syntax obligation for %q refused", subject)
 	}
@@ -237,12 +238,12 @@ func TestASyntaxPassMayDescribeOnlyASyntaxObligation(t *testing.T) {
 	for _, c := range []struct{ kind, strength string }{
 		// A declared command needs a strength; syntax is the one a syntax
 		// pass could be mistaken for.
-		{ObligationDeclaredCommand, "syntax"},
-		{ObligationDeclaredExample, ""},
-		{ObligationArtifactExists, ""},
-		{ObligationUnsupported, ""},
+		{taskcontract.ObligationDeclaredCommand, "syntax"},
+		{taskcontract.ObligationDeclaredExample, ""},
+		{taskcontract.ObligationArtifactExists, ""},
+		{taskcontract.ObligationUnsupported, ""},
 	} {
-		o, ok := newTaskObligation(c.kind, "solve.py", c.strength, true)
+		o, ok := taskcontract.NewTaskObligation(c.kind, "solve.py", c.strength, true)
 		if !ok {
 			t.Fatalf("a %s obligation for solve.py was refused, so nothing is checked for it", c.kind)
 		}
@@ -275,7 +276,7 @@ func TestAPassingSyntaxRecordCannotSatisfyABehavioralObligation(t *testing.T) {
 
 func TestASyntaxPassCannotPreserveAStrongerBaseline(t *testing.T) {
 	ctx := syntaxEvidenceCtx(t, syntaxSandbox(t, true, nil))
-	base, ok := newTaskObligation(ObligationBaselinePreserved, "solve.py", "behavioral", true)
+	base, ok := taskcontract.NewTaskObligation(taskcontract.ObligationBaselinePreserved, "solve.py", "behavioral", true)
 	if !ok {
 		t.Fatal("baseline obligation refused")
 	}
@@ -325,9 +326,9 @@ func TestAWorkspaceMutationMovesTheGeneration(t *testing.T) {
 	ctx := syntaxEvidenceCtx(t, syntaxSandbox(t, true, nil))
 	before, beforeHash := workspaceIdentity(ctx)
 	if ctx.Ledger == nil {
-		ctx.Ledger = map[string]*DeliverableState{}
+		ctx.Ledger = map[string]*taskcontract.DeliverableState{}
 	}
-	ctx.Ledger["solve.py"] = &DeliverableState{
+	ctx.Ledger["solve.py"] = &taskcontract.DeliverableState{
 		Path: "solve.py", CurrentHash: "h1", Generation: 1}
 	after, afterHash := workspaceIdentity(ctx)
 	if after <= before {

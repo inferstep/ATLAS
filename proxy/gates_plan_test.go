@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -346,11 +347,11 @@ func recordWarnedValidation(t *testing.T, ctx *AgentContext, rel string) {
 	ctx.LedgerMu.Lock()
 	defer ctx.LedgerMu.Unlock()
 	if ctx.Ledger == nil {
-		ctx.Ledger = map[string]*DeliverableState{}
+		ctx.Ledger = map[string]*taskcontract.DeliverableState{}
 	}
 	d := ctx.Ledger[key]
 	if d == nil {
-		d = &DeliverableState{}
+		d = &taskcontract.DeliverableState{}
 		ctx.Ledger[key] = d
 	}
 	h := fileSHA256(ctx, rel)

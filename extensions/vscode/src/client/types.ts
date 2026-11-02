@@ -18,7 +18,7 @@ export type PermissionMode = 'default' | 'accept-edits' | 'yolo';
 export type TaskMode = 'work' | 'question';
 
 /** The structured declaration sent with a request (`task_contract`). Mirrors
- * proxy/types.go's TaskContract and tui/chat.go's taskContract.
+ * proxy/internal/taskcontract/task_contract.go's TaskContract and tui/chat.go's taskContract.
  *
  * `expected_outputs` and `verification` stay unset from this client: someone
  * typing into a chat box has told the extension nothing structured about

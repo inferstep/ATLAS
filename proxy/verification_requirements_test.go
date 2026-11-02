@@ -5,19 +5,20 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // typedCommandObligation returns the world's declared-command obligation.
-func typedCommandObligation(t *testing.T, w *matrixWorld) taskObligation {
+func typedCommandObligation(t *testing.T, w *matrixWorld) taskcontract.TaskObligation {
 	t.Helper()
 	for _, o := range w.obligations() {
-		if o.Kind == ObligationDeclaredCommand {
+		if o.Kind == taskcontract.ObligationDeclaredCommand {
 			return o
 		}
 	}
 	t.Fatal("no declared-command obligation derived")
-	return taskObligation{}
+	return taskcontract.TaskObligation{}
 }
 
 // Required strength comes from what the client declared and from nothing else.
@@ -35,19 +36,19 @@ func TestDeclaredStrengthComesFromTheDeclaration(t *testing.T) {
 			name: "untyped list is runtime",
 			contract: `{"task_mode":"work","verification_knowledge":"declared",` +
 				`"verification":["pytest -q"]}`,
-			want: VerificationKindRuntime,
+			want: taskcontract.VerificationKindRuntime,
 		},
 		{
 			name: "untyped parse check is runtime",
 			contract: `{"task_mode":"work","verification_knowledge":"declared",` +
 				`"verification":["python3 -c \"import ast;ast.parse(open('solve.py').read())\""]}`,
-			want: VerificationKindRuntime,
+			want: taskcontract.VerificationKindRuntime,
 		},
 		{
 			name: "untyped true is runtime",
 			contract: `{"task_mode":"work","verification_knowledge":"declared",` +
 				`"verification":["true"]}`,
-			want: VerificationKindRuntime,
+			want: taskcontract.VerificationKindRuntime,
 		},
 		{
 			name: "typed syntax is syntax",
@@ -55,7 +56,7 @@ func TestDeclaredStrengthComesFromTheDeclaration(t *testing.T) {
 				`"verification_requirements_version":1,"verification_requirements":[` +
 				`{"command":"pytest -q","kind":"syntax","expects":"exit_zero",` +
 				`"asset_authority":"client_supplied"}]}`,
-			want: VerificationKindSyntax,
+			want: taskcontract.VerificationKindSyntax,
 		},
 		{
 			name: "typed runtime is runtime",
@@ -63,7 +64,7 @@ func TestDeclaredStrengthComesFromTheDeclaration(t *testing.T) {
 				`"verification_requirements_version":1,"verification_requirements":[` +
 				`{"command":"pytest -q","kind":"runtime","expects":"exit_zero",` +
 				`"asset_authority":"client_supplied"}]}`,
-			want: VerificationKindRuntime,
+			want: taskcontract.VerificationKindRuntime,
 		},
 		{
 			name: "typed behavioral is behavioral",
@@ -71,7 +72,7 @@ func TestDeclaredStrengthComesFromTheDeclaration(t *testing.T) {
 				`"verification_requirements_version":1,"verification_requirements":[` +
 				`{"command":"pytest -q","kind":"behavioral","expects":"exit_zero",` +
 				`"asset_authority":"client_supplied"}]}`,
-			want: VerificationKindBehavioral,
+			want: taskcontract.VerificationKindBehavioral,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -80,7 +81,7 @@ func TestDeclaredStrengthComesFromTheDeclaration(t *testing.T) {
 			if o.RequiredStrength != tc.want {
 				t.Errorf("required strength %q, want %q", o.RequiredStrength, tc.want)
 			}
-			if got := authorizationFloor(w.obligations()); got != tc.want {
+			if got := taskcontract.AuthorizationFloor(w.obligations()); got != tc.want {
 				t.Errorf("floor %q, want %q", got, tc.want)
 			}
 		})
@@ -103,7 +104,7 @@ func TestObservedStrengthIsCappedByAssetAuthority(t *testing.T) {
 		if !ok {
 			t.Fatal("a typed behavioral command produced no evidence")
 		}
-		if ev.Provenance.ObservedStrength != VerificationKindBehavioral {
+		if ev.Provenance.ObservedStrength != taskcontract.VerificationKindBehavioral {
 			t.Errorf("observed %q, want behavioral", ev.Provenance.ObservedStrength)
 		}
 		if authorized, why := ev.Authorizes(); !authorized {
@@ -121,9 +122,9 @@ func TestObservedStrengthIsCappedByAssetAuthority(t *testing.T) {
 		// contract's claim about it is not the fact about it.
 		asset := resolveAgentPath(w.ctx, "test_solve.py")
 		if w.ctx.Ledger == nil {
-			w.ctx.Ledger = map[string]*DeliverableState{}
+			w.ctx.Ledger = map[string]*taskcontract.DeliverableState{}
 		}
-		w.ctx.Ledger[ledgerKey(w.ctx, asset)] = &DeliverableState{
+		w.ctx.Ledger[ledgerKey(w.ctx, asset)] = &taskcontract.DeliverableState{
 			Path: asset, CurrentHash: contentSHA256("assert True\n"), Generation: 1,
 		}
 		o := typedCommandObligation(t, w)
@@ -132,7 +133,7 @@ func TestObservedStrengthIsCappedByAssetAuthority(t *testing.T) {
 		if !ok {
 			t.Fatal("the run produced no evidence at all")
 		}
-		if ev.Provenance.ObservedStrength != VerificationKindRuntime {
+		if ev.Provenance.ObservedStrength != taskcontract.VerificationKindRuntime {
 			t.Errorf("observed %q, want runtime", ev.Provenance.ObservedStrength)
 		}
 		// And it does not reach the floor the client declared, so it cannot
@@ -153,21 +154,21 @@ func TestTypedAndUntypedCommandsCoexist(t *testing.T) {
 		`"asset_authority":"client_supplied"}]}`, "solve.py", "print(7)\n", true)
 	strengths := map[string]string{}
 	for _, o := range w.obligations() {
-		if o.Kind == ObligationDeclaredCommand {
+		if o.Kind == taskcontract.ObligationDeclaredCommand {
 			strengths[o.Subject] = o.RequiredStrength
 		}
 	}
 	if len(strengths) != 2 {
 		t.Fatalf("derived %d command obligations, want 2: %v", len(strengths), strengths)
 	}
-	if strengths["python3 solve.py"] != VerificationKindBehavioral {
+	if strengths["python3 solve.py"] != taskcontract.VerificationKindBehavioral {
 		t.Errorf("the typed command reached %q", strengths["python3 solve.py"])
 	}
-	if strengths["ruff check ."] != VerificationKindRuntime {
+	if strengths["ruff check ."] != taskcontract.VerificationKindRuntime {
 		t.Errorf("the untyped command reached %q", strengths["ruff check ."])
 	}
 	// Both are owed: the floor is the strongest of them.
-	if got := authorizationFloor(w.obligations()); got != VerificationKindBehavioral {
+	if got := taskcontract.AuthorizationFloor(w.obligations()); got != taskcontract.VerificationKindBehavioral {
 		t.Errorf("floor %q, want behavioral", got)
 	}
 }
@@ -214,7 +215,7 @@ func TestTypedVerificationBoundaryRefusesTheUnreadable(t *testing.T) {
 			`"asset_authority":"client_supplied"}]}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var in TaskContract
+			var in taskcontract.TaskContract
 			if err := json.Unmarshal([]byte(tc.contract), &in); err != nil {
 				t.Fatal(err)
 			}

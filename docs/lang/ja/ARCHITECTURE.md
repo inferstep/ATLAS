@@ -127,6 +127,9 @@ K3s デプロイパス（`scripts/install.sh`、`templates/` 内のマニフェ�
 | `internal/wire/tool_io.go` | 各ツールの引数と出力。モデルが読み書きする JSON |
 | `internal/wire/tool_classification.go` | ツール結果が起きたことを表す閉じた語彙 |
 | `internal/wire/events.go` | `/events` のエンベロープ |
+| `internal/taskcontract/task_contract.go` | タスク契約と成果物の記録。リクエストが求めたもの |
+| `internal/taskcontract/obligation_kinds.go` | 義務の閉じた語彙、必要な強度、義務の構築 |
+| `internal/taskcontract/verification_requirements.go` | 型付きのクライアント検証要件、実行の記録、その検証 |
 | `advisory_policy.go` | モデルの提案を保持するか候補を配信するかを決定する。検証と選択ルールの前にハード拒否権を適用する |
 | `authorization_decision.go` | 候補の証拠がタスクの認可要件（対象スコープと、既存ファイルの検証済み挙動の保存を含む）を満たすかチェックする |
 | `authorization_grant.go` | 正確な候補・対象・ワークスペース状態に束ねられた一回使い切りの許可を作成・消費・退役させる |

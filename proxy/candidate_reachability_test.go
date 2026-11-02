@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -566,11 +567,11 @@ func TestNoGenerationWhenNoCandidateCouldBeDelivered(t *testing.T) {
 func TestGenerationStillRunsWhereACandidateCouldBeDelivered(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
-		contract *TaskContract
+		contract *taskcontract.TaskContract
 	}{
 		{"declared outputs", declaredOutputs("solve.py")},
-		{"declared work", &TaskContract{TaskMode: TaskModeWork,
-			OutputKnowledge: KnowledgeUnspecified, VerificationKnowledge: KnowledgeUnspecified}},
+		{"declared work", &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork,
+			OutputKnowledge: taskcontract.KnowledgeUnspecified, VerificationKnowledge: taskcontract.KnowledgeUnspecified}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newBudgetWorld(t)

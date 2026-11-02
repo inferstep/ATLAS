@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -96,7 +97,7 @@ type runState struct {
 	// The decision that named them, carried whole, so the contract list and
 	// the prose heuristic stay separate: the source and whether knowledge was
 	// stated travel with the paths.
-	outputObligation obligationDecision
+	outputObligation taskcontract.ObligationDecision
 	// The expected-output gate fires at most ONCE per session: a named
 	// deliverable might be PRODUCED AT RUNTIME by the model's code (not
 	// authored), so repeatedly bouncing a correct done would steer the
@@ -514,7 +515,7 @@ func recordVerificationEvidence(ctx *AgentContext, turn int, command string, ev 
 		segs = ev.Honest
 	}
 	generation, state := workspaceIdentity(ctx)
-	ctx.VerificationEvidence = append(ctx.VerificationEvidence, VerificationRecord{
+	ctx.VerificationEvidence = append(ctx.VerificationEvidence, taskcontract.VerificationRecord{
 		Command:             command,
 		Redirect:            stdinRedirectSource(command),
 		Covered:             coverageForGreenCommand(ctx, strings.Join(segs, " && ")),

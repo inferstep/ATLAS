@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -57,7 +58,7 @@ func TestAnAuthorizedDeliverySettlesExistence(t *testing.T) {
 	if len(done) != 1 || len(owed) != 0 {
 		t.Fatalf("settled %v owed %v, want the one existence obligation settled", done, owed)
 	}
-	if !strings.HasPrefix(done[0], ObligationArtifactExists+":") {
+	if !strings.HasPrefix(done[0], taskcontract.ObligationArtifactExists+":") {
 		t.Errorf("settled %v, want the existence obligation", done)
 	}
 }
@@ -74,7 +75,7 @@ func TestSettlementCannotBeManufactured(t *testing.T) {
 	observeDeliverable(w.ctx, w.path, []byte(routeWinner),
 		wire.ValidationKindSyntax, wire.ValidationPassed, "")
 	obs := requestObligations(w.ctx)
-	settling := postDeliverySettlement(obs)
+	settling := taskcontract.PostDeliverySettlement(obs)
 	if len(settling) == 0 {
 		t.Fatal("the declared output owes no settlement, so there is nothing to check")
 	}
@@ -97,7 +98,7 @@ func TestALedgerThatNeverSawTheWriteCannotSettle(t *testing.T) {
 	// The ledger effect is not recorded. The bytes are right and the delivery
 	// happened; the session's own record never saw it.
 	obs := requestObligations(w.ctx)
-	settling := postDeliverySettlement(obs)
+	settling := taskcontract.PostDeliverySettlement(obs)
 	if len(settling) == 0 {
 		t.Fatal("the declared output owes no settlement, so there is nothing to check")
 	}
@@ -178,8 +179,8 @@ func TestACommandDeclaredAfterDeliveryUnsettlesIt(t *testing.T) {
 		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
 			`"verification_knowledge":"declared","verification":["pytest -q"]}`)
 	commands := 0
-	for _, o := range authorizationPrerequisites(requestObligations(w.ctx)) {
-		if o.Kind == ObligationDeclaredCommand && o.Required {
+	for _, o := range taskcontract.AuthorizationPrerequisites(requestObligations(w.ctx)) {
+		if o.Kind == taskcontract.ObligationDeclaredCommand && o.Required {
 			commands++
 		}
 	}
@@ -203,7 +204,7 @@ func TestSettlementCannotSettleAnotherTarget(t *testing.T) {
 	}
 	observeDeliverable(w.ctx, other, []byte(routeWinner),
 		wire.ValidationKindSyntax, wire.ValidationPassed, "")
-	o, ok := newTaskObligation(ObligationArtifactExists, other, "", true)
+	o, ok := taskcontract.NewTaskObligation(taskcontract.ObligationArtifactExists, other, "", true)
 	if !ok {
 		t.Fatal("obligation refused")
 	}
@@ -355,7 +356,7 @@ func TestAnUnsettledDeliveryBlocksCompletion(t *testing.T) {
 	}
 	observeDeliverable(w.ctx, w.path, []byte(replaced),
 		wire.ValidationKindSyntax, wire.ValidationPassed, "")
-	w.ctx.VerificationEvidence = append(w.ctx.VerificationEvidence, VerificationRecord{
+	w.ctx.VerificationEvidence = append(w.ctx.VerificationEvidence, taskcontract.VerificationRecord{
 		Command: "python3 solve.py",
 		Covered: map[string]string{w.path: contentSHA256(replaced)}, Turn: 1,
 	})
@@ -375,7 +376,7 @@ func TestAnUnsettledDeliveryBlocksCompletion(t *testing.T) {
 // When the artifact is still what was authorized, settlement says nothing.
 func TestASettledDeliveryRaisesNoSettlementObjection(t *testing.T) {
 	w := newSettledWorld(t, settledContract, nil)
-	w.ctx.VerificationEvidence = append(w.ctx.VerificationEvidence, VerificationRecord{
+	w.ctx.VerificationEvidence = append(w.ctx.VerificationEvidence, taskcontract.VerificationRecord{
 		Command: "python3 solve.py",
 		Covered: map[string]string{w.path: contentSHA256(routeWinner)}, Turn: 1,
 	})
