@@ -69,10 +69,10 @@ docker compose logs --tail 50
 | `error: patch failed:` / `patch does not apply` | [llama.cpp 재빌드](#llamacpp-재빌드-새-모델-아키텍처-또는-패치-드리프트) |
 | 마운트된 볼륨 / 모델 파일에 대한 권한 거부 (Fedora/RHEL) | [SELinux가 컨테이너 접근을 차단함](#selinux가-컨테이너-접근을-차단함-fedorarhel) |
 | 프록시 헬스에 `"sandbox": false` (수동 컨테이너 설정) | [Sandbox에 연결할 수 없음](#sandbox에-연결할-수-없음) |
-| 프록시 헬스에 `"sandbox": false` (Compose 스택) | [Sandbox에 연결할 수 없음 (헬스 체크)](#sandbox에-연결할-수-없음-헬스-체크) |
+| 프록시 헬스에 `"sandbox": false` (Compose 스택) | [Sandbox에 연결할 수 없음](#sandbox에-연결할-수-없음) |
 | 시작 시 `address already in use` | [포트 충돌](#포트-충돌) |
 | "fitting params to device memory" 이후 CUDA 할당 오류 | [모델 + KV 캐시가 GPU에 들어가지 않음](#모델--kv-캐시가-gpu에-들어가지-않음-시작-실패-또는-생성이-5배-느림) |
-| 생성이 ~2 tok/s, llama-server가 CPU 코어를 소모 | [모델 + KV 캐시가 GPU에 들어가지 않음](#모델--kv-캐시가-gpu에-들어가지-않음-시작-실패-또는-생성이-5배-느림) / [느린 생성 속도](#느린-생성-속도-2-toks) |
+| 생성이 ~2 tok/s, llama-server가 CPU 코어를 소모 | [모델 + KV 캐시가 GPU에 들어가지 않음](#모델--kv-캐시가-gpu에-들어가지-않음-시작-실패-또는-생성이-5배-느림) / [모델이 GPU 대신 CPU에서 로드됨](#모델이-gpu-대신-cpu에서-로드됨) |
 | 다운로드 전 모델 사이징 | [내 GPU에는 무엇이 들어가는가?](#내-gpu에는-무엇이-들어가는가) |
 | 시작 시 `failed to load model` | [모델 파일을 찾을 수 없음](#모델-파일을-찾을-수-없음) |
 | llama-server 크래시 / OOMKilled, VRAM이 거의 100% | [VRAM 부족](#vram-부족) |
@@ -430,17 +430,6 @@ chcon -Rt svirt_sandbox_file_t ~/models/
 # Or add :Z flag to volume mounts (Docker Compose handles this)
 ```
 
-### Sandbox에 연결할 수 없음
-
-**증상:** 프록시 헬스에 `"sandbox": false`가 표시됩니다. V3 빌드 검증이 실패합니다.
-
-**해결:** 샌드박스는 `atlas`가 아니라 `sandbox-net`을 통해 접근합니다 — 실행된 코드가 나머지 스택에 닿을 수 없도록, 샌드박스는 의도적으로 `atlas` 네트워크에 속하지 않는 유일한 서비스입니다. 프록시, 렌즈, v3-service는 두 네트워크에 모두 연결됩니다. 컨테이너를 수동으로 실행하는 경우:
-```bash
-docker network create sandbox-net
-# sandbox joins ONLY sandbox-net; proxy / lens / v3-service join it too,
-# in addition to the atlas network.
-```
-
 ### 포트 충돌
 
 **증상:** `docker compose up`이 특정 포트에서 "address already in use"로 실패합니다.
@@ -521,6 +510,8 @@ ps aux | grep llama-server | grep -e '-ngl' -e 'n-gpu-layers'
 ```
 
 Docker를 사용 중이라면 NVIDIA 컨테이너 런타임이 설정되어 있는지 확인하세요(위의 GPU 섹션 참고).
+
+**예상 성능:** 처리량은 모델, 양자화, 문법 모드에 따라 달라집니다.
 
 ### 모델 + KV 캐시가 GPU에 들어가지 않음 (시작 실패, 또는 생성이 5배 느림)
 
@@ -876,9 +867,9 @@ curl -s http://localhost:8099/health | python3 -c "import sys,json; l=json.load(
 
 ## Sandbox 문제
 
-### Sandbox에 연결할 수 없음 (헬스 체크)
+### Sandbox에 연결할 수 없음
 
-**증상:** 코드가 전혀 테스트되지 않습니다. 프록시 헬스에 `"sandbox": false`가 표시됩니다.
+**증상:** 코드가 전혀 테스트되지 않습니다. V3 빌드 검증이 실패합니다. 프록시 헬스에 `"sandbox": false`가 표시됩니다.
 
 **해결:** 샌드박스 헬스를 확인하세요:
 ```bash
@@ -892,6 +883,13 @@ curl -s http://localhost:8020/health
 샌드박스 컨테이너가 실행 중인데 unhealthy라면 로그를 확인하세요:
 ```bash
 docker compose logs sandbox
+```
+
+샌드박스는 `atlas`가 아니라 `sandbox-net`을 통해 접근합니다 — 실행된 코드가 나머지 스택에 닿을 수 없도록, 샌드박스는 의도적으로 `atlas` 네트워크에 속하지 않는 유일한 서비스입니다. 프록시, 렌즈, v3-service는 두 네트워크에 모두 연결됩니다. 컨테이너를 수동으로 실행하는 경우:
+```bash
+docker network create sandbox-net
+# sandbox joins ONLY sandbox-net; proxy / lens / v3-service join it too,
+# in addition to the atlas network.
 ```
 
 ### 코드 실행 타임아웃
@@ -931,15 +929,6 @@ atlas bench --run-id <your-run-id> --tasks 200
 완료된 태스크는 절대 손실되지 않습니다: 결과는 `benchmark/results/<run-id>/v3_lcb/per_task/`에 태스크별 JSON으로 저장되며, 러너는 결과 파일이 존재하는 태스크를 건너뛰며 재개합니다. 어떤 이유로든(OOM, 재부팅, 세션 종료) 중단된 실행도 같은 방식으로 재개됩니다 — 동일한 `atlas bench` 명령을 다시 실행하기만 하면 됩니다.
 
 ## 성능
-
-### 느린 생성 속도 (~2 tok/s)
-
-모델이 GPU 대신 CPU에서 실행되고 있습니다. 확인:
-1. `nvidia-smi` — llama-server가 GPU 프로세스로 표시되는지
-2. `-ngl 99`(`--n-gpu-layers`) — 모든 레이어가 오프로드되었는지
-3. NVIDIA Container Toolkit — 컨테이너 런타임이 GPU 접근용으로 설정되었는지
-
-**예상 성능:** 처리량은 모델, 양자화, 문법 모드에 따라 달라집니다.
 
 ### V3 파이프라인이 수 분 소요됨
 
