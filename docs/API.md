@@ -584,6 +584,17 @@ Defined in `proxy/tools.go` and the `proxy/tool_*.go` files beside it. Used by t
 | `tail_background` | Fetch new stdout/stderr lines from a backgrounded job by `job_id`. |
 | `stop_background` | Terminate a backgrounded job by `job_id`. |
 
+**Read-only tools.** `read_file`, `outline_file`, `find_file`, `search_files`, `list_directory` and `tail_background` have no side effects, so they can run in parallel.
+
+**Limits the table leaves out.**
+- `read_file` takes an optional `offset` and `limit`.
+- `outline_file` uses tree-sitter for `.py` and a language-agnostic scan otherwise. It returns no code, so it cannot ground a diagnosis: `read_file` is the default entry point.
+- `search_files` returns at most 200 matches. `search_files` and `find_file` never enter `.git`, `node_modules`, `__pycache__`, `.next` or `target`.
+- `list_directory` returns each entry's type and size.
+- `move_file` is a pure relocation: it bypasses the V3 and surgical-edit gates and refuses to overwrite an existing destination. Shell `mv` and `cp` through `run_command` also work.
+- `run_command` is capped at 5 minutes. A command the shell cannot parse returns why it could not run: when the cause is a program quoted inline after `-c` or `-e`, the message points to writing it to a file, because a raw `syntax error near unexpected token` gives the model nothing to change.
+- `stop_background` sends SIGTERM, then SIGKILL if the job is still alive.
+
 **Workspace containment.** Before any tool handler touches the filesystem, the proxy validates every path-taking argument (`path`, `source`, `destination`, `cwd`) against the workspace root (`proxy/context.go`). Paths that resolve outside the workspace — via `..`, absolute paths, or symlink components — are rejected with an error before execution, in every permission mode.
 
 **Write deny-list.** A safety deny-list applies in every permission mode, including `yolo` (`proxy/permissions.go`): `write_file`/`edit_file` targets matching `.env`, `*.pem`, `*.key`, or `*credentials*` are refused, as are `run_command` invocations matching destructive patterns (`rm -rf /`, `mkfs*`, `dd if=... of=/dev/...`).
