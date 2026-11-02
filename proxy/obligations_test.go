@@ -7,6 +7,8 @@ import (
 	"go/token"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 )
 
 // One owner decides where an obligation came from.
@@ -22,24 +24,24 @@ import (
 // The two are alternatives, never a union, and the source travels with the
 // decision so a later change cannot quietly re-merge them.
 
-func ctxWith(tc *TaskContract) *AgentContext {
+func ctxWith(tc *taskcontract.TaskContract) *AgentContext {
 	c := NewAgentContext("/tmp", Tier2Medium)
 	c.TaskContract = tc
 	return c
 }
 
-func declaredOutputs(paths ...string) *TaskContract {
+func declaredOutputs(paths ...string) *taskcontract.TaskContract {
 	p := append([]string{}, paths...)
-	return &TaskContract{TaskMode: TaskModeWork,
-		OutputKnowledge: KnowledgeDeclared, ExpectedOutputs: &p,
-		VerificationKnowledge: KnowledgeUnspecified}
+	return &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork,
+		OutputKnowledge: taskcontract.KnowledgeDeclared, ExpectedOutputs: &p,
+		VerificationKnowledge: taskcontract.KnowledgeUnspecified}
 }
 
-func declaredVerification(cmds ...string) *TaskContract {
+func declaredVerification(cmds ...string) *taskcontract.TaskContract {
 	c := append([]string{}, cmds...)
-	return &TaskContract{TaskMode: TaskModeWork,
-		OutputKnowledge:       KnowledgeUnspecified,
-		VerificationKnowledge: KnowledgeDeclared, Verification: &c}
+	return &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork,
+		OutputKnowledge:       taskcontract.KnowledgeUnspecified,
+		VerificationKnowledge: taskcontract.KnowledgeDeclared, Verification: &c}
 }
 
 const proseNamesTwo = "Write solve.py that reads input.txt"
@@ -51,23 +53,23 @@ func TestTheOutputObligationComesFromExactlyOneSource(t *testing.T) {
 	legacy := expectedOutputPaths(proseNamesTwo)
 	for _, tc := range []struct {
 		name          string
-		contract      *TaskContract
-		wantSource    ObligationSource
+		contract      *taskcontract.TaskContract
+		wantSource    taskcontract.ObligationSource
 		wantSpecified bool
 		wantItems     []string
 	}{
-		{"no contract", nil, ObligationSourceLegacy, false, legacy},
-		{"unspecified knowledge", &TaskContract{TaskMode: TaskModeWork,
-			OutputKnowledge: KnowledgeUnspecified, VerificationKnowledge: KnowledgeUnspecified},
-			ObligationSourceLegacy, false, legacy},
-		{"only verification declared", declaredVerification("pytest"), ObligationSourceLegacy, false, legacy},
+		{"no contract", nil, taskcontract.ObligationSourceLegacy, false, legacy},
+		{"unspecified knowledge", &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork,
+			OutputKnowledge: taskcontract.KnowledgeUnspecified, VerificationKnowledge: taskcontract.KnowledgeUnspecified},
+			taskcontract.ObligationSourceLegacy, false, legacy},
+		{"only verification declared", declaredVerification("pytest"), taskcontract.ObligationSourceLegacy, false, legacy},
 		// The prose names input.txt too. A union would bring it back.
-		{"declared", declaredOutputs("solve.py"), ObligationSourceContractDeclared, true, []string{"solve.py"}},
-		{"declared empty", declaredOutputs(), ObligationSourceContractDeclared, true, nil},
-		{"unrecognised knowledge value", &TaskContract{TaskMode: TaskModeWork, OutputKnowledge: "sideways"},
-			ObligationSourceLegacy, false, legacy},
-		{"declared with no list", &TaskContract{TaskMode: TaskModeWork, OutputKnowledge: KnowledgeDeclared},
-			ObligationSourceLegacy, false, legacy},
+		{"declared", declaredOutputs("solve.py"), taskcontract.ObligationSourceContractDeclared, true, []string{"solve.py"}},
+		{"declared empty", declaredOutputs(), taskcontract.ObligationSourceContractDeclared, true, nil},
+		{"unrecognised knowledge value", &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork, OutputKnowledge: "sideways"},
+			taskcontract.ObligationSourceLegacy, false, legacy},
+		{"declared with no list", &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork, OutputKnowledge: taskcontract.KnowledgeDeclared},
+			taskcontract.ObligationSourceLegacy, false, legacy},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := resolveOutputObligation(ctxWith(tc.contract), proseNamesTwo)
@@ -86,16 +88,16 @@ func TestTheOutputObligationComesFromExactlyOneSource(t *testing.T) {
 func TestTheVerificationObligationComesFromExactlyOneSource(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
-		contract      *TaskContract
-		wantSource    ObligationSource
+		contract      *taskcontract.TaskContract
+		wantSource    taskcontract.ObligationSource
 		wantSpecified bool
 		wantItems     []string
 	}{
-		{"no contract", nil, ObligationSourceLegacy, false, nil},
-		{"only outputs declared", declaredOutputs("a.py"), ObligationSourceLegacy, false, nil},
+		{"no contract", nil, taskcontract.ObligationSourceLegacy, false, nil},
+		{"only outputs declared", declaredOutputs("a.py"), taskcontract.ObligationSourceLegacy, false, nil},
 		{"declared", declaredVerification("go test ./...", "pytest"),
-			ObligationSourceContractDeclared, true, []string{"go test ./...", "pytest"}},
-		{"declared empty", declaredVerification(), ObligationSourceContractDeclared, true, nil},
+			taskcontract.ObligationSourceContractDeclared, true, []string{"go test ./...", "pytest"}},
+		{"declared empty", declaredVerification(), taskcontract.ObligationSourceContractDeclared, true, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := resolveVerificationObligation(ctxWith(tc.contract))
@@ -163,7 +165,7 @@ func callSites(files map[string]*ast.File, fn string) map[string]int {
 			if !ok {
 				return true
 			}
-			if id, ok := call.Fun.(*ast.Ident); ok && id.Name == fn {
+			if calledName(call.Fun) == fn {
 				hits[f.file+":"+f.decl.Name.Name]++
 			}
 			return true
@@ -374,7 +376,7 @@ func TestAnAocRunThatWritesAndRunsItsSolverCompletes(t *testing.T) {
 	input := map[string]string{"input.txt": "forward 5\ndown 5\nforward 8\nup 3\ndown 8\nforward 2\n"}
 	// The reliability runner sends {"task_mode":"work"} and nothing else.
 	work := func(ctx *AgentContext) {
-		tc, err := validateTaskContract(&TaskContract{TaskMode: TaskModeWork}, ctx.WorkingDir)
+		tc, err := validateTaskContract(&taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork}, ctx.WorkingDir)
 		if err != nil {
 			t.Fatal(err)
 		}

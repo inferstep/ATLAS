@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -610,7 +611,7 @@ func TestRefusedReplacementRunEndsOnceWithEveryCallAnswered(t *testing.T) {
 // c4State builds the one state C4 reads: a session-written file on disk whose
 // exact current bytes are syntax/passed, plus one refused proposal recorded
 // against them. Each case then breaks exactly one clause.
-func c4State(t *testing.T, mutate func(*AgentContext, *DeliverableState, string)) (
+func c4State(t *testing.T, mutate func(*AgentContext, *taskcontract.DeliverableState, string)) (
 	*AgentContext, *runState, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -618,10 +619,10 @@ func c4State(t *testing.T, mutate func(*AgentContext, *DeliverableState, string)
 	os.WriteFile(path, []byte(c4Valid), 0o644)
 	ctx := NewAgentContext(dir, Tier2Medium)
 	if ctx.Ledger == nil {
-		ctx.Ledger = map[string]*DeliverableState{}
+		ctx.Ledger = map[string]*taskcontract.DeliverableState{}
 	}
 	h := hashBytes([]byte(c4Valid))
-	d := &DeliverableState{
+	d := &taskcontract.DeliverableState{
 		Path: "solve.py", CurrentHash: h, CurrentSize: len(c4Valid), Generation: 1,
 		ValidationKind: wire.ValidationKindSyntax, ValidationStatus: wire.ValidationPassed,
 		ValidatedHash: h,
@@ -649,31 +650,31 @@ func TestRefusedReplacementEligibility(t *testing.T) {
 	badA := `{"path":"solve.py","content":` + c4JSON(c4BadA) + `}`
 	for _, c := range []struct {
 		name   string
-		mutate func(*AgentContext, *DeliverableState, string)
+		mutate func(*AgentContext, *taskcontract.DeliverableState, string)
 		result func(*wire.ToolResult)
 	}{
-		{"surviving validation unknown", func(_ *AgentContext, d *DeliverableState, _ string) {
+		{"surviving validation unknown", func(_ *AgentContext, d *taskcontract.DeliverableState, _ string) {
 			d.ValidationStatus, d.ValidationKind = wire.ValidationUnknown, wire.ValidationKindUnknown
 		}, nil},
-		{"surviving validation not_run", func(_ *AgentContext, d *DeliverableState, _ string) {
+		{"surviving validation not_run", func(_ *AgentContext, d *taskcontract.DeliverableState, _ string) {
 			d.ValidationStatus = wire.ValidationNotRun
 		}, nil},
-		{"surviving validation not_applicable", func(_ *AgentContext, d *DeliverableState, _ string) {
+		{"surviving validation not_applicable", func(_ *AgentContext, d *taskcontract.DeliverableState, _ string) {
 			d.ValidationStatus = wire.ValidationNotApplicable
 		}, nil},
-		{"surviving validation failed", func(_ *AgentContext, d *DeliverableState, _ string) {
+		{"surviving validation failed", func(_ *AgentContext, d *taskcontract.DeliverableState, _ string) {
 			d.ValidationStatus = wire.ValidationFailed
 		}, nil},
-		{"surviving verdict describes older bytes", func(_ *AgentContext, d *DeliverableState, _ string) {
+		{"surviving verdict describes older bytes", func(_ *AgentContext, d *taskcontract.DeliverableState, _ string) {
 			d.ValidatedHash = hashBytes([]byte("other"))
 		}, nil},
-		{"disk moved under the ledger", func(_ *AgentContext, _ *DeliverableState, path string) {
+		{"disk moved under the ledger", func(_ *AgentContext, _ *taskcontract.DeliverableState, path string) {
 			os.WriteFile(path, []byte(c4Fixed), 0o644)
 		}, nil},
-		{"path unreadable", func(_ *AgentContext, _ *DeliverableState, path string) {
+		{"path unreadable", func(_ *AgentContext, _ *taskcontract.DeliverableState, path string) {
 			os.Remove(path)
 		}, nil},
-		{"no known-good baseline was ever kept", func(ctx *AgentContext, _ *DeliverableState, _ string) {
+		{"no known-good baseline was ever kept", func(ctx *AgentContext, _ *taskcontract.DeliverableState, _ string) {
 			delete(ctx.Ledger, ledgerKey(ctx, "solve.py"))
 		}, nil},
 		{"the write was not refused", nil, func(r *wire.ToolResult) { r.MutationStatus = wire.MutationApplied }},
@@ -801,7 +802,7 @@ func TestRefusedReplacementSeparatePathsAreIndependent(t *testing.T) {
 	other := filepath.Join(ctx.WorkingDir, "helper.py")
 	os.WriteFile(other, []byte(c4Valid), 0o644)
 	h := hashBytes([]byte(c4Valid))
-	ctx.Ledger[ledgerKey(ctx, "helper.py")] = &DeliverableState{
+	ctx.Ledger[ledgerKey(ctx, "helper.py")] = &taskcontract.DeliverableState{
 		Path: "helper.py", CurrentHash: h, Generation: 1,
 		ValidationKind: wire.ValidationKindSyntax, ValidationStatus: wire.ValidationPassed,
 		ValidatedHash: h,
@@ -913,7 +914,7 @@ func TestRefusedReplacementCeilingFailsClosed(t *testing.T) {
 		p := filepath.Join(ctx.WorkingDir, name)
 		os.WriteFile(p, []byte(c4Valid), 0o644)
 		h := hashBytes([]byte(c4Valid))
-		ctx.Ledger[ledgerKey(ctx, name)] = &DeliverableState{
+		ctx.Ledger[ledgerKey(ctx, name)] = &taskcontract.DeliverableState{
 			Path: name, CurrentHash: h, Generation: 1,
 			ValidationKind: wire.ValidationKindSyntax, ValidationStatus: wire.ValidationPassed,
 			ValidatedHash: h,

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -29,7 +30,7 @@ func ledgerToolCtx(t *testing.T, dir string) *AgentContext {
 	return ctx
 }
 
-func ledgerOf(t *testing.T, ctx *AgentContext, path string) *DeliverableState {
+func ledgerOf(t *testing.T, ctx *AgentContext, path string) *taskcontract.DeliverableState {
 	t.Helper()
 	return ctx.Ledger[ledgerKey(ctx, path)]
 }

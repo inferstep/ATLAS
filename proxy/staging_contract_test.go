@@ -9,6 +9,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 )
 
 // The staging transport: what may be asked, what may come back, and every way
@@ -38,7 +40,7 @@ func stagingReq(commands ...string) stagingRequest {
 	for i, text := range commands {
 		req.Commands = append(req.Commands, stagingCommand{
 			Text: text, Identity: contentSHA256(text),
-			ObligationID: ObligationDeclaredCommand + ":" + contentSHA256(text)[:32],
+			ObligationID: taskcontract.ObligationDeclaredCommand + ":" + contentSHA256(text)[:32],
 			Index:        i, Count: len(commands),
 		})
 	}
@@ -126,7 +128,7 @@ func TestTheDeclaredSetMayNotExceedTheStagingBudget(t *testing.T) {
 	} else if !strings.Contains(why, "budget") {
 		t.Errorf("refused for %q, want the budget", why)
 	}
-	if defaultStagingBudget().MaxCommands >= maxTaskContractEntries {
+	if defaultStagingBudget().MaxCommands >= taskcontract.MaxTaskContractEntries {
 		t.Error("the staging budget is not smaller than the validation ceiling")
 	}
 }

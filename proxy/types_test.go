@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -51,10 +52,10 @@ func TestToWireMessagesRendersToolAsUser(t *testing.T) {
 // turn all that traffic into "the caller requires no outputs". So knowledge is
 // stated, not inferred.
 
-func decodeContract(t *testing.T, body string) *TaskContract {
+func decodeContract(t *testing.T, body string) *taskcontract.TaskContract {
 	t.Helper()
 	var req struct {
-		TaskContract *TaskContract `json:"task_contract,omitempty"`
+		TaskContract *taskcontract.TaskContract `json:"task_contract,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		t.Fatalf("decode %s: %v", body, err)
@@ -62,7 +63,7 @@ func decodeContract(t *testing.T, body string) *TaskContract {
 	return req.TaskContract
 }
 
-func validate(t *testing.T, body string) (*TaskContract, error) {
+func validate(t *testing.T, body string) (*taskcontract.TaskContract, error) {
 	t.Helper()
 	return validateTaskContract(decodeContract(t, body), t.TempDir())
 }
@@ -73,31 +74,31 @@ func TestOutputKnowledgeTruthTable(t *testing.T) {
 	for _, c := range []struct {
 		name      string
 		body      string
-		knowledge ObligationKnowledge
+		knowledge taskcontract.ObligationKnowledge
 		paths     []string
 	}{
 		{"task_mode only", `{"task_contract":{"task_mode":"work"}}`,
-			KnowledgeUnspecified, nil},
+			taskcontract.KnowledgeUnspecified, nil},
 		{"outputs omitted", `{"task_contract":{"task_mode":"work","verification":["go test"]}}`,
-			KnowledgeUnspecified, nil},
+			taskcontract.KnowledgeUnspecified, nil},
 		{"outputs null", `{"task_contract":{"task_mode":"work","expected_outputs":null}}`,
-			KnowledgeUnspecified, nil},
+			taskcontract.KnowledgeUnspecified, nil},
 		// Without output_knowledge, an explicit [] cannot be told from an
 		// omitted list in stored contracts, so it is not authoritative none.
 		{"legacy empty list", `{"task_contract":{"task_mode":"work","expected_outputs":[]}}`,
-			KnowledgeUnspecified, nil},
+			taskcontract.KnowledgeUnspecified, nil},
 		// A legacy non-empty list always meant "these are the outputs".
 		{"legacy non-empty list", `{"task_contract":{"task_mode":"work","expected_outputs":["a.py"]}}`,
-			KnowledgeDeclared, []string{"a.py"}},
+			taskcontract.KnowledgeDeclared, []string{"a.py"}},
 		{"declared with paths",
 			`{"task_contract":{"task_mode":"work","output_knowledge":"declared","expected_outputs":["a.py","b.py"]}}`,
-			KnowledgeDeclared, []string{"a.py", "b.py"}},
+			taskcontract.KnowledgeDeclared, []string{"a.py", "b.py"}},
 		{"declared empty is authoritative none",
 			`{"task_contract":{"task_mode":"work","output_knowledge":"declared","expected_outputs":[]}}`,
-			KnowledgeDeclared, []string{}},
+			taskcontract.KnowledgeDeclared, []string{}},
 		{"explicit unspecified",
 			`{"task_contract":{"task_mode":"work","output_knowledge":"unspecified"}}`,
-			KnowledgeUnspecified, nil},
+			taskcontract.KnowledgeUnspecified, nil},
 	} {
 		got, err := validate(t, c.body)
 		if err != nil {
@@ -112,11 +113,11 @@ func TestOutputKnowledgeTruthTable(t *testing.T) {
 			t.Errorf("%s: paths=%v want %v", c.name, paths, c.paths)
 		}
 		// Presence must survive: declared-empty is not the same as unspecified.
-		declaredEmpty := c.knowledge == KnowledgeDeclared && c.paths != nil && len(c.paths) == 0
+		declaredEmpty := c.knowledge == taskcontract.KnowledgeDeclared && c.paths != nil && len(c.paths) == 0
 		if declaredEmpty && !got.OutputsPresent() {
 			t.Errorf("%s: an authoritative none collapsed into absent", c.name)
 		}
-		if c.knowledge == KnowledgeUnspecified && got.OutputsPresent() {
+		if c.knowledge == taskcontract.KnowledgeUnspecified && got.OutputsPresent() {
 			t.Errorf("%s: unspecified knowledge claims a present list", c.name)
 		}
 	}
@@ -151,21 +152,21 @@ func TestVerificationKnowledgeTruthTable(t *testing.T) {
 	for _, c := range []struct {
 		name      string
 		body      string
-		knowledge ObligationKnowledge
+		knowledge taskcontract.ObligationKnowledge
 		cmds      []string
 		reject    bool
 	}{
 		{"task_mode only", `{"task_contract":{"task_mode":"work"}}`,
-			KnowledgeUnspecified, nil, false},
+			taskcontract.KnowledgeUnspecified, nil, false},
 		{"legacy empty", `{"task_contract":{"task_mode":"work","verification":[]}}`,
-			KnowledgeUnspecified, nil, false},
+			taskcontract.KnowledgeUnspecified, nil, false},
 		{"legacy non-empty", `{"task_contract":{"task_mode":"work","verification":["pytest -q"]}}`,
-			KnowledgeDeclared, []string{"pytest -q"}, false},
+			taskcontract.KnowledgeDeclared, []string{"pytest -q"}, false},
 		{"declared empty", `{"task_contract":{"task_mode":"work","verification_knowledge":"declared","verification":[]}}`,
-			KnowledgeDeclared, []string{}, false},
+			taskcontract.KnowledgeDeclared, []string{}, false},
 		{"declared with commands",
 			`{"task_contract":{"task_mode":"work","verification_knowledge":"declared","verification":["go test ./...","pytest"]}}`,
-			KnowledgeDeclared, []string{"go test ./...", "pytest"}, false},
+			taskcontract.KnowledgeDeclared, []string{"go test ./...", "pytest"}, false},
 		{"declared with the list omitted",
 			`{"task_contract":{"task_mode":"work","verification_knowledge":"declared"}}`, "", nil, true},
 		{"unknown knowledge",
@@ -201,10 +202,10 @@ func TestOutputAndVerificationKnowledgeAreIndependent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.OutputKnowledge != KnowledgeDeclared {
+	if got.OutputKnowledge != taskcontract.KnowledgeDeclared {
 		t.Errorf("output knowledge %q", got.OutputKnowledge)
 	}
-	if got.VerificationKnowledge != KnowledgeDeclared {
+	if got.VerificationKnowledge != taskcontract.KnowledgeDeclared {
 		t.Errorf("legacy non-empty verification did not normalise to declared")
 	}
 	got, err = validate(t, `{"task_contract":{"task_mode":"work",
@@ -212,7 +213,7 @@ func TestOutputAndVerificationKnowledgeAreIndependent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.OutputKnowledge != KnowledgeDeclared || got.VerificationKnowledge != KnowledgeUnspecified {
+	if got.OutputKnowledge != taskcontract.KnowledgeDeclared || got.VerificationKnowledge != taskcontract.KnowledgeUnspecified {
 		t.Errorf("knowledge leaked across classes: %q / %q",
 			got.OutputKnowledge, got.VerificationKnowledge)
 	}
@@ -230,8 +231,8 @@ func TestEveryOwnedSenderNormalisesToUnspecified(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
-		if got.OutputKnowledge != KnowledgeUnspecified ||
-			got.VerificationKnowledge != KnowledgeUnspecified {
+		if got.OutputKnowledge != taskcontract.KnowledgeUnspecified ||
+			got.VerificationKnowledge != taskcontract.KnowledgeUnspecified {
 			t.Errorf("%s: %q / %q", c.name, got.OutputKnowledge, got.VerificationKnowledge)
 		}
 		if got.OutputsPresent() || got.VerificationPresent() {
@@ -264,7 +265,7 @@ func TestStoredContractRoundTripsWithPresenceIntact(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var back TaskContract
+		var back taskcontract.TaskContract
 		if err := json.Unmarshal(b, &back); err != nil {
 			t.Fatal(err)
 		}
@@ -307,7 +308,7 @@ func TestAStoredUnspecifiedContractInventsNoList(t *testing.T) {
 
 func TestEntryBoundsStillApply(t *testing.T) {
 	var paths []string
-	for i := 0; i <= maxTaskContractEntries; i++ {
+	for i := 0; i <= taskcontract.MaxTaskContractEntries; i++ {
 		paths = append(paths, "f"+string(rune('a'+i%26))+".py")
 	}
 	b, _ := json.Marshal(paths)

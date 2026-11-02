@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -100,17 +101,17 @@ func producibleStrengthsWith(sandboxReachable bool) map[string]string {
 	}
 	if evidenceProducerStatus[wire.ProvenanceProxyOwnedValidation] == evidenceProducerWired {
 		// The proxy's own gate: structural validity, at syntax.
-		out[ObligationSyntacticValidity] = "syntax"
+		out[taskcontract.ObligationSyntacticValidity] = "syntax"
 	}
 	if evidenceProducerStatus[wire.ProvenanceClientDeclaredVerification] == evidenceProducerWired {
-		out[ObligationDeclaredCommand] = "behavioral"
+		out[taskcontract.ObligationDeclaredCommand] = "behavioral"
 	}
 	return out
 }
 
 // feasibilityInput is the closed set of things the decision may look at.
 type feasibilityInput struct {
-	Obligations []taskObligation
+	Obligations []taskcontract.TaskObligation
 	// AuthorizedTargets is identity only, and is consulted to answer "is there
 	// anything to deliver to at all".
 	AuthorizedTargets []string
@@ -130,8 +131,8 @@ func decideInvocationFeasibility(in feasibilityInput) FeasibilityDecision {
 		d.Reason = FeasibilityUnspecifiedContract
 		return d
 	}
-	prerequisites := authorizationPrerequisites(in.Obligations)
-	d.Floor = authorizationFloor(in.Obligations)
+	prerequisites := taskcontract.AuthorizationPrerequisites(in.Obligations)
+	d.Floor = taskcontract.AuthorizationFloor(in.Obligations)
 
 	if len(prerequisites) == 0 {
 		// Targets but nothing to demonstrate about them. Not a closure path:
@@ -160,15 +161,15 @@ func decideInvocationFeasibility(in feasibilityInput) FeasibilityDecision {
 		if !o.Required {
 			continue
 		}
-		if obligationUnsatisfiableKinds[o.Kind] {
+		if taskcontract.Unsatisfiable(o.Kind) {
 			note(FeasibilityUnsupportedObligation, o.ID)
 			continue
 		}
-		if _, known := obligationRole(o.Kind); !known {
+		if _, known := taskcontract.ObligationRole(o.Kind); !known {
 			note(FeasibilityUnsupportedObligation, o.ID)
 			continue
 		}
-		if o.Kind == ObligationBaselinePreserved {
+		if o.Kind == taskcontract.ObligationBaselinePreserved {
 			// Preservation has no producer of its own and never will: it is
 			// derived from whatever else spoke for the candidate. So it is
 			// reachable exactly when something this build CAN produce reaches
@@ -221,14 +222,14 @@ func decideInvocationFeasibility(in feasibilityInput) FeasibilityDecision {
 // the service's records carry no trusted provenance.
 func anyAdapterMeasures(kind string) bool {
 	switch kind {
-	case ObligationSyntacticValidity:
+	case taskcontract.ObligationSyntacticValidity:
 		// The structural gate exists whether or not a producer is wired to it.
 		return true
-	case ObligationDeclaredCommand, ObligationDeclaredExample:
+	case taskcontract.ObligationDeclaredCommand, taskcontract.ObligationDeclaredExample:
 		// Executing a client's command or case is a mechanism, not a checker,
 		// and the proxy owns no such mechanism at candidate time.
 		return false
-	case ObligationBaselinePreserved:
+	case taskcontract.ObligationBaselinePreserved:
 		// Preservation is a claim about survival, and nothing here evaluates
 		// it directly.
 		return false
@@ -287,7 +288,7 @@ func sandboxConfigured(ctx *AgentContext) bool {
 
 func observeInvocationFeasibility(ctx *AgentContext, entry routeEntry) FeasibilityDecision {
 	obs := requestObligations(ctx)
-	targets := authorizedTargets(obs)
+	targets := taskcontract.AuthorizedTargets(obs)
 	d := decideInvocationFeasibility(feasibilityInput{
 		Obligations:       obs,
 		AuthorizedTargets: targets,
@@ -322,7 +323,7 @@ func init() {
 // and post-generation answer are about different systems.
 func baselineFloorReachable(required string, producible map[string]string) bool {
 	for kind, strength := range producible {
-		if kind == ObligationBaselinePreserved {
+		if kind == taskcontract.ObligationBaselinePreserved {
 			continue
 		}
 		if wire.StrengthRank(strength) >= wire.StrengthRank(required) {

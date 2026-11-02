@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -208,7 +209,7 @@ func liveEvidenceIdentity(ctx *AgentContext, id candidateEvidenceIdentity,
 // the model's structured tool call names exactly this target instead; the
 // request's obligations; and whether the target has any grounding at all.
 func deliveryOwnership(ctx *AgentContext, scope mutationScope, resolved string) (
-	declared, structured bool, obligations []taskObligation, targetGrounded bool) {
+	declared, structured bool, obligations []taskcontract.TaskObligation, targetGrounded bool) {
 	// The one question that decides ownership, asked of the obligation owner
 	// rather than inferred from how many obligations came back.
 	declared = outputKnowledgeDeclared(ctx)
@@ -224,7 +225,7 @@ func deliveryOwnership(ctx *AgentContext, scope mutationScope, resolved string) 
 	// Whether the target has any grounding at all. Decided here, once, and
 	// handed to the automatic eligibility so the policy owner's answer and
 	// the mint's cannot disagree about it.
-	targetGrounded = (declared && targetIsAuthorized(obligations, resolved)) || structured
+	targetGrounded = (declared && taskcontract.TargetIsAuthorized(obligations, resolved)) || structured
 	return declared, structured, obligations, targetGrounded
 }
 
@@ -506,13 +507,13 @@ func (d *deliveryRefusal) Error() string {
 //
 // A task with no baseline states none, and vacuously satisfies it: a new file
 // replaces nothing.
-func baselineObligationsSatisfied(obs []taskObligation, d AuthorizationDecision) bool {
+func baselineObligationsSatisfied(obs []taskcontract.TaskObligation, d AuthorizationDecision) bool {
 	satisfied := map[string]bool{}
 	for _, id := range d.Satisfied {
 		satisfied[id] = true
 	}
-	for _, o := range authorizationPrerequisites(obs) {
-		if o.Kind != ObligationBaselinePreserved || !o.Required {
+	for _, o := range taskcontract.AuthorizationPrerequisites(obs) {
+		if o.Kind != taskcontract.ObligationBaselinePreserved || !o.Required {
 			continue
 		}
 		if !satisfied[o.ID] {
@@ -546,8 +547,8 @@ func classifyStructuralUnmet(ctx *AgentContext, resolved string,
 	default:
 		return unmet
 	}
-	for _, o := range authorizationPrerequisites(requestObligations(ctx)) {
-		if o.Kind != ObligationSyntacticValidity || o.Subject != resolved {
+	for _, o := range taskcontract.AuthorizationPrerequisites(requestObligations(ctx)) {
+		if o.Kind != taskcontract.ObligationSyntacticValidity || o.Subject != resolved {
 			continue
 		}
 		if unmet == nil {

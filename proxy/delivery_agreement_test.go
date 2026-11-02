@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -181,7 +182,7 @@ func seedBaseline(t *testing.T, w *routeWorld, kind wire.ValidationKind, command
 	}
 	observeDeliverable(w.ctx, w.path, []byte(routeBaseline), kind, wire.ValidationPassed, "")
 	if command != "" {
-		w.ctx.VerificationEvidence = append(w.ctx.VerificationEvidence, VerificationRecord{
+		w.ctx.VerificationEvidence = append(w.ctx.VerificationEvidence, taskcontract.VerificationRecord{
 			Command: command,
 			Covered: map[string]string{w.path: contentSHA256(routeBaseline)}, Turn: 1,
 		})

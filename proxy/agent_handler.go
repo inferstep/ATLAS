@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
@@ -153,7 +154,7 @@ type agentRequest struct {
 	RemovedFeasibilityMode string `json:"feasibility_mode,omitempty"`
 	// What the client declares about the request. Optional, and absent
 	// stays distinguishable from present-and-empty.
-	TaskContract *TaskContract `json:"task_contract,omitempty"`
+	TaskContract *taskcontract.TaskContract `json:"task_contract,omitempty"`
 }
 
 // readAgentRequest decodes a /v1/agent request, or answers it with the HTTP

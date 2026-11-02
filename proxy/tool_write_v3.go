@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/itigges22/atlas-proxy/internal/logsafe"
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
@@ -541,7 +542,7 @@ func decideWriteCandidateDelivery(ctx *AgentContext, entry routeEntry, write *v3
 	vetoInput := advisoryInput{
 		Observed:                    write.deliveredCheck,
 		TargetDeclared:              outputKnowledgeDeclared(ctx),
-		TargetAuthorized:            targetIsAuthorized(requestObligations(ctx), resolveAgentPath(ctx, path)),
+		TargetAuthorized:            taskcontract.TargetIsAuthorized(requestObligations(ctx), resolveAgentPath(ctx, path)),
 		LanguageOrBoundaryViolation: write.languageOrBoundaryViolation,
 		Unmet:                       evidence.unmet,
 		Evidence:                    evidence.observed,

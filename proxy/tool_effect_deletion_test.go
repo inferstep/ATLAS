@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -402,15 +403,15 @@ func TestMoveTombstoneDemonstrationPredicate(t *testing.T) {
 	for _, c := range []struct {
 		name   string
 		reason string
-		mutate func(dir string, src, dst *DeliverableState)
+		mutate func(dir string, src, dst *taskcontract.DeliverableState)
 		want   bool // true = still blocks completion
 	}{
 		{"demonstrated move", "moved:<dst>", nil, false},
 		{"plain deletion", "deleted", nil, true},
-		{"destination missing", "moved:<dst>", func(dir string, _, _ *DeliverableState) {
+		{"destination missing", "moved:<dst>", func(dir string, _, _ *taskcontract.DeliverableState) {
 			os.Remove(filepath.Join(dir, "new.py"))
 		}, true},
-		{"destination stale in the ledger", "moved:<dst>", func(_ string, _, dst *DeliverableState) {
+		{"destination stale in the ledger", "moved:<dst>", func(_ string, _, dst *taskcontract.DeliverableState) {
 			dst.CurrentHash = hashBytes([]byte("other"))
 		}, true},
 		// move_file deliberately records the destination as unknown -- a pass
@@ -419,15 +420,15 @@ func TestMoveTombstoneDemonstrationPredicate(t *testing.T) {
 		// matching hash plus bytes that pass IS demonstrated; what is not
 		// demonstrated is covered by the stale-hash and bad-bytes cases.
 		{"unknown ledger verdict, bytes still demonstrate", "moved:<dst>",
-			func(_ string, _, dst *DeliverableState) {
+			func(_ string, _, dst *taskcontract.DeliverableState) {
 				dst.ValidationStatus, dst.ValidatedHash = wire.ValidationUnknown, ""
 			}, false},
-		{"source still exists", "moved:<dst>", func(dir string, _, _ *DeliverableState) {
+		{"source still exists", "moved:<dst>", func(dir string, _, _ *taskcontract.DeliverableState) {
 			os.WriteFile(filepath.Join(dir, "old.py"), []byte(delSeed), 0o644)
 		}, true},
 		{"malformed move reason", "moved:", nil, true},
 		{"move reason naming nothing on disk", "moved:/nowhere/gone.py", nil, true},
-		{"destination bytes no longer parse", "moved:<dst>", func(dir string, _, dst *DeliverableState) {
+		{"destination bytes no longer parse", "moved:<dst>", func(dir string, _, dst *taskcontract.DeliverableState) {
 			bad := []byte("def solve(:\n")
 			os.WriteFile(filepath.Join(dir, "new.py"), bad, 0o644)
 			dst.CurrentHash, dst.ValidatedHash = hashBytes(bad), hashBytes(bad)
@@ -451,14 +452,14 @@ func TestMoveTombstoneDemonstrationPredicate(t *testing.T) {
 			ctx := NewAgentContext(dir, Tier2Medium)
 			ctx.SandboxURL = syn.URL
 			if ctx.Ledger == nil {
-				ctx.Ledger = map[string]*DeliverableState{}
+				ctx.Ledger = map[string]*taskcontract.DeliverableState{}
 			}
 			os.WriteFile(filepath.Join(dir, "new.py"), []byte(delSeed), 0o644)
 			h := hashBytes([]byte(delSeed))
-			dst := &DeliverableState{Path: "new.py", CurrentHash: h, Generation: 1,
+			dst := &taskcontract.DeliverableState{Path: "new.py", CurrentHash: h, Generation: 1,
 				ValidationKind: wire.ValidationKindSyntax, ValidationStatus: wire.ValidationPassed,
 				ValidatedHash: h}
-			src := &DeliverableState{Path: "old.py", Generation: 1, Tombstoned: true,
+			src := &taskcontract.DeliverableState{Path: "old.py", Generation: 1, Tombstoned: true,
 				RestoreProhibited: true,
 				TombstoneReason:   strings.Replace(c.reason, "<dst>", ledgerKey(ctx, "new.py"), 1)}
 			ctx.Ledger[ledgerKey(ctx, "old.py")] = src

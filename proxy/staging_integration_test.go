@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 )
 
 // Candidate staging against the REAL executor process.
@@ -111,7 +113,7 @@ func (w *integrationWorld) declare(commands ...string) {
 	for i, c := range commands {
 		w.req.Commands = append(w.req.Commands, stagingCommand{
 			Text: c, Identity: contentSHA256(c),
-			ObligationID: ObligationDeclaredCommand + ":" + contentSHA256(c)[:32],
+			ObligationID: taskcontract.ObligationDeclaredCommand + ":" + contentSHA256(c)[:32],
 			Index:        i, Count: len(commands),
 		})
 	}

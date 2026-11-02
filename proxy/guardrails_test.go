@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -151,10 +152,10 @@ func TestWantsStateChange(t *testing.T) {
 // contract says: the read-only guard refuses every edit of such a run, so a
 // demand for one could never be met.
 func TestAForbiddenChangeIsNeverAlsoDemanded(t *testing.T) {
-	work := &TaskContract{TaskMode: TaskModeWork}
+	work := &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork}
 	for _, c := range []struct {
 		name     string
-		contract *TaskContract
+		contract *taskcontract.TaskContract
 		ask      string
 		tier     Tier
 		required bool
@@ -357,7 +358,7 @@ func TestAnExplicitReadOnlyRequestRefusesEveryMutatingTool(t *testing.T) {
 func TestRunningATestCoversTheCodeTheTestImports(t *testing.T) {
 	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
 	ctx.PermissionMode = PermissionYolo
-	ctx.TaskContract = &TaskContract{TaskMode: TaskModeWork}
+	ctx.TaskContract = &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork}
 	writeAsTheModel(t, ctx, "stats.py", "def mean(v):\n    return sum(v) / len(v)\n\n\ndef median(v):\n    s = sorted(v)\n    return s[len(s) // 2]\n")
 	writeAsTheModel(t, ctx, "test_stats.py", "from stats import mean, median\n\nassert mean([1, 2, 3]) == 2\nassert median([3, 1, 2]) == 2\nprint('passed')\n")
 
@@ -365,7 +366,7 @@ func TestRunningATestCoversTheCodeTheTestImports(t *testing.T) {
 	if _, ok := covered[resolveAgentPath(ctx, "stats.py")]; !ok {
 		t.Fatalf("running the test did not cover the code it imports; covered=%v", covered)
 	}
-	ctx.VerificationEvidence = append(ctx.VerificationEvidence, VerificationRecord{
+	ctx.VerificationEvidence = append(ctx.VerificationEvidence, taskcontract.VerificationRecord{
 		Command: "python3 test_stats.py", Covered: covered, Turn: 1,
 	})
 	if d := decideVerificationDemand(ctx, ctx.TaskContract, nil); d.Required && !d.Met {

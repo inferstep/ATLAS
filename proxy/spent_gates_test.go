@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -50,7 +51,7 @@ func doneEvent(ctx *AgentContext) *map[string]string {
 }
 
 func TestASpentEvidenceGateEndsIncomplete(t *testing.T) {
-	ctx, dir := sepCtx(t, &TaskContract{TaskMode: TaskModeQuestion})
+	ctx, dir := sepCtx(t, &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeQuestion})
 	if err := os.WriteFile(filepath.Join(dir, "orders.py"), []byte("def total(items):\n    return 1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}

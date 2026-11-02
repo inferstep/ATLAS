@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -289,7 +290,7 @@ func TestAResultNamingAnUndeclaredObligationProducesNothing(t *testing.T) {
 	w := wiringWorld(t,
 		`{"task_mode":"work","verification_knowledge":"declared","verification":["python3 solve.py"]}`,
 		"solve.py", "print(7)\n", true)
-	obl, ok := newTaskObligation(ObligationDeclaredCommand, "python3 solve.py", VerificationKindRuntime, true)
+	obl, ok := taskcontract.NewTaskObligation(taskcontract.ObligationDeclaredCommand, "python3 solve.py", taskcontract.VerificationKindRuntime, true)
 	if !ok {
 		t.Fatal("obligation refused")
 	}
@@ -480,7 +481,7 @@ var evidenceProducers = map[string]bool{
 	"produceDeclaredVerificationEvidence": true,
 	"declaredVerificationCoverage":        true,
 	"deriveTaskObligations":               true,
-	"newTaskObligation":                   true,
+	"NewTaskObligation":                   true,
 }
 
 // TestNoProducerReachesTheDeliveryGraph pins one direction: a producer may
@@ -680,7 +681,7 @@ func TestTerminalCompletionReadsNoEvidence(t *testing.T) {
 		"missingExpectedOutputs":    true,
 	}
 	banned := append(append([]string{}, provenanceReaders...),
-		"deriveTaskObligations", "obligationID",
+		"deriveTaskObligations", "ObligationID",
 		"baselineIdentityFor", "workspaceIdentity")
 	for _, fn := range banned {
 		for site := range callSites(files, fn) {

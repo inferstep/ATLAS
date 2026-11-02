@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -20,8 +21,8 @@ type stagedCmdWorld struct {
 	target string
 	hash   string
 	id     stagingIdentity
-	ob     taskObligation
-	tc     *TaskContract
+	ob     taskcontract.TaskObligation
+	tc     *taskcontract.TaskContract
 }
 
 const stagedDeclaredCommand = "pytest"
@@ -45,7 +46,7 @@ func newStagedCmdWorld(t *testing.T) *stagedCmdWorld {
 	hash := contentSHA256(body)
 	observeDeliverable(ctx, "solve.py", []byte(body), wire.ValidationKindSyntax, wire.ValidationPassed, "")
 
-	ob, ok := newTaskObligation(ObligationDeclaredCommand, stagedDeclaredCommand, VerificationKindRuntime, true)
+	ob, ok := taskcontract.NewTaskObligation(taskcontract.ObligationDeclaredCommand, stagedDeclaredCommand, taskcontract.VerificationKindRuntime, true)
 	if !ok {
 		t.Fatal("obligation")
 	}
@@ -216,7 +217,7 @@ func TestStagedEvidenceStopsCountingWhenItsContextChanges(t *testing.T) {
 func TestAModelCommandNotInTheContractCannotSatisfyCommandDemand(t *testing.T) {
 	w := newStagedCmdWorld(t)
 	// The model runs something plausible of its own invention, staged and green.
-	invented, ok := newTaskObligation(ObligationDeclaredCommand, "python3 -m pytest -q", VerificationKindRuntime, true)
+	invented, ok := taskcontract.NewTaskObligation(taskcontract.ObligationDeclaredCommand, "python3 -m pytest -q", taskcontract.VerificationKindRuntime, true)
 	if !ok {
 		t.Fatal("obligation")
 	}

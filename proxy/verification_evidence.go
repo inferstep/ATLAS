@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -40,7 +41,7 @@ import (
 type verificationEvidenceRequest struct {
 	// Obligation must be a declared-command obligation whose subject is the
 	// exact command string the client wrote.
-	Obligation taskObligation
+	Obligation taskcontract.TaskObligation
 	// Result is what the staging run observed for that command. It is
 	// consumed, never synthesised here, and it carries no conclusion: the
 	// executor reports hashes and an exit status, and what those mean is
@@ -78,7 +79,7 @@ func produceDeclaredVerificationEvidence(ctx *AgentContext, req verificationEvid
 	// client wrote -- and an obligation whose floor disagrees with the
 	// declaration it should have come from is refused rather than reconciled.
 	requirement, declared := requestVerificationRequirement(ctx, command)
-	if !declared || requirement.declaredStrength() != req.Obligation.RequiredStrength {
+	if !declared || requirement.DeclaredStrength() != req.Obligation.RequiredStrength {
 		return proxyEvidence{}, false
 	}
 	// What ran must be what the client wrote, byte for byte. The staging side
@@ -127,13 +128,13 @@ func verificationRunAdmissible(ctx *AgentContext, req verificationEvidenceReques
 	if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
 		return false
 	}
-	if req.Obligation.Kind != ObligationDeclaredCommand {
+	if req.Obligation.Kind != taskcontract.ObligationDeclaredCommand {
 		return false
 	}
 	// The floor may be any strength a client can declare. What it may not be
 	// is a strength no declaration produces: an obligation carrying oracle, or
 	// carrying nothing, was not built from a verification requirement.
-	if !verificationKinds[req.Obligation.RequiredStrength] {
+	if !taskcontract.IsVerificationKind(req.Obligation.RequiredStrength) {
 		return false
 	}
 	if !stagingCommandOutcomes[req.Result.Outcome] {
@@ -146,7 +147,7 @@ func verificationRunAdmissible(ctx *AgentContext, req verificationEvidenceReques
 // declared command: the identity the run was bound to, the command by hash,
 // and the strength the run may be said to have shown.
 func declaredVerificationProvenance(ctx *AgentContext, req verificationEvidenceRequest,
-	requestID string, requirement VerificationRequirement) wire.V3EvidenceProvenance {
+	requestID string, requirement taskcontract.VerificationRequirement) wire.V3EvidenceProvenance {
 	p := wire.V3EvidenceProvenance{
 		Source:              wire.ProvenanceClientDeclaredVerification,
 		RequestID:           requestID,
@@ -202,7 +203,7 @@ func requestDeclaredCommand(ctx *AgentContext, command string) bool {
 // Independence is the point: two declared commands are two obligations, and
 // one passing says nothing about the other. Missing is returned sorted so a
 // caller reporting it does not depend on map order.
-func declaredVerificationCoverage(obligations []taskObligation,
+func declaredVerificationCoverage(obligations []taskcontract.TaskObligation,
 	evidence []proxyEvidence) (met []string, missing []string) {
 	authorized := map[string]bool{}
 	for _, e := range evidence {
@@ -215,7 +216,7 @@ func declaredVerificationCoverage(obligations []taskObligation,
 		authorized[e.Provenance.ObligationID] = true
 	}
 	for _, o := range obligations {
-		if o.Kind != ObligationDeclaredCommand || !o.Required {
+		if o.Kind != taskcontract.ObligationDeclaredCommand || !o.Required {
 			continue
 		}
 		if authorized[o.ID] {

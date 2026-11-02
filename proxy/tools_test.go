@@ -3500,13 +3500,13 @@ func TestStructuralEditRefusesWhatItCannotTrust(t *testing.T) {
 	}
 }
 
-// wireFiles names the files that hold what crosses a boundary, and types.go,
-// which holds the state beside it.
-func wireFiles(t *testing.T) []string {
+// packageFiles names the code files of a package folder. It fails on an empty
+// folder, so a guard over a list cannot go quiet when the folder moves.
+func packageFiles(t *testing.T, folder string) []string {
 	t.Helper()
-	files, err := filepath.Glob("internal/wire/*.go")
+	files, err := filepath.Glob(folder + "/*.go")
 	if err != nil || len(files) == 0 {
-		t.Fatalf("internal/wire holds no file: %v", err)
+		t.Fatalf("%s holds no file: %v", folder, err)
 	}
 	var code []string
 	for _, file := range files {
@@ -3514,7 +3514,27 @@ func wireFiles(t *testing.T) []string {
 			code = append(code, file)
 		}
 	}
-	return append(code, "types.go")
+	return code
+}
+
+// wireFiles names the files that hold what crosses a boundary, the task
+// contract a client sends among them, and types.go, which holds the state
+// beside it.
+func wireFiles(t *testing.T) []string {
+	t.Helper()
+	files := append(packageFiles(t, "internal/wire"), packageFiles(t, "internal/taskcontract")...)
+	return append(files, "types.go")
+}
+
+// calledName names a bare call or a call through one of the proxy's packages.
+// A method call has no such name.
+func calledName(fun ast.Expr) string {
+	if sel, ok := fun.(*ast.SelectorExpr); ok {
+		if pkg, ok := sel.X.(*ast.Ident); !ok || (pkg.Name != "wire" && pkg.Name != "taskcontract") {
+			return ""
+		}
+	}
+	return baseName(fun)
 }
 
 // baseName names what an expression refers to, with or without its package, so

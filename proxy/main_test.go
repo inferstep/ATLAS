@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -697,21 +698,21 @@ func TestTaskContractWireShape(t *testing.T) {
 	for _, c := range []struct {
 		name     string
 		contract string
-		mode     TaskMode
+		mode     taskcontract.TaskMode
 		outputs  []string
 		verify   []string
 	}{
 		{"work with outputs and verification",
 			`{"task_mode":"work","expected_outputs":["app.py"],"verification":["go test ./..."]}`,
-			TaskModeWork, []string{"app.py"}, []string{"go test ./..."}},
+			taskcontract.TaskModeWork, []string{"app.py"}, []string{"go test ./..."}},
 		{"question", `{"task_mode":"question"}`,
-			TaskModeQuestion, nil, nil},
+			taskcontract.TaskModeQuestion, nil, nil},
 		{"aliases deduplicate canonically",
 			`{"task_mode":"work","expected_outputs":["app.py","./app.py"]}`,
-			TaskModeWork, []string{"app.py"}, nil},
+			taskcontract.TaskModeWork, []string{"app.py"}, nil},
 		{"duplicate verification deduplicates",
 			`{"task_mode":"work","verification":["go test ./...","go test ./..."]}`,
-			TaskModeWork, nil, []string{"go test ./..."}},
+			taskcontract.TaskModeWork, nil, []string{"go test ./..."}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			// Decoded from the wire body, present, and valid, or the case stops here.
@@ -747,7 +748,7 @@ func TestTaskContractWireShapeRefusesAnInvalidContractWhole(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			var wire struct {
-				TaskContract *TaskContract `json:"task_contract,omitempty"`
+				TaskContract *taskcontract.TaskContract `json:"task_contract,omitempty"`
 			}
 			if err := json.Unmarshal([]byte(c.body), &wire); err != nil {
 				t.Fatalf("decode: %v", err)
@@ -776,8 +777,8 @@ func strsPtr(v ...string) *[]string {
 // Bounds use the ceiling the rest of the session state already uses.
 func TestTaskContractBounds(t *testing.T) {
 	dir := t.TempDir()
-	mk := func(n int) *TaskContract {
-		c := &TaskContract{TaskMode: TaskModeWork}
+	mk := func(n int) *taskcontract.TaskContract {
+		c := &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork}
 		paths := []string{}
 		for i := 0; i < n; i++ {
 			paths = append(paths, fmt.Sprintf("f%d.py", i))
@@ -785,19 +786,19 @@ func TestTaskContractBounds(t *testing.T) {
 		c.ExpectedOutputs = &paths
 		return c
 	}
-	if _, err := validateTaskContract(mk(maxTaskContractEntries), dir); err != nil {
+	if _, err := validateTaskContract(mk(taskcontract.MaxTaskContractEntries), dir); err != nil {
 		t.Errorf("at the bound: %v", err)
 	}
-	got, err := validateTaskContract(mk(maxTaskContractEntries+1), dir)
+	got, err := validateTaskContract(mk(taskcontract.MaxTaskContractEntries+1), dir)
 	if err == nil {
 		t.Error("over the bound was accepted")
 	}
 	if got != nil {
 		t.Error("overflow produced a partial contract")
 	}
-	v := &TaskContract{TaskMode: TaskModeWork}
+	v := &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork}
 	cmds := []string{}
-	for i := 0; i <= maxTaskContractEntries; i++ {
+	for i := 0; i <= taskcontract.MaxTaskContractEntries; i++ {
 		cmds = append(cmds, fmt.Sprintf("cmd %d", i))
 	}
 	v.Verification = &cmds
@@ -811,8 +812,8 @@ func TestTaskContractRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	inPaths := []string{"b.py", "a.py"}
 	inCmds := []string{"pytest", "go vet ./..."}
-	in := &TaskContract{
-		TaskMode:        TaskModeWork,
+	in := &taskcontract.TaskContract{
+		TaskMode:        taskcontract.TaskModeWork,
 		ExpectedOutputs: &inPaths,
 		Verification:    &inCmds,
 	}
@@ -831,7 +832,7 @@ func TestTaskContractRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var back TaskContract
+	var back taskcontract.TaskContract
 	if err := json.Unmarshal(b, &back); err != nil {
 		t.Fatal(err)
 	}
@@ -842,28 +843,39 @@ func TestTaskContractRoundTrip(t *testing.T) {
 	}
 }
 
-// One definition, one validator, and only the files listed below may take the
-// contract from the request context (a .TaskContract read).
-func TestTaskContractHasNoDecisionConsumer(t *testing.T) {
+func TestTaskContractHasOneDefinition(t *testing.T) {
 	defs := astSites(t, func(n ast.Node) bool {
 		v, ok := n.(*ast.TypeSpec)
 		return ok && v.Name != nil && v.Name.Name == "TaskContract"
 	})
+	if len(defs) != 1 {
+		t.Errorf("%d TaskContract definitions, want exactly one: %v", len(defs), defs)
+	}
+}
+
+func TestTaskContractHasOneValidator(t *testing.T) {
 	validators := astSites(t, func(n ast.Node) bool {
 		v, ok := n.(*ast.FuncDecl)
 		return ok && v.Name != nil && v.Name.Name == "validateTaskContract"
 	})
-	readers := astSites(t, func(n ast.Node) bool {
-		v, ok := n.(*ast.SelectorExpr)
-		return ok && v.Sel != nil && v.Sel.Name == "TaskContract"
-	})
-	t.Logf("definitions=%v validators=%v reads=%v", defs, validators, readers)
-	if len(defs) != 1 {
-		t.Errorf("%d TaskContract definitions, want exactly one: %v", len(defs), defs)
-	}
 	if len(validators) != 1 {
 		t.Errorf("%d validators, want exactly one: %v", len(validators), validators)
 	}
+}
+
+// Only the files listed below may take the contract from the request context
+// (a .TaskContract read).
+func TestTaskContractHasNoDecisionConsumer(t *testing.T) {
+	readers := astSites(t, func(n ast.Node) bool {
+		v, ok := n.(*ast.SelectorExpr)
+		if !ok || v.Sel == nil || v.Sel.Name != "TaskContract" {
+			return false
+		}
+		// The type's own name, read through its package, is not a read.
+		pkg, ok := v.X.(*ast.Ident)
+		return !ok || pkg.Name != "taskcontract"
+	})
+	t.Logf("reads=%v", readers)
 	// obligations.go joins the list because this slice moved the decision
 	// there: it is THE obligation-source owner, and it reads only the contract
 	// the request boundary already validated. Nothing else may read the
@@ -1059,36 +1071,38 @@ func TestGuardrailsOwnsTheTaskContractDecisions(t *testing.T) {
 // The obligation owner reads the contract ONLY through the validated
 // request-bound context -- never a shadow copy, never a second decode.
 func TestTheObligationOwnerReadsOnlyTheValidatedContract(t *testing.T) {
-	fset := token.NewFileSet()
-	obTree, err := parser.ParseFile(fset, "obligations.go", nil, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
 	banned := map[string]bool{
 		"json.Unmarshal": true, "Unmarshal": true, "validateTaskContract": true,
 		"contractOutputs": true, "openShadowSink": true, "newShadowSink": true,
 		"emitShadowRequestSnapshot": true,
 	}
-	// Calls, not prose: the file names validateTaskContract in a comment
-	// precisely to say it does not call it.
-	ast.Inspect(obTree, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
+	fset := token.NewFileSet()
+	for _, file := range append(packageFiles(t, "internal/taskcontract"), "obligations.go") {
+		tree, err := parser.ParseFile(fset, file, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Calls, not prose: the file names validateTaskContract in a comment
+		// precisely to say it does not call it.
+		ast.Inspect(tree, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			name := ""
+			switch fn := call.Fun.(type) {
+			case *ast.Ident:
+				name = fn.Name
+			case *ast.SelectorExpr:
+				name = fn.Sel.Name
+			}
+			if banned[name] || shadowProductionSymbols[name] {
+				t.Errorf("the obligation owner calls %s instead of reading the "+
+					"validated request-bound contract", name)
+			}
 			return true
-		}
-		name := ""
-		switch fn := call.Fun.(type) {
-		case *ast.Ident:
-			name = fn.Name
-		case *ast.SelectorExpr:
-			name = fn.Sel.Name
-		}
-		if banned[name] || shadowProductionSymbols[name] {
-			t.Errorf("the obligation owner calls %s instead of reading the "+
-				"validated request-bound contract", name)
-		}
-		return true
-	})
+		})
+	}
 }
 
 // A contract changes only the classes it DECLARES.
@@ -1248,7 +1262,7 @@ func TestEquivalentTaskContractsRunAlike(t *testing.T) {
 // given contract and returns its event stream, its terminal as "status/reason"
 // and a digest of the files it left. V3 is unavailable, the syntax check
 // accepts everything and every command succeeds.
-func contractRun(t *testing.T, contract *TaskContract, prompt string,
+func contractRun(t *testing.T, contract *taskcontract.TaskContract, prompt string,
 	plan func(i int) map[string]interface{}) (string, string, []string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -1310,11 +1324,11 @@ func contractRun(t *testing.T, contract *TaskContract, prompt string,
 // it through the same decoder a request uses. A contract that decodes to nil
 // would make a comparison of two runs compare a run against itself, so it is a
 // failure here rather than a silent pass.
-func mustValidateContract(t *testing.T, contract string) *TaskContract {
+func mustValidateContract(t *testing.T, contract string) *taskcontract.TaskContract {
 	t.Helper()
 	body := `{"task_contract":` + contract + `}`
 	var req struct {
-		TaskContract *TaskContract `json:"task_contract,omitempty"`
+		TaskContract *taskcontract.TaskContract `json:"task_contract,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -1412,10 +1426,10 @@ func firstDifferentLine(a, b string) (int, string, string, bool) {
 // Action demand stays pinned: a declared work contract may demand action where
 // the wording alone would not have, and nothing else about that decision moved.
 func TestActionDemandRemainsPinnedUnderDeclaredKnowledge(t *testing.T) {
-	base := &TaskContract{TaskMode: TaskModeWork}
+	base := &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork}
 	paths := []string{"a.py"}
-	declared := &TaskContract{TaskMode: TaskModeWork,
-		OutputKnowledge: KnowledgeDeclared, ExpectedOutputs: &paths}
+	declared := &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork,
+		OutputKnowledge: taskcontract.KnowledgeDeclared, ExpectedOutputs: &paths}
 	for _, msg := range []string{"Create app.py.", "What does this do?", ""} {
 		want := decideActionDemand(base, msg, Tier2Medium, false)
 		got := decideActionDemand(declared, msg, Tier2Medium, false)
@@ -1428,8 +1442,8 @@ func TestActionDemandRemainsPinnedUnderDeclaredKnowledge(t *testing.T) {
 
 func TestLegacyRequestWithoutContractIsAccepted(t *testing.T) {
 	var wire struct {
-		Message      string        `json:"message"`
-		TaskContract *TaskContract `json:"task_contract,omitempty"`
+		Message      string                     `json:"message"`
+		TaskContract *taskcontract.TaskContract `json:"task_contract,omitempty"`
 	}
 	const legacy = `{"message":"Create app.py.","working_dir":"/w","mode":"default"}`
 	if err := json.Unmarshal([]byte(legacy), &wire); err != nil {
@@ -1444,7 +1458,7 @@ func TestLegacyRequestWithoutContractIsAccepted(t *testing.T) {
 	}
 	// And a present-but-invalid one is still a hard refusal, never a silent
 	// omission that would look like a client which declared nothing.
-	bad := &TaskContract{TaskMode: "explore"}
+	bad := &taskcontract.TaskContract{TaskMode: "explore"}
 	if _, err := validateTaskContract(bad, t.TempDir()); err == nil {
 		t.Error("an unsupported mode was accepted")
 	}
@@ -2108,7 +2122,7 @@ func TestShadowBlockedWriterDeadlineWritesNoFooter(t *testing.T) {
 
 // shadowLoopRun drives the real agent loop with capture optionally enabled and
 // returns the emitted records plus everything a causal comparison needs.
-func shadowLoopRun(t *testing.T, capture bool, contract *TaskContract, prompt string,
+func shadowLoopRun(t *testing.T, capture bool, contract *taskcontract.TaskContract, prompt string,
 	plan func(i int) map[string]interface{}) ([]map[string]interface{}, string, []string, string, []string) {
 	t.Helper()
 	capDir := t.TempDir()
@@ -2140,7 +2154,7 @@ func shadowLoopRun(t *testing.T, capture bool, contract *TaskContract, prompt st
 // whatever sink is currently installed, and returns everything a comparison
 // needs. It never reads the capture and never touches the environment, so it is
 // safe to call from several goroutines at once.
-func shadowLoopDrive(t *testing.T, requestID string, contract *TaskContract, prompt string,
+func shadowLoopDrive(t *testing.T, requestID string, contract *taskcontract.TaskContract, prompt string,
 	plan func(i int) map[string]interface{}) ([]map[string]interface{}, string, []string, string, []string) {
 	dir := t.TempDir()
 	turns := 0
@@ -2238,7 +2252,7 @@ func shadowWorkPlan(i int) map[string]interface{} {
 
 // The two record kinds, the two gate sites, and the value production consumed.
 func TestShadowRecordsCaptureBothGateSites(t *testing.T) {
-	contract := &TaskContract{TaskMode: TaskModeWork}
+	contract := &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork}
 	recs, _, _, term, _ := shadowLoopRun(t, true, contract, "Create app.py.", shadowWorkPlan)
 	t.Logf("terminal=%s records=%d", term, len(recs))
 
@@ -2309,7 +2323,7 @@ func TestShadowContractlessGateIsUnmeasured(t *testing.T) {
 
 // Undeclared lists stay non-comparable; verification never claims equality.
 func TestShadowUndeclaredListsAreNonComparable(t *testing.T) {
-	recs, _, _, _, _ := shadowLoopRun(t, true, &TaskContract{TaskMode: TaskModeWork},
+	recs, _, _, _, _ := shadowLoopRun(t, true, &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork},
 		"Create app.py.", shadowWorkPlan)
 	for _, r := range recs {
 		if r["record_kind"] != "task_contract_shadow_request" {
@@ -2324,7 +2338,7 @@ func TestShadowUndeclaredListsAreNonComparable(t *testing.T) {
 	}
 	// A declared verification never reports command equality with a boolean.
 	recs2, _, _, _, _ := shadowLoopRun(t, true,
-		&TaskContract{TaskMode: TaskModeWork, Verification: strsPtr("go test ./...")},
+		&taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork, Verification: strsPtr("go test ./...")},
 		"Fix the failing test.", shadowWorkPlan)
 	for _, r := range recs2 {
 		if r["record_kind"] != "task_contract_shadow_request" {
@@ -2343,7 +2357,7 @@ func TestShadowUndeclaredListsAreNonComparable(t *testing.T) {
 // Aliases collapse to one canonical identity through the existing resolver.
 func TestShadowOutputAliasesShareIdentity(t *testing.T) {
 	recs, _, _, _, _ := shadowLoopRun(t, true,
-		&TaskContract{TaskMode: TaskModeWork, ExpectedOutputs: strsPtr("app.py", "./app.py")},
+		&taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork, ExpectedOutputs: strsPtr("app.py", "./app.py")},
 		"Create app.py.", shadowWorkPlan)
 	for _, r := range recs {
 		if r["record_kind"] != "task_contract_shadow_request" {
@@ -2360,7 +2374,7 @@ func TestShadowOutputAliasesShareIdentity(t *testing.T) {
 func TestShadowRecordsCarryNoRawText(t *testing.T) {
 	const secret = "Create app.py with the SECRETMARKER inside."
 	recs, _, _, _, _ := shadowLoopRun(t, true,
-		&TaskContract{TaskMode: TaskModeWork, ExpectedOutputs: strsPtr("app.py"),
+		&taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork, ExpectedOutputs: strsPtr("app.py"),
 			Verification: strsPtr("pytest --marker=SECRETCMD")},
 		secret, shadowWorkPlan)
 	blob, _ := json.Marshal(recs)
@@ -2390,7 +2404,7 @@ func TestShadowRecordsCarryNoRawText(t *testing.T) {
 //
 // Nothing else is removed to make the comparison pass.
 func TestShadowCaptureIsCausallyInert(t *testing.T) {
-	contract := &TaskContract{TaskMode: TaskModeWork,
+	contract := &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork,
 		ExpectedOutputs: strsPtr("app.py"), Verification: strsPtr("pytest")}
 	_, evOff, diskOff, termOff, promptOff := shadowLoopRun(t, false, contract, "Create app.py.", shadowWorkPlan)
 	recs, evOn, diskOn, termOn, promptOn := shadowLoopRun(t, true, contract, "Create app.py.", shadowWorkPlan)
@@ -2450,7 +2464,7 @@ func excerpt(v string, lo, hi int) string {
 func TestShadowDisabledCostsNothing(t *testing.T) {
 	activeShadowSink.Store(nil)
 	before := runtime.NumGoroutine()
-	_, _, _, term, _ := shadowLoopRun(t, false, &TaskContract{TaskMode: TaskModeWork},
+	_, _, _, term, _ := shadowLoopRun(t, false, &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork},
 		"Create app.py.", shadowWorkPlan)
 	t.Logf("terminal=%s", term)
 	deadline := time.Now().Add(2 * time.Second)
@@ -2532,7 +2546,7 @@ func TestShadowGateFollowsInspectionNotRequestText(t *testing.T) {
 		}
 		return out
 	}
-	contract := &TaskContract{TaskMode: TaskModeWork}
+	contract := &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork}
 	cold, _, _, termCold, _ := shadowLoopRun(t, true, contract, neutral, noInspect)
 	warm, _, _, termWarm, _ := shadowLoopRun(t, true, contract, neutral, shadowWorkPlan)
 	coldSeq, warmSeq := report(cold, "uninspected", false), report(warm, "inspected", true)
@@ -2558,7 +2572,7 @@ func TestShadowRejectedContractProducesNoSnapshot(t *testing.T) {
 		`{"task_mode":"work","expected_outputs":["../../etc/passwd"]}`,
 		`{"task_mode":""}`,
 	} {
-		var in TaskContract
+		var in taskcontract.TaskContract
 		if err := json.Unmarshal([]byte(bad), &in); err != nil {
 			t.Fatalf("fixture %s: %v", bad, err)
 		}
@@ -2925,7 +2939,7 @@ func openShadowSink() (*shadowSink, error) {
 // keeps its stream, its prompts, its bytes on disk and its terminal; only the
 // capture is defective, and it says so in its own counters.
 func TestShadowWriterErrorLeavesTheRunUnchanged(t *testing.T) {
-	contract := &TaskContract{TaskMode: TaskModeWork, ExpectedOutputs: strsPtr("app.py")}
+	contract := &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork, ExpectedOutputs: strsPtr("app.py")}
 	activeShadowSink.Store(nil)
 	_, evOff, diskOff, termOff, promptOff := shadowLoopDrive(t, "req-writer-err",
 		contract, "Create app.py.", shadowWorkPlan)
@@ -2992,7 +3006,7 @@ func TestShadowConcurrentRequestsKeepIndependentSequences(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			shadowLoopDrive(t, fmt.Sprintf("req-concurrent-%d", i),
-				&TaskContract{TaskMode: TaskModeWork}, "Create app.py.", shadowWorkPlan)
+				&taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork}, "Create app.py.", shadowWorkPlan)
 		}(i)
 	}
 	wg.Wait()
@@ -3116,7 +3130,7 @@ func modePlanInspectThenDone(i int) map[string]interface{} {
 	return map[string]interface{}{"type": "done", "summary": "looked around"}
 }
 
-func modeTerminal(t *testing.T, contract *TaskContract, prompt string,
+func modeTerminal(t *testing.T, contract *taskcontract.TaskContract, prompt string,
 	plan func(int) map[string]interface{}) string {
 	t.Helper()
 	activeShadowSink.Store(nil)
@@ -3129,7 +3143,7 @@ func modeTerminal(t *testing.T, contract *TaskContract, prompt string,
 //
 // 5. The same run shows that no inspection cannot turn work into a question.
 func TestContractWorkDemandsActionOnNeutralProse(t *testing.T) {
-	got := modeTerminal(t, &TaskContract{TaskMode: TaskModeWork},
+	got := modeTerminal(t, &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork},
 		"app.py numbers", modePlanDoneNow)
 	if got != "incomplete/action_demanded_unmet" {
 		t.Errorf("terminal %q, want incomplete/action_demanded_unmet", got)
@@ -3138,7 +3152,7 @@ func TestContractWorkDemandsActionOnNeutralProse(t *testing.T) {
 
 // 2. Question-shaped wording, contract work: wording does not soften it.
 func TestContractWorkDemandsActionOnInterrogativeSurface(t *testing.T) {
-	got := modeTerminal(t, &TaskContract{TaskMode: TaskModeWork},
+	got := modeTerminal(t, &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork},
 		"Could you add a median helper to calc.py?", modePlanDoneNow)
 	if got != "incomplete/action_demanded_unmet" {
 		t.Errorf("terminal %q, want incomplete/action_demanded_unmet", got)
@@ -3147,7 +3161,7 @@ func TestContractWorkDemandsActionOnInterrogativeSurface(t *testing.T) {
 
 // 3. Imperative wording, contract question: a read-only answer completes.
 func TestContractQuestionAllowsTextReplyOnImperativeSurface(t *testing.T) {
-	got := modeTerminal(t, &TaskContract{TaskMode: TaskModeQuestion},
+	got := modeTerminal(t, &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeQuestion},
 		"Walk me through how mean computes its result.", modePlanTextOnly)
 	if got != "completed/text_reply" {
 		t.Errorf("terminal %q, want completed/text_reply", got)
@@ -3156,7 +3170,7 @@ func TestContractQuestionAllowsTextReplyOnImperativeSurface(t *testing.T) {
 
 // 4. Inspecting the workspace cannot turn a question into work.
 func TestInspectionCannotFlipAQuestionContract(t *testing.T) {
-	got := modeTerminal(t, &TaskContract{TaskMode: TaskModeQuestion},
+	got := modeTerminal(t, &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeQuestion},
 		"app.py numbers", modePlanInspectThenDone)
 	if got == "incomplete/action_demanded_unmet" {
 		t.Errorf("inspection flipped a question contract into work: %q", got)
@@ -3166,7 +3180,7 @@ func TestInspectionCannotFlipAQuestionContract(t *testing.T) {
 // 13. An invalid mode cannot reach a run, but if one ever did it must fail
 // closed to REQUIRING work rather than silently reading as a question.
 func TestInvalidTaskModeFailsClosedToWork(t *testing.T) {
-	d := decideActionDemand(&TaskContract{TaskMode: TaskMode("explore")},
+	d := decideActionDemand(&taskcontract.TaskContract{TaskMode: taskcontract.TaskMode("explore")},
 		"app.py numbers", Tier2Medium, false)
 	if !d.Required {
 		t.Error("an unknown task mode did not fail closed to requiring work")
@@ -3180,19 +3194,19 @@ func TestInvalidTaskModeFailsClosedToWork(t *testing.T) {
 func TestActionDemandDecisionTable(t *testing.T) {
 	cases := []struct {
 		name      string
-		contract  *TaskContract
+		contract  *taskcontract.TaskContract
 		message   string
 		inspected bool
 		want      bool
 		source    actionDemandSource
 	}{
-		{"work contract, neutral prose", &TaskContract{TaskMode: TaskModeWork},
+		{"work contract, neutral prose", &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork},
 			"app.py numbers", false, true, actionDemandContractWork},
-		{"work contract, inspected", &TaskContract{TaskMode: TaskModeWork},
+		{"work contract, inspected", &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork},
 			"app.py numbers", true, true, actionDemandContractWork},
-		{"question contract, action words", &TaskContract{TaskMode: TaskModeQuestion},
+		{"question contract, action words", &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeQuestion},
 			"Delete obsolete.py and fix the tests.", false, false, actionDemandContractQuestion},
-		{"question contract, inspected", &TaskContract{TaskMode: TaskModeQuestion},
+		{"question contract, inspected", &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeQuestion},
 			"app.py numbers", true, false, actionDemandContractQuestion},
 		{"no contract, legacy false", nil, "app.py numbers", false,
 			wantsStateChange("app.py numbers", Tier2Medium, false), actionDemandLegacy},
@@ -3272,7 +3286,7 @@ func TestContractlessRequestIsUnchanged(t *testing.T) {
 // What this still pins is the property that mattered: a contract on its own
 // never manufactures a completion, in either direction.
 func TestWorkContractStillRequiresDeliverableEvidence(t *testing.T) {
-	good := modeTerminal(t, &TaskContract{TaskMode: TaskModeWork},
+	good := modeTerminal(t, &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork},
 		"Create app.py.", shadowWorkPlan)
 	if good != "incomplete/verification_demanded_unmet" {
 		t.Errorf("written-but-never-run terminal %q, want "+
@@ -3287,7 +3301,7 @@ func TestWorkContractStillRequiresDeliverableEvidence(t *testing.T) {
 		}
 		return map[string]interface{}{"type": "done", "summary": "wrote app.py"}
 	}
-	bad := modeTerminal(t, &TaskContract{TaskMode: TaskModeWork}, "Create app.py.", brokenPlan)
+	bad := modeTerminal(t, &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork}, "Create app.py.", brokenPlan)
 	if bad == "completed/deliverables_demonstrated" {
 		t.Errorf("invalid bytes completed as demonstrated: %q", bad)
 	}
@@ -3303,7 +3317,7 @@ func TestWorkContractStripsAConfidentClaimWithNoAction(t *testing.T) {
 	}
 	activeShadowSink.Store(nil)
 	_, ev, _, term, _ := shadowLoopDrive(t, "req-claim",
-		&TaskContract{TaskMode: TaskModeWork}, "app.py numbers", plan)
+		&taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork}, "app.py numbers", plan)
 	if term != "incomplete/action_demanded_unmet" {
 		t.Errorf("terminal %q, want incomplete/action_demanded_unmet", term)
 	}
@@ -3338,7 +3352,7 @@ func TestQuestionContractDoesNotEraseMutationDebt(t *testing.T) {
 		}
 		return map[string]interface{}{"type": "done", "summary": "answered"}
 	}
-	term := modeTerminal(t, &TaskContract{TaskMode: TaskModeQuestion},
+	term := modeTerminal(t, &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeQuestion},
 		"What does app.py do?", plan)
 	if term == "completed/text_reply" || term == "completed/no_file_obligation" {
 		t.Errorf("a question contract completed over unresolved mutation: %q", term)
@@ -3349,8 +3363,8 @@ func TestQuestionContractDoesNotEraseMutationDebt(t *testing.T) {
 // 15. Both live action-demand sites reach the same centralised decision for the
 // same inputs, so which gate fires cannot change the answer.
 func TestBothActionDemandSitesShareOneDecision(t *testing.T) {
-	for _, mode := range []*TaskContract{
-		nil, {TaskMode: TaskModeWork}, {TaskMode: TaskModeQuestion},
+	for _, mode := range []*taskcontract.TaskContract{
+		nil, {TaskMode: taskcontract.TaskModeWork}, {TaskMode: taskcontract.TaskModeQuestion},
 	} {
 		for _, inspected := range []bool{false, true} {
 			a := decideActionDemand(mode, "app.py numbers", Tier2Medium, inspected)
@@ -3373,7 +3387,7 @@ func TestBothActionDemandSitesShareOneDecision(t *testing.T) {
 
 // 14. Capture on and capture off produce the same live result.
 func TestTaskModePolicyIsIndependentOfShadowCapture(t *testing.T) {
-	contract := &TaskContract{TaskMode: TaskModeWork}
+	contract := &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork}
 	activeShadowSink.Store(nil)
 	_, evOff, diskOff, termOff, promptOff := shadowLoopDrive(t, "req-cap", contract,
 		"app.py numbers", modePlanDoneNow)
@@ -3517,7 +3531,7 @@ func TestGateRecordsDeclareTheirOwnSchemaVersion(t *testing.T) {
 	}
 	activeShadowSink.Store(sink)
 	defer activeShadowSink.Store(nil)
-	shadowLoopDrive(t, "req-schema", &TaskContract{TaskMode: TaskModeWork},
+	shadowLoopDrive(t, "req-schema", &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork},
 		"app.py numbers", modePlanDoneNow)
 	sink.close(context.Background(), 5*time.Second)
 
@@ -3751,15 +3765,15 @@ func TestWorkContractVerificationDemandUsesBoundEvidence(t *testing.T) {
 	}
 	done := map[string]interface{}{"type": "done", "summary": "wrote solve.py"}
 	prose := map[string]interface{}{"type": "text", "content": "Please provide the content for solve.py."}
-	work := func(outputs, verify []string) *TaskContract {
-		return &TaskContract{TaskMode: TaskModeWork,
+	work := func(outputs, verify []string) *taskcontract.TaskContract {
+		return &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork,
 			ExpectedOutputs: strsPtr(outputs...), Verification: strsPtr(verify...)}
 	}
 
 	// Each plan's turns end with done, which the model repeats on any later turn.
 	for _, c := range []struct {
 		name     string
-		contract *TaskContract
+		contract *taskcontract.TaskContract
 		plan     func(int) map[string]interface{}
 		want     string
 		wantNot  string
@@ -3803,7 +3817,7 @@ func TestWorkContractVerificationDemandUsesBoundEvidence(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			contract := c.contract
 			if c.name == "question mode unchanged" {
-				contract = &TaskContract{TaskMode: TaskModeQuestion}
+				contract = &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeQuestion}
 			}
 			got, disk := verificationDemandRun(t, prompt, contract, c.plan)
 			if c.want != "" && got != c.want {
@@ -3824,7 +3838,7 @@ func TestWorkContractVerificationDemandUsesBoundEvidence(t *testing.T) {
 // "status/reason" and a digest of the files it left. It fails the test unless
 // the run ends once and every tool call has its result. V3 is unavailable, the
 // syntax check refuses "def f(:", and a command fails when it names FAILING.
-func verificationDemandRun(t *testing.T, prompt string, contract *TaskContract,
+func verificationDemandRun(t *testing.T, prompt string, contract *taskcontract.TaskContract,
 	plan func(i int) map[string]interface{}) (string, []string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -3976,15 +3990,15 @@ func TestExecutableDeliverablesDemandExecutionDeclarativeDoNot(t *testing.T) {
 			"args": map[string]string{"command": c}}
 	}
 	done := map[string]interface{}{"type": "done", "summary": "wrote the files"}
-	work := func(outputs, verify []string) *TaskContract {
-		return &TaskContract{TaskMode: TaskModeWork,
+	work := func(outputs, verify []string) *taskcontract.TaskContract {
+		return &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork,
 			ExpectedOutputs: strsPtr(outputs...), Verification: strsPtr(verify...)}
 	}
 
 	// Each plan's turns end with done, which the model repeats on any later turn.
 	for _, c := range []struct {
 		name     string
-		contract *TaskContract
+		contract *taskcontract.TaskContract
 		plan     func(int) map[string]interface{}
 		want     string
 		wantNot  string
@@ -4063,7 +4077,7 @@ func TestExecutableDeliverablesDemandExecutionDeclarativeDoNot(t *testing.T) {
 // how many tool calls and tool results it streamed. It fails the test unless
 // the run ends once. V3 is unavailable, the syntax check refuses "def f(:" and
 // "unclosed", and every command succeeds.
-func deliverablesRun(t *testing.T, prompt string, contract *TaskContract,
+func deliverablesRun(t *testing.T, prompt string, contract *taskcontract.TaskContract,
 	plan func(i int) map[string]interface{}) (string, []string, int, int) {
 	t.Helper()
 	dir := t.TempDir()

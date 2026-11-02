@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 )
 
 // One entry of the candidate-generation route is one attributable thing.
@@ -85,8 +87,8 @@ func TestTheFeasibilityRecordCarriesItsRouteEntry(t *testing.T) {
 	ctx := routeCtx(t)
 	ctx.SandboxURL = "http://127.0.0.1:1"
 	outputs := []string{"solve.py"}
-	ctx.TaskContract = &TaskContract{TaskMode: TaskModeWork,
-		OutputKnowledge: KnowledgeDeclared, ExpectedOutputs: &outputs}
+	ctx.TaskContract = &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork,
+		OutputKnowledge: taskcontract.KnowledgeDeclared, ExpectedOutputs: &outputs}
 
 	ids := []string{}
 	recs := captureShadow(t, func() {

@@ -7,6 +7,7 @@ import (
 	"log"
 	"path/filepath"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -257,7 +258,7 @@ func decideEditCandidateDelivery(ctx *AgentContext, entry routeEntry, lifecycle 
 	vetoInput := advisoryInput{
 		Observed:               evidence.observed,
 		TargetDeclared:         outputKnowledgeDeclared(ctx),
-		TargetAuthorized:       targetIsAuthorized(requestObligations(ctx), resolveAgentPath(ctx, path)),
+		TargetAuthorized:       taskcontract.TargetIsAuthorized(requestObligations(ctx), resolveAgentPath(ctx, path)),
 		Unmet:                  evidence.unmet,
 		Evidence:               evidence.pool,
 		Envelope:               meta.Envelope,

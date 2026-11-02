@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -17,10 +18,10 @@ import (
 // convention, no benchmark and nothing the model emitted, and a caller that
 // stated no knowledge produces no structured obligation at all.
 
-func mustContract(t *testing.T, dir, contract string) *TaskContract {
+func mustContract(t *testing.T, dir, contract string) *taskcontract.TaskContract {
 	t.Helper()
 	var req struct {
-		TaskContract *TaskContract `json:"task_contract,omitempty"`
+		TaskContract *taskcontract.TaskContract `json:"task_contract,omitempty"`
 	}
 	body := `{"task_contract":` + contract + `}`
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
@@ -36,14 +37,14 @@ func mustContract(t *testing.T, dir, contract string) *TaskContract {
 	return tc
 }
 
-func obligationsFor(t *testing.T, ctx *AgentContext) []taskObligation {
+func obligationsFor(t *testing.T, ctx *AgentContext) []taskcontract.TaskObligation {
 	t.Helper()
 	return deriveTaskObligations(ctx,
 		resolveOutputObligation(ctx, "Create solve.py."),
 		resolveVerificationObligation(ctx))
 }
 
-func kindsOf(obs []taskObligation) []string {
+func kindsOf(obs []taskcontract.TaskObligation) []string {
 	out := make([]string, 0, len(obs))
 	for _, o := range obs {
 		out = append(out, o.Kind)
@@ -51,13 +52,13 @@ func kindsOf(obs []taskObligation) []string {
 	return out
 }
 
-func hasKindFor(obs []taskObligation, kind, subject string) (taskObligation, bool) {
+func hasKindFor(obs []taskcontract.TaskObligation, kind, subject string) (taskcontract.TaskObligation, bool) {
 	for _, o := range obs {
 		if o.Kind == kind && o.Subject == subject {
 			return o, true
 		}
 	}
-	return taskObligation{}, false
+	return taskcontract.TaskObligation{}, false
 }
 
 // --- the taxonomy is closed, and its floors are stated ----------------------
@@ -67,86 +68,17 @@ func hasKindFor(obs []taskObligation, kind, subject string) (taskObligation, boo
 // fixed one. Each of the next three tests takes the kinds of one class, and an
 // unsatisfiable kind counts as unsatisfiable even when it is also dynamic.
 
-func TestAnUnsatisfiableObligationKindHasNoFloor(t *testing.T) {
-	for _, kind := range obligationKinds {
-		if !obligationUnsatisfiableKinds[kind] {
-			continue
-		}
-		if _, ok := obligationRequiredStrength(kind, ""); ok {
-			t.Errorf("%s is unsatisfiable and must have no strength", kind)
-		}
-	}
-}
-
-func TestADynamicObligationKindTakesItsFloorFromTheBaseline(t *testing.T) {
-	for _, kind := range obligationKinds {
-		if obligationUnsatisfiableKinds[kind] || !obligationDynamicStrengthKinds[kind] {
-			continue
-		}
-		if _, ok := obligationRequiredStrength(kind, ""); ok {
-			t.Errorf("%s must refuse to invent a baseline strength", kind)
-		}
-		s, ok := obligationRequiredStrength(kind, "behavioral")
-		if !ok || s != "behavioral" {
-			t.Errorf("%s took %q/%v from a behavioral baseline", kind, s, ok)
-		}
-	}
-}
-
-func TestEveryOtherObligationKindHasAFixedFloor(t *testing.T) {
-	for _, kind := range obligationKinds {
-		if obligationUnsatisfiableKinds[kind] || obligationDynamicStrengthKinds[kind] {
-			continue
-		}
-		s, ok := obligationRequiredStrength(kind, "")
-		if !ok || wire.StrengthRank(s) < 0 {
-			t.Errorf("%s has no fixed strength: %q/%v", kind, s, ok)
-		}
-		// A fixed floor cannot be raised by handing it a baseline.
-		if _, ok := obligationRequiredStrength(kind, "oracle"); ok {
-			t.Errorf("%s let a baseline raise its fixed floor", kind)
-		}
-	}
-}
-
-func TestADeclaredCommandIsBehavioralAndNotAnOracle(t *testing.T) {
-	// Exit zero says the command the client asked for ran and succeeded
-	// against these bytes. It does not say an answer was checked against a
-	// reference, so no declaration reaches oracle -- and the kind carries no
-	// fixed floor at all, because how strongly a command counts is a statement
-	// only the client can make about that command.
-	if _, fixed := obligationKindRequiredStrength[ObligationDeclaredCommand]; fixed {
-		t.Error("the declared-command kind carries a fixed floor")
-	}
-	if !obligationDynamicStrengthKinds[ObligationDeclaredCommand] {
-		t.Error("the declared-command floor is not taken from the obligation")
-	}
-	for _, kind := range []string{VerificationKindSyntax, VerificationKindRuntime,
-		VerificationKindBehavioral} {
-		got, ok := obligationRequiredStrength(ObligationDeclaredCommand, kind)
-		if !ok || got != kind {
-			t.Errorf("declared %q resolved to %q (ok=%v)", kind, got, ok)
-		}
-	}
-	if _, ok := obligationRequiredStrength(ObligationDeclaredCommand, "oracle"); ok {
-		t.Error("a declared command reached oracle")
-	}
-	if got := obligationKindRequiredStrength[ObligationDeclaredExample]; got != "oracle" {
-		t.Errorf("declared example floor is %q, want oracle", got)
-	}
-}
-
 func TestAnUnknownObligationKindFailsClosed(t *testing.T) {
-	if _, ok := obligationID("something_new", "x"); ok {
+	if _, ok := taskcontract.ObligationID("something_new", "x"); ok {
 		t.Error("an unknown kind produced an id")
 	}
-	if _, ok := newTaskObligation("something_new", "x", "", true); ok {
+	if _, ok := taskcontract.NewTaskObligation("something_new", "x", "", true); ok {
 		t.Error("an unknown kind produced an obligation")
 	}
-	if _, ok := newTaskObligation(ObligationBaselinePreserved, "x", "very_strong", true); ok {
+	if _, ok := taskcontract.NewTaskObligation(taskcontract.ObligationBaselinePreserved, "x", "very_strong", true); ok {
 		t.Error("an unknown baseline strength produced an obligation")
 	}
-	if _, ok := newTaskObligation(ObligationArtifactExists, "   ", "", true); ok {
+	if _, ok := taskcontract.NewTaskObligation(taskcontract.ObligationArtifactExists, "   ", "", true); ok {
 		t.Error("an empty subject produced an obligation")
 	}
 }
@@ -156,7 +88,7 @@ func TestAnUnknownObligationKindFailsClosed(t *testing.T) {
 // leak. The rule is uniform so no exception can leak one.
 func TestAnObligationIDNeverCarriesItsSubject(t *testing.T) {
 	const secret = "pytest --token=hunter2 -q"
-	o, ok := newTaskObligation(ObligationDeclaredCommand, secret, VerificationKindRuntime, true)
+	o, ok := taskcontract.NewTaskObligation(taskcontract.ObligationDeclaredCommand, secret, taskcontract.VerificationKindRuntime, true)
 	if !ok {
 		t.Fatal("declared command obligation refused")
 	}
@@ -171,14 +103,14 @@ func TestAnObligationIDNeverCarriesItsSubject(t *testing.T) {
 // silently renaming every obligation.
 func TestObligationIDsArePinned(t *testing.T) {
 	for _, c := range []struct{ kind, subject, want string }{
-		{ObligationArtifactExists, "solve.py",
+		{taskcontract.ObligationArtifactExists, "solve.py",
 			"artifact_exists:713230e3884f80839aab2246048d5c46"},
-		{ObligationSyntacticValidity, "solve.py",
+		{taskcontract.ObligationSyntacticValidity, "solve.py",
 			"syntactic_validity:713230e3884f80839aab2246048d5c46"},
-		{ObligationDeclaredCommand, "pytest -q",
+		{taskcontract.ObligationDeclaredCommand, "pytest -q",
 			"declared_command:c3b206874e8a7a233c1954889847b7d5"},
 	} {
-		got, ok := obligationID(c.kind, c.subject)
+		got, ok := taskcontract.ObligationID(c.kind, c.subject)
 		if !ok || got != c.want {
 			t.Errorf("%s/%q -> %q (ok=%v), want %q", c.kind, c.subject, got, ok, c.want)
 		}
@@ -199,18 +131,18 @@ func TestADeclaredOutputOwesExistenceAndTheSyntaxTheGateAlreadyRequires(t *testi
 
 	obs := obligationsFor(t, ctx)
 	for _, p := range []string{"notes.txt", "solve.py"} {
-		if _, ok := hasKindFor(obs, ObligationArtifactExists, resolveAgentPath(ctx, p)); !ok {
+		if _, ok := hasKindFor(obs, taskcontract.ObligationArtifactExists, resolveAgentPath(ctx, p)); !ok {
 			t.Errorf("%s owes no existence obligation: %v", p, kindsOf(obs))
 		}
 	}
-	syn, ok := hasKindFor(obs, ObligationSyntacticValidity, resolveAgentPath(ctx, "solve.py"))
+	syn, ok := hasKindFor(obs, taskcontract.ObligationSyntacticValidity, resolveAgentPath(ctx, "solve.py"))
 	if !ok {
 		t.Fatalf("no syntax obligation for a .py deliverable: %v", kindsOf(obs))
 	}
 	if syn.RequiredStrength != "syntax" {
 		t.Errorf("syntax obligation floor %q", syn.RequiredStrength)
 	}
-	if _, ok := hasKindFor(obs, ObligationSyntacticValidity, resolveAgentPath(ctx, "notes.txt")); ok {
+	if _, ok := hasKindFor(obs, taskcontract.ObligationSyntacticValidity, resolveAgentPath(ctx, "notes.txt")); ok {
 		t.Error("a class the syntax gate does not govern owes syntax")
 	}
 }
@@ -223,18 +155,18 @@ func TestEachDeclaredCommandIsItsOwnExactObligation(t *testing.T) {
 			`"verification":["pytest -q","ruff check ."]}`)
 
 	obs := obligationsFor(t, ctx)
-	pytest, ok := hasKindFor(obs, ObligationDeclaredCommand, "pytest -q")
+	pytest, ok := hasKindFor(obs, taskcontract.ObligationDeclaredCommand, "pytest -q")
 	if !ok {
 		t.Fatal(`no obligation for declared command "pytest -q"`)
 	}
-	ruff, ok := hasKindFor(obs, ObligationDeclaredCommand, "ruff check .")
+	ruff, ok := hasKindFor(obs, taskcontract.ObligationDeclaredCommand, "ruff check .")
 	if !ok {
 		t.Fatal(`no obligation for declared command "ruff check ."`)
 	}
 	// Declared without a type, so each carries the runtime floor rather than a
 	// behavioral one nobody stated.
-	for _, o := range []taskObligation{pytest, ruff} {
-		if o.RequiredStrength != VerificationKindRuntime {
+	for _, o := range []taskcontract.TaskObligation{pytest, ruff} {
+		if o.RequiredStrength != taskcontract.VerificationKindRuntime {
 			t.Errorf("%q floor %q, want runtime", o.Subject, o.RequiredStrength)
 		}
 	}
@@ -247,9 +179,9 @@ func TestEachDeclaredCommandIsItsOwnExactObligation(t *testing.T) {
 // TestSimilarCommandsAreDifferentObligations pins exactness: the client's
 // string is the obligation, not the shape of it.
 func TestSimilarCommandsAreDifferentObligations(t *testing.T) {
-	a, _ := obligationID(ObligationDeclaredCommand, "pytest -q")
-	b, _ := obligationID(ObligationDeclaredCommand, "pytest  -q")
-	c, _ := obligationID(ObligationDeclaredCommand, "pytest -q ")
+	a, _ := taskcontract.ObligationID(taskcontract.ObligationDeclaredCommand, "pytest -q")
+	b, _ := taskcontract.ObligationID(taskcontract.ObligationDeclaredCommand, "pytest  -q")
+	c, _ := taskcontract.ObligationID(taskcontract.ObligationDeclaredCommand, "pytest -q ")
 	if a == b || a == c {
 		t.Error("a command that differs by whitespace became the same obligation")
 	}
@@ -273,15 +205,15 @@ func TestReplacingAValidatedBaselineOwesAtLeastWhatItAlreadyHas(t *testing.T) {
 
 	// A ledger pass about exactly these bytes is syntax-strength evidence.
 	if ctx.Ledger == nil {
-		ctx.Ledger = map[string]*DeliverableState{}
+		ctx.Ledger = map[string]*taskcontract.DeliverableState{}
 	}
-	ctx.Ledger[resolved] = &DeliverableState{
+	ctx.Ledger[resolved] = &taskcontract.DeliverableState{
 		Path: resolved, CurrentHash: disk, Generation: 1,
 		ValidationKind: wire.ValidationKindSyntax, ValidationStatus: wire.ValidationPassed,
 		ValidatedHash: disk,
 	}
 	obs := obligationsFor(t, ctx)
-	base, ok := hasKindFor(obs, ObligationBaselinePreserved, resolved)
+	base, ok := hasKindFor(obs, taskcontract.ObligationBaselinePreserved, resolved)
 	if !ok {
 		t.Fatalf("a validated baseline owes no preservation: %v", kindsOf(obs))
 	}
@@ -290,11 +222,11 @@ func TestReplacingAValidatedBaselineOwesAtLeastWhatItAlreadyHas(t *testing.T) {
 	}
 
 	// A green run covering exactly these bytes raises it to behavioral.
-	ctx.VerificationEvidence = append(ctx.VerificationEvidence, VerificationRecord{
+	ctx.VerificationEvidence = append(ctx.VerificationEvidence, taskcontract.VerificationRecord{
 		Command: "python3 solve.py", Covered: map[string]string{resolved: disk}, Turn: 1,
 	})
 	obs = obligationsFor(t, ctx)
-	base, ok = hasKindFor(obs, ObligationBaselinePreserved, resolved)
+	base, ok = hasKindFor(obs, taskcontract.ObligationBaselinePreserved, resolved)
 	if !ok {
 		t.Fatal("a behaviourally covered baseline owes no preservation")
 	}
@@ -317,14 +249,14 @@ func TestAStaleValidationIsNotABaseline(t *testing.T) {
 		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`)
 	resolved := resolveAgentPath(ctx, "solve.py")
 	if ctx.Ledger == nil {
-		ctx.Ledger = map[string]*DeliverableState{}
+		ctx.Ledger = map[string]*taskcontract.DeliverableState{}
 	}
-	ctx.Ledger[resolved] = &DeliverableState{
+	ctx.Ledger[resolved] = &taskcontract.DeliverableState{
 		Path: resolved, CurrentHash: "stale", Generation: 1,
 		ValidationKind: wire.ValidationKindSyntax, ValidationStatus: wire.ValidationPassed,
 		ValidatedHash: "some-earlier-hash",
 	}
-	if _, ok := hasKindFor(obligationsFor(t, ctx), ObligationBaselinePreserved, resolved); ok {
+	if _, ok := hasKindFor(obligationsFor(t, ctx), taskcontract.ObligationBaselinePreserved, resolved); ok {
 		t.Error("a verdict about superseded bytes became a baseline")
 	}
 }
@@ -335,7 +267,7 @@ func TestAnAbsentFileIsNoBaseline(t *testing.T) {
 	ctx.TaskContract = mustContract(t, dir,
 		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`)
 	resolved := resolveAgentPath(ctx, "solve.py")
-	if _, ok := hasKindFor(obligationsFor(t, ctx), ObligationBaselinePreserved, resolved); ok {
+	if _, ok := hasKindFor(obligationsFor(t, ctx), taskcontract.ObligationBaselinePreserved, resolved); ok {
 		t.Error("a file that is not there became a baseline to preserve")
 	}
 }
@@ -377,7 +309,7 @@ func TestContractlessProseNeverBecomesAStructuredObligation(t *testing.T) {
 	ctx.TaskContract = nil
 
 	legacy := resolveOutputObligation(ctx, "Write solve.py that reads input.txt")
-	if legacy.Source != ObligationSourceLegacy {
+	if legacy.Source != taskcontract.ObligationSourceLegacy {
 		t.Fatalf("source %q, want legacy", legacy.Source)
 	}
 	if obs := deriveTaskObligations(ctx, legacy, resolveVerificationObligation(ctx)); len(obs) != 0 {
@@ -418,7 +350,7 @@ func TestDerivationIsCanonicalAndRepeatable(t *testing.T) {
 // delivery needs authorization. If authorization also needed existence, every
 // task with a declared output could never be satisfied.
 
-func rolesFixture(t *testing.T, contract string, files map[string]string) (*AgentContext, []taskObligation) {
+func rolesFixture(t *testing.T, contract string, files map[string]string) (*AgentContext, []taskcontract.TaskObligation) {
 	t.Helper()
 	dir := t.TempDir()
 	for name, body := range files {
@@ -438,41 +370,21 @@ func rolesFixture(t *testing.T, contract string, files map[string]string) (*Agen
 
 // --- the split itself --------------------------------------------------------
 
-func TestEveryKindHasExactlyOneRole(t *testing.T) {
-	for _, kind := range obligationKinds {
-		role, ok := obligationRole(kind)
-		if !ok {
-			t.Errorf("%s has no role; nothing knows when to ask it", kind)
-			continue
-		}
-		switch role {
-		case ObligationRoleTargetIdentity,
-			ObligationRoleAuthorizationPrerequisite,
-			ObligationRolePostDeliverySettlement:
-		default:
-			t.Errorf("%s carries the unknown role %q", kind, role)
-		}
-	}
-	if _, ok := obligationRole("something_new"); ok {
-		t.Error("an unknown kind was given a role")
-	}
-}
-
 func TestExistenceIsNeverAnAuthorizationPrerequisite(t *testing.T) {
-	role, _ := obligationRole(ObligationArtifactExists)
-	if role != ObligationRolePostDeliverySettlement {
+	role, _ := taskcontract.ObligationRole(taskcontract.ObligationArtifactExists)
+	if role != taskcontract.ObligationRolePostDeliverySettlement {
 		t.Fatalf("artifact_exists role %q, want post-delivery settlement", role)
 	}
 	_, obs := rolesFixture(t,
 		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`,
 		nil)
-	for _, o := range authorizationPrerequisites(obs) {
-		if o.Kind == ObligationArtifactExists {
+	for _, o := range taskcontract.AuthorizationPrerequisites(obs) {
+		if o.Kind == taskcontract.ObligationArtifactExists {
 			t.Error("existence is being asked for before the candidate lands")
 		}
 	}
-	settle := postDeliverySettlement(obs)
-	if len(settle) != 1 || settle[0].Kind != ObligationArtifactExists {
+	settle := taskcontract.PostDeliverySettlement(obs)
+	if len(settle) != 1 || settle[0].Kind != taskcontract.ObligationArtifactExists {
 		t.Errorf("settlement is %v, want exactly the declared output", kindsOf(settle))
 	}
 }
@@ -485,14 +397,14 @@ func TestANewCodeOutputOwesTargetIdentityAndSyntax(t *testing.T) {
 		nil)
 	resolved := resolveAgentPath(ctx, "solve.py")
 
-	if !targetIsAuthorized(obs, resolved) {
+	if !taskcontract.TargetIsAuthorized(obs, resolved) {
 		t.Error("the declared output is not an authorized target")
 	}
-	pre := authorizationPrerequisites(obs)
-	if len(pre) != 1 || pre[0].Kind != ObligationSyntacticValidity {
+	pre := taskcontract.AuthorizationPrerequisites(obs)
+	if len(pre) != 1 || pre[0].Kind != taskcontract.ObligationSyntacticValidity {
 		t.Fatalf("prerequisites %v, want exactly structural validity", kindsOf(pre))
 	}
-	if got := authorizationFloor(obs); got != "syntax" {
+	if got := taskcontract.AuthorizationFloor(obs); got != "syntax" {
 		t.Errorf("authorization floor %q, want syntax", got)
 	}
 }
@@ -505,21 +417,21 @@ func TestANewDocumentOutputOwesNoFabricatedSyntax(t *testing.T) {
 		nil)
 	resolved := resolveAgentPath(ctx, "notes.md")
 
-	if !targetIsAuthorized(obs, resolved) {
+	if !taskcontract.TargetIsAuthorized(obs, resolved) {
 		t.Error("the declared document is not an authorized target")
 	}
 	for _, o := range obs {
-		if o.Kind == ObligationSyntacticValidity {
+		if o.Kind == taskcontract.ObligationSyntacticValidity {
 			t.Error("a class the gate does not govern was given a syntax obligation")
 		}
 	}
 	// No prerequisite, so no floor. That is a real answer, not an open door:
 	// authorization additionally requires a satisfied prerequisite, and a task
 	// with none has nothing to satisfy.
-	if got := authorizationFloor(obs); got != "" {
+	if got := taskcontract.AuthorizationFloor(obs); got != "" {
 		t.Errorf("authorization floor %q, want none stated", got)
 	}
-	if len(authorizationPrerequisites(obs)) != 0 {
+	if len(taskcontract.AuthorizationPrerequisites(obs)) != 0 {
 		t.Error("a document with no declared verification owes a prerequisite")
 	}
 	// Naming a path says what may be replaced, never that any bytes belong in
@@ -531,7 +443,7 @@ func TestANewDocumentOutputOwesNoFabricatedSyntax(t *testing.T) {
 	_, withCmd := rolesFixture(t,
 		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["notes.md"],`+
 			`"verification_knowledge":"declared","verification":["mdl notes.md"]}`, nil)
-	if got := authorizationFloor(withCmd); got != VerificationKindRuntime {
+	if got := taskcontract.AuthorizationFloor(withCmd); got != taskcontract.VerificationKindRuntime {
 		t.Errorf("a declared command gave the document floor %q, want runtime", got)
 	}
 }
@@ -543,9 +455,9 @@ func TestAnExistingSyntaxValidatedArtifactStillOwesPreservation(t *testing.T) {
 	resolved := resolveAgentPath(ctx, "solve.py")
 	disk := fileSHA256(ctx, resolved)
 	if ctx.Ledger == nil {
-		ctx.Ledger = map[string]*DeliverableState{}
+		ctx.Ledger = map[string]*taskcontract.DeliverableState{}
 	}
-	ctx.Ledger[resolved] = &DeliverableState{
+	ctx.Ledger[resolved] = &taskcontract.DeliverableState{
 		Path: resolved, CurrentHash: disk, Generation: 1,
 		ValidationKind: wire.ValidationKindSyntax, ValidationStatus: wire.ValidationPassed,
 		ValidatedHash: disk,
@@ -556,9 +468,9 @@ func TestAnExistingSyntaxValidatedArtifactStillOwesPreservation(t *testing.T) {
 		resolveOutputObligation(ctx, "Improve it."),
 		resolveVerificationObligation(ctx))
 
-	var base taskObligation
-	for _, o := range authorizationPrerequisites(obs) {
-		if o.Kind == ObligationBaselinePreserved {
+	var base taskcontract.TaskObligation
+	for _, o := range taskcontract.AuthorizationPrerequisites(obs) {
+		if o.Kind == taskcontract.ObligationBaselinePreserved {
 			base = o
 		}
 	}
@@ -568,7 +480,7 @@ func TestAnExistingSyntaxValidatedArtifactStillOwesPreservation(t *testing.T) {
 	if base.RequiredStrength != "syntax" {
 		t.Errorf("baseline floor %q, want the syntax it has", base.RequiredStrength)
 	}
-	if got := authorizationFloor(obs); got != "syntax" {
+	if got := taskcontract.AuthorizationFloor(obs); got != "syntax" {
 		t.Errorf("authorization floor %q, want syntax", got)
 	}
 }
@@ -577,7 +489,7 @@ func TestASyntaxOnlyReplacementCannotDisplaceABehavioralBaseline(t *testing.T) {
 	ctx, _ := rolesFixture(t, "", map[string]string{"solve.py": "print(7)\n"})
 	resolved := resolveAgentPath(ctx, "solve.py")
 	disk := fileSHA256(ctx, resolved)
-	ctx.VerificationEvidence = append(ctx.VerificationEvidence, VerificationRecord{
+	ctx.VerificationEvidence = append(ctx.VerificationEvidence, taskcontract.VerificationRecord{
 		Command: "python3 solve.py", Covered: map[string]string{resolved: disk}, Turn: 1,
 	})
 	ctx.TaskContract = mustContract(t, ctx.WorkingDir,
@@ -586,11 +498,11 @@ func TestASyntaxOnlyReplacementCannotDisplaceABehavioralBaseline(t *testing.T) {
 		resolveOutputObligation(ctx, "Improve it."),
 		resolveVerificationObligation(ctx))
 
-	if got := authorizationFloor(obs); got != "behavioral" {
+	if got := taskcontract.AuthorizationFloor(obs); got != "behavioral" {
 		t.Fatalf("authorization floor %q, want the behavioral the baseline has", got)
 	}
 	// A syntax verifier cannot reach that floor, which is the refusal.
-	if wire.StrengthRank("syntax") >= wire.StrengthRank(authorizationFloor(obs)) {
+	if wire.StrengthRank("syntax") >= wire.StrengthRank(taskcontract.AuthorizationFloor(obs)) {
 		t.Error("a compile was allowed to displace a behaviourally covered baseline")
 	}
 }
@@ -621,9 +533,9 @@ func TestExistenceIsNotFulfilledUntilDiskAndLedgerAgree(t *testing.T) {
 	})
 
 	if ctx.Ledger == nil {
-		ctx.Ledger = map[string]*DeliverableState{}
+		ctx.Ledger = map[string]*taskcontract.DeliverableState{}
 	}
-	ctx.Ledger[resolved] = &DeliverableState{
+	ctx.Ledger[resolved] = &taskcontract.DeliverableState{
 		Path: resolved, CurrentHash: disk, Generation: 1}
 
 	t.Run("disk and ledger agree", func(t *testing.T) {
@@ -664,14 +576,14 @@ func TestAnUndeclaredTargetCannotBorrowAnotherOutputsAuthority(t *testing.T) {
 	for _, other := range []string{
 		"src/other.py", "solve.py", "src/solve.pyc", "src", "src/solve.py.bak",
 	} {
-		if targetIsAuthorized(obs, resolveAgentPath(ctx, other)) {
+		if taskcontract.TargetIsAuthorized(obs, resolveAgentPath(ctx, other)) {
 			t.Errorf("%q borrowed the declared target's authority", other)
 		}
 	}
-	if !targetIsAuthorized(obs, resolveAgentPath(ctx, "src/solve.py")) {
+	if !taskcontract.TargetIsAuthorized(obs, resolveAgentPath(ctx, "src/solve.py")) {
 		t.Error("the declared target is not authorized")
 	}
-	if targetIsAuthorized(obs, "") {
+	if taskcontract.TargetIsAuthorized(obs, "") {
 		t.Error("the empty path is an authorized target")
 	}
 }
@@ -680,16 +592,16 @@ func TestDeclaredEmptyOutputsAuthorizeNoTarget(t *testing.T) {
 	ctx, obs := rolesFixture(t,
 		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":[],`+
 			`"verification_knowledge":"declared","verification":["pytest -q"]}`, nil)
-	if got := authorizedTargets(obs); len(got) != 0 {
+	if got := taskcontract.AuthorizedTargets(obs); len(got) != 0 {
 		t.Errorf("authoritative none authorized %v", got)
 	}
-	if targetIsAuthorized(obs, resolveAgentPath(ctx, "anything.py")) {
+	if taskcontract.TargetIsAuthorized(obs, resolveAgentPath(ctx, "anything.py")) {
 		t.Error("authoritative none authorized a target")
 	}
 	// The declared command is still owed: the classes are independent. Its
 	// floor is runtime, because the client declared the command without
 	// saying what it demonstrates.
-	if got := authorizationFloor(obs); got != VerificationKindRuntime {
+	if got := taskcontract.AuthorizationFloor(obs); got != taskcontract.VerificationKindRuntime {
 		t.Errorf("floor %q, want the declared command's runtime", got)
 	}
 }
@@ -707,13 +619,13 @@ func TestContractlessAndUnspecifiedTrafficAuthorizeNothing(t *testing.T) {
 		if len(obs) != 0 {
 			t.Errorf("%q derived %v", body, kindsOf(obs))
 		}
-		if got := authorizedTargets(obs); len(got) != 0 {
+		if got := taskcontract.AuthorizedTargets(obs); len(got) != 0 {
 			t.Errorf("%q authorized %v", body, got)
 		}
-		if got := authorizationFloor(obs); got != "" {
+		if got := taskcontract.AuthorizationFloor(obs); got != "" {
 			t.Errorf("%q produced floor %q", body, got)
 		}
-		if targetIsAuthorized(obs, resolveAgentPath(ctx, "solve.py")) {
+		if taskcontract.TargetIsAuthorized(obs, resolveAgentPath(ctx, "solve.py")) {
 			t.Errorf("%q authorized a target", body)
 		}
 	}
@@ -722,32 +634,32 @@ func TestContractlessAndUnspecifiedTrafficAuthorizeNothing(t *testing.T) {
 // --- unknown fails closed ----------------------------------------------------
 
 func TestAnUnsupportedPrerequisitePutsTheFloorOutOfReach(t *testing.T) {
-	unsup, ok := newTaskObligation(ObligationUnsupported, "a thing we cannot name", "", true)
+	unsup, ok := taskcontract.NewTaskObligation(taskcontract.ObligationUnsupported, "a thing we cannot name", "", true)
 	if !ok {
 		t.Fatal("an unsupported obligation could not be represented")
 	}
-	obs := []taskObligation{unsup}
-	if role, _ := obligationRole(ObligationUnsupported); role != ObligationRoleAuthorizationPrerequisite {
+	obs := []taskcontract.TaskObligation{unsup}
+	if role, _ := taskcontract.ObligationRole(taskcontract.ObligationUnsupported); role != taskcontract.ObligationRoleAuthorizationPrerequisite {
 		t.Errorf("unsupported role %q, want prerequisite so it blocks", role)
 	}
-	if got := authorizationFloor(obs); got != "oracle" {
+	if got := taskcontract.AuthorizationFloor(obs); got != "oracle" {
 		t.Errorf("floor %q, want the top of the order", got)
 	}
 }
 
 func TestAKindWithNoRoleIsRefusedRatherThanAssumed(t *testing.T) {
-	forged := taskObligation{
+	forged := taskcontract.TaskObligation{
 		ID: "forged:0", Kind: "forged", Subject: "x",
 		RequiredStrength: "syntax", Required: true,
 	}
-	obs := []taskObligation{forged}
-	if len(authorizationPrerequisites(obs)) != 0 {
+	obs := []taskcontract.TaskObligation{forged}
+	if len(taskcontract.AuthorizationPrerequisites(obs)) != 0 {
 		t.Error("a kind with no role became a prerequisite")
 	}
-	if len(postDeliverySettlement(obs)) != 0 {
+	if len(taskcontract.PostDeliverySettlement(obs)) != 0 {
 		t.Error("a kind with no role became settlement")
 	}
-	if len(authorizedTargets(obs)) != 0 {
+	if len(taskcontract.AuthorizedTargets(obs)) != 0 {
 		t.Error("a kind with no role named a target")
 	}
 }

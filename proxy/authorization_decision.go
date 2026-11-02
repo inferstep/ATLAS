@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -142,7 +143,7 @@ type AuthorizationDecision struct {
 // explicitly is what stops the decision reaching for something else.
 type authorizationInput struct {
 	// Obligations are the task's own, derived from the validated request.
-	Obligations []taskObligation
+	Obligations []taskcontract.TaskObligation
 	// TargetPath is the canonical artifact the delivery would replace.
 	TargetPath string
 	// CandidateHash names the exact bytes proposed.
@@ -214,7 +215,7 @@ type authorizationInput struct {
 // Every record here has already been matched against the asked-for identity,
 // so it is current, about these exact candidate bytes, and about this
 // invocation. What is left to decide is strength and witness.
-func baselinePreservedBy(o taskObligation, witnessCommand string,
+func baselinePreservedBy(o taskcontract.TaskObligation, witnessCommand string,
 	authorizing []proxyEvidence) (bool, string) {
 	required := o.RequiredStrength
 	if wire.StrengthRank(required) < 0 {
@@ -273,7 +274,7 @@ func decideAuthorization(ctx *AgentContext, in authorizationInput) Authorization
 		return d
 	}
 
-	prerequisites := authorizationPrerequisites(in.Obligations)
+	prerequisites := taskcontract.AuthorizationPrerequisites(in.Obligations)
 	// Settlement is owed whenever the task states one and the bytes are not
 	// yet confirmed. It never blocks authorization. Without a context there is
 	// nothing to confirm against, so it is owed by definition.
@@ -375,7 +376,7 @@ func endsBeforePrerequisites(d *AuthorizationDecision, in authorizationInput) bo
 	//
 	// A declared-and-empty output set arrives here with no targets at all, and
 	// takes this branch: it authorizes nothing, which is exactly what it says.
-	if !targetIsAuthorized(in.Obligations, in.TargetPath) {
+	if !taskcontract.TargetIsAuthorized(in.Obligations, in.TargetPath) {
 		d.Reason = ReasonTargetNotDeclared
 		return true
 	}
@@ -394,7 +395,7 @@ func noteSettlementRequired(ctx *AgentContext, d *AuthorizationDecision, in auth
 		settled, _ = settlementIsComplete(ctx, in.Obligations, in.CandidateHash)
 	}
 	if !settled {
-		d.SettlementRequired = len(postDeliverySettlement(in.Obligations)) > 0
+		d.SettlementRequired = len(taskcontract.PostDeliverySettlement(in.Obligations)) > 0
 	}
 }
 
@@ -402,15 +403,15 @@ func noteSettlementRequired(ctx *AgentContext, d *AuthorizationDecision, in auth
 // role, is of a kind nothing can satisfy, or asks for a strength with no rank.
 // It records the first such obligation in d as missing, for the reason
 // obligation_unknown.
-func endsOnUnclassifiedObligation(d *AuthorizationDecision, prerequisites []taskObligation) bool {
+func endsOnUnclassifiedObligation(d *AuthorizationDecision, prerequisites []taskcontract.TaskObligation) bool {
 	for _, o := range prerequisites {
-		if _, ok := obligationRole(o.Kind); !ok {
+		if _, ok := taskcontract.ObligationRole(o.Kind); !ok {
 			d.Reason = ReasonObligationUnknown
 			d.Missing = append(d.Missing, o.ID)
 			sort.Strings(d.Missing)
 			return true
 		}
-		if obligationUnsatisfiableKinds[o.Kind] {
+		if taskcontract.Unsatisfiable(o.Kind) {
 			d.Reason = ReasonObligationUnknown
 			d.Missing = append(d.Missing, o.ID)
 			sort.Strings(d.Missing)
@@ -429,10 +430,10 @@ func endsOnUnclassifiedObligation(d *AuthorizationDecision, prerequisites []task
 // wantedCommandIdentities maps each prerequisite's id to the command identity
 // its evidence must name: the hash of the declared command's own text for a
 // declared-command obligation, and "" for every other kind.
-func wantedCommandIdentities(prerequisites []taskObligation) map[string]string {
+func wantedCommandIdentities(prerequisites []taskcontract.TaskObligation) map[string]string {
 	wantCommand := map[string]string{}
 	for _, o := range prerequisites {
-		if o.Kind == ObligationDeclaredCommand {
+		if o.Kind == taskcontract.ObligationDeclaredCommand {
 			wantCommand[o.ID] = contentSHA256(o.Subject)
 			continue
 		}
@@ -444,9 +445,9 @@ func wantedCommandIdentities(prerequisites []taskObligation) map[string]string {
 // markPreservedBaselines adds to satisfied each baseline obligation that the
 // authorizing evidence also shows to be preserved.
 func markPreservedBaselines(satisfied map[string]bool, in authorizationInput,
-	prerequisites []taskObligation, authorizing []proxyEvidence) {
+	prerequisites []taskcontract.TaskObligation, authorizing []proxyEvidence) {
 	for _, o := range prerequisites {
-		if o.Kind != ObligationBaselinePreserved || satisfied[o.ID] {
+		if o.Kind != taskcontract.ObligationBaselinePreserved || satisfied[o.ID] {
 			continue
 		}
 		if ok, _ := baselinePreservedBy(o, in.BaselineWitnessCommand, authorizing); ok {
@@ -457,7 +458,7 @@ func markPreservedBaselines(satisfied map[string]bool, in authorizationInput,
 
 // accountForPrerequisites puts each required prerequisite into d.Satisfied or
 // d.Missing, and sorts both lists.
-func accountForPrerequisites(d *AuthorizationDecision, prerequisites []taskObligation,
+func accountForPrerequisites(d *AuthorizationDecision, prerequisites []taskcontract.TaskObligation,
 	satisfied map[string]bool) {
 	for _, o := range prerequisites {
 		if !o.Required {
@@ -476,7 +477,7 @@ func accountForPrerequisites(d *AuthorizationDecision, prerequisites []taskOblig
 // explainMissingPrerequisites sets d.Reason for a decision with missing
 // prerequisites. Each rule below overrides the one before it.
 func explainMissingPrerequisites(d *AuthorizationDecision, in authorizationInput,
-	prerequisites []taskObligation, satisfied map[string]bool, firstRefusal AuthorizationReason) {
+	prerequisites []taskcontract.TaskObligation, satisfied map[string]bool, firstRefusal AuthorizationReason) {
 	// A prerequisite nothing spoke for is missing evidence; one something
 	// spoke for badly gets that something's own reason.
 	d.Reason = ReasonEvidenceMissing
@@ -502,7 +503,7 @@ func explainMissingPrerequisites(d *AuthorizationDecision, in authorizationInput
 	// A baseline obligation left unmet is its own fact, and the more
 	// useful one to report.
 	for _, o := range prerequisites {
-		if o.Kind == ObligationBaselinePreserved && !satisfied[o.ID] {
+		if o.Kind == taskcontract.ObligationBaselinePreserved && !satisfied[o.ID] {
 			d.Reason = ReasonBaselineNotPreserved
 			break
 		}

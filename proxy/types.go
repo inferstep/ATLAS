@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -108,7 +109,7 @@ type AgentContext struct {
 	// at the request boundary (validateTaskContract). Nil means the client
 	// declared nothing, which stays distinct from declaring an empty
 	// contract.
-	TaskContract *TaskContract
+	TaskContract *taskcontract.TaskContract
 
 	// AllowedTools names tools the client has pre-approved for this session
 	// (seeded from the request's session_allowed_tools) plus any the user
@@ -156,7 +157,7 @@ type AgentContext struct {
 	// records, never from a session-wide boolean: a flag can't answer
 	// "verified WHAT, at WHICH bytes", and labelling on it would train the
 	// lens on files the passing command never touched.
-	VerificationEvidence []VerificationRecord
+	VerificationEvidence []taskcontract.VerificationRecord
 
 	// StagedCommands are declared commands that ran against exact candidate
 	// bytes in the staging overlay, kept in their own store rather than
@@ -321,7 +322,7 @@ type AgentContext struct {
 	// boundary, so without the ledger a finaliser has nothing true to say
 	// and nothing safe to leave behind. Restoration, the completion check
 	// and delivery grants read it.
-	Ledger   map[string]*DeliverableState
+	Ledger   map[string]*taskcontract.DeliverableState
 	LedgerMu sync.Mutex
 
 	// WorkspaceHazards is the set of background work that may still be
@@ -632,149 +633,4 @@ type ProjectInfo struct {
 	BuildCommand string   `json:"build_command"` // e.g., "npm run build"
 	DevCommand   string   `json:"dev_command"`   // e.g., "npm run dev"
 	TestCommand  string   `json:"test_command"`  // e.g., "npm test"
-}
-
-// --- The structured task contract -------------------------------------------
-//
-// Without it, ATLAS decides what the user demanded by reading their English:
-// which verbs appeared decides whether work was required, which filenames sat
-// near a write verb become deliverables, which phrases demand verification.
-// Those lists are open vocabularies and they are measurably wrong -- "Write
-// four files." produces no expected outputs at all, and "Run the tests and make
-// sure they pass." sets no verification requirement.
-//
-// The contract is the client saying, in typed fields, what it already knows.
-//
-// Three rules hold for good. The model cannot write this -- it arrives in the
-// HTTP request or not at all. It is a statement of obligation, never of
-// fulfilment: what actually happened is still the ledger's to say. And nothing
-// in it can authorise a destructive act; deletion stays with the permission
-// endpoint and never appears here.
-type TaskMode string
-
-const (
-	// TaskModeWork: the request asks for the workspace to change.
-	TaskModeWork TaskMode = "work"
-	// TaskModeQuestion: the request is answered by reading.
-	TaskModeQuestion TaskMode = "question"
-)
-
-// maxTaskContractEntries bounds each list, matching the ceiling the session's
-// other per-path state already uses.
-const maxTaskContractEntries = 64
-
-// ObligationKnowledge is what the CLIENT says it knows about a class of
-// obligation. It is stated, never inferred.
-//
-// encoding/json can tell `"expected_outputs": []` from an omitted key -- the
-// first decodes to a non-nil empty slice, the second to nil -- and output
-// rebuilt by append turns an explicit [] into nil, byte-identical to omitted,
-// so validateTaskContract stores presence explicitly.
-//
-// That is not a cosmetic loss. Every owned sender -- the TUI,
-// tests/e2e/conftest.py, scripts/eval/e2e-reliability.py -- sends
-// `{"task_mode": ...}` and nothing else, so a rule of the form "a contract is
-// present, therefore its output list is authoritative" would read 100% of
-// owned traffic as "this caller requires no outputs" and drop the legacy
-// obligation for all of it.
-type ObligationKnowledge string
-
-const (
-	// KnowledgeUnspecified: the caller has no structured knowledge of this
-	// obligation class. It does NOT mean none are required -- it means the
-	// caller did not say, and the legacy inference still applies.
-	KnowledgeUnspecified ObligationKnowledge = "unspecified"
-	// KnowledgeDeclared: the caller is the authority here, including when the
-	// list it declares is empty.
-	KnowledgeDeclared ObligationKnowledge = "declared"
-)
-
-// TaskContract is what the client declares about the request. Absent is
-// distinct from present-and-empty, and stays distinct: an absent contract must
-// not be read as work here.
-type TaskContract struct {
-	TaskMode TaskMode `json:"task_mode"`
-
-	// OutputKnowledge / VerificationKnowledge are independent: a caller may
-	// know its outputs and not its verification, or the reverse. Omitted
-	// means unspecified, so a client that predates these fields is unchanged.
-	OutputKnowledge       ObligationKnowledge `json:"output_knowledge,omitempty"`
-	VerificationKnowledge ObligationKnowledge `json:"verification_knowledge,omitempty"`
-
-	// ExpectedOutputs are exact paths the client knows the request must
-	// produce. Validated and deduplicated through the workspace resolver the
-	// rest of the proxy uses (there is no second path rule), and stored as
-	// the client spelled them.
-	//
-	// A POINTER, so absence survives: nil is "no list arrived", a non-nil
-	// empty slice is "the caller sent []". Read it through OutputPaths and
-	// OutputsPresent rather than testing nilness at each site, where that
-	// test is easy to get wrong.
-	ExpectedOutputs *[]string `json:"expected_outputs,omitempty"`
-	// Verification are the exact commands the client requires be run. Kept as
-	// the client wrote them: the command/result contract already records
-	// commands verbatim, so binding a requirement to an execution later needs
-	// no parsing. Declaring one here does not run anything.
-	Verification *[]string `json:"verification,omitempty"`
-
-	// VerificationRequirements is the typed form of the same thing: the exact
-	// command, what the client declares it demonstrates, what result counts,
-	// and the assets it runs against. It is the only source of a required
-	// strength above runtime.
-	//
-	// Additive and independent. A client may send neither, either, or both;
-	// a command that appears in both is answered by its typed declaration,
-	// and one that appears only in the older list keeps the legacy answer.
-	VerificationRequirements *[]VerificationRequirement `json:"verification_requirements,omitempty"`
-	// VerificationRequirementsVersion is stated by the client and checked
-	// exactly. A version this build does not read is refused rather than
-	// interpreted under today's rules.
-	VerificationRequirementsVersion int `json:"verification_requirements_version,omitempty"`
-
-	// CandidatePolicy is accepted and never read: there is one delivery rule
-	// (candidate_policy.go), and an older client that still sends the field
-	// keeps working.
-	CandidatePolicy string `json:"candidate_policy,omitempty"`
-}
-
-// TypedVerificationRequirements is the declared typed set, or nil.
-func (tc *TaskContract) TypedVerificationRequirements() []VerificationRequirement {
-	if tc == nil || tc.VerificationRequirements == nil {
-		return nil
-	}
-	return *tc.VerificationRequirements
-}
-
-// OutputPaths is the declared output list, or nil when none arrived. Safe on a
-// nil contract.
-func (tc *TaskContract) OutputPaths() []string {
-	if tc == nil || tc.ExpectedOutputs == nil {
-		return nil
-	}
-	return *tc.ExpectedOutputs
-}
-
-// OutputsPresent reports whether a list ARRIVED, which an empty one did.
-func (tc *TaskContract) OutputsPresent() bool {
-	return tc != nil && tc.ExpectedOutputs != nil
-}
-
-// VerificationCommands is the declared command list, or nil when none arrived.
-func (tc *TaskContract) VerificationCommands() []string {
-	if tc == nil || tc.Verification == nil {
-		return nil
-	}
-	return *tc.Verification
-}
-
-// VerificationPresent reports whether a list ARRIVED, which an empty one did.
-//
-// Either list arriving is a list arriving: a client that sends only typed
-// requirements has stated its verification knowledge as surely as one that
-// sends only command strings.
-func (tc *TaskContract) VerificationPresent() bool {
-	if tc == nil {
-		return false
-	}
-	return tc.Verification != nil || tc.VerificationRequirements != nil
 }

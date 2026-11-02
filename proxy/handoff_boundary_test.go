@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -341,7 +342,7 @@ func TestARelevantModificationInvalidatesPriorVerification(t *testing.T) {
 	})
 	path := filepath.Join(w.dir, "inv.py")
 	// A verification record bound to the bytes that were on disk when it ran.
-	rec := VerificationRecord{
+	rec := taskcontract.VerificationRecord{
 		Command: "python inv.py",
 		Covered: map[string]string{"inv.py": fileSHA256(w.ctx, "inv.py")},
 	}

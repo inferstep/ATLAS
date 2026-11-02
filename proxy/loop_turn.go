@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/itigges22/atlas-proxy/internal/logsafe"
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -80,7 +81,7 @@ type agentLoop struct {
 
 // newAgentLoop sets up one run of the agent loop: its run state, with the
 // output obligation already decided, and counters that start at zero.
-func newAgentLoop(ctx *AgentContext, userMessage string, outputObligation obligationDecision) *agentLoop {
+func newAgentLoop(ctx *AgentContext, userMessage string, outputObligation taskcontract.ObligationDecision) *agentLoop {
 	st := &runState{
 		expectedOutputs:       outputObligation.Items,
 		outputObligation:      outputObligation,

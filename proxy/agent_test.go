@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -3337,14 +3338,14 @@ func TestADeclaredWorkRequestIsNeverTieredAsAQuestion(t *testing.T) {
 	}
 	for _, c := range []struct {
 		name string
-		tc   *TaskContract
+		tc   *taskcontract.TaskContract
 		in   Tier
 		want Tier
 	}{
-		{"declared work", &TaskContract{TaskMode: TaskModeWork}, classified, Tier2Medium},
-		{"declared question", &TaskContract{TaskMode: TaskModeQuestion}, classified, Tier0Conversational},
+		{"declared work", &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork}, classified, Tier2Medium},
+		{"declared question", &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeQuestion}, classified, Tier0Conversational},
 		{"no contract", nil, classified, Tier0Conversational},
-		{"work never lowers a tier", &TaskContract{TaskMode: TaskModeWork}, Tier3Hard, Tier3Hard},
+		{"work never lowers a tier", &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork}, Tier3Hard, Tier3Hard},
 	} {
 		if got := declaredTier(c.tc, c.in); got != c.want {
 			t.Errorf("%s: declaredTier = %v, want %v", c.name, got, c.want)

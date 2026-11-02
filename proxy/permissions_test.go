@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -1377,7 +1378,7 @@ func TestRemovingASymlinkNeverFulfilsItsTarget(t *testing.T) {
 func TestUnapprovedAbsenceIsNotFulfilled(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "a.py"), []byte("A\n"), 0o644)
-	ctx := &AgentContext{WorkingDir: dir, Ledger: map[string]*DeliverableState{}}
+	ctx := &AgentContext{WorkingDir: dir, Ledger: map[string]*taskcontract.DeliverableState{}}
 	// Something else removes it; the ledger is told about a delete call.
 	os.Remove(filepath.Join(dir, "a.py"))
 	args := json.RawMessage(`{"path":"a.py"}`)

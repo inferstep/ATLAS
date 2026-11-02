@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -219,7 +220,7 @@ func TestDeclaredCommandsLeftUnstaged(t *testing.T) {
 		t.Fatalf("missing %v, want both commands owed", d.Missing)
 	}
 	for _, id := range d.Missing {
-		if !strings.HasPrefix(id, ObligationDeclaredCommand+":") {
+		if !strings.HasPrefix(id, taskcontract.ObligationDeclaredCommand+":") {
 			t.Errorf("missing %v, want the declared commands", d.Missing)
 		}
 	}
@@ -237,7 +238,7 @@ func TestExactDeclaredCommandInAGenuineCandidateWorkspace(t *testing.T) {
 		t.Errorf("the executor ran %d times, want once per declared command",
 			w.shellRuns)
 	}
-	if got := behavioral[0].Provenance.ObservedStrength; got != VerificationKindRuntime {
+	if got := behavioral[0].Provenance.ObservedStrength; got != taskcontract.VerificationKindRuntime {
 		t.Errorf("strength %q, want behavioral", got)
 	}
 	d := w.decide(evID, append([]proxyEvidence{ev}, behavioral...)...)
@@ -374,7 +375,7 @@ func TestTwoDeclaredCommandsWhereOnlyOnePasses(t *testing.T) {
 	if len(d.Missing) != 1 {
 		t.Fatalf("missing %v, want the other command owed", d.Missing)
 	}
-	if !strings.HasPrefix(d.Missing[0], ObligationDeclaredCommand+":") {
+	if !strings.HasPrefix(d.Missing[0], taskcontract.ObligationDeclaredCommand+":") {
 		t.Errorf("missing %v, want the command that failed", d.Missing)
 	}
 }
@@ -447,9 +448,9 @@ func TestBehavioralEvidenceFromAnotherInvocation(t *testing.T) {
 func TestExistingSyntaxBaselineWithEqualEvidence(t *testing.T) {
 	w := newAuthWorld(t, declaredPy, "solve.py", authPy, true)
 	if w.ctx.Ledger == nil {
-		w.ctx.Ledger = map[string]*DeliverableState{}
+		w.ctx.Ledger = map[string]*taskcontract.DeliverableState{}
 	}
-	w.ctx.Ledger[w.path] = &DeliverableState{
+	w.ctx.Ledger[w.path] = &taskcontract.DeliverableState{
 		Path: w.path, CurrentHash: w.hash, Generation: 1,
 		ValidationKind: wire.ValidationKindSyntax, ValidationStatus: wire.ValidationPassed,
 		ValidatedHash: w.hash,
@@ -461,7 +462,7 @@ func TestExistingSyntaxBaselineWithEqualEvidence(t *testing.T) {
 	// would refuse every replacement of a validated file forever.
 	expectReason(t, "syntax baseline", d, true, ReasonAuthorized)
 	for _, id := range d.Missing {
-		if strings.HasPrefix(id, ObligationBaselinePreserved+":") {
+		if strings.HasPrefix(id, taskcontract.ObligationBaselinePreserved+":") {
 			t.Errorf("missing %v: equal evidence did not preserve an equal baseline",
 				d.Missing)
 		}
@@ -470,11 +471,11 @@ func TestExistingSyntaxBaselineWithEqualEvidence(t *testing.T) {
 
 func TestExistingBehavioralBaselineWithSyntaxOnlyEvidence(t *testing.T) {
 	w := newAuthWorld(t, declaredPy, "solve.py", authPy, true)
-	w.ctx.VerificationEvidence = append(w.ctx.VerificationEvidence, VerificationRecord{
+	w.ctx.VerificationEvidence = append(w.ctx.VerificationEvidence, taskcontract.VerificationRecord{
 		Command: "python3 solve.py",
 		Covered: map[string]string{w.path: w.hash}, Turn: 1,
 	})
-	if got := authorizationFloor(requestObligations(w.ctx)); got != "behavioral" {
+	if got := taskcontract.AuthorizationFloor(requestObligations(w.ctx)); got != "behavioral" {
 		t.Fatalf("floor %q, want behavioral", got)
 	}
 	ev, evID := w.mustObserve(t)
@@ -496,7 +497,7 @@ func TestExistingBehavioralBaselineReEstablishedByItsOwnCommand(t *testing.T) {
 			`"kind":"behavioral","expects":"exit_zero",`+
 			`"asset_authority":"client_supplied"}]}`,
 		"solve.py", authPy, true)
-	w.ctx.VerificationEvidence = append(w.ctx.VerificationEvidence, VerificationRecord{
+	w.ctx.VerificationEvidence = append(w.ctx.VerificationEvidence, taskcontract.VerificationRecord{
 		Command: "python3 solve.py",
 		Covered: map[string]string{w.path: w.hash}, Turn: 1,
 	})
@@ -509,7 +510,7 @@ func TestExistingBehavioralBaselineReEstablishedByItsOwnCommand(t *testing.T) {
 
 func TestExistingBehavioralBaselineWithADifferentCommandPassing(t *testing.T) {
 	w := stagedWorld(t, "ruff check .")
-	w.ctx.VerificationEvidence = append(w.ctx.VerificationEvidence, VerificationRecord{
+	w.ctx.VerificationEvidence = append(w.ctx.VerificationEvidence, taskcontract.VerificationRecord{
 		Command: "python3 solve.py",
 		Covered: map[string]string{w.path: w.hash}, Turn: 1,
 	})
@@ -526,7 +527,7 @@ func TestANewFileOwesNoPreservation(t *testing.T) {
 	// Nothing was ever validated at this path, so there is no baseline to
 	// preserve and no obligation to fabricate.
 	for _, o := range requestObligations(w.ctx) {
-		if o.Kind == ObligationBaselinePreserved {
+		if o.Kind == taskcontract.ObligationBaselinePreserved {
 			t.Fatal("a path with no validated baseline owed preservation")
 		}
 	}
@@ -535,9 +536,9 @@ func TestANewFileOwesNoPreservation(t *testing.T) {
 }
 
 func TestPreservationNeverPromotesTheEvidenceItCompares(t *testing.T) {
-	syntax, _ := newTaskObligation(ObligationBaselinePreserved, "/w/solve.py", "syntax", true)
-	behavioral, _ := newTaskObligation(ObligationBaselinePreserved, "/w/solve.py", "behavioral", true)
-	oracle, _ := newTaskObligation(ObligationBaselinePreserved, "/w/solve.py", "oracle", true)
+	syntax, _ := taskcontract.NewTaskObligation(taskcontract.ObligationBaselinePreserved, "/w/solve.py", "syntax", true)
+	behavioral, _ := taskcontract.NewTaskObligation(taskcontract.ObligationBaselinePreserved, "/w/solve.py", "behavioral", true)
+	oracle, _ := taskcontract.NewTaskObligation(taskcontract.ObligationBaselinePreserved, "/w/solve.py", "oracle", true)
 	syntaxEv := proxyEvidence{Outcome: wire.ValidationPassed,
 		Provenance: wire.V3EvidenceProvenance{ObservedStrength: "syntax"}}
 	behavioralEv := proxyEvidence{Outcome: wire.ValidationPassed,
@@ -547,7 +548,7 @@ func TestPreservationNeverPromotesTheEvidenceItCompares(t *testing.T) {
 
 	for _, tc := range []struct {
 		name    string
-		o       taskObligation
+		o       taskcontract.TaskObligation
 		ev      []proxyEvidence
 		witness string
 		want    bool
@@ -661,8 +662,8 @@ func TestRepairOrRefinementCandidate(t *testing.T) {
 func TestUnknownObligationKind(t *testing.T) {
 	w := newAuthWorld(t, declaredPy, "solve.py", authPy, true)
 	in := authorizationInput{
-		Obligations: []taskObligation{
-			{ID: "artifact_exists:x", Kind: ObligationArtifactExists,
+		Obligations: []taskcontract.TaskObligation{
+			{ID: "artifact_exists:x", Kind: taskcontract.ObligationArtifactExists,
 				Subject: w.path, RequiredStrength: "syntax", Required: true},
 			{ID: "forged:x", Kind: "forged", Subject: w.path,
 				RequiredStrength: "syntax", Required: true},
@@ -679,10 +680,10 @@ func TestUnknownObligationKind(t *testing.T) {
 
 func TestUnsupportedObligation(t *testing.T) {
 	w := newAuthWorld(t, declaredPy, "solve.py", authPy, true)
-	unsupported, _ := newTaskObligation(ObligationUnsupported, "a thing", "", true)
-	exists, _ := newTaskObligation(ObligationArtifactExists, w.path, "", true)
+	unsupported, _ := taskcontract.NewTaskObligation(taskcontract.ObligationUnsupported, "a thing", "", true)
+	exists, _ := taskcontract.NewTaskObligation(taskcontract.ObligationArtifactExists, w.path, "", true)
 	d := decideAuthorization(w.ctx, authorizationInput{
-		Obligations:             []taskObligation{exists, unsupported},
+		Obligations:             []taskcontract.TaskObligation{exists, unsupported},
 		TargetPath:              w.path,
 		CandidateHash:           w.hash,
 		OutputKnowledgeDeclared: true,
@@ -740,9 +741,9 @@ func TestAContradictoryStateNeverAuthorizes(t *testing.T) {
 		t.Errorf("reason %q, want legacy_record", d.Reason)
 	}
 	// A nil context with obligations still cannot settle.
-	exists, _ := newTaskObligation(ObligationArtifactExists, w.path, "", true)
+	exists, _ := taskcontract.NewTaskObligation(taskcontract.ObligationArtifactExists, w.path, "", true)
 	d = decideAuthorization(nil, authorizationInput{
-		Obligations: []taskObligation{exists}, TargetPath: w.path, CandidateHash: w.hash})
+		Obligations: []taskcontract.TaskObligation{exists}, TargetPath: w.path, CandidateHash: w.hash})
 	if d.Authorized {
 		t.Errorf("a nil context authorized: %q", d.Reason)
 	}

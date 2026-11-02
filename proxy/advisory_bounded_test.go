@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -29,7 +30,7 @@ func TestCandidatePathBoundsAreFinite(t *testing.T) {
 		t.Errorf("the V3 call timeout is %v", d)
 	}
 	b := defaultStagingBudget()
-	if b.MaxCommands <= 0 || b.MaxCommands > maxTaskContractEntries {
+	if b.MaxCommands <= 0 || b.MaxCommands > taskcontract.MaxTaskContractEntries {
 		t.Errorf("staging command ceiling is %d", b.MaxCommands)
 	}
 	if b.PerCommandTimeoutSec <= 0 || b.TotalTimeoutSec <= 0 {

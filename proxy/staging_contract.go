@@ -2,6 +2,8 @@ package main
 
 import (
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 )
 
 // The typed transport for running a client's declared verification commands
@@ -351,7 +353,7 @@ func defaultStagingBudget() stagingBudget {
 }
 
 func (b stagingBudget) validate() (bool, string) {
-	if b.MaxCommands <= 0 || b.MaxCommands > maxTaskContractEntries {
+	if b.MaxCommands <= 0 || b.MaxCommands > taskcontract.MaxTaskContractEntries {
 		return false, "staging command budget is out of range"
 	}
 	if b.PerCommandTimeoutSec <= 0 || b.TotalTimeoutSec <= 0 {
