@@ -332,8 +332,7 @@ type hereDoc struct {
 // here.
 func splitTopLevelShell(cmd string) (segs, ops, bodies []string) {
 	var cur strings.Builder
-	inSingle, inDouble, inBacktick := false, false, false
-	depth := 0
+	var nest shellNesting
 	var pending []hereDoc
 	bodyAt := map[int]*strings.Builder{}
 	flush := func(op string) {
@@ -343,46 +342,22 @@ func splitTopLevelShell(cmd string) (segs, ops, bodies []string) {
 	}
 	for i := 0; i < len(cmd); i++ {
 		c := cmd[i]
-		if c == '\\' && !inSingle && i+1 < len(cmd) {
+		if c == '\\' && !nest.inSingle && i+1 < len(cmd) {
 			cur.WriteByte(c)
 			cur.WriteByte(cmd[i+1])
 			i++
 			continue
 		}
-		switch {
-		case c == '\'' && !inDouble && !inBacktick:
-			inSingle = !inSingle
-		case c == '"' && !inSingle && !inBacktick:
-			inDouble = !inDouble
-		case c == '`' && !inSingle:
-			inBacktick = !inBacktick
-		}
-		quoted := inSingle || inDouble || inBacktick
-		if !quoted {
-			if c == '(' {
-				depth++
-			} else if c == ')' && depth > 0 {
-				depth--
-			}
-		}
-		if quoted || depth > 0 {
+		if !nest.topLevel(c) {
 			cur.WriteByte(c)
 			continue
 		}
-		next := byte(0)
-		if i+1 < len(cmd) {
-			next = cmd[i+1]
-		}
-		prev := byte(0)
-		if i > 0 {
-			prev = cmd[i-1]
-		}
-		if c == '<' && next == '<' {
-			if i+2 < len(cmd) && cmd[i+2] == '<' {
-				cur.WriteString("<<<") // a here-string, not a here-document
-				i += 2
-				continue
-			}
+		op, width := shellOperatorAt(cmd, i)
+		switch {
+		case strings.HasPrefix(cmd[i:], "<<<"):
+			cur.WriteString("<<<") // a here-string, not a here-document
+			i += 2
+		case strings.HasPrefix(cmd[i:], "<<"):
 			end, doc := readHereDocOperator(cmd, i)
 			cur.WriteString(cmd[i:end])
 			if doc.delim != "" {
@@ -390,44 +365,82 @@ func splitTopLevelShell(cmd string) (segs, ops, bodies []string) {
 				pending = append(pending, doc)
 			}
 			i = end - 1
-			continue
-		}
-		switch {
-		case c == '&' && next == '&':
-			flush("&&")
-			i++
-			continue
-		case c == '|' && next == '|':
-			flush("||")
-			i++
-			continue
-		case c == '|' && next == '&':
-			flush("|")
-			i++
-			continue
-		case c == '|':
-			flush("|")
-			continue
 		case c == '\n' && len(pending) > 0:
 			// The bodies start on the next line. The newline itself still
 			// ends the command line.
 			i = readHereDocBodies(cmd, i+1, pending, bodyAt)
 			pending = nil
 			flush(";")
-			continue
-		case c == ';' || c == '\n':
-			flush(";")
-			continue
-		case c == '&' && prev != '>' && prev != '<' && next != '>':
-			flush("&")
-			continue
+		case op != "":
+			flush(op)
+			i += width - 1
+		default:
+			cur.WriteByte(c)
 		}
-		cur.WriteByte(c)
 	}
 	segs = append(segs, cur.String())
 	segs = dropEmptyTrailingSegments(segs, ops)
 	bodies = hereDocBodiesBySegment(segs, bodyAt)
 	return segs, ops, bodies
+}
+
+// shellNesting tracks the quotes and parentheses a command line is inside.
+type shellNesting struct {
+	inSingle, inDouble, inBacktick bool
+	depth                          int
+}
+
+// topLevel reads byte c and reports whether it sits outside every quote and
+// parenthesis, where an operator separates commands. An opening quote or
+// parenthesis is inside; the one that closes the last of them is outside.
+func (n *shellNesting) topLevel(c byte) bool {
+	switch {
+	case c == '\'' && !n.inDouble && !n.inBacktick:
+		n.inSingle = !n.inSingle
+	case c == '"' && !n.inSingle && !n.inBacktick:
+		n.inDouble = !n.inDouble
+	case c == '`' && !n.inSingle:
+		n.inBacktick = !n.inBacktick
+	}
+	if n.inSingle || n.inDouble || n.inBacktick {
+		return false
+	}
+	if c == '(' {
+		n.depth++
+	} else if c == ')' && n.depth > 0 {
+		n.depth--
+	}
+	return n.depth == 0
+}
+
+// shellOperatorAt returns the operator that starts at cmd[i] and its length
+// in bytes, or "" when none does. `|&` is recorded as `|` and a newline as
+// `;`. The `&` of `2>&1`, `&>` and `>&` is part of a redirection, not the
+// background operator.
+func shellOperatorAt(cmd string, i int) (op string, width int) {
+	c := cmd[i]
+	prev, next := byte(0), byte(0)
+	if i > 0 {
+		prev = cmd[i-1]
+	}
+	if i+1 < len(cmd) {
+		next = cmd[i+1]
+	}
+	switch {
+	case c == '&' && next == '&':
+		return "&&", 2
+	case c == '|' && next == '|':
+		return "||", 2
+	case c == '|' && next == '&':
+		return "|", 2
+	case c == '|':
+		return "|", 1
+	case c == ';' || c == '\n':
+		return ";", 1
+	case c == '&' && prev != '>' && prev != '<' && next != '>':
+		return "&", 1
+	}
+	return "", 0
 }
 
 // readHereDocOperator reads `<<WORD`, `<<-WORD`, `<<'WORD'` or `<<"WORD"`
