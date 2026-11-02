@@ -227,6 +227,22 @@ func TestSplitTopLevelShell(t *testing.T) {
 	}
 }
 
+// programWords looks past each wrapper to the program it runs.
+func TestProgramWords(t *testing.T) {
+	for in, want := range map[string]string{
+		"nohup python3 app.py":              "python3 app.py",
+		"env -i FOO=1 python3 app.py":       "python3 app.py",
+		"nice -n 5 python3 app.py":          "python3 app.py",
+		"stdbuf -oL python3 app.py":         "python3 app.py",
+		"timeout -s KILL 10 python3 app.py": "python3 app.py",
+		"time":                              "",
+	} {
+		if got := strings.Join(programWords(shellFields(in)), " "); got != want {
+			t.Errorf("programWords(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // --- what the loop records -----------------------------------------------------
 
 func ranClean(stdout string) *wire.ToolResult {

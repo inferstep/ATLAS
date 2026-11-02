@@ -584,6 +584,11 @@ var runnerValueFlags = map[string]bool{
 	"--extra": true, "--package": true, "--index": true,
 }
 
+// timeoutValueFlags are timeout options that take a value.
+var timeoutValueFlags = map[string]bool{
+	"-s": true, "-k": true, "--signal": true, "--kill-after": true,
+}
+
 // programWords strips what runs a program without being it: leading
 // environment assignments, the wrappers timeout, env, nice, nohup, time,
 // command, exec and stdbuf, and environment runners (`uv run`, `poetry run`,
@@ -597,47 +602,57 @@ func programWords(words []string) []string {
 		case w == "time" || w == "command" || w == "exec" || w == "nohup":
 			words = words[1:]
 		case w == "env":
-			words = words[1:]
-			for len(words) > 0 && (strings.HasPrefix(words[0], "-") || envAssignmentRe.MatchString(words[0])) {
-				words = words[1:]
-			}
+			words = dropEnvOptions(words[1:])
 		case w == "nice":
 			words = words[1:]
 			if len(words) > 1 && words[0] == "-n" {
 				words = words[2:]
 			}
 		case w == "stdbuf":
-			words = words[1:]
-			for len(words) > 0 && strings.HasPrefix(words[0], "-") {
-				words = words[1:]
-			}
+			words = dropOptions(words[1:], nil)
 		case w == "timeout":
-			words = words[1:]
-			for len(words) > 0 && strings.HasPrefix(words[0], "-") {
-				if (words[0] == "-s" || words[0] == "-k" || words[0] == "--signal" || words[0] == "--kill-after") && len(words) > 1 {
-					words = words[1:]
-				}
-				words = words[1:]
-			}
+			words = dropOptions(words[1:], timeoutValueFlags)
 			if len(words) > 0 {
 				words = words[1:] // the duration
 			}
 		case (w == "uv" || w == "poetry" || w == "pipenv" || w == "pdm" || w == "rye") && len(words) > 1 && words[1] == "run":
-			words = words[2:]
-			for len(words) > 0 && strings.HasPrefix(words[0], "-") {
-				if runnerValueFlags[words[0]] && len(words) > 1 {
-					words = words[1:]
-				}
-				words = words[1:]
-			}
-			if len(words) > 0 && strings.HasSuffix(words[0], ".py") {
-				return append([]string{"python"}, words...) // `uv run app.py`
-			}
+			words = runnerProgramWords(words[2:])
 		case w == "bundle" && len(words) > 1 && words[1] == "exec":
 			words = words[2:]
 		default:
 			return words
 		}
+	}
+	return words
+}
+
+// dropOptions removes the options words start with, and the value that
+// follows each option named in withValue.
+func dropOptions(words []string, withValue map[string]bool) []string {
+	for len(words) > 0 && strings.HasPrefix(words[0], "-") {
+		if withValue[words[0]] && len(words) > 1 {
+			words = words[1:]
+		}
+		words = words[1:]
+	}
+	return words
+}
+
+// dropEnvOptions removes the options and variable assignments env reads
+// before the command it runs.
+func dropEnvOptions(words []string) []string {
+	for len(words) > 0 && (strings.HasPrefix(words[0], "-") || envAssignmentRe.MatchString(words[0])) {
+		words = words[1:]
+	}
+	return words
+}
+
+// runnerProgramWords are the words of what an environment runner runs, past
+// its options. A Python script it is given runs under python.
+func runnerProgramWords(words []string) []string {
+	words = dropOptions(words, runnerValueFlags)
+	if len(words) > 0 && strings.HasSuffix(words[0], ".py") {
+		return append([]string{"python"}, words...) // `uv run app.py`
 	}
 	return words
 }
