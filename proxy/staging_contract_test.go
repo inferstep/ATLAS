@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"os"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -139,7 +140,7 @@ func TestAWellFormedStagingResultValidates(t *testing.T) {
 	if ok, why := res.validateAgainst(req); !ok {
 		t.Fatalf("a well-formed result was refused: %s", why)
 	}
-	got := res.authorizingOutcomes()
+	got := cleanPasses(res)
 	if len(got) != 2 {
 		t.Errorf("authorizing %v, want both", got)
 	}
@@ -200,7 +201,7 @@ func TestAPartialSetIsNeverComplete(t *testing.T) {
 	if ok, why := res.validateAgainst(req); !ok {
 		t.Errorf("an honestly partial result was refused: %s", why)
 	}
-	if got := res.authorizingOutcomes(); len(got) != 1 {
+	if got := cleanPasses(res); len(got) != 1 {
 		t.Errorf("authorizing %v, want only the one that ran", got)
 	}
 }
@@ -215,12 +216,12 @@ func TestOnlyACleanNonMutatingPassAuthorizes(t *testing.T) {
 		stagingBudgetExceeded, stagingUnavailable,
 	} {
 		res := stagingRes(req, o)
-		if got := res.authorizingOutcomes(); len(got) != 0 {
+		if got := cleanPasses(res); len(got) != 0 {
 			t.Errorf("%s authorized %v", o, got)
 		}
 	}
 	clean := stagingRes(req, stagingExitedZero)
-	if got := clean.authorizingOutcomes(); len(got) != 1 {
+	if got := cleanPasses(clean); len(got) != 1 {
 		t.Errorf("a clean pass authorized %v", got)
 	}
 }
@@ -234,7 +235,7 @@ func TestAPassThatChangedSomethingAuthorizesNothing(t *testing.T) {
 		if ok, why := res.validateAgainst(req); !ok {
 			t.Fatalf("a consistent mutation report was refused: %s", why)
 		}
-		if got := res.authorizingOutcomes(); len(got) != 0 {
+		if got := cleanPasses(res); len(got) != 0 {
 			t.Errorf("a command that rewrote its own subject authorized %v", got)
 		}
 	})
@@ -245,7 +246,7 @@ func TestAPassThatChangedSomethingAuthorizesNothing(t *testing.T) {
 		if ok, why := res.validateAgainst(req); !ok {
 			t.Fatalf("a consistent mutation report was refused: %s", why)
 		}
-		if got := res.authorizingOutcomes(); len(got) != 0 {
+		if got := cleanPasses(res); len(got) != 0 {
 			t.Errorf("a command that changed its inputs authorized %v", got)
 		}
 	})
@@ -450,4 +451,16 @@ func TestTheContractExecutesNothing(t *testing.T) {
 		}
 		return true
 	})
+}
+
+// cleanPasses names the commands the live path counts as passed, sorted.
+func cleanPasses(res stagingResult) []string {
+	var ids []string
+	for _, r := range res.Commands {
+		if r.passedClean() {
+			ids = append(ids, r.ObligationID)
+		}
+	}
+	sort.Strings(ids)
+	return ids
 }

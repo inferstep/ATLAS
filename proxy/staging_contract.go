@@ -1,7 +1,6 @@
 package main
 
 import (
-	"sort"
 	"strings"
 )
 
@@ -310,18 +309,12 @@ func (res stagingResult) validateAgainst(req stagingRequest) (bool, string) {
 	return true, ""
 }
 
-// authorizingOutcomes returns the obligation ids whose command ran cleanly,
-// sorted. Only exited_zero, and only when the command changed nothing.
-func (res stagingResult) authorizingOutcomes() []string {
-	var out []string
-	for _, r := range res.Commands {
-		if r.Outcome != stagingExitedZero || r.MutatedTarget || r.MutatedWorkspace {
-			continue
-		}
-		out = append(out, r.ObligationID)
-	}
-	sort.Strings(out)
-	return out
+// passedClean reports whether the exact command exited zero having changed
+// neither the candidate it was testing nor anything else it could see. A
+// command that rewrote its own subject proved something about bytes that no
+// longer exist. Every reader of a staged result asks here.
+func (r stagingCommandResult) passedClean() bool {
+	return r.Outcome == stagingExitedZero && !r.MutatedTarget && !r.MutatedWorkspace
 }
 
 // --- budget -------------------------------------------------------------------
