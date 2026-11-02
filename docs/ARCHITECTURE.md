@@ -222,26 +222,7 @@ Three checks keep a broken file from landing as a clean write. Each names the re
 
 ### Tools
 
-16 tools registered in `proxy/tools.go`:
-
-| Tool | Purpose | Read-only |
-|------|---------|-----------|
-| `read_file` | Read file contents (with optional offset/limit) | Yes |
-| `outline_file` | List a file's top-level functions/classes with line ranges, no bodies (tree-sitter for `.py`, best-effort scan otherwise). Locates a target inside a file too large to read whole: outline, then `read_file` with offset/limit. Returns no code, so it cannot ground a diagnosis — `read_file` is the default entry point | Yes |
-| `write_file` | Create a NEW file (rejected for existing files >5 lines — see safety limits) | No |
-| `edit_file` | Surgical inline string replacement (old_str/new_str) for ≤10-line changes | No |
-| `insert_after` | Insert new lines after a given line number — the line numbers `read_file` prints. For ADDING code (a branch, function, import) where nothing existing changes: there is no `old_str` to reproduce, which is the step that fails on long spans | No |
-| `replace_lines` | Replace a line range (`start_line`..`end_line`, as `read_file` prints them) with new content. For CHANGING code without reproducing it: the anchor is two asserted lines (first and last of the range, whitespace-insensitive) rather than the whole span, so the verbatim burden is 2 lines instead of N. Capped at 60 lines per call — a whole JavaScript function inside a template is the unit of work, and it does not fit in less | No |
-| `structural_edit` | Whole-function/class/HTML-element rewrite via tree-sitter selector (`function:NAME`, `class:NAME`, `<tag>`); REQUIRED over edit_file for whole-node swaps. Python, HTML, Go, JavaScript and TypeScript | No |
-| `delete_file` | Delete file or empty directory | No |
-| `move_file` | Move or rename a file within the workspace (e.g. `index.html` → `templates/`). Pure relocation — bypasses the V3/surgical-edit gate, refuses to clobber an existing destination. One call for "reorganize the files"; shell `mv`/`cp` through `run_command` also work | No |
-| `find_file` | Regex search by file **name** / path (cheap existence + locate). Distinct from `search_files` which greps inside file contents. | Yes |
-| `search_files` | Regex search across file contents (max 200 matches, skips .git/node_modules) | Yes |
-| `list_directory` | List directory contents with type and size | Yes |
-| `run_command` | Execute shell command via sandbox container; 5 min timeout cap. A command the shell cannot parse at all returns why it could not run: when the cause is a program quoted inline after `-c`/`-e`, the rejection redirects to writing the snippet to a file, since a raw `syntax error near unexpected token` gives the model nothing to change and it re-sends the identical line | No |
-| `run_background` | Start a long-running process (e.g. `python app.py`) in the sandbox; returns a `job_id` immediately | No |
-| `tail_background` | Fetch new stdout/stderr from a backgrounded job by `job_id` | Yes |
-| `stop_background` | SIGTERM/SIGKILL a backgrounded job by `job_id` | No |
+16 tools are registered in `proxy/tools.go`. What each does, its limits, and which are read-only: [API.md § Tools available to the agent loop](API.md#tools-available-to-the-agent-loop).
 
 ### Deliverable ledger (observational)
 

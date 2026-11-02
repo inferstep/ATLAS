@@ -216,26 +216,7 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 
 ### ツール
 
-`proxy/tools.go` に登録された16個のツール:
-
-| ツール | 役割 | 読み取り専用 |
-|------|---------|-----------|
-| `read_file` | ファイル内容を読む（任意の offset/limit 付き） | はい |
-| `outline_file` | ファイルのトップレベルの関数/クラスを行範囲付きで一覧表示し、本体は含めない（`.py` は tree-sitter、それ以外はベストエフォートのスキャン）。全体を読むには大きすぎるファイル内の対象を位置特定する: まずアウトラインし、次に offset/limit 付きで `read_file` する。コードを返さないため、診断を接地できない — `read_file` がデフォルトのエントリーポイント | はい |
-| `write_file` | 新規ファイルを作成（既存の5行超ファイルでは拒否 — 安全制限を参照） | いいえ |
-| `edit_file` | ≤10 行の変更向けの外科的なインライン文字列置換（old_str/new_str） | いいえ |
-| `insert_after` | 指定した行番号（`read_file` が表示する行番号）の後ろに新しい行を挿入する。何も既存のものを変えずにコード（分岐、関数、import）を**追加**する場合向け: 再現すべき `old_str` がなく、長いスパンで失敗するのはまさにその工程 | いいえ |
-| `replace_lines` | 行範囲（`start_line`..`end_line`、`read_file` が表示する行番号）を新しい内容で置き換える。コードを再現せずに**変更**する場合向け: アンカーはスパン全体ではなく主張された2行（範囲の先頭行と末尾行、空白は無視）なので、逐語での再現負担は N 行ではなく 2 行になる。1回の呼び出しにつき最大60行 | いいえ |
-| `structural_edit` | tree-sitter セレクタ（`function:NAME`、`class:NAME`、`<tag>`）による関数/クラス/HTML 要素全体の書き換え; ノード全体の差し替えでは edit_file より優先して必須。Python、HTML、Go、JavaScript、TypeScript に対応 | いいえ |
-| `delete_file` | ファイルまたは空ディレクトリを削除 | いいえ |
-| `move_file` | ワークスペース内でファイルを移動またはリネーム（例: `index.html` → `templates/`）。純粋な移動 — V3/外科的編集のゲートをバイパスし、既存の宛先の上書きは拒否。シェルの `mv`/`cp` が拒否されるため「ファイルを再編成する」ための正規のパス | いいえ |
-| `find_file` | ファイル**名** / パスによる正規表現検索（安価な存在確認 + 位置特定）。ファイル内容を grep する `search_files` とは区別される。 | はい |
-| `search_files` | ファイル内容にまたがる正規表現検索（最大200件、.git/node_modules をスキップ） | はい |
-| `list_directory` | ディレクトリ内容を種別とサイズ付きで一覧表示 | はい |
-| `run_command` | サンドボックスコンテナ経由でシェルコマンドを実行; 5分のタイムアウト上限。シェルがまったくパースできないコマンドは、実行できなかった理由を返します: 原因が `-c`/`-e` の後ろにインラインで引用されたプログラムである場合、拒否はそのスニペットをファイルに書くようリダイレクトします。生の `syntax error near unexpected token` はモデルに変更すべきものを何も与えず、同一の行を再送させるためです | いいえ |
-| `run_background` | サンドボックス内で長時間実行プロセス（例: `python app.py`）を開始; `job_id` を即座に返す | いいえ |
-| `tail_background` | バックグラウンドジョブの新しい stdout/stderr を `job_id` で取得 | はい |
-| `stop_background` | バックグラウンドジョブを `job_id` で SIGTERM/SIGKILL | いいえ |
+`proxy/tools.go` に 16 個のツールが登録されています。各ツールの内容、制限、読み取り専用かどうかは [API.md § Tools available to the agent loop](../../API.md#tools-available-to-the-agent-loop) をご覧ください。
 
 ### 成果物台帳（観測的）
 

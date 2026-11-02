@@ -172,26 +172,7 @@ flowchart LR
 
 ### 도구
 
-`proxy/tools.go`에 등록된 16개의 도구:
-
-| 도구 | 용도 | 읽기 전용 |
-|------|---------|-----------|
-| `read_file` | 파일 내용 읽기(선택적 offset/limit 포함) | 예 |
-| `outline_file` | 파일의 최상위 함수/클래스를 본문 없이 줄 범위와 함께 나열(`.py`는 tree-sitter, 그 외는 최선 노력 스캔). 정밀 읽기의 진입점: 먼저 아웃라인하고, 그다음 offset/limit으로 `read_file` | 예 |
-| `write_file` | 새(NEW) 파일 생성(5줄 초과의 기존 파일에 대해서는 거부 — 안전 제한 참고) | 아니오 |
-| `edit_file` | ≤10줄 변경을 위한 정밀 인라인 문자열 치환(old_str/new_str) | 아니오 |
-| `insert_after` | 주어진 줄 번호(`read_file` 이 출력하는 줄 번호) 뒤에 새 줄을 삽입합니다. 기존 코드가 전혀 바뀌지 않는 코드 **추가**(분기, 함수, import)에 적합: 재현해야 할 `old_str` 이 없으며, 긴 구간에서 실패하는 단계가 바로 그것입니다 | 아니오 |
-| `replace_lines` | 줄 범위(`start_line`..`end_line`, `read_file` 이 출력하는 줄 번호)를 새 내용으로 교체합니다. 코드를 재현하지 않고 **변경**할 때 사용: 앵커가 구간 전체가 아니라 주장된 두 줄(범위의 첫 줄과 마지막 줄, 공백 무시)이므로 그대로 옮겨 적어야 하는 분량이 N 줄이 아닌 2 줄입니다. 호출당 최대 60줄 | 아니오 |
-| `structural_edit` | tree-sitter 셀렉터(`function:NAME`, `class:NAME`, `<tag>`)를 통한 함수/클래스/HTML 요소 전체 재작성; 노드 전체 교체에는 edit_file보다 필수(REQUIRED). Python, HTML, Go, JavaScript, TypeScript 지원 | 아니오 |
-| `delete_file` | 파일 또는 빈 디렉토리 삭제 | 아니오 |
-| `move_file` | 워크스페이스 내에서 파일 이동 또는 이름 변경(예: `index.html` → `templates/`). 순수 재배치 — V3/정밀 편집 게이트를 우회하며, 기존 대상을 덮어쓰는 것은 거부. 셸 `mv`/`cp`가 거부되므로 "파일 재구성"을 위한 지원 경로 | 아니오 |
-| `find_file` | 파일 **이름**/경로에 대한 정규식 검색(저렴한 존재 확인 + 위치 파악). 파일 내용을 grep하는 `search_files`와 구별됨. | 예 |
-| `search_files` | 파일 내용 전체에 대한 정규식 검색(최대 200개 일치, .git/node_modules 건너뜀) | 예 |
-| `list_directory` | 타입과 크기와 함께 디렉토리 내용 나열 | 예 |
-| `run_command` | 샌드박스 컨테이너를 통한 셸 명령 실행; 5분 타임아웃 상한 | 아니오 |
-| `run_background` | 샌드박스에서 장기 실행 프로세스(예: `python app.py`) 시작; 즉시 `job_id` 반환 | 아니오 |
-| `tail_background` | `job_id`로 백그라운드 작업의 새 stdout/stderr 가져오기 | 예 |
-| `stop_background` | `job_id`로 백그라운드 작업을 SIGTERM/SIGKILL | 아니오 |
+`proxy/tools.go`에 16개의 도구가 등록되어 있습니다. 각 도구의 내용과 제한, 읽기 전용 여부는 [API.md § Tools available to the agent loop](../../API.md#tools-available-to-the-agent-loop)를 참고하세요.
 
 ### 도구 선택 편향 완화
 
