@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/itigges22/atlas-proxy/internal/logsafe"
+	"github.com/itigges22/atlas-proxy/internal/memoryenvelope"
 	"github.com/itigges22/atlas-proxy/internal/shadowcapture"
 	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
@@ -69,6 +70,12 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// declaredMemoryEnvelope is the memory envelope the operator declared in the
+// environment; internal/memoryenvelope says what it holds and how it is checked.
+func declaredMemoryEnvelope() memoryenvelope.Envelope {
+	return memoryenvelope.FromSettings(func(name string) string { return envOr(name, "") })
 }
 
 // resolveVerifyTarget returns "host" when run_command should bypass
@@ -532,7 +539,7 @@ func main() {
 	// verdict the TUI's header badge will render, as one calibration view (Lens
 	// and ASA lines) at startup.
 	logCalibrationStatusAtStartup()
-	logEnvelopeOverruns(envelopeFromEnv())
+	memoryenvelope.LogOverruns(declaredMemoryEnvelope())
 
 	if envOr("ATLAS_KEEP_LLAMA_WARM", "1") != "0" {
 		go keepLlamaWarm()
