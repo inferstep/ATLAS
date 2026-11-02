@@ -438,7 +438,7 @@ API 契约见 [API.md § POST /v3/plan](../../API.md#post-v3plan)。
 
 ##### tui：渲染（Go）
 
-`tui/state.go` 定义了 `planView`（模型上的状态），以及接入 `tui/events.go` 聊天分发器的三个 `applyPlan*` 处理程序：
+`tui/internal/pipelinestate/plan.go` 定义了 `PlanView`（模型上的状态），`tui/state.go` 定义了接入 `tui/events.go` 聊天分发器的三个 `applyPlan*` 处理程序：
 
 | 事件 | 处理程序 | UI 效果 |
 |---|---|---|
@@ -488,7 +488,7 @@ API 契约见 [API.md § POST /v3/plan](../../API.md#post-v3plan)。
 | 代理桥接 | `proxy/v3_bridge_test.go` | SSE 解析、缺少结果时的错误、阶段路由 |
 | 代理钩子 | `proxy/agent_test.go` | 优先文件选取、截断阈值、回退遍历、层级与长度判断 |
 | 代理遵循 | `proxy/gates_plan_test.go`；系统提示见 `proxy/gates_test.go` | 匹配逻辑（工具名 + 路径后缀）、排除失败的调用、修订上限、系统提示渲染 |
-| TUI 渲染 | `tui/plan_test.go` | `planView` 状态转换、修订时由 plan_loaded 替换、偏离计划时静默 |
+| TUI 渲染 | `tui/internal/pipelinestate/plan_test.go`；处理程序见 `tui/plan_test.go` | `PlanView` 状态转换、修订时由 plan_loaded 替换、偏离计划时静默 |
 
 ### 安全限制
 

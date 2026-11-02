@@ -631,7 +631,7 @@ The system prompt rendering happens in `buildSystemPrompt`. Plan steps are rende
 
 ##### tui: rendering (Go)
 
-`tui/state.go` defines `planView` (state on the model) plus three `applyPlan*` handlers wired into the chat dispatcher in `tui/events.go`:
+`tui/internal/pipelinestate/plan.go` defines `PlanView` (state on the model), and `tui/state.go` holds the three `applyPlan*` handlers wired into the chat dispatcher in `tui/events.go`:
 
 | Event | Handler | UI effect |
 |---|---|---|
@@ -681,7 +681,7 @@ Both are paid up front before the agent's first tool call. The investment is rec
 | proxy bridge | `proxy/v3_bridge_test.go` | SSE parse, missing-result error, stage routing |
 | proxy hook | `proxy/agent_test.go` | priority-file pickup, truncation thresholds, fallback walk, tier/length gating |
 | proxy adherence | `proxy/gates_plan_test.go`; `proxy/gates_test.go` for the system prompt | match logic (tool name + path suffix), failed-call exclusion, revision cap, system-prompt rendering |
-| TUI rendering | `tui/plan_test.go` | `planView` state transitions, plan_loaded replacement on revise, off-plan silence |
+| TUI rendering | `tui/internal/pipelinestate/plan_test.go`; `tui/plan_test.go` for the handlers | `PlanView` state transitions, plan_loaded replacement on revise, off-plan silence |
 
 ### Safety Limits
 

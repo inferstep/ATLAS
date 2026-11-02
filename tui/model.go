@@ -2,7 +2,7 @@
 // chat history + textarea + rendered view.
 //
 // Two SSE streams feed the model:
-//   /events   → envelopeMsg → state.apply()  (always-on visibility)
+//   /events   → envelopeMsg → state.Apply()  (always-on visibility)
 //   /v1/agent → chatStreamMsg → chat history (per-turn, on Enter)
 //
 // Update hands key and mouse messages to the handlers in input.go. The
@@ -27,6 +27,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/itigges22/atlas-tui/internal/debuglog"
+	"github.com/itigges22/atlas-tui/internal/pipelinestate"
 	"github.com/itigges22/atlas-tui/internal/proxyclient"
 	"github.com/itigges22/atlas-tui/internal/sessionstore"
 	"github.com/itigges22/atlas-tui/internal/termtext"
@@ -57,7 +58,7 @@ type tuiModel struct {
 	height int
 
 	// Derived state — pipeline + counters from the event stream.
-	state    pipelineState
+	state    pipelinestate.Pipeline
 	envelope []proxyclient.Envelope
 	maxLines int
 
@@ -177,9 +178,9 @@ type tuiModel struct {
 	streamingV3ReasoningText string
 
 	// Plan state — populated by plan_loaded events from the proxy.
-	// One planView per turn (replaced on revision). nil when the
+	// One pipelinestate.PlanView per turn (replaced on revision). nil when the
 	// current turn skipped planning (T0 / planner failure).
-	plan *planView
+	plan *pipelinestate.PlanView
 
 	// PC-059 / PC-061: Lens + ASA calibration verdict for the loaded
 	// model. Populated by fetchCalibrationStatusCmd on startup; rendered
@@ -355,7 +356,7 @@ func newTUIModel(proxyURL string) tuiModel {
 	return tuiModel{
 		proxyURL:            proxyURL,
 		events:              make(chan proxyclient.Envelope, 256),
-		state:               newPipelineState(),
+		state:               pipelinestate.New(),
 		maxLines:            1000,
 		input:               ta,
 		chatEvents:          make(chan proxyclient.ChatEvent, 64),
@@ -750,7 +751,7 @@ func (m tuiModel) handleEnvelope(msg envelopeMsg) (tea.Model, tea.Cmd) {
 		})
 		return m, waitForEnvelope(m.events)
 	}
-	m.state.apply(msg.ev)
+	m.state.Apply(msg.ev)
 	m.envelope = append(m.envelope, msg.ev)
 	if len(m.envelope) > m.maxLines {
 		m.envelope = m.envelope[len(m.envelope)-m.maxLines:]
