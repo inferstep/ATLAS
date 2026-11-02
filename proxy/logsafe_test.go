@@ -194,6 +194,17 @@ func TestCredentialFilteringStillApplies(t *testing.T) {
 	}
 }
 
+// The filter reads the record before the escape does: an escaped line break is
+// no longer white space, so a credential after it would pass the filter.
+func TestCredentialFilteringSeesTheRecordBeforeItsEscape(t *testing.T) {
+	out := captureLog(t, func() {
+		log.Printf("auth=%s", "bearer\nSUPERSECRETVALUE1234567890")
+	})
+	if strings.Contains(out, "SUPERSECRETVALUE1234567890") {
+		t.Fatalf("the escape ran before the filter: %s", out)
+	}
+}
+
 // A logged value keeps no control character but tab and no Unicode line break,
 // so it cannot pass for a record or act on a terminal. Sites that already call
 // logPath escape the same text twice, which must change nothing.
