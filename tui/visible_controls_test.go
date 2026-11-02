@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/itigges22/atlas-tui/internal/proxyclient"
 	"github.com/itigges22/atlas-tui/internal/sessionstore"
+	"github.com/itigges22/atlas-tui/internal/termtext"
 )
 
 // windowTitle is a harmless sequence that would set the terminal window's title.
@@ -24,7 +25,7 @@ const markedInTheOutput = "\x07\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\
 // direction marks replaced by a visible mark, on each path that renders it.
 // `shown` is what must be on the screen in their place.
 func TestTextFromTheProxyReachesTheTerminalWithItsControlsMarked(t *testing.T) {
-	mark := string(controlMark)
+	mark := "\uFFFD" // the replacement character, which termtext puts in place of each control
 	markdown, err := glamour.NewTermRenderer(glamour.WithStandardStyle("dark"), glamour.WithWordWrap(60))
 	if err != nil {
 		t.Fatal(err)
@@ -46,7 +47,7 @@ func TestTextFromTheProxyReachesTheTerminalWithItsControlsMarked(t *testing.T) {
 			return strings.Join(renderChatMessage(sessionstore.ChatMessage{Role: sessionstore.RoleAssistant, Body: "```\n&#169;\n```"}, markdown, 80), "\n")
 		}, "&#169;"},
 		{"the markdown renderer's output", func() string {
-			return visibleControlsKeepingStyles("\x1b[1mbold\x1b[0m" + windowTitle)
+			return termtext.VisibleControlsKeepingStyles("\x1b[1mbold\x1b[0m" + windowTitle)
 		}, "\x1b[1mbold\x1b[0m" + mark},
 		{"a tool result", func() string {
 			return strings.Join(renderChatMessage(sessionstore.ChatMessage{Role: sessionstore.RoleTool, Meta: "← run_command", Body: windowTitle}, nil, 80), "\n")

@@ -23,6 +23,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/itigges22/atlas-tui/internal/proxyclient"
 	"github.com/itigges22/atlas-tui/internal/sessionstore"
+	"github.com/itigges22/atlas-tui/internal/termtext"
 )
 
 // thinkingVerbs cycles through quirky phrases while the model is
@@ -119,12 +120,12 @@ func renderPipelinePane(p *pipelineState, height, width, scroll int) (string, []
 
 func renderPipelineRow(s *stageStatus, width int) string {
 	icon, style := stageIcon(s)
-	name := lipgloss.NewStyle().Width(16).Render(truncate(visibleControls(s.Name), 16))
+	name := lipgloss.NewStyle().Width(16).Render(termtext.Truncate(termtext.VisibleControls(s.Name), 16))
 	status := style.Width(8).Render(stageStatusLabel(s))
 	// Truncate to the cell width — content wider than the Width(8) cell
 	// would soft-wrap and push the whole row onto a second line.
-	dur := dimStyle.Width(8).Render(truncate(formatDuration(s.Duration()), 8))
-	detail := dimStyle.Render(truncate(visibleControls(s.Detail), max(0, width-40)))
+	dur := dimStyle.Width(8).Render(termtext.Truncate(formatDuration(s.Duration()), 8))
+	detail := dimStyle.Render(termtext.Truncate(termtext.VisibleControls(s.Detail), max(0, width-40)))
 	return fmt.Sprintf("%s  %s %s %s %s", icon, name, status, dur, detail)
 }
 
@@ -215,9 +216,9 @@ func applySelectionOverlay(rendered, paneName string, sel selectionState,
 	return strings.Join(lines, "\n")
 }
 
-// stripPaneANSI is the panes-level shim around model.go's stripANSI.
-// Defined here so the overlay code can stay in panes.go without
-// pulling in model.go's helpers.
+// stripPaneANSI removes the CSI sequences from a pane line for the selection
+// overlay. It is not termtext.StripANSI: any other escape loses only its ESC
+// and the byte after it, so the text of an OSC sequence stays.
 func stripPaneANSI(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
@@ -360,12 +361,12 @@ func renderChatPane(chat []sessionstore.ChatMessage, renderer *glamour.TermRende
 // renderChatMessage formats one chat row into a list of display lines.
 func renderChatMessage(m sessionstore.ChatMessage, renderer *glamour.TermRenderer,
 	width int) []string {
-	m.Body, m.Meta = visibleControls(m.Body), visibleControls(m.Meta)
-	m.Status, m.Reason = visibleControls(m.Status), visibleControls(m.Reason)
+	m.Body, m.Meta = termtext.VisibleControls(m.Body), termtext.VisibleControls(m.Meta)
+	m.Status, m.Reason = termtext.VisibleControls(m.Status), termtext.VisibleControls(m.Reason)
 	switch m.Role {
 	case sessionstore.RoleUser:
 		header := chatUserStyle.Render("you")
-		body := wrapPlain(m.Body, width-2)
+		body := termtext.WrapPlain(m.Body, width-2)
 		return prependPrefix(header, body)
 
 	case sessionstore.RoleAssistant:
@@ -387,7 +388,7 @@ func renderChatMessage(m sessionstore.ChatMessage, renderer *glamour.TermRendere
 }
 
 // renderToolMessage formats a tool call or its result. renderChatMessage has
-// already passed m's text through visibleControls.
+// already passed m's text through termtext.VisibleControls.
 func renderToolMessage(m sessionstore.ChatMessage, width int) []string {
 	// Meta convention from appendChatEvent:
 	//   "→ <tool>" — pending call, no mark
@@ -402,12 +403,12 @@ func renderToolMessage(m sessionstore.ChatMessage, width int) []string {
 		}
 		header = chatToolStyle.Render(fmt.Sprintf("%s tool · %s", mark, m.Meta))
 	}
-	body := wrapPlain(m.Body, width-2)
+	body := termtext.WrapPlain(m.Body, width-2)
 	return prependPrefix(header, body)
 }
 
 // renderSystemMessage formats a system row by its tag. renderChatMessage has
-// already passed m's text through visibleControls.
+// already passed m's text through termtext.VisibleControls.
 func renderSystemMessage(m sessionstore.ChatMessage, width int) []string {
 	tag := m.Meta
 	if tag == "" {
@@ -436,7 +437,7 @@ func renderSystemMessage(m sessionstore.ChatMessage, width int) []string {
 		}
 		parts := strings.SplitN(m.Body, "\n", 2)
 		out := []string{lineStyle.Render(fmt.Sprintf("· %s · %s", tag, parts[0]))}
-		for _, ln := range wrapPlain(parts[1], width-4) {
+		for _, ln := range termtext.WrapPlain(parts[1], width-4) {
 			out = append(out, lineStyle.Render("  "+ln))
 		}
 		return out
@@ -452,56 +453,26 @@ func renderSystemMessage(m sessionstore.ChatMessage, width int) []string {
 		if m.Body == "" {
 			return []string{header}
 		}
-		return prependPrefix(header, wrapPlain(m.Body, width-2))
+		return prependPrefix(header, termtext.WrapPlain(m.Body, width-2))
 	}
 	header = chatSystemStyle.Render(fmt.Sprintf("· %s", tag))
-	body := wrapPlain(m.Body, width-2)
+	body := termtext.WrapPlain(m.Body, width-2)
 	return prependPrefix(header, body)
 }
 
 func renderMarkdown(body string, r *glamour.TermRenderer) []string {
 	if r == nil {
-		return wrapPlain(body, 80)
+		return termtext.WrapPlain(body, 80)
 	}
 	// The renderer turns a numeric character reference such as "&#27;" into
 	// the character itself, so a reference to a marked character goes in as
 	// the reference to the mark.
-	out, err := r.Render(withMarkedReferences(body))
+	out, err := r.Render(termtext.WithMarkedReferences(body))
 	if err != nil {
-		return wrapPlain(body, 80)
+		return termtext.WrapPlain(body, 80)
 	}
-	out = visibleControlsKeepingStyles(strings.TrimRight(out, "\n"))
+	out = termtext.VisibleControlsKeepingStyles(strings.TrimRight(out, "\n"))
 	return strings.Split(out, "\n")
-}
-
-// wrapPlain hard-wraps long lines at the given width. Nothing fancy —
-// just splits at whitespace when possible. Operates on runes so a
-// multi-byte character (em dash, box drawing, CJK) is never split
-// mid-sequence and width counts characters, not bytes.
-func wrapPlain(s string, width int) []string {
-	if width < 8 {
-		width = 8
-	}
-	out := []string{}
-	for _, line := range strings.Split(s, "\n") {
-		runes := []rune(line)
-		for len(runes) > width {
-			cut := width
-			for i := width - 1; i > width/2; i-- {
-				if runes[i] == ' ' {
-					cut = i
-					break
-				}
-			}
-			out = append(out, string(runes[:cut]))
-			runes = runes[cut:]
-			for len(runes) > 0 && runes[0] == ' ' {
-				runes = runes[1:]
-			}
-		}
-		out = append(out, string(runes))
-	}
-	return out
 }
 
 // doneStatusStyles give each terminal status its own color (#236), so a
@@ -545,7 +516,7 @@ func renderStatsPane(p *pipelineState, width int,
 	lastTurnTokens, totalTokens, maxTokens int) string {
 	parts := []string{}
 	if active := p.activeStage(); active != nil {
-		parts = append(parts, runStyle.Render(fmt.Sprintf("● %s", visibleControls(active.Name))))
+		parts = append(parts, runStyle.Render(fmt.Sprintf("● %s", termtext.VisibleControls(active.Name))))
 	}
 	if p.currentTurn > 0 {
 		parts = append(parts, fmt.Sprintf("turn:%d", p.currentTurn))
@@ -683,7 +654,7 @@ func permPromptLines(pp *permPrompt, innerW, maxRows int) []string {
 	title := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("214")).Bold(true).
 		Render("⚠ Permission required")
-	toolName, msg := visibleControls(pp.toolName), visibleControls(pp.message)
+	toolName, msg := termtext.VisibleControls(pp.toolName), termtext.VisibleControls(pp.message)
 	tool := chatToolStyle.Render("tool · " + toolName)
 	if strings.TrimSpace(msg) == "" {
 		msg = "Allow " + toolName + "?"
@@ -1387,12 +1358,12 @@ func renderFilesPane(entries []fileEntry, modified map[string]bool,
 	if rootDisplay == "" || rootDisplay == "/" {
 		rootDisplay = root
 	}
-	header := dimStyle.Render(truncate("● "+rootDisplay, width))
+	header := dimStyle.Render(termtext.Truncate("● "+rootDisplay, width))
 
 	rows := []string{header}
 	for _, e := range entries {
 		indent := strings.Repeat("  ", e.Depth)
-		name := visibleControls(filepath.Base(e.RelPath))
+		name := termtext.VisibleControls(filepath.Base(e.RelPath))
 		var marker string
 		var styled string
 		switch {
@@ -1414,7 +1385,7 @@ func renderFilesPane(entries []fileEntry, modified map[string]bool,
 			raw += "/"
 		}
 		if lipgloss.Width(styled) > width {
-			cut := truncate(raw, width)
+			cut := termtext.Truncate(raw, width)
 			switch {
 			case e.IsDir:
 				styled = fileDirStyle.Render(cut)
@@ -1458,7 +1429,7 @@ func renderFilesPane(entries []fileEntry, modified map[string]bool,
 			more = fmt.Sprintf("(↑%d / +%d more)", scroll, total-height-scroll)
 		}
 		if len(out) > 0 {
-			out[len(out)-1] = dimStyle.Render(truncate(more, width))
+			out[len(out)-1] = dimStyle.Render(termtext.Truncate(more, width))
 		}
 	}
 	return strings.Join(out, "\n"), rows, start

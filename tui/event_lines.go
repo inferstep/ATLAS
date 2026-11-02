@@ -11,15 +11,16 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/itigges22/atlas-tui/internal/proxyclient"
+	"github.com/itigges22/atlas-tui/internal/termtext"
 )
 
 func formatEventLine(ev proxyclient.Envelope, width int) string {
 	ts := time.Unix(0, int64(ev.Timestamp*1e9)).Format("15:04:05")
 	color := typeColor(ev.Type)
-	typeCell := lipgloss.NewStyle().Foreground(color).Width(13).Render(visibleControls(ev.Type))
+	typeCell := lipgloss.NewStyle().Foreground(color).Width(13).Render(termtext.VisibleControls(ev.Type))
 	stageCell := lipgloss.NewStyle().Foreground(lipgloss.Color("251")).
-		Width(14).Render(truncate(visibleControls(ev.Stage), 14))
-	detail := visibleControls(summarizePayload(ev))
+		Width(14).Render(termtext.Truncate(termtext.VisibleControls(ev.Stage), 14))
+	detail := termtext.VisibleControls(summarizePayload(ev))
 
 	line := fmt.Sprintf("%s  %s %s %s", ts, typeCell, stageCell, detail)
 	line = strings.ReplaceAll(line, "\n", " ")
@@ -92,7 +93,7 @@ func summarizePayload(ev proxyclient.Envelope) string {
 			mark, ev.Payload["total_duration_ms"])
 	}
 	if d, ok := ev.Payload["detail"].(string); ok {
-		return truncate(d, 80)
+		return termtext.Truncate(d, 80)
 	}
 	return ""
 }
@@ -102,5 +103,5 @@ func truncateAny(v interface{}, n int) string {
 	if !ok {
 		return fmt.Sprintf("%v", v)
 	}
-	return truncate(s, n)
+	return termtext.Truncate(s, n)
 }

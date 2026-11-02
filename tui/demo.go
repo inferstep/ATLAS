@@ -35,6 +35,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/itigges22/atlas-tui/internal/proxyclient"
 	"github.com/itigges22/atlas-tui/internal/sessionstore"
+	"github.com/itigges22/atlas-tui/internal/termtext"
 )
 
 //go:embed demo_prompts_fallback.json
@@ -774,7 +775,7 @@ func (m *demoModel) View() string {
 	// Wrap to terminal width — the real-world prompts in the bank are
 	// 200+ chars and would otherwise overflow off the right edge.
 	// Subtract 2 for the "> " prefix on the first visible line.
-	headerLines := wrapPlain(prompt, m.width-2)
+	headerLines := termtext.WrapPlain(prompt, m.width-2)
 	headerStyled := make([]string, len(headerLines))
 	for i, line := range headerLines {
 		if i == 0 {
@@ -1117,7 +1118,7 @@ func readFileForDisplay(path string, maxLines, maxCols, offset int) (string, int
 		if maxCols > 0 && len(line) > maxCols {
 			line = line[:maxCols-1] + "…"
 		}
-		lines = append(lines, visibleControls(line))
+		lines = append(lines, termtext.VisibleControls(line))
 	}
 	total := len(lines)
 

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/itigges22/atlas-tui/internal/sessionstore"
+	"github.com/itigges22/atlas-tui/internal/termtext"
 )
 
 // sessionTitle derives a title from the first non-empty, non-echo user message
@@ -21,7 +22,7 @@ func sessionTitle(chat []sessionstore.ChatMessage) string {
 		if body == "" {
 			continue
 		}
-		return truncate(body, 60)
+		return termtext.Truncate(body, 60)
 	}
 	return ""
 }

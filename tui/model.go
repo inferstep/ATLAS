@@ -29,6 +29,7 @@ import (
 	"github.com/itigges22/atlas-tui/internal/debuglog"
 	"github.com/itigges22/atlas-tui/internal/proxyclient"
 	"github.com/itigges22/atlas-tui/internal/sessionstore"
+	"github.com/itigges22/atlas-tui/internal/termtext"
 )
 
 type envelopeMsg struct {
@@ -1013,17 +1014,17 @@ func extractPaneSelection(paneName string, startY, endY, startX, endX int) strin
 	}
 	out := make([]string, 0, endLine-startLine+1)
 	for i := startLine; i <= endLine; i++ {
-		raw := stripANSI(pane.lines[i])
+		raw := termtext.StripANSI(pane.lines[i])
 		if i == startLine && i == endLine {
 			lo, hi := startX, endX
 			if lo > hi {
 				lo, hi = hi, lo
 			}
-			raw = clipColumns(raw, lo-pane.leftX, hi-pane.leftX)
+			raw = termtext.ClipColumns(raw, lo-pane.leftX, hi-pane.leftX)
 		} else if i == startLine {
-			raw = clipColumns(raw, startX-pane.leftX, len(raw))
+			raw = termtext.ClipColumns(raw, startX-pane.leftX, len(raw))
 		} else if i == endLine {
-			raw = clipColumns(raw, 0, endX-pane.leftX)
+			raw = termtext.ClipColumns(raw, 0, endX-pane.leftX)
 		}
 		out = append(out, raw)
 	}
@@ -1072,76 +1073,6 @@ func (m *tuiModel) scrollPaneAt(x, y, delta int) {
 			m.fileScanScroll = max
 		}
 	}
-}
-
-// stripANSI removes ANSI CSI / OSC sequences from s. Bubbletea/lipgloss
-// embed lots of styling in chat lines; the clipboard only wants the
-// human-readable characters.
-func stripANSI(s string) string {
-	var b strings.Builder
-	b.Grow(len(s))
-	i := 0
-	for i < len(s) {
-		c := s[i]
-		if c == 0x1b && i+1 < len(s) {
-			next := s[i+1]
-			switch next {
-			case '[':
-				// CSI: ESC [ ... <final byte 0x40-0x7e>
-				j := i + 2
-				for j < len(s) {
-					if s[j] >= 0x40 && s[j] <= 0x7e {
-						j++
-						break
-					}
-					j++
-				}
-				i = j
-				continue
-			case ']':
-				// OSC: ESC ] ... BEL or ESC \
-				j := i + 2
-				for j < len(s) && s[j] != 0x07 {
-					if s[j] == 0x1b && j+1 < len(s) && s[j+1] == '\\' {
-						j += 2
-						break
-					}
-					j++
-				}
-				if j < len(s) && s[j] == 0x07 {
-					j++
-				}
-				i = j
-				continue
-			default:
-				i += 2
-				continue
-			}
-		}
-		b.WriteByte(c)
-		i++
-	}
-	return b.String()
-}
-
-// clipColumns returns s[lo:hi] in rune positions, clamped to the
-// string's actual length. Used to apply the column-precision clip on
-// the first and last lines of a multi-line drag.
-func clipColumns(s string, lo, hi int) string {
-	r := []rune(s)
-	if lo < 0 {
-		lo = 0
-	}
-	if hi < lo {
-		hi = lo
-	}
-	if hi > len(r) {
-		hi = len(r)
-	}
-	if lo > len(r) {
-		return ""
-	}
-	return string(r[lo:hi])
 }
 
 func (m tuiModel) View() string {
@@ -1251,7 +1182,7 @@ func overlayToast(rendered, body string, width int) string {
 		if max < 8 {
 			return rendered
 		}
-		styled = toastStyle.Render(truncate(body, max))
+		styled = toastStyle.Render(termtext.Truncate(body, max))
 		tw = lipgloss.Width(styled)
 	}
 	headW := lipgloss.Width(head)
@@ -1261,7 +1192,7 @@ func overlayToast(rendered, body string, width int) string {
 	// Strip ANSI and re-anchor: keep leftmost (headW - tw) visible cols
 	// then append the styled toast. Header's uniform style means losing
 	// its trailing ANSI codes at the right edge is harmless.
-	plain := stripANSI(head)
+	plain := termtext.StripANSI(head)
 	plainRunes := []rune(plain)
 	keep := len(plainRunes) - tw
 	if keep < 0 {
@@ -1350,7 +1281,7 @@ func renderHeader(proxyURL, workingDir, mode string, busy bool,
 		Foreground(lipgloss.Color("251")).
 		Padding(0, 1).
 		Render(fmt.Sprintf("%s · cwd:%s · %s · %s",
-			proxyURL, truncate(workingDir, 30), mode, status))
+			proxyURL, termtext.Truncate(workingDir, 30), mode, status))
 	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
 		gap = 1
