@@ -74,7 +74,7 @@ def test_ci_lens_job_installs_the_cpu_torch():
         "test.yml: the lens job does not install .github/requirements/lens.txt")
     torch = re.search(r"^torch==(\S+)", lock, re.MULTILINE)
     why = (f"lens.txt pins torch {torch.group(1) if torch else 'nowhere'}, not the "
-           f"build of PyTorch's CPU index. Fix: run scripts/ci-lock.sh.")
+           f"build of PyTorch's CPU index. Fix: run scripts/ci/ci-lock.sh.")
     assert torch, why
     assert torch.group(1).endswith("+cpu"), why
 

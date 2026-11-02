@@ -21,8 +21,8 @@ ACTIONS = ROOT / ".github" / "actions"
 SHA = "a" * 40
 
 
-def load(name):
-    spec = importlib.util.spec_from_file_location(f"atlas_{name}", ROOT / "scripts" / f"{name}.py")
+def load(path):
+    spec = importlib.util.spec_from_file_location(f"atlas_{Path(path).stem}", ROOT / "scripts" / path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -31,7 +31,7 @@ def load(name):
 
 @pytest.fixture(scope="module")
 def lookup():
-    return load("queue_run")
+    return load("ci/queue_run.py")
 
 
 def workflow(name):
@@ -191,7 +191,7 @@ def test_the_results_job_finds_the_run_then_takes_its_reports_then_sends_them():
     order = [step.get("id") or step.get("uses", "").split("@")[0] or step.get("name") for step in steps]
     assert order == ["actions/checkout", "run", "actions/download-artifact", "the reports of that run are here",
                      "./.github/actions/upload-coverage", "coverage is not sent", "./.github/actions/upload-test-results"]
-    assert steps[1]["run"] == 'python3 scripts/queue_run.py --commit "$GITHUB_SHA" --wait-minutes 30'
+    assert steps[1]["run"] == 'python3 scripts/ci/queue_run.py --commit "$GITHUB_SHA" --wait-minutes 30'
     assert steps[2]["with"]["run-id"] == "${{ steps.run.outputs.run-id }}"
     assert steps[2]["with"]["pattern"] == "coverage-*"
     assert steps[4]["if"] == "steps.run.outputs.tests-passed == 'true'"
@@ -236,13 +236,13 @@ def test_the_cache_job_saves_under_the_key_and_folders_that_the_pull_request_job
 def test_the_cache_job_builds_only_when_no_cache_was_found():
     build = steps_of("dev-results.yml", "go-cache")[-1]
     assert build["if"] == "steps.cache.outputs.cache-hit != 'true'"
-    assert build["run"] == 'python3 scripts/go_test_build.py "$MODULE"'
+    assert build["run"] == 'python3 scripts/ci/go_test_build.py "$MODULE"'
     assert cache_step(steps_of("dev-results.yml", "go-cache"))["id"] == "cache"
 
 
 @pytest.mark.parametrize("module", ["proxy", "tui"])
 def test_the_build_for_the_cache_is_the_test_gates_own_command_with_no_test_to_run(tmp_path, module):
-    build, gates = load("go_test_build"), load("production-readiness")
+    build, gates = load("ci/go_test_build.py"), load("production-readiness.py")
     command, folder, env = build.build_command(module, str(tmp_path))
     gate = gates._gates(())[f"go-{module}-test"]
     assert command[:2] == ["go", "test"]
@@ -338,13 +338,13 @@ def test_a_pull_request_that_changes_the_results_path_tries_the_lookup_and_sends
     assert sorted(on) == ["pull_request"]
     assert sorted(on["pull_request"]["paths"]) == sorted([
         ".github/workflows/dev-results.yml", ".github/workflows/dev-results-check.yml", ".github/actions/**",
-        "scripts/queue_run.py"])
+        "scripts/ci/queue_run.py"])
     job = workflow("dev-results-check.yml")["jobs"]["lookup"]
     assert job["permissions"] == {"contents": "read", "actions": "read"}
     uses = [str(step.get("uses", "")) for step in job["steps"]]
     assert not [use for use in uses if use.startswith(("codecov/", "./"))], "the check must send nothing"
     lookup_step = next(step for step in job["steps"] if step.get("id") == "run")
-    assert "scripts/queue_run.py" in lookup_step["run"]
+    assert "scripts/ci/queue_run.py" in lookup_step["run"]
     assert "--plain" in lookup_step["run"]
     assert 'git rev-list --first-parent -n 5 "$BASE"' in lookup_step["run"]
 

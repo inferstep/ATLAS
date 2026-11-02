@@ -20,7 +20,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_GATES = ("compose", "compose-rocm", "compose-vulkan", "compose-cpu", "compose-macos")
 PROXY = "proxy/"
 INFRASTRUCTURE_SUITE = "tests/infrastructure"
@@ -72,7 +72,7 @@ FIXES = {
     "shellcheck": "Fix the line shellcheck names. Its code (SCnnnn) is explained at https://www.shellcheck.net/wiki/.",
     "workflow-yaml": "Fix the YAML at the line shown.",
     "dockerfile-sources": "A Dockerfile copies a path that is not there. Fix the COPY line or add the file.",
-    "code-health": "Split the function or file it names (docs/CODE_STYLE.md). If something got smaller, run `python scripts/code_health.py --update` and commit the baseline.",
+    "code-health": "Split the function or file it names (docs/CODE_STYLE.md). If something got smaller, run `python scripts/ci/code_health.py --update` and commit the baseline.",
 }
 FIXES.update(dict.fromkeys(COMPOSE_GATES, "Run `docker compose -f <files> config` and fix the key it rejects."))
 FAILING_LINE = re.compile(r"FAIL|[Ee]rror|panic:|\.(?:go|py|sh|yml|ts):\d+|^E {2}")
@@ -171,7 +171,7 @@ def golangci_notes(changed: list[str], base: str) -> list[str]:
 def hadolint_notes(changed: list[str]) -> list[str]:
     """What hadolint finds in the Dockerfiles this change touches."""
     files = [p for p in changed if Path(p).name == "Dockerfile" or Path(p).name.startswith("Dockerfile.")]
-    script = ROOT / "scripts" / "dockerfile_lint.py"
+    script = ROOT / "scripts" / "ci" / "dockerfile_lint.py"
     if not files or not script.is_file():
         return []
     if not shutil.which("hadolint"):
@@ -197,7 +197,7 @@ def gates_to_run(pr, changed: list[str], full: bool) -> list:
                            cwd=ROOT / "proxy", available=lambda: shutil.which("go") is not None,
                            unavailable_reason="Go is not installed", env=gates["go-proxy-vet"].env))
     if any(p.endswith((".go", ".py")) for p in changed):
-        run.append(pr.Gate("code-health", (sys.executable, "scripts/code_health.py")))
+        run.append(pr.Gate("code-health", (sys.executable, "scripts/ci/code_health.py")))
     return run
 
 

@@ -1,4 +1,4 @@
-"""scripts/code_health.py measures what docs/CODE_STYLE.md limits, and the
+"""scripts/ci/code_health.py measures what docs/CODE_STYLE.md limits, and the
 committed baseline matches the code."""
 
 import importlib.util
@@ -6,9 +6,13 @@ import os
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-_spec = importlib.util.spec_from_file_location("code_health", os.path.join(ROOT, "scripts", "code_health.py"))
+_spec = importlib.util.spec_from_file_location("code_health", os.path.join(ROOT, "scripts", "ci", "code_health.py"))
 ch = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ch)
+
+
+def test_the_script_finds_the_repo_root():
+    assert ch.ROOT == ROOT
 
 
 def test_go_functions_and_methods_are_measured():

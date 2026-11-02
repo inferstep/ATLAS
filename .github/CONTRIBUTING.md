@@ -349,7 +349,7 @@ golangci-lint run ./... --new-from-merge-base=origin/dev
 
 **Dockerfiles.** [hadolint](https://github.com/hadolint/hadolint) reads every
 Dockerfile. It reports and does not fail for a finding. With hadolint
-installed, `python scripts/dockerfile_lint.py` prints what CI prints. Do not
+installed, `python scripts/ci/dockerfile_lint.py` prints what CI prints. Do not
 add a finding in a Dockerfile you change; if a rule is wrong for a line, say
 why in the pull request and do not switch the rule off in the file.
 
@@ -372,7 +372,7 @@ gate, and `extensions/jetbrains/.editorconfig` is the single source of the
 rules it applies — no baseline and no rule configuration in the Gradle
 build. Lines up to 100 characters. Run `./gradlew ktlintCheck` from
 `extensions/jetbrains/`, or `ktlintFormat` to apply the same rules. Kotlin
-is not covered by `scripts/code_health.py`.
+is not covered by `scripts/ci/code_health.py`.
 
 **YAML and Kubernetes.** 2-space indentation, resource limits on every
 container, meaningful names and labels.
