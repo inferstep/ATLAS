@@ -66,10 +66,10 @@ docker compose logs --tail 50
 | `error: patch failed:` / `patch does not apply` | [llama.cpp の再ビルド](#llamacpp-の再ビルド新しいモデルアーキテクチャまたはパッチのドリフト) |
 | マウントしたボリューム / モデルファイルでのパーミッション拒否 (Fedora/RHEL) | [SELinux がコンテナアクセスをブロック](#selinux-がコンテナアクセスをブロック-fedorarhel) |
 | プロキシのヘルスに `"sandbox": false`（手動のコンテナセットアップ） | [サンドボックスに到達できない](#サンドボックスに到達できない) |
-| プロキシのヘルスに `"sandbox": false`（Compose スタック） | [サンドボックスに到達できない (ヘルスチェック)](#サンドボックスに到達できない-ヘルスチェック) |
+| プロキシのヘルスに `"sandbox": false`（Compose スタック） | [サンドボックスに到達できない](#サンドボックスに到達できない) |
 | 起動時の `address already in use` | [ポート競合](#ポート競合) |
 | 「fitting params to device memory」直後の CUDA アロケーションエラー | [モデル + KV キャッシュが GPU に収まらない](#モデル--kv-キャッシュが-gpu-に収まらない起動失敗または生成が-5-倍遅い) |
-| 約 2 tok/s の生成、llama-server が CPU コアを消費する | [モデル + KV キャッシュが GPU に収まらない](#モデル--kv-キャッシュが-gpu-に収まらない起動失敗または生成が-5-倍遅い) / [生成が遅い](#生成が遅い約-2-toks) |
+| 約 2 tok/s の生成、llama-server が CPU コアを消費する | [モデル + KV キャッシュが GPU に収まらない](#モデル--kv-キャッシュが-gpu-に収まらない起動失敗または生成が-5-倍遅い) / [モデルが GPU ではなく CPU で読み込まれている](#モデルが-gpu-ではなく-cpu-で読み込まれている) |
 | ダウンロード前のモデルサイズの見積もり | [この GPU には何が収まる?](#この-gpu-には何が収まる) |
 | 起動時の `failed to load model` | [モデルファイルが見つからない](#モデルファイルが見つからない) |
 | llama-server がクラッシュ / OOMKilled、VRAM がほぼ 100% | [VRAM 不足](#vram-不足) |
@@ -427,17 +427,6 @@ chcon -Rt svirt_sandbox_file_t ~/models/
 # Or add :Z flag to volume mounts (Docker Compose handles this)
 ```
 
-### サンドボックスに到達できない
-
-**症状:** プロキシのヘルスが `"sandbox": false` を表示する。V3 のビルド検証が失敗する。
-
-**修正:** サンドボックスには `atlas` ではなく `sandbox-net` 経由で到達します — 実行されたコードがスタックの他の部分に届かないよう、サンドボックスは意図的に `atlas` ネットワークに参加しない唯一のサービスです。プロキシ、レンズ、v3-service は両方のネットワークに接続されています。コンテナを手動で実行している場合:
-```bash
-docker network create sandbox-net
-# sandbox joins ONLY sandbox-net; proxy / lens / v3-service join it too,
-# in addition to the atlas network.
-```
-
 ### ポート競合
 
 **症状:** `docker compose up` がポートの "address already in use" で失敗する。
@@ -498,6 +487,8 @@ ps aux | grep llama-server | grep -e '-ngl' -e 'n-gpu-layers'
 ```
 
 Docker を使用している場合、NVIDIA コンテナランタイムが設定されていることを確認してください（上記の GPU セクションを参照）。
+
+**想定パフォーマンス:** スループットはモデル、量子化、文法モードによって変わります。
 
 ### モデル + KV キャッシュが GPU に収まらない（起動失敗、または生成が 5 倍遅い）
 
@@ -853,9 +844,9 @@ curl -s http://localhost:8099/health | python3 -c "import sys,json; l=json.load(
 
 ## サンドボックスの問題
 
-### サンドボックスに到達できない (ヘルスチェック)
+### サンドボックスに到達できない
 
-**症状:** コードがテストされない。プロキシのヘルスが `"sandbox": false` を表示する。
+**症状:** コードがテストされない。V3 のビルド検証が失敗する。プロキシのヘルスが `"sandbox": false` を表示する。
 
 **修正:** サンドボックスのヘルスを確認してください:
 ```bash
@@ -869,6 +860,13 @@ curl -s http://localhost:8020/health
 サンドボックスコンテナが実行中だが正常でない場合、ログを確認してください:
 ```bash
 docker compose logs sandbox
+```
+
+サンドボックスには `atlas` ではなく `sandbox-net` 経由で到達します — 実行されたコードがスタックの他の部分に届かないよう、サンドボックスは意図的に `atlas` ネットワークに参加しない唯一のサービスです。プロキシ、レンズ、v3-service は両方のネットワークに接続されています。コンテナを手動で実行している場合:
+```bash
+docker network create sandbox-net
+# sandbox joins ONLY sandbox-net; proxy / lens / v3-service join it too,
+# in addition to the atlas network.
 ```
 
 ### コード実行のタイムアウト
@@ -908,15 +906,6 @@ atlas bench --run-id <your-run-id> --tasks 200
 完了済みタスクが失われることはありません: 結果は `benchmark/results/<run-id>/v3_lcb/per_task/` にタスクごとの JSON として保存され、ランナーは結果ファイルが存在するタスクをスキップして再開します。何らかの理由（OOM、再起動、セッションのクローズ）で中断された実行も同じ方法で再開します — 同一の `atlas bench` コマンドを再実行するだけです。
 
 ## パフォーマンス
-
-### 生成が遅い（約 2 tok/s）
-
-モデルが GPU ではなく CPU で実行されています。以下を確認してください:
-1. `nvidia-smi` — llama-server が GPU プロセスとして表示されているか?
-2. `-ngl 99`（`--n-gpu-layers`）— すべてのレイヤーがオフロードされているか?
-3. NVIDIA Container Toolkit — コンテナランタイムが GPU アクセス用に設定されているか?
-
-**想定パフォーマンス:** スループットはモデル、量子化、文法モードによって変わります。
 
 ### V3 パイプラインに数分かかる
 

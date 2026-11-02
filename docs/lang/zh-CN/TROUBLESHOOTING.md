@@ -69,10 +69,10 @@ docker compose logs --tail 50
 | `error: patch failed:` / `patch does not apply` | [重建 llama.cpp](#重建-llamacpp新模型架构或补丁漂移) |
 | 挂载卷 / 模型文件权限被拒绝（Fedora/RHEL） | [SELinux 阻止容器访问](#selinux-阻止容器访问fedorarhel) |
 | 代理健康检查中 `"sandbox": false`（手动容器部署） | [Sandbox 不可达](#sandbox-不可达) |
-| 代理健康检查中 `"sandbox": false`（Compose 栈） | [Sandbox 不可达（健康检查）](#sandbox-不可达健康检查) |
+| 代理健康检查中 `"sandbox": false`（Compose 栈） | [Sandbox 不可达](#sandbox-不可达) |
 | 启动时 `address already in use` | [端口冲突](#端口冲突) |
 | "fitting params to device memory" 之后出现 CUDA 分配错误 | [模型 + KV 缓存放不进 GPU](#模型--kv-缓存放不进-gpu启动失败或生成速度慢-5-倍) |
-| 生成约 2 tok/s，llama-server 占满多个 CPU 核心 | [模型 + KV 缓存放不进 GPU](#模型--kv-缓存放不进-gpu启动失败或生成速度慢-5-倍) / [生成速度慢](#生成速度慢约-2-toks) |
+| 生成约 2 tok/s，llama-server 占满多个 CPU 核心 | [模型 + KV 缓存放不进 GPU](#模型--kv-缓存放不进-gpu启动失败或生成速度慢-5-倍) / [模型在 CPU 而非 GPU 上加载](#模型在-cpu-而非-gpu-上加载) |
 | 下载前估算模型能否放下 | [我的 GPU 能放下什么？](#我的-gpu-能放下什么) |
 | 启动时 `failed to load model` | [模型文件未找到](#模型文件未找到) |
 | llama-server 崩溃 / 被 OOMKill，显存接近 100% | [显存不足](#显存不足) |
@@ -430,17 +430,6 @@ chcon -Rt svirt_sandbox_file_t ~/models/
 # Or add :Z flag to volume mounts (Docker Compose handles this)
 ```
 
-### Sandbox 不可达
-
-**现象：** 代理健康检查显示 `"sandbox": false`。V3 构建验证失败。
-
-**解决方法：** Sandbox 通过 `sandbox-net` 而不是 `atlas` 访问 —— 它是有意设计为唯一不在 `atlas` 网络上的服务，使执行的代码无法访问栈的其余部分。代理、Lens 和 v3-service 同时接入两个网络。如果手动运行容器：
-```bash
-docker network create sandbox-net
-# sandbox joins ONLY sandbox-net; proxy / lens / v3-service join it too,
-# in addition to the atlas network.
-```
-
 ### 端口冲突
 
 **现象：** `docker compose up` 因某端口 "address already in use" 而失败。
@@ -501,6 +490,8 @@ ps aux | grep llama-server | grep -e '-ngl' -e 'n-gpu-layers'
 ```
 
 如果使用 Docker，请确保已配置 NVIDIA 容器运行时（参见上方 GPU 章节）。
+
+**预期性能：** 吞吐量取决于模型、量化方式和语法模式。
 
 ### 模型 + KV 缓存放不进 GPU（启动失败，或生成速度慢 5 倍）
 
@@ -856,9 +847,9 @@ curl -s http://localhost:8099/health | python3 -c "import sys,json; l=json.load(
 
 ## Sandbox 问题
 
-### Sandbox 不可达（健康检查）
+### Sandbox 不可达
 
-**现象：** 代码从未被测试。代理健康检查显示 `"sandbox": false`。
+**现象：** 代码从未被测试。V3 构建验证失败。代理健康检查显示 `"sandbox": false`。
 
 **解决方法：** 检查 Sandbox 健康状态：
 ```bash
@@ -872,6 +863,13 @@ curl -s http://localhost:8020/health
 如果 Sandbox 容器正在运行但不健康，请检查日志：
 ```bash
 docker compose logs sandbox
+```
+
+Sandbox 通过 `sandbox-net` 而不是 `atlas` 访问 —— 它是有意设计为唯一不在 `atlas` 网络上的服务，使执行的代码无法访问栈的其余部分。代理、Lens 和 v3-service 同时接入两个网络。如果手动运行容器：
+```bash
+docker network create sandbox-net
+# sandbox joins ONLY sandbox-net; proxy / lens / v3-service join it too,
+# in addition to the atlas network.
 ```
 
 ### 代码执行超时
@@ -911,15 +909,6 @@ atlas bench --run-id <your-run-id> --tasks 200
 已完成的任务绝不会丢失：结果以每任务一个 JSON 的形式保存在 `benchmark/results/<run-id>/v3_lcb/per_task/` 下，运行器恢复时会跳过已有结果文件的任务。无论因何中断（OOM、重启、会话关闭），重新运行相同的 `atlas bench` 命令即可恢复。
 
 ## 性能问题
-
-### 生成速度慢（约 2 tok/s）
-
-模型正在 CPU 而非 GPU 上运行。请检查：
-1. `nvidia-smi` —— llama-server 是否列为 GPU 进程？
-2. `-ngl 99`（`--n-gpu-layers`）—— 所有层是否已卸载到 GPU？
-3. NVIDIA Container Toolkit —— 容器运行时是否已配置 GPU 访问？
-
-**预期性能：** 吞吐量取决于模型、量化方式和语法模式。
 
 ### V3 Pipeline 需要几分钟
 

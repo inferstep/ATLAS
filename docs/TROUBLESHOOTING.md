@@ -69,10 +69,10 @@ Exact error strings and symptoms, mapped to their entries.
 | Agent insists a file "does not exist" that's right there; `read_file` and `run_command` disagree | [Agent Says Files Don't Exist That Are Right There](#agent-says-files-dont-exist-that-are-right-there-workspace-mount-split) |
 | Permission denied on mounted volumes / model files (Fedora/RHEL) | [SELinux Blocking Container Access](#selinux-blocking-container-access-fedorarhel) |
 | `"sandbox": false` in proxy health (manual container setup) | [Sandbox Unreachable](#sandbox-unreachable) |
-| `"sandbox": false` in proxy health (Compose stack) | [Sandbox Unreachable (health check)](#sandbox-unreachable-health-check) |
+| `"sandbox": false` in proxy health (Compose stack) | [Sandbox Unreachable](#sandbox-unreachable) |
 | `address already in use` on startup | [Port Conflicts](#port-conflicts) |
 | CUDA allocation error after "fitting params to device memory" | [Model + KV cache don't fit on the GPU](#model--kv-cache-dont-fit-on-the-gpu-startup-fails-or-generation-is-5-slow) |
-| Generation at ~2 tok/s, llama-server burning CPU cores | [Model + KV cache don't fit on the GPU](#model--kv-cache-dont-fit-on-the-gpu-startup-fails-or-generation-is-5-slow) / [Slow Generation](#slow-generation-2-toks) |
+| Generation at ~2 tok/s, llama-server burning CPU cores | [Model + KV cache don't fit on the GPU](#model--kv-cache-dont-fit-on-the-gpu-startup-fails-or-generation-is-5-slow) / [Model Loading on CPU Instead of GPU](#model-loading-on-cpu-instead-of-gpu) |
 | Sizing a model before download | [What fits on my GPU?](#what-fits-on-my-gpu) |
 | `failed to load model` at startup | [Model File Not Found](#model-file-not-found) |
 | llama-server crashes / OOMKilled, VRAM near 100% | [Out of VRAM](#out-of-vram) |
@@ -431,17 +431,6 @@ chcon -Rt svirt_sandbox_file_t ~/models/
 # Or add :Z flag to volume mounts (Docker Compose handles this)
 ```
 
-### Sandbox Unreachable
-
-**Symptom:** Proxy health shows `"sandbox": false`. V3 build verification fails.
-
-**Fix:** The sandbox is reached over `sandbox-net`, not `atlas` — it is deliberately the only service NOT on the `atlas` network, so executed code cannot reach the rest of the stack. The proxy, lens and v3-service are dual-homed on both. If running containers manually:
-```bash
-docker network create sandbox-net
-# sandbox joins ONLY sandbox-net; proxy / lens / v3-service join it too,
-# in addition to the atlas network.
-```
-
 ### Port Conflicts
 
 **Symptom:** `docker compose up` fails with "address already in use" on a port.
@@ -521,6 +510,8 @@ ps aux | grep llama-server | grep -e '-ngl' -e 'n-gpu-layers'
 ```
 
 If using Docker, ensure the NVIDIA container runtime is configured (see GPU section above).
+
+**Expected performance:** throughput depends on the model, quantization and grammar mode.
 
 ### Model + KV cache don't fit on the GPU (startup fails, or generation is 5× slow)
 
@@ -906,9 +897,9 @@ curl -s http://localhost:8099/health | python3 -c "import sys,json; l=json.load(
 
 ## Sandbox Issues
 
-### Sandbox Unreachable (health check)
+### Sandbox Unreachable
 
-**Symptom:** Code is never tested. Proxy health shows `"sandbox": false`.
+**Symptom:** Code is never tested. V3 build verification fails. Proxy health shows `"sandbox": false`.
 
 **Fix:** Check sandbox health:
 ```bash
@@ -922,6 +913,13 @@ curl -s http://localhost:8020/health
 If the sandbox container is running but unhealthy, check logs:
 ```bash
 docker compose logs sandbox
+```
+
+The sandbox is reached over `sandbox-net`, not `atlas` — it is deliberately the only service NOT on the `atlas` network, so executed code cannot reach the rest of the stack. The proxy, lens and v3-service are dual-homed on both. If running containers manually:
+```bash
+docker network create sandbox-net
+# sandbox joins ONLY sandbox-net; proxy / lens / v3-service join it too,
+# in addition to the atlas network.
 ```
 
 ### Code Execution Timeout
@@ -972,15 +970,6 @@ reason (OOM, reboot, closed session) resumes the same way — just re-run
 the identical `atlas bench` command.
 
 ## Performance
-
-### Slow Generation (~2 tok/s)
-
-The model is running on CPU instead of GPU. Check:
-1. `nvidia-smi` — is llama-server listed as a GPU process?
-2. `-ngl 99` (`--n-gpu-layers`) — are all layers offloaded?
-3. NVIDIA Container Toolkit — is the container runtime configured for GPU access?
-
-**Expected performance:** throughput depends on the model, quantization and grammar mode.
 
 ### V3 Pipeline Takes Several Minutes
 
