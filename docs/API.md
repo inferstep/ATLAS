@@ -1128,6 +1128,7 @@ Run a shell command against the bind-mounted workspace. The proxy's `run_command
   "stderr": "",
   "exit_code": 0,
   "elapsed_ms": 78,
+  "outcome": "completed",
   "timed_out": false,
   "limits_enforced": true,
   "resource_limits": "enforced"
@@ -1165,6 +1166,24 @@ The proxy uses this for candidate staging — see
 [CANDIDATE_POLICY.md](CANDIDATE_POLICY.md). Stdout is truncated to its last 4000 chars and stderr to its last 2000 server-side; the proxy's `run_command` bridge applies its own caps (stdout 8000 / stderr 4000) on top. State is **not** persistent between calls — each call is its own subprocess. To preserve state (e.g. an installed pip package) chain commands with `&&` in a single call, or rely on a project venv that survives across calls because it lives on the bind-mounted workspace.
 
 The proxy's destructive-verb gate (`validateShellCommand`) blocks catastrophic commands — fork bombs, `rm -rf /`-class whole-project wipes, `find … -delete` / `-exec rm` from a search root, `dd`/`mkfs`/`wipefs` against block devices — and unwraps `bash -c "…"` / `eval "…"` wrappers, up to 16 layers, and refuses a wrapper it cannot check so the inner command is checked too, *before* the call ever reaches `/shell`. Ordinary `mv`, `cp`, and targeted `rm` of specific files are allowed. This endpoint is the executor, not the gate.
+
+#### How a command ends
+
+A command stopped at a ceiling exits non-zero exactly like a failing test. Read as an exit code alone, a verification that never completed becomes a behavioural failure of the code under test.
+
+So the executor reports **how** the command ended, in `outcome`, from a closed set: `completed`, `timed_out`, `memory_exhausted`, `process_limit_exceeded`, `output_limit_exceeded`, `cancelled`, `spawn_failed`, and the fail-closed `internal_unclassified`. Only `completed` means the command reached its own end, and only then does its exit code mean anything.
+
+A stopped command cannot mint a candidate authorization, consume a grant, settle mutation debt or claim completion. In candidate staging it becomes `resource_exhausted`, which reports as `evidence_resource_exhausted` — the obligation is unmet for want of an observation, not because an observation went against the candidate.
+
+The model is told what happened in words it can act on ("the command was stopped because it used too much memory to finish. It did NOT fail"), with no host limits, pids, cgroup paths or deployment detail in the message.
+
+**Cancelling by going away.** A caller that stops waiting for an answer cancels the command. The `/shell` handler watches the request's own connection through Starlette's `is_disconnected`, and tells the bounded runner to stop through the same cancellation callback every other stop uses — a reset connection, a closed one, an explicitly aborted request and a graceful shutdown all arrive the same way. The runner kills the process tree the same way a timeout does, including descendants that left the process group.
+
+`cancelled` is a different outcome from `timed_out` and from `memory_exhausted`, `process_limit_exceeded` and `output_limit_exceeded`, so a stopped command is never mistaken for a finished one. A cancelled command produces no verification evidence and mints no candidate grant. Cancelling twice is the same as cancelling once, a neighbouring command is unaffected, and the watcher is per-request, so a reused file descriptor cannot cancel a later one.
+
+The executor's middlewares are pure ASGI rather than `BaseHTTPMiddleware`, which interposes on the receive channel, so `http.disconnect` would never reach the endpoint and `Request.is_disconnected()` would return False forever.
+
+Under compose the sandbox sets no `stop_grace_period`, so a shutdown is bounded by Docker's default stop timeout, not by `MAX_EXECUTION_TIME`. Nothing survives it.
 
 ### POST /execute
 

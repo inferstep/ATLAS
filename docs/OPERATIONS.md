@@ -138,7 +138,7 @@ analysed. In particular:
 | Model load failure | llama logs name the reason (VRAM, arch, quant); `atlas tier fit --write` re-sizes; `atlas model verify` checks file integrity against the pinned hash |
 | Lens degraded (`self_test_error`) | `atlas lens check` prints the exact missing artifact + fix command (`atlas lens build`); identity mismatch means the bundle belongs to another model |
 | ASA inactive | llama startup log prints why (missing vector / marker mismatch); `atlas asa check`, then `atlas asa build` |
-| Sandbox failures | `docker compose logs sandbox`; egress-cut mode (`ATLAS_SANDBOX_NET_INTERNAL=true`) intentionally breaks dependency installs; resource kills show in tool results as their outcome (`memory_exhausted`, `process_limit_exceeded`, `output_limit_exceeded`, `timed_out`); see § Truthful results |
+| Sandbox failures | `docker compose logs sandbox`; egress-cut mode (`ATLAS_SANDBOX_NET_INTERNAL=true`) intentionally breaks dependency installs; resource kills show in tool results as their outcome (`memory_exhausted`, `process_limit_exceeded`, `output_limit_exceeded`, `timed_out`); see [How a command ends](API.md#how-a-command-ends) |
 | GPU OOM | reduce `ATLAS_CTX_SIZE`/slots via `atlas tier fit --write`; check nothing else holds VRAM (`nvidia-smi`) |
 | Disk full | models dir is the usual consumer; `atlas model remove <name> --yes` |
 | Failed upgrade | § Rolling back (pin the previous tag, restore `.env.bak`) |
@@ -163,7 +163,7 @@ Two layers, and both are needed.
 **Per command.** The executor bounds every untrusted command: wall clock,
 memory, process count and output bytes, installed before the command starts and
 applied to everything it spawns, however it spawns it. A command stopped at a
-ceiling is reported as stopped, never as failed — see "Truthful results" below.
+ceiling is reported as stopped, never as failed — see [How a command ends](API.md#how-a-command-ends).
 
 | Variable | Default | What it bounds |
 | --- | --- | --- |
@@ -230,22 +230,6 @@ Swap is disabled for the sandbox (`memswap_limit` tracks `mem_limit`): a
 swapping test is a hung one, and swap hides an over-commit rather than
 absorbing it.
 
-## Cancelling a command by going away
-
-A caller that stops waiting for an answer cancels the command. The executor's
-`/shell` handler watches the request's own connection through Starlette's
-`is_disconnected`, and tells the bounded runner to stop through the same
-cancellation callback every other stop uses — a reset connection, a closed one,
-an explicitly aborted request and a graceful shutdown all arrive the same way.
-
-The distinction is kept in the answer: `cancelled` is its own outcome, separate
-from `timed_out` and from `memory_exhausted`, `process_limit_exceeded` and
-`output_limit_exceeded`. A cancelled command produces no verification evidence,
-mints no candidate grant, and takes its whole process tree with it — including
-descendants that left the process group. Cancelling twice is the same as
-cancelling once, a neighbouring command is unaffected, and the watcher for each
-request is per-request, so a reused file descriptor cannot cancel a later one.
-
 ## Building for verification without claiming the deployable tag
 
 `docker compose build atlas-proxy` writes
@@ -302,44 +286,6 @@ stack and records what "deployed" means. In order, it:
 Records go to `ATLAS_DEPLOY_DIR` (default `~/atlas-ralph`). To roll one
 service back, tag its `atlas-prev:*` image with the service's image name and
 recreate that service with `docker compose up -d --force-recreate --no-deps`.
-
-## Cancellation
-
-A caller that goes away stops the command it asked for. A reset connection, a
-closed one, an aborted request or a shutdown all reach the executor's bounded
-runner through its cancellation callback, which kills the process tree the same
-way a timeout does — and reports `cancelled`, which is a different outcome from
-`timed_out` and from the resource ones, so a stopped command is never mistaken
-for a finished one.
-
-The executor's middlewares are pure ASGI rather than `BaseHTTPMiddleware`,
-which interposes on the receive channel, so `http.disconnect` would never reach
-the endpoint and `Request.is_disconnected()` would return False forever.
-
-Under compose the sandbox sets no `stop_grace_period`, so a shutdown is bounded
-by Docker's default stop timeout, not by `MAX_EXECUTION_TIME`. Nothing survives
-it.
-
-## Truthful results
-
-A command stopped at a ceiling exits non-zero exactly like a failing test. Read as an exit code alone, a verification that never completed becomes a
-behavioural failure of the code under test.
-
-So the executor reports **how** the command ended, from a closed set:
-`completed`, `timed_out`, `memory_exhausted`, `process_limit_exceeded`,
-`output_limit_exceeded`, `cancelled`, `spawn_failed`, and the fail-closed
-`internal_unclassified`. Only `completed` means the command reached its own
-end, and only then does its exit code mean anything.
-
-A stopped command cannot mint a candidate authorization, consume a grant,
-settle mutation debt or claim completion. In candidate staging it becomes
-`resource_exhausted`, which reports as `evidence_resource_exhausted` — the
-obligation is unmet for want of an observation, not because an observation went
-against the candidate.
-
-The model is told what happened in words it can act on ("it used too much
-memory to finish; it did NOT fail"), with no host limits, pids, cgroup paths or
-deployment detail in the message.
 
 ---
 
