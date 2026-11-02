@@ -32,32 +32,45 @@ func inspectShellCommand(cmd string) string {
 	for len(pending) > 0 {
 		current := pending[len(pending)-1]
 		pending = pending[:len(pending)-1]
-		seg := strings.TrimSpace(current.command)
-		if shellForkBombRe.MatchString(seg) {
-			return "refused: that is a fork bomb — it would exhaust the sandbox's process table. If you need to spawn processes, run them one at a time."
+		refusal, inner := inspectOneShellCommand(current)
+		if refusal != "" {
+			return refusal
 		}
-		if shellDeviceWriteRe.MatchString(seg) {
-			return "refused: writing to a block device is blocked. Work with files under the project directory instead."
-		}
-		segments := commandSegments(seg)
-		if len(segments) > 1 {
-			for _, part := range segments {
-				pending = append(pending, shellInspection{command: part, depth: current.depth})
-			}
-			continue
-		}
-		if msg := catastrophicCommand(seg); msg != "" {
-			return msg
-		}
-		result := unwrapShellWrapper(seg, current.depth)
-		if result.refusal != "" {
-			return result.refusal
-		}
-		if result.unwrapped {
-			pending = append(pending, shellInspection{command: result.command, depth: result.depth})
-		}
+		pending = append(pending, inner...)
 	}
 	return ""
+}
+
+// inspectOneShellCommand checks one command and returns its refusal, or the
+// commands inside it that still need checking: the segments of a chain, or
+// the command an execution wrapper runs.
+func inspectOneShellCommand(current shellInspection) (string, []shellInspection) {
+	seg := strings.TrimSpace(current.command)
+	if shellForkBombRe.MatchString(seg) {
+		return "refused: that is a fork bomb — it would exhaust the sandbox's process table. If you need to spawn processes, run them one at a time.", nil
+	}
+	if shellDeviceWriteRe.MatchString(seg) {
+		return "refused: writing to a block device is blocked. Work with files under the project directory instead.", nil
+	}
+	segments := commandSegments(seg)
+	if len(segments) > 1 {
+		var inner []shellInspection
+		for _, part := range segments {
+			inner = append(inner, shellInspection{command: part, depth: current.depth})
+		}
+		return "", inner
+	}
+	if msg := catastrophicCommand(seg); msg != "" {
+		return msg, nil
+	}
+	result := unwrapShellWrapper(seg, current.depth)
+	if result.refusal != "" {
+		return result.refusal, nil
+	}
+	if result.unwrapped {
+		return "", []shellInspection{{command: result.command, depth: result.depth}}
+	}
+	return "", nil
 }
 
 // shellCommandWords splits only the shell words needed to inspect wrappers.
