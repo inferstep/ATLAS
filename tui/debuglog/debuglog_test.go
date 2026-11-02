@@ -1,4 +1,4 @@
-package main
+package debuglog
 
 import (
 	"os"
@@ -7,17 +7,17 @@ import (
 )
 
 // "off" is the documented opt-out and the Python wrapper strips it before
-// exec. Anyone running the binary directly bypasses that, and initDebugLog
+// exec. Anyone running the binary directly bypasses that, and Open
 // used to take the word as a filename — `ATLAS_TUI_LOG=off atlas-tui` left a
 // file called "off" in the working directory (one got committed that way).
-func TestInitDebugLogTreatsOffAsDisabled(t *testing.T) {
+func TestOpenTreatsOffAsDisabled(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 
 	for _, val := range []string{"off", "OFF", " off "} {
-		closer, err := initDebugLog(val)
+		closer, err := Open(val)
 		if err != nil {
-			t.Fatalf("initDebugLog(%q) errored: %v", val, err)
+			t.Fatalf("Open(%q) errored: %v", val, err)
 		}
 		if closer != nil {
 			closer()
@@ -27,16 +27,16 @@ func TestInitDebugLogTreatsOffAsDisabled(t *testing.T) {
 			for _, e := range entries {
 				names = append(names, e.Name())
 			}
-			t.Fatalf("initDebugLog(%q) created %v, want no file", val, names)
+			t.Fatalf("Open(%q) created %v, want no file", val, names)
 		}
 	}
 }
 
-func TestInitDebugLogStillWritesToARealPath(t *testing.T) {
+func TestOpenStillWritesToARealPath(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "debug.log")
-	closer, err := initDebugLog(path)
+	closer, err := Open(path)
 	if err != nil {
-		t.Fatalf("initDebugLog: %v", err)
+		t.Fatalf("Open: %v", err)
 	}
 	if closer != nil {
 		closer()
