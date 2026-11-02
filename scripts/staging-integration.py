@@ -27,7 +27,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -70,9 +69,47 @@ def wait_healthy(url: str, proc: subprocess.Popen, timeout: float = 30.0) -> boo
             with urllib.request.urlopen(url + "/health", timeout=2) as resp:
                 if resp.status == 200:
                     return True
-        except (urllib.error.URLError, OSError):
+        except OSError:
             time.sleep(0.25)
     return False
+
+
+def missing_requirement() -> str:
+    """Why this cannot run here, or nothing when it can."""
+    for tool, why in ((shutil.which("go"), "Go is not installed"),
+                      (EXECUTOR.exists() or None, f"{EXECUTOR} is missing")):
+        if not tool:
+            return why
+    try:
+        import uvicorn
+        import fastapi
+    except ImportError as exc:
+        return f"{exc.name} is not installed"
+    return ""
+
+
+def run_tests(args: argparse.Namespace, proc: subprocess.Popen, url: str, stage: dict) -> int:
+    """With the executor starting at `url`: the exit code of the Go tests, or of --keep."""
+    if not wait_healthy(url, proc):
+        out = ""
+        if proc.stdout is not None:
+            with contextlib.suppress(Exception):
+                out = proc.stdout.read()[-2000:]
+        print(f"staging-integration: executor never became healthy\n{out}",
+              file=sys.stderr)
+        return 2
+    if args.keep:
+        print(f"ATLAS_STAGING_SANDBOX_URL={url}")
+        print(f"ATLAS_STAGING_SANDBOX_WORKSPACE={stage['ATLAS_STAGING_SANDBOX_WORKSPACE']}")
+        print(f"ATLAS_STAGING_SANDBOX_BASE={stage['ATLAS_STAGING_SANDBOX_BASE']}")
+        proc.wait()
+        return 0
+    result = subprocess.run(
+        ["go", "test", "-count=1", "-timeout", args.timeout, "-v",
+         "-run", TESTS, "."],
+        cwd=PROXY,
+        env=dict(stage, ATLAS_STAGING_SANDBOX_URL=url))
+    return result.returncode
 
 
 def main() -> int:
@@ -82,16 +119,9 @@ def main() -> int:
     ap.add_argument("--timeout", default="10m", help="go test -timeout value")
     args = ap.parse_args()
 
-    for tool, why in ((shutil.which("go"), "Go is not installed"),
-                      (EXECUTOR.exists() or None, f"{EXECUTOR} is missing")):
-        if not tool:
-            print(f"staging-integration: {why}", file=sys.stderr)
-            return 2
-    try:
-        import uvicorn
-        import fastapi
-    except ImportError as exc:
-        print(f"staging-integration: {exc.name} is not installed", file=sys.stderr)
+    missing = missing_requirement()
+    if missing:
+        print(f"staging-integration: {missing}", file=sys.stderr)
         return 2
 
     workdir = Path(tempfile.mkdtemp(prefix="atlas-staging-integration-"))
@@ -111,28 +141,8 @@ def main() -> int:
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True)
     try:
-        if not wait_healthy(url, proc):
-            out = ""
-            if proc.stdout is not None:
-                with contextlib.suppress(Exception):
-                    out = proc.stdout.read()[-2000:]
-            print(f"staging-integration: executor never became healthy\n{out}",
-                  file=sys.stderr)
-            return 2
-        if args.keep:
-            print(f"ATLAS_STAGING_SANDBOX_URL={url}")
-            print(f"ATLAS_STAGING_SANDBOX_WORKSPACE={ws}")
-            print(f"ATLAS_STAGING_SANDBOX_BASE={base}")
-            proc.wait()
-            return 0
-        result = subprocess.run(
-            ["go", "test", "-count=1", "-timeout", args.timeout, "-v",
-             "-run", TESTS, "."],
-            cwd=PROXY,
-            env=dict(env, ATLAS_STAGING_SANDBOX_URL=url,
-                     ATLAS_STAGING_SANDBOX_WORKSPACE=str(ws),
-                     ATLAS_STAGING_SANDBOX_BASE=str(base)))
-        return result.returncode
+        return run_tests(args, proc, url, dict(env, ATLAS_STAGING_SANDBOX_WORKSPACE=str(ws),
+                                               ATLAS_STAGING_SANDBOX_BASE=str(base)))
     finally:
         proc.terminate()
         with contextlib.suppress(subprocess.TimeoutExpired):
