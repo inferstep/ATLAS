@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
-SCRIPT = ROOT / "scripts" / "dockerfile_lint.py"
+SCRIPT = ROOT / "scripts" / "ci" / "dockerfile_lint.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "hadolint.yml"
 # The stand-in is two files. The first line of the one that is called is fixed: a line that named the path of Python
 # would not start where that path holds a space.
@@ -35,6 +35,10 @@ def lint():
     spec.loader.exec_module(module)
     yield module
     sys.modules.pop(spec.name, None)
+
+
+def test_the_script_finds_the_repo_root(lint):
+    assert lint.ROOT == ROOT
 
 
 def git(repo: Path, *args: str) -> str:
@@ -211,4 +215,4 @@ def test_the_workflow_holds_the_binary_against_a_recorded_checksum():
     assert re.search(r"HADOLINT_VERSION: v\d+\.\d+\.\d+\n", text)
     assert re.search(r"HADOLINT_SHA256: [0-9a-f]{64}\n", text)
     assert "sha256sum --check" in text
-    assert re.search(r"^ +run: python scripts/dockerfile_lint\.py --changed-from ", text, re.MULTILINE)
+    assert re.search(r"^ +run: python scripts/ci/dockerfile_lint\.py --changed-from ", text, re.MULTILINE)

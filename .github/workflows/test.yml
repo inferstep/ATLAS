@@ -159,7 +159,7 @@ jobs:
         run: |
           # The CLI is stdlib-only, so --no-deps installs everything it needs.
           # Everything else comes from the one hashed lock (ci.in lists it;
-          # scripts/ci-lock.sh makes ci.txt again), and pip checks each file
+          # scripts/ci/ci-lock.sh makes ci.txt again), and pip checks each file
           # it downloads against the lock's hashes:
           # - pytest and pyyaml. pyyaml:
           #   tests/contracts/test_openapi_contract.py importorskips yaml —
@@ -348,7 +348,7 @@ jobs:
         # docs/CODE_STYLE.md: no new function over 100 lines or file over
         # 1,500, and nothing on .github/code-health-baseline.json grows.
         # Standard library only; the runner's python3 is enough.
-        run: python3 scripts/code_health.py
+        run: python3 scripts/ci/code_health.py
 
   e2e-acceptance:
     # Deterministic end-to-end acceptance tests (tests/e2e/): real proxy

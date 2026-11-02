@@ -39,7 +39,7 @@ def test_min_python_gate_passes_on_current_tree():
 
     root = Path(__file__).resolve().parents[3]
     proc = subprocess.run(
-        [sys.executable, str(root / "scripts" / "check_min_python.py")],
+        [sys.executable, str(root / "scripts" / "ci" / "check_min_python.py")],
         capture_output=True, text=True, cwd=str(root))
     assert proc.returncode == 0, (
         f"min-python gate failed:\n{proc.stdout}\n{proc.stderr}")
@@ -56,7 +56,7 @@ def test_min_python_gate_detects_a_violation(tmp_path):
     bad.write_text("def f(x: int) -> str | None:\n    return None\n")
 
     proc = subprocess.run(
-        [sys.executable, str(root / "scripts" / "check_min_python.py"), str(bad)],
+        [sys.executable, str(root / "scripts" / "ci" / "check_min_python.py"), str(bad)],
         capture_output=True, text=True, cwd=str(root))
     assert proc.returncode == 1, (
         f"gate passed on a PEP 604 annotation:\n{proc.stdout}\n{proc.stderr}")
@@ -75,7 +75,7 @@ def test_min_python_gate_accepts_future_annotations(tmp_path):
                   "def f(x: int) -> str | None:\n    return None\n")
 
     proc = subprocess.run(
-        [sys.executable, str(root / "scripts" / "check_min_python.py"), str(ok)],
+        [sys.executable, str(root / "scripts" / "ci" / "check_min_python.py"), str(ok)],
         capture_output=True, text=True, cwd=str(root))
     assert proc.returncode == 0, (
         f"gate rejected a correctly-guarded file:\n{proc.stdout}\n{proc.stderr}")

@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[3]
 WORKFLOWS = ROOT / ".github" / "workflows"
 STEP = "./.github/actions/docker-hub-mirror"
 ACTION = ROOT / ".github" / "actions" / "docker-hub-mirror" / "action.yml"
-SCRIPT = ROOT / "scripts" / "docker_hub_mirror.py"
+SCRIPT = ROOT / "scripts" / "ci" / "docker_hub_mirror.py"
 PAGE = ROOT / "docs" / "quality" / "gates.md"
 SECTION = "Docker Hub and the checks"
 
@@ -289,7 +289,7 @@ def test_the_script_opens_no_file():
     # from its caller would write wherever the caller says.
     source = SCRIPT.read_text(encoding="utf-8")
     for word in ("open(", "pathlib", "read_text", "write_text", "os.path"):
-        assert word not in source, f"scripts/docker_hub_mirror.py uses `{word}`: it is a filter from its input to its output"
+        assert word not in source, f"scripts/ci/docker_hub_mirror.py uses `{word}`: it is a filter from its input to its output"
 
 
 @pytest.mark.parametrize("named, has", [

@@ -13,7 +13,7 @@ on:
       - '.github/workflows/dev-results.yml'
       - '.github/workflows/dev-results-check.yml'
       - '.github/actions/**'
-      - 'scripts/queue_run.py'
+      - 'scripts/ci/queue_run.py'
 
 concurrency:
   group: dev-results-check-${{ github.ref }}
@@ -67,7 +67,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           for commit in $(git rev-list --first-parent -n 5 "$BASE"); do
-            if python3 scripts/queue_run.py --commit "$commit" --wait-minutes 30 --plain; then
+            if python3 scripts/ci/queue_run.py --commit "$commit" --wait-minutes 30 --plain; then
               exit 0
             fi
           done

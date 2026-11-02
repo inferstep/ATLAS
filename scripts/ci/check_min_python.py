@@ -30,7 +30,7 @@ import re
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 # scripts/ is included because it runs under the developer's own
 # interpreter — `atlas bench` and `atlas lens build` are driven from the

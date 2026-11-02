@@ -396,7 +396,7 @@ The on-screen behaviour is unverified: the panel, its streaming, its prompt card
 
 `ktlint` is the Kotlin gate, and `extensions/jetbrains/.editorconfig` is the single source of the rules it applies — there is no baseline file and no rule configuration in the Gradle build. Lines are limited to 100 characters, matching the other languages in this repository.
 
-Kotlin is intentionally **not** covered by `scripts/code_health.py`, which scans the Go and Python trees only. Formatting is ktlint's concern; the function- and file-size rules in `docs/CODE_STYLE.md` are not mechanically enforced for this language yet.
+Kotlin is intentionally **not** covered by `scripts/ci/code_health.py`, which scans the Go and Python trees only. Formatting is ktlint's concern; the function- and file-size rules in `docs/CODE_STYLE.md` are not mechanically enforced for this language yet.
 
 ## Layout
 

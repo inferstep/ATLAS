@@ -24,7 +24,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 DOCKERFILE = re.compile(r"(^|/)Dockerfile(\.[^/]+)?$")
 UNREADABLE = "DL1000"
 LEVELS = ("error", "warning", "info", "style")

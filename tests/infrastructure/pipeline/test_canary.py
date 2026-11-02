@@ -28,8 +28,8 @@ NOW = datetime(2000, 1, 10, tzinfo=timezone.utc)
 LACKING_SINCE = "2000-01-05T00:00:00Z"
 
 
-def load(name):
-    spec = importlib.util.spec_from_file_location(f"atlas_{name}", ROOT / "scripts" / f"{name}.py")
+def load(path):
+    spec = importlib.util.spec_from_file_location(f"atlas_{Path(path).stem}", ROOT / "scripts" / path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -38,7 +38,7 @@ def load(name):
 
 @pytest.fixture(scope="module")
 def canary():
-    return load("canary")
+    return load("canary.py")
 
 
 @pytest.fixture(scope="module")
@@ -103,7 +103,7 @@ def only(found):
 
 def job_names(root=ROOT):
     """Each job of the workflows: the pattern of its names, how many letters of a name it fixes, and its `name:`."""
-    checks = load("checks_ran")
+    checks = load("checks_ran.py")
     return [(*checks.name_regex(job_id, job or {}), str((job or {}).get("name") or ""))
             for workflow in checks.read_workflows(root).values() for job_id, job in (workflow.get("jobs") or {}).items()]
 
@@ -232,7 +232,7 @@ def test_a_planted_file_stays_valid_where_its_reader_needs_that(canary, manifest
 
 def test_the_planted_function_is_over_the_size_limit(canary, manifest, checkout):
     canary.apply_plants(checkout, manifest)
-    size_gate = load("code_health")
+    size_gate = load("ci/code_health.py")
     plant = next(plant for plant in manifest["plants"]
                  if plant["action"] == "long_function" and plant.get("language", "python") == "python")
     text = (checkout / plant["path"]).read_text(encoding="utf-8")
@@ -570,7 +570,7 @@ def checked(canary, monkeypatch, tmp_path, capsys, github, number=None):
 def outside_code(page):
     """The text of a page that is in no fenced block and in no code marks: what a reader's program may read as a
     mention or as a link to an issue. The weekly cleanup's script has the reading; both pages are read by one rule."""
-    plain = load("weekly_cleanup").plain_part(page)
+    plain = load("weekly_cleanup.py").plain_part(page)
     assert "a fenced block is not closed" not in plain
     return plain
 

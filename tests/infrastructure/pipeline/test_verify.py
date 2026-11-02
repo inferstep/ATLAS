@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
-SCRIPT = ROOT / "scripts" / "verify.py"
+SCRIPT = ROOT / "scripts" / "ci" / "verify.py"
 ALWAYS = ["test-integrity", "dockerfile-sources"]
 PYTHON = ["python-compile", "min-python", "ruff"]
 SENDERS = "tests/contracts/test_api_version_contract.py"

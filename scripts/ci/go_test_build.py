@@ -19,14 +19,14 @@ import sys
 import tempfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 # A pattern for `go test -run` that no test name fits.
 NO_TEST = "^$"
 
 
 def gate_script():
     """scripts/production-readiness.py as a module."""
-    spec = importlib.util.spec_from_file_location("atlas_production_readiness", Path(__file__).with_name("production-readiness.py"))
+    spec = importlib.util.spec_from_file_location("atlas_production_readiness", ROOT / "scripts" / "production-readiness.py")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)

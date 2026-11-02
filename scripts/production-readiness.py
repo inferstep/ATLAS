@@ -230,7 +230,7 @@ def _tree_gates(python: str) -> dict[str, Gate]:
         # against pyproject's declared requires-python instead.
         "min-python": Gate(
             "min-python",
-            (python, "scripts/check_min_python.py"),
+            (python, "scripts/ci/check_min_python.py"),
         ),
         # A COPY whose source was deleted breaks only the image build —
         # imports, tests, and lint all stay green, so nothing else sees it.

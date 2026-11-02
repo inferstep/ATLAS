@@ -12,10 +12,10 @@ note and never a failure: a sub-folder that makes a list harder to read is no
 gain, so a folder can stay flat with a reason.
 
 Usage:
-  scripts/code_health.py           check; exit 1 on a new or grown item
-  scripts/code_health.py --update  write the baseline from the current code
+  scripts/ci/code_health.py           check; exit 1 on a new or grown item
+  scripts/ci/code_health.py --update  write the baseline from the current code
                                    (after a refactor made items smaller)
-  scripts/code_health.py --report  list the largest items and the totals
+  scripts/ci/code_health.py --report  list the largest items and the totals
 
 Go functions are found in gofmt-formatted source: `func` and the closing
 `}` at column 0. Python functions come from the ast module. Tests are not
@@ -32,7 +32,7 @@ import re
 import subprocess
 import sys
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 BASELINE = os.path.join(ROOT, ".github", "code-health-baseline.json")
 FUNC_MAX = 100
 FILE_MAX = 1500
@@ -187,7 +187,7 @@ def main() -> int:
         print(f"FAIL {p}")
     if shrunk:
         print(f"note: {len(shrunk)} baseline item(s) got smaller or went away; "
-              "run scripts/code_health.py --update and commit the baseline")
+              "run scripts/ci/code_health.py --update and commit the baseline")
     crowded = crowded_folders(tracked_paths())
     if crowded:
         listed = ", ".join(f"{folder} ({n})" for folder, n in sorted(crowded.items(), key=lambda kv: -kv[1]))

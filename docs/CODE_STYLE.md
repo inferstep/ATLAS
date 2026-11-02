@@ -1,7 +1,7 @@
 # Code style: how ATLAS code should read
 
 These rules apply to new code and to every refactor. Much of today's code
-predates them. The code-health check (`scripts/code_health.py`) stops it
+predates them. The code-health check (`scripts/ci/code_health.py`) stops it
 from growing, and the Code health epic (#262) brings it in line step by
 step. The formatting and lint rules per language stay in
 [CONTRIBUTING](../.github/CONTRIBUTING.md#code-style).

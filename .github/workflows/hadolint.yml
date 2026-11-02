@@ -1,6 +1,6 @@
 name: hadolint
 
-# Lints every Dockerfile the repository tracks (scripts/dockerfile_lint.py).
+# Lints every Dockerfile the repository tracks (scripts/ci/dockerfile_lint.py).
 # A finding does not fail the job: the counts are in the job summary, and the
 # findings in a Dockerfile the change touches are annotations. The job fails
 # when the lint did not lint: no Dockerfile, hadolint did not run, or hadolint
@@ -81,4 +81,4 @@ jobs:
       - name: lint the Dockerfiles
         env:
           BASE: ${{ steps.base.outputs.sha }}
-        run: python scripts/dockerfile_lint.py --changed-from "$BASE"
+        run: python scripts/ci/dockerfile_lint.py --changed-from "$BASE"
