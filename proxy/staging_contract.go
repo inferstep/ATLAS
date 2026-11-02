@@ -312,7 +312,7 @@ func (res stagingResult) validateAgainst(req stagingRequest) (bool, string) {
 // passedClean reports whether the exact command exited zero having changed
 // neither the candidate it was testing nor anything else it could see. A
 // command that rewrote its own subject proved something about bytes that no
-// longer exist. Every reader of a staged result asks here.
+// longer exist. Every check of whether a staged command passed asks here.
 func (r stagingCommandResult) passedClean() bool {
 	return r.Outcome == stagingExitedZero && !r.MutatedTarget && !r.MutatedWorkspace
 }

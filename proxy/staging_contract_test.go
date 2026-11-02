@@ -7,7 +7,6 @@ import (
 	"go/token"
 	"os"
 	"reflect"
-	"sort"
 	"strings"
 	"testing"
 )
@@ -453,7 +452,7 @@ func TestTheContractExecutesNothing(t *testing.T) {
 	})
 }
 
-// cleanPasses names the commands the live path counts as passed, sorted.
+// cleanPasses names the commands the live path counts as passed.
 func cleanPasses(res stagingResult) []string {
 	var ids []string
 	for _, r := range res.Commands {
@@ -461,6 +460,5 @@ func cleanPasses(res stagingResult) []string {
 			ids = append(ids, r.ObligationID)
 		}
 	}
-	sort.Strings(ids)
 	return ids
 }
