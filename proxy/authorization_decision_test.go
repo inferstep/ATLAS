@@ -763,7 +763,7 @@ func TestTheDecisionReachesNoLiveWrite(t *testing.T) {
 		"proposedV3Candidate": true, "v3DeliveryAuthorized": true,
 		"writeFileRecorded": true, "finalizeCompletion": true,
 		"terminalCompletionAllowed": true, "callV3Generate": true,
-		"callV3GenerateStreaming": true, "revokeV3": true,
+		"GenerateStreaming": true, "revokeV3": true,
 		"WriteFile": true, "Remove": true, "RemoveAll": true,
 		"StreamFn": true, "awaitPermission": true,
 	}

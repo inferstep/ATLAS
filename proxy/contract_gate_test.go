@@ -16,6 +16,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/itigges22/atlas-proxy/internal/v3client"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -753,7 +754,7 @@ print(json.dumps({
 	}))
 	defer srv.Close()
 
-	got, err := callV3GenerateStreaming(context.Background(), srv.URL,
+	got, err := v3client.GenerateStreaming(context.Background(), srv.URL, "", v3CallTimeout(),
 		wire.V3GenerateRequest{FilePath: "theme.css", BaselineCode: "body {}\n"}, nil)
 	if err != nil {
 		t.Fatalf("bridge call failed: %v", err)

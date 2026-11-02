@@ -119,7 +119,7 @@ Every non-test Go file of `proxy/`, sub-folders included, with its area of owner
 | `command_evidence.go` | What a shell command demonstrates: execution, probe, static check or nothing, and whether the command line reports that part's exit status |
 | `guardrails*.go` | Per-tool steering guards (shrinkage, missing-command/module steers, doctype strip). `guardrails_reply.go` normalizes introductory phrases so completion checks can recognize replies that merely announce future work |
 | `events.go` | Typed-envelope broker (`/events`) and SSE plumbing |
-| `v3_bridge.go` | SSE client for v3-service `/v3/generate` + `/v3/plan` |
+| `internal/v3client/client.go` | SSE client for v3-service `/v3/generate` + `/v3/plan`; `v3_bridge.go` keeps the call's cap, `ATLAS_V3_TIMEOUT` |
 | `types.go` | Shared types, tiers, turn caps |
 | `internal/wire/messages.go` | The model's messages, tool results and the plan: what crosses a boundary |
 | `internal/wire/v3.go` | The V3 service's request, response and evidence envelope, and the check that reads one |
@@ -621,7 +621,7 @@ API contract documented in [API.md § POST /v3/plan](API.md#post-v3plan).
 
 | File | Role |
 |---|---|
-| `proxy/v3_bridge.go` | `callV3PlanStreaming(reqCtx, v3URL, req, onProgress)` — opens the SSE stream, forwards progress events to the callback, returns the final `Plan` from the `event: result` frame. `reqCtx` binds the agent's request context so `/cancel` aborts an in-flight plan. Mirrors `callV3GenerateStreaming` for V3-pipeline runs. |
+| `proxy/internal/v3client/client.go` | `PlanStreaming(reqCtx, v3URL, requestID, req, onProgress)` — opens the SSE stream, forwards progress events to the callback, returns the final `Plan` from the `event: result` frame. `reqCtx` binds the agent's request context so `/cancel` aborts an in-flight plan. Mirrors `GenerateStreaming` for V3-pipeline runs. |
 | `proxy/internal/wire/` | `V3PlanRequest` (in `v3.go`), `Plan` and `PlanStep` (in `messages.go`) types. |
 | `proxy/types.go` | `AgentContext` gains `Plan`, `PlanStepsSatisfied[]`, `PlanOffStreak`, `PlanRevisions`. |
 | `proxy/plan_generation.go` | `samplePlanContext()` walks priority files (app.py, templates/index.html, package.json, …) for the planner. `shouldGeneratePlan()` gates on tier, message length and read-only requests. `generatePlan()` runs the bridge, drops per-token noise, emits `plan_loaded` with the full step list. |
@@ -678,7 +678,7 @@ Both are paid up front before the agent's first tool call. The investment is rec
 | Layer | File | What's covered |
 |---|---|---|
 | v3-service plan endpoint | `tests/v3-service/pipeline/test_plan_scoring.py` (scorer); parser smoke-tested via `curl /v3/plan` | scorer credits a verify step that runs the program, its tests or a probe, and credits neither a static check (build, parse, linter) nor a recon call; parser tolerance (fences, prose preamble, brace-depth nesting) is exercised by the 3-candidate sampler |
-| proxy bridge | `proxy/v3_bridge_test.go` | SSE parse, missing-result error, stage routing |
+| proxy bridge | `proxy/internal/v3client/client_test.go`; `proxy/v3_bridge_test.go` for stage routing | SSE parse, missing-result error, stage routing |
 | proxy hook | `proxy/agent_test.go` | priority-file pickup, truncation thresholds, fallback walk, tier/length gating |
 | proxy adherence | `proxy/gates_plan_test.go`; `proxy/gates_test.go` for the system prompt | match logic (tool name + path suffix), failed-call exclusion, revision cap, system-prompt rendering |
 | TUI rendering | `tui/internal/pipelinestate/plan_test.go`; `tui/plan_test.go` for the handlers | `PlanView` state transitions, plan_loaded replacement on revise, off-plan silence |

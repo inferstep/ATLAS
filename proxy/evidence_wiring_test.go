@@ -702,7 +702,7 @@ func TestNoProductionCodeConstructsAProvenanceOutsideTheProducers(t *testing.T) 
 		// The type and its methods live here.
 		"internal/wire/v3.go": true,
 		// The wire decoder materialises what the service sent.
-		"v3_bridge.go": true,
+		"internal/v3client/client.go": true,
 		// The live owner builds the identity evidence must MATCH, which is the
 		// opposite of producing evidence. It may not give that identity a
 		// source -- one with a source would read as a record.

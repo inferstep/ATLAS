@@ -435,7 +435,7 @@ func TestAutomaticSharesTheOneAuthorizationAndDeliveryOwner(t *testing.T) {
 	// The eligibility owner decides nothing about bytes: it neither writes,
 	// nor mints, nor reaches a producer.
 	for _, banned := range []string{"os.WriteFile", "writeFileRecorded", "mintAuthorizationGrant",
-		"http.", "exec.", "callV3"} {
+		"http.", "exec.", "callV3", "v3client."} {
 		if strings.Contains(body["automatic_delivery.go"], banned) {
 			t.Errorf("the automatic owner reaches %q", banned)
 		}

@@ -144,7 +144,7 @@ func workAllowance() time.Duration {
 
 // generationLeavesWorkAllowance reports whether the producer's cap for a call
 // made now would still leave workAllowance of the session. The cap is
-// computed the way callV3GenerateStreaming applies it. Without a deadline
+// computed the way v3client.GenerateStreaming applies it. Without a deadline
 // there is nothing to protect.
 func generationLeavesWorkAllowance(ctx *AgentContext) bool {
 	if ctx == nil || ctx.Ctx == nil {

@@ -14,6 +14,7 @@ import (
 
 	"github.com/itigges22/atlas-proxy/internal/logsafe"
 	"github.com/itigges22/atlas-proxy/internal/taskcontract"
+	"github.com/itigges22/atlas-proxy/internal/v3client"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
@@ -209,7 +210,7 @@ func generateV3Write(ctx *AgentContext, entry routeEntry, path string,
 	//   llm_end     — V3's LLM call finished (with token/timing summary)
 	//   <other>     — pipeline stage marker (probe, plansearch, sandbox…)
 	var stages v3StageMarks
-	v3Result, err := callV3GenerateStreaming(ctx.Ctx, ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
+	v3Result, err := v3client.GenerateStreaming(ctx.Ctx, ctx.V3URL, requestIDOf(ctx), v3CallTimeout(), req, func(stage, detail string, data map[string]interface{}) {
 		forwardV3Stage(ctx, stage, detail, data)
 		switch stage {
 		case "token", "reasoning_token", "llm_start", "llm_end":
@@ -1072,7 +1073,7 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 	// unknown stages fall back to the v3_progress text line. Without
 	// this branching, edit_file with V3 floods the chat pane with
 	// thousands of "[token] X" rows during a single candidate generation.
-	v3Result, err := callV3GenerateStreaming(ctx.Ctx, ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
+	v3Result, err := v3client.GenerateStreaming(ctx.Ctx, ctx.V3URL, requestIDOf(ctx), v3CallTimeout(), req, func(stage, detail string, data map[string]interface{}) {
 		forwardV3Stage(ctx, stage, detail, data)
 	})
 	if err != nil {

@@ -158,7 +158,7 @@ func TestThePolicyOwnerDoesNotIterate(t *testing.T) {
 	}
 	// And it calls nothing that could generate: no pipeline, no model, no
 	// second opinion.
-	for _, banned := range []string{"callV3", "improveContentWithV3", "stageCandidate",
+	for _, banned := range []string{"callV3", "v3client.", "improveContentWithV3", "stageCandidate",
 		"http.", "exec."} {
 		if strings.Contains(decide, banned) {
 			t.Errorf("the policy owner reaches %q", banned)

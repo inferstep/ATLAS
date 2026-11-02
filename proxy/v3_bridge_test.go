@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/types"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -39,87 +41,6 @@ func fakePlanServer(t *testing.T, sse string) *httptest.Server {
 	}))
 }
 
-func TestCallV3PlanStreamingParsesResult(t *testing.T) {
-	// Three progress events, then a final result event, then [DONE].
-	// Mirrors the wire format of /v3/plan.
-	sse := strings.Join([]string{
-		`data: {"stage":"plan_start","detail":"generating 3 candidates"}`,
-		``,
-		`data: {"stage":"plan_candidate_scored","detail":"candidate 1 score=0.80","data":{"index":0,"score":0.8}}`,
-		``,
-		`data: {"stage":"plan_selected","detail":"plan 1 won","data":{"index":0,"score":0.8}}`,
-		``,
-		`event: result`,
-		`data: {"steps":[{"id":"s1","action":"edit_file","target":"app.py","why":"add route"},{"id":"s2","action":"run_command","target":"curl http://localhost:5000/hello","why":"verify"}],"verify_step":"s2","rationale":"add then verify","candidates_tested":3,"winning_score":0.8,"winning_index":0,"reasons":["step count 2 in range","verify_step=s2"]}`,
-		``,
-		`data: [DONE]`,
-		``,
-	}, "\n")
-	srv := fakePlanServer(t, sse)
-	defer srv.Close()
-
-	var mu sync.Mutex
-	var seenStages []string
-	cb := func(stage, detail string, data map[string]interface{}) {
-		mu.Lock()
-		seenStages = append(seenStages, stage)
-		mu.Unlock()
-	}
-
-	plan, err := callV3PlanStreaming(context.Background(), srv.URL, wire.V3PlanRequest{
-		UserMessage: "add a hello endpoint",
-		WorkingDir:  "/workspace",
-	}, cb)
-	if err != nil {
-		t.Fatalf("callV3PlanStreaming: %v", err)
-	}
-	if plan == nil {
-		t.Fatal("plan is nil")
-	}
-	if got, want := len(plan.Steps), 2; got != want {
-		t.Errorf("got %d steps, want %d", got, want)
-	}
-	if plan.VerifyStep != "s2" {
-		t.Errorf("got verify_step=%q, want %q", plan.VerifyStep, "s2")
-	}
-	if plan.WinningScore != 0.8 {
-		t.Errorf("got winning_score=%v, want 0.8", plan.WinningScore)
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-	wantStages := []string{"plan_start", "plan_candidate_scored", "plan_selected"}
-	if len(seenStages) != len(wantStages) {
-		t.Fatalf("got stages %v, want %v", seenStages, wantStages)
-	}
-	for i, s := range wantStages {
-		if seenStages[i] != s {
-			t.Errorf("stage[%d]=%q, want %q", i, seenStages[i], s)
-		}
-	}
-}
-
-func TestCallV3PlanStreamingMissingResult(t *testing.T) {
-	// SSE that ends without an `event: result` block — bridge should
-	// surface this as an error rather than returning nil silently.
-	sse := strings.Join([]string{
-		`data: {"stage":"plan_start","detail":"go"}`,
-		``,
-		`data: [DONE]`,
-		``,
-	}, "\n")
-	srv := fakePlanServer(t, sse)
-	defer srv.Close()
-
-	_, err := callV3PlanStreaming(context.Background(), srv.URL, wire.V3PlanRequest{UserMessage: "x"}, nil)
-	if err == nil {
-		t.Fatal("expected error for missing result event")
-	}
-	if !strings.Contains(err.Error(), "without result") {
-		t.Errorf("error %q doesn't mention missing result", err.Error())
-	}
-}
-
 func TestV3StageToEventCoversPlanStages(t *testing.T) {
 	planStages := []string{
 		"plan_start", "plan_candidate", "plan_candidate_unparseable",
@@ -134,9 +55,8 @@ func TestV3StageToEventCoversPlanStages(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// callV3GenerateStreaming + v3CallTimeout — the generate path. All three
-// proxy callers treat a bridge error as "fall back to the model's own
-// content", so every failure path must return, not hang.
+// v3CallTimeout — the cap the callers pass to v3client.GenerateStreaming,
+// whose own tests are in internal/v3client.
 // ---------------------------------------------------------------------------
 
 // The default is 300s because PlanSearch spends two LLM calls per candidate:
@@ -162,15 +82,35 @@ func TestV3CallTimeout(t *testing.T) {
 	}
 }
 
-func fakeGenerateServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
-	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v3/generate" {
-			http.NotFound(w, r)
-			return
-		}
-		handler(w, r)
-	}))
+// Each production V3 call forwards its request's id. The client read the id
+// from the context itself before it became a package; now a caller could
+// leave it out, and the service joins a candidate pool to its request by it.
+func TestEveryV3CallForwardsTheRequestID(t *testing.T) {
+	calls := 0
+	for name, f := range proxyFiles(t) {
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || types.ExprString(sel.X) != "v3client" {
+				return true
+			}
+			if sel.Sel.Name != "GenerateStreaming" && sel.Sel.Name != "PlanStreaming" {
+				return true
+			}
+			calls++
+			if got := types.ExprString(call.Args[2]); got != "requestIDOf(ctx)" {
+				t.Errorf("%s: v3client.%s gets %s as the request id, want requestIDOf(ctx)",
+					name, sel.Sel.Name, got)
+			}
+			return true
+		})
+	}
+	if calls == 0 {
+		t.Fatal("no call to v3client was found, so this guard reads nothing")
+	}
 }
 
 func sseLines(w http.ResponseWriter, lines ...string) {
@@ -180,187 +120,6 @@ func sseLines(w http.ResponseWriter, lines ...string) {
 		if fl != nil {
 			fl.Flush()
 		}
-	}
-}
-
-func TestCallV3GenerateStreamingParsesResultAndProgress(t *testing.T) {
-	srv := fakeGenerateServer(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		sseLines(w,
-			`data: {"stage":"plan_search","detail":"3 candidates","data":{"count":3}}`,
-			``,
-			`event: result`,
-			`data: {"code":"print(1)","passed":true,"phase_solved":"phase1","candidates_tested":3}`,
-			``,
-			`data: [DONE]`,
-			``)
-	})
-	defer srv.Close()
-
-	var stages []string
-	var gotData map[string]interface{}
-	result, err := callV3GenerateStreaming(context.Background(), srv.URL,
-		wire.V3GenerateRequest{FilePath: "a.py"},
-		func(stage, detail string, data map[string]interface{}) {
-			stages = append(stages, stage)
-			gotData = data
-		})
-	if err != nil {
-		t.Fatalf("streaming call failed: %v", err)
-	}
-	if result.Code != "print(1)" || !result.Passed {
-		t.Errorf("result = %+v", result)
-	}
-	if len(stages) != 1 || stages[0] != "plan_search" {
-		t.Errorf("progress stages = %v", stages)
-	}
-	if gotData["count"] != float64(3) {
-		t.Errorf("structured progress data = %v", gotData)
-	}
-}
-
-func TestCallV3GenerateStreamingNon200IsAnError(t *testing.T) {
-	srv := fakeGenerateServer(t, func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "overloaded", http.StatusServiceUnavailable)
-	})
-	defer srv.Close()
-
-	_, err := callV3GenerateStreaming(context.Background(), srv.URL,
-		wire.V3GenerateRequest{}, nil)
-	if err == nil || !strings.Contains(err.Error(), "503") {
-		t.Errorf("err = %v, want the 503 surfaced", err)
-	}
-}
-
-func TestCallV3GenerateStreamingMissingResultIsAnError(t *testing.T) {
-	// Progress events then [DONE] with no result event — the pipeline
-	// died server-side. Must be an error, not a nil result.
-	srv := fakeGenerateServer(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		sseLines(w,
-			`data: {"stage":"plan_search","detail":"working"}`,
-			``,
-			`data: [DONE]`,
-			``)
-	})
-	defer srv.Close()
-
-	_, err := callV3GenerateStreaming(context.Background(), srv.URL,
-		wire.V3GenerateRequest{}, nil)
-	if err == nil || !strings.Contains(err.Error(), "without sending a result event") {
-		t.Errorf("err = %v, want a stream that really ended empty", err)
-	}
-}
-
-func TestCallV3GenerateStreamingUndecodableResultNamesTheDecodeFailure(t *testing.T) {
-	// A result that does not decode must say so, and must not read like a
-	// stream that sent nothing at all.
-	srv := fakeGenerateServer(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		sseLines(w, `event: result`, `data: {not json`, ``, `data: [DONE]`, ``)
-	})
-	defer srv.Close()
-
-	_, err := callV3GenerateStreaming(context.Background(), srv.URL,
-		wire.V3GenerateRequest{}, nil)
-	if err == nil || !strings.Contains(err.Error(), "could not decode") {
-		t.Errorf("err = %v, want the decode failure named", err)
-	}
-}
-
-// stalledGenerateServer is a V3 service that sends one progress event and then
-// stalls until the client hangs up or the test ends.
-func stalledGenerateServer(t *testing.T) *httptest.Server {
-	t.Helper()
-	// release unblocks the stalled handler after the call returns: srv.Close
-	// waits for active handlers, and the server does not always see the
-	// client hang up.
-	release := make(chan struct{})
-	srv := fakeGenerateServer(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		sseLines(w, `data: {"stage":"plan_search","detail":"stalling"}`, ``)
-		select {
-		case <-r.Context().Done():
-		case <-release:
-		}
-	})
-	t.Cleanup(srv.Close)
-	t.Cleanup(func() { close(release) }) // cleanups run last-in first-out, so this runs before srv.Close
-	return srv
-}
-
-// A stalled V3 stream must end with an error at the first of: the configured
-// cap, half of the session's remaining time, or the user's cancel
-// (TestCancelAbortsAStalledV3Stream).
-func TestCallV3GenerateStreamingEndsAStalledStream(t *testing.T) {
-	for _, tc := range []struct {
-		name       string
-		timeoutEnv string        // ATLAS_V3_TIMEOUT, in seconds
-		session    time.Duration // time left in the session; 0 means no deadline
-		within     time.Duration // the call must return before this
-	}{
-		{name: "the configured cap fires",
-			timeoutEnv: "1", within: 5 * time.Second},
-		// Half of a long session is far above the cap, so the cap applies.
-		{name: "the cap bounds a long session",
-			timeoutEnv: "1", session: 10 * time.Minute, within: 5 * time.Second},
-		// With 6s left, V3 may have 3s, not 300s, so the run keeps as much
-		// again for the work still to do.
-		{name: "half of a short session",
-			timeoutEnv: "300", session: 6 * time.Second, within: 5 * time.Second},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("ATLAS_V3_TIMEOUT", tc.timeoutEnv)
-			srv := stalledGenerateServer(t)
-			sessionCtx := context.Background()
-			if tc.session > 0 {
-				var cancel context.CancelFunc
-				sessionCtx, cancel = context.WithTimeout(sessionCtx, tc.session)
-				defer cancel()
-			}
-
-			start := time.Now()
-			_, err := callV3GenerateStreaming(sessionCtx, srv.URL, wire.V3GenerateRequest{}, nil)
-			elapsed := time.Since(start)
-
-			if err == nil {
-				t.Fatal("a stalled V3 run returned no error")
-			}
-			if elapsed > tc.within {
-				t.Errorf("the call took %v, want under %v", elapsed.Round(time.Millisecond), tc.within)
-			}
-			if sessionCtx.Err() != nil {
-				t.Errorf("V3 used up the whole session: %v", sessionCtx.Err())
-			}
-			// The cap firing and V3 finishing empty are different events with
-			// different fixes, so they must not share one message.
-			if strings.Contains(err.Error(), "without sending a result event") {
-				t.Errorf("the cap firing is reported as V3 finishing empty:\n%s", err)
-			}
-			if !strings.Contains(err.Error(), "ATLAS_V3_TIMEOUT") {
-				t.Errorf("the error does not name the cap that fired:\n%s", err)
-			}
-		})
-	}
-}
-
-// The user presses Ctrl-C during a long PlanSearch.
-func TestCancelAbortsAStalledV3Stream(t *testing.T) {
-	t.Setenv("ATLAS_V3_TIMEOUT", "")
-	srv := stalledGenerateServer(t)
-	callCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	time.AfterFunc(150*time.Millisecond, cancel)
-
-	start := time.Now()
-	_, err := callV3GenerateStreaming(callCtx, srv.URL, wire.V3GenerateRequest{}, nil)
-	elapsed := time.Since(start)
-
-	if err == nil {
-		t.Fatal("a stalled V3 run returned no error")
-	}
-	if elapsed > 3*time.Second {
-		t.Errorf("the call took %v, want under %v", elapsed.Round(time.Millisecond), 3*time.Second)
 	}
 }
 
@@ -900,49 +659,4 @@ func codeOf(result *wire.V3GenerateResponse) string {
 		return ""
 	}
 	return result.Code
-}
-
-// The service plans its phases against the cap this call actually has. Told
-// nothing, it plans a 300s run inside a call the bridge may cut to half of
-// the session's remaining time.
-func TestCallV3GenerateStreamingSendsTheCapItApplies(t *testing.T) {
-	var got []map[string]interface{}
-	srv := fakeGenerateServer(t, func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]interface{}
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		got = append(got, body)
-		w.Header().Set("Content-Type", "text/event-stream")
-		sseLines(w, `event: result`, `data: {"code":"x = 1\n","passed":true}`, ``, `data: [DONE]`, ``)
-	})
-	defer srv.Close()
-
-	t.Setenv("ATLAS_V3_TIMEOUT", "300")
-	// No session deadline: the configured ceiling.
-	if _, err := callV3GenerateStreaming(context.Background(), srv.URL, wire.V3GenerateRequest{}, nil); err != nil {
-		t.Fatal(err)
-	}
-	// 6s of session left: half of it, whatever a caller put in the field.
-	sessionCtx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
-	defer cancel()
-	if _, err := callV3GenerateStreaming(sessionCtx, srv.URL, wire.V3GenerateRequest{BudgetMs: 999999}, nil); err != nil {
-		t.Fatal(err)
-	}
-	// Uncapped: no cap is sent, and the service keeps its own reading.
-	t.Setenv("ATLAS_V3_TIMEOUT", "0")
-	if _, err := callV3GenerateStreaming(context.Background(), srv.URL, wire.V3GenerateRequest{BudgetMs: 5}, nil); err != nil {
-		t.Fatal(err)
-	}
-
-	if len(got) != 3 {
-		t.Fatalf("%d requests reached the service, want 3", len(got))
-	}
-	if v, _ := got[0]["budget_ms"].(float64); v != 300000 {
-		t.Errorf("an unshortened call sent budget_ms=%v, want 300000", got[0]["budget_ms"])
-	}
-	if v, _ := got[1]["budget_ms"].(float64); v <= 2500 || v > 3000 {
-		t.Errorf("a call with 6s of session left sent budget_ms=%v, want about 3000", got[1]["budget_ms"])
-	}
-	if v, ok := got[2]["budget_ms"]; ok {
-		t.Errorf("an uncapped call sent budget_ms=%v", v)
-	}
 }

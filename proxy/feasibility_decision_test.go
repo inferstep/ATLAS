@@ -331,7 +331,7 @@ func TestFeasibilityCallsNothingThatGenerates(t *testing.T) {
 		t.Fatal(err)
 	}
 	banned := map[string]bool{
-		"callV3Generate": true, "callV3GenerateStreaming": true,
+		"callV3Generate": true, "GenerateStreaming": true,
 		"writeFileWithV3": true, "improveContentWithV3": true,
 		"proposedV3Candidate": true, "v3DeliveryAuthorized": true,
 		"writeFileRecorded": true, "finalizeCompletion": true,

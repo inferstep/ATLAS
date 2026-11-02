@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/v3client"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
@@ -67,7 +68,7 @@ func generatePlan(ctx *AgentContext, userMessage string) *wire.Plan {
 		"candidates": req.NCandidates,
 	}))
 
-	plan, err := callV3PlanStreaming(ctx.Ctx, ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
+	plan, err := v3client.PlanStreaming(ctx.Ctx, ctx.V3URL, requestIDOf(ctx), req, func(stage, detail string, data map[string]interface{}) {
 		// Filter out per-token events: forwarding each one to the TUI as a
 		// separate v3_plan row clogs the pipeline pane. The structural plan stages
 		// (plan_candidate, plan_candidate_scored, plan_selected) are
