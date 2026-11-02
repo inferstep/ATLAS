@@ -104,7 +104,7 @@ Every non-test Go file of `proxy/`, sub-folders included, with its area of owner
 | `detectors.go` | Stuck-pattern detectors: tool repetition, reasoning repetition, traceback localization |
 | `context.go` | Context enrichment: symbol index, project scan, workspace containment, session file manifest |
 | `permissions.go` | Permission gate (`/v1/permission`), trust mode, hard-blocked patterns |
-| `lens.go` | Lens scoring calls, the `VerificationRecord` the loop keeps for each verification run (passing or failed, with its evidence kind), calibration status |
+| `lens.go` | Lens scoring calls, calibration status |
 | `lens_identity.go` | Creates and attaches the proxy-owned invocation identity used for direct Lens service calls |
 | `lens_required.go` | Enforces that the geometric Lens is available, tracks Lens failures, and stops runs when scoring is unavailable |
 | `internal/logsafe/logsafe.go` | Builds privacy-safe tool argument summaries for logs, allowing only approved fields and redacting sensitive content |
@@ -113,7 +113,7 @@ Every non-test Go file of `proxy/`, sub-folders included, with its area of owner
 | `internal/workspacefs/object_handle_linux.go` | Holds Linux filesystem objects open during deletion approval so the approved object cannot be replaced before removal |
 | `internal/workspacefs/object_handle_other.go` | Refuses deletion approval on non-Linux platforms because a filesystem object cannot be safely pinned and verified |
 | `mutation_scope.go` | Derives the exact file and edit scope from model tool calls so candidates cannot modify anything outside the requested target |
-| `obligation_kinds.go` | Defines the closed obligation types, required evidence strength, and how each obligation is satisfied |
+| `obligation_kinds.go` | Derives a request's obligations from its decisions and the ledger, and checks whether a delivery settled them |
 | `obligations.go` | Chooses whether run obligations come from the caller’s declared contract or ATLAS’s legacy inference, and keeps that decision bound to the request |
 | `command_evidence.go` | What a shell command demonstrates: execution, probe, static check or nothing, and whether the command line reports that part's exit status |
 | `guardrails*.go` | Per-tool steering guards (shrinkage, missing-command/module steers, doctype strip). `guardrails_reply.go` normalizes introductory phrases so completion checks can recognize replies that merely announce future work |
@@ -161,7 +161,7 @@ Every non-test Go file of `proxy/`, sub-folders included, with its area of owner
 | `v3_delivery_registry.go` | Lists the production routes and originating tools allowed to deliver service-authored candidate content |
 | `v3_fallback_note.go` | Tracks files written after V3 failed or timed out and discloses still-current unchecked content in the final summary |
 | `verification_evidence.go` | Produces evidence from client-declared command observations and tracks which individual verification obligations they satisfy |
-| `verification_requirements.go` | Validates typed client verification requirements and limits evidence strength according to the declared check and the origin of its test assets |
+| `verification_requirements.go` | Limits a declared verification's evidence strength by where its test assets came from, as this session saw it |
 | `workspace_observation.go` | Observes file changes made by foreground and background commands and records deliverables and deletions in the session ledger |
 | `internal/workspacefs/confined_dir.go` | Reads one folder through `os.Root`: a name that resolves to something outside the folder is an error, never a read, and a name that holds something other than a regular file is skipped like one that is absent |
 | `internal/workspacefs/sandbox_subdir.go` | Allows a `sandbox_subdir` of ASCII letters, digits, dot, underscore and dash, at most 64 characters, and never `.` or `..` |

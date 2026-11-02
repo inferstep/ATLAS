@@ -12,9 +12,6 @@ import (
 // disk now, what evidence exists about some exact bytes, whether a restorable
 // checkpoint is available, and task correctness -- which this type never
 // claims and never stores.
-// DeliverableState, the ledger's record of one path: the bytes last seen on
-// disk, the verdict about exact bytes, the checkpoint and the tombstone; and
-// the ceilings on what the ledger keeps in memory and re-reads to hash.
 type DeliverableState struct {
 	Path        string // canonical workspace-relative
 	CurrentHash string // sha256 of the bytes last observed on disk

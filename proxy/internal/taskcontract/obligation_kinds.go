@@ -9,6 +9,27 @@ import (
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
+// What a task obliges, as a closed typed vocabulary.
+//
+// obligations.go decided WHOSE list a run owes -- the caller's or the
+// heuristic's. It says nothing about what sort of thing each item is or how
+// strongly it must be shown, so a path and a command arrived as the same
+// untyped string and any evidence about either looked equally good.
+//
+// This file names the sorts and their floors. Three things stay separate:
+//
+//	KIND      what sort of thing is owed (a closed set)
+//	STRENGTH  how strong the evidence closing it must be
+//	SUBJECT   the exact thing it is owed about, carried as a hash
+//
+// The subject is a hash and never the text. A declared verification command
+// is a subject, and a command string in an operator log is a content leak; a
+// uniform rule that never carries text cannot leak one by exception.
+//
+// This is the only copy of the vocabulary. The V3 service never receives
+// task obligations -- V3GenerateRequest has no field for them -- so nothing
+// there names a kind.
+
 const (
 	// ObligationArtifactExists: the artifact the client named must exist at
 	// its canonical path.

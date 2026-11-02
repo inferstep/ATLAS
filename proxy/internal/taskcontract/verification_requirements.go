@@ -6,6 +6,22 @@ import (
 	"strings"
 )
 
+// What a client says about the commands it requires, in types rather than in
+// command text.
+//
+// A bare command string carries no semantics. `python3 -c "import ast; ..."`
+// and `pytest -q tests/` are the same shape to a parser and demonstrate very
+// different things, and there is no honest way to tell them apart by reading
+// them: a filename, the word pytest and the presence of assertions are all
+// things a caller can write over anything at all. Strength therefore comes
+// from a typed declaration and from nowhere else.
+//
+// The declaration is additive. A client that sends the older command list
+// keeps its exact meaning, with the strength that list can actually support --
+// runtime, the fact that a command ran and exited zero against these bytes.
+// Reaching behavioral requires saying so, and saying what the command depends
+// on.
+
 // VerificationRecord binds one green verification command to what it
 // exercised. Covered maps each session-written path the command named to
 // the sha256 of its bytes at the moment the command passed — the bytes the

@@ -968,12 +968,14 @@ from what is available then.
 | `proxy/authorization_grant.go` | the grant check (`grantFor`) and the one mint; the one-time grant: minting, consumption, retirement |
 | `proxy/automatic_delivery.go` | whether the exact selected candidate may land, and the grant basis |
 | `proxy/candidate_provenance.go` | what the terminal is told about delivered bytes |
-| `proxy/verification_requirements.go` | typed verification requirements and asset authority |
+| `proxy/internal/taskcontract/verification_requirements.go` | typed verification requirements |
+| `proxy/verification_requirements.go` | asset authority as this session observed it |
 | `proxy/evidence_wiring.go` | the staged declared-verification producer; the producer inventory and the two production call paths |
 | `proxy/tool_write_v3.go` | the new-file route: proposal, staging, policy, delivery |
 | `proxy/edit_route_delivery.go` | the edit route, through the same owners |
 | `proxy/candidate_reachability.go` | whether the producer is consulted at all, and why not |
-| `proxy/obligation_kinds.go` | the six kinds, the three roles, derivation, `baselineWitness` |
+| `proxy/internal/taskcontract/obligation_kinds.go` | the six kinds, the three roles |
+| `proxy/obligation_kinds.go` | derivation, `baselineWitness` |
 | `proxy/syntax_evidence.go` | the proxy-owned syntax producer, `workspaceIdentity` |
 | `proxy/verification_evidence.go` | the client-declared verification producer |
 | `proxy/staging_contract.go` | the staging request/result types and their fail-closed validation |
