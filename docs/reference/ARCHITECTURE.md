@@ -116,7 +116,7 @@ Every non-test Go file of `proxy/`, sub-folders included, with its area of owner
 | `mutation_scope.go` | Derives the exact file and edit scope from model tool calls so candidates cannot modify anything outside the requested target |
 | `obligation_kinds.go` | Derives a request's obligations from its decisions and the ledger, and checks whether a delivery settled them |
 | `obligations.go` | Chooses whether run obligations come from the caller’s declared contract or ATLAS’s legacy inference, and keeps that decision bound to the request |
-| `command_evidence.go` | What a shell command demonstrates: execution, probe, static check or nothing, and whether the command line reports that part's exit status |
+| `internal/shellcmd/command_evidence.go` | What a shell command demonstrates: execution, probe, static check or nothing, and whether the command line reports that part's exit status |
 | `guardrails*.go` | Per-tool steering guards (shrinkage, missing-command/module steers, doctype strip). `guardrails_reply.go` normalizes introductory phrases so completion checks can recognize replies that merely announce future work |
 | `events.go` | Typed-envelope broker (`/events`) and SSE plumbing |
 | `internal/v3client/client.go` | SSE client for v3-service `/v3/generate` + `/v3/plan`; `v3_bridge.go` keeps the call's cap, `ATLAS_V3_TIMEOUT` |
@@ -168,7 +168,8 @@ Every non-test Go file of `proxy/`, sub-folders included, with its area of owner
 | `internal/workspacefs/sandbox_subdir.go` | Allows a `sandbox_subdir` of ASCII letters, digits, dot, underscore and dash, at most 64 characters, and never `.` or `..` |
 | `server_start.go` | Tells a verification command that failed because it is a long-running server (it hit the time limit, or its port was taken) from one that failed because the code is broken |
 | `service_answer.go` | Reads an answer from a service of the stack (llama-server, the V3 service, the lens, the sandbox) up to 64 MiB, so a service that sends without end cannot fill the proxy's memory |
-| `shell_wrapper.go` | The command policy behind `validateShellCommand`: splits compound commands, looks inside execution wrappers (`sh -c`, `eval`, …) up to 16 layers deep, and refuses catastrophic commands and wrappers it cannot check |
+| `internal/shellcmd/shell_wrapper.go` | The command policy behind `validateShellCommand`: splits compound commands, looks inside execution wrappers (`sh -c`, `eval`, …) up to 16 layers deep, and refuses catastrophic commands and wrappers it cannot check |
+| `internal/shellcmd/destructive.go` | The shell forms no command may use: catastrophic deletes, fork bombs, writes to a device |
 
 ### Agent Loop Flow
 

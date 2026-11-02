@@ -50,22 +50,10 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/itigges22/atlas-proxy/internal/shellcmd"
 	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
-
-// isCatastrophicDeleteTarget reports whether a recursive-rm target is a root /
-// home / project-root / glob-everything path.
-func isCatastrophicDeleteTarget(t string) bool {
-	t = strings.Trim(t, `"'`)
-	switch t {
-	case "/", "/*", "~", "~/", "~/*", "$HOME", "${HOME}", "$HOME/*", "${HOME}/*",
-		".", "./", "./*", "*", "..", "../", "../*",
-		"/workspace", "/workspace/", "/workspace/*":
-		return true
-	}
-	return false
-}
 
 // fixIntentWords tracks vocabulary that signals "the user wants
 // something repaired or verified." Reused by the verification gate
@@ -328,7 +316,7 @@ func coverageForGreenCommand(ctx *AgentContext, command string) map[string]strin
 	// a bare `pytest` could never meet its contract: nothing named the module
 	// or its tests.
 	if ctx != nil {
-		for _, p := range runnerEntries(command, ctx.WorkingDir, candidates) {
+		for _, p := range shellcmd.RunnerEntries(command, ctx.WorkingDir, candidates) {
 			if _, already := covered[p]; already {
 				continue
 			}
@@ -504,7 +492,7 @@ func evidenceIsCurrent(ctx *AgentContext, rec taskcontract.VerificationRecord) (
 }
 
 // contractRequiresCommand reports whether the client declared this exact
-// command. classifyCommandEvidence recognises builds, tests, probes and runners
+// command. ClassifyCommandEvidence recognises builds, tests, probes and runners
 // by shape, and a client's own requirement may be none of those -- a linter, a
 // schema check, a project script. Without this, a declared command could be
 // impossible to satisfy: the demand would require it and nothing would ever

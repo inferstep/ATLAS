@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/itigges22/atlas-proxy/internal/shellcmd"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -116,15 +117,15 @@ func redirectOnlyVerificationMessage(source string) string {
 // why, the run repeated it, and both sessions ended
 // verification_demanded_unmet with working code on disk.
 func isHeadOnlyProbe(cmd string) bool {
-	segs, _, _ := splitTopLevelShell(cmd)
+	segs, _, _ := shellcmd.SplitTopLevelShell(cmd)
 	for _, seg := range segs {
-		words := programWords(shellFields(strings.TrimSpace(seg)))
+		words := shellcmd.ProgramWords(shellcmd.ShellFields(strings.TrimSpace(seg)))
 		if len(words) == 0 {
 			continue
 		}
 		switch filepath.Base(words[0]) {
 		case "curl", "wget":
-			if headOnlyProbeRe.MatchString(seg) {
+			if shellcmd.IsHeadOnlyProbe(seg) {
 				return true
 			}
 		}
@@ -139,11 +140,6 @@ func headOnlyProbeNote(cmd string) string {
 		"it cannot show that the page or endpoint does the right thing, so it does not count as a "+
 		"verification. Request the body instead and check what comes back.", truncateStr(strings.TrimSpace(cmd), 60))
 }
-
-// headOnlyProbeRe matches curl/wget invocations that fetch headers only:
-// `curl -I`, `curl --head`, `wget --spider`. Long-form and clustered short
-// flags (-sI) both count.
-var headOnlyProbeRe = regexp.MustCompile(`(?i)\b(?:curl\b[^|;&]*?\s-{1,2}(?:I\b|head\b)|curl\b[^|;&]*?\s-[a-zA-Z]*I[a-zA-Z]*\b|wget\b[^|;&]*?--spider\b)`)
 
 // gateTrigger names why the verification gate fired, for the log line. A
 // red command outranks message shape: it is the concrete signal, and when
@@ -188,7 +184,7 @@ func executionAttempt(command, path string) bool {
 	for _, segment := range splitShellSegments(command) {
 		// A parse, lint or compile names the file without running it:
 		// `python -m py_compile app.py` is not an execution of app.py.
-		if segmentEvidenceKind(segment) != evidenceExecution {
+		if shellcmd.SegmentEvidenceKind(segment) != shellcmd.EvidenceExecution {
 			continue
 		}
 		if segmentRunsFile(segment, path, base) {

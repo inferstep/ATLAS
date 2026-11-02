@@ -4,145 +4,16 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
+	"github.com/itigges22/atlas-proxy/internal/shellcmd"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // The cases below are the ways a check can be miscounted: a parse, a lint or
 // a `--version` taken as verification, `| tail` or `|| true` hiding a failing
 // test, and a red run after a green one that does not block completion.
-
-func TestClassifyCommandEvidence(t *testing.T) {
-	cases := []struct {
-		cmd    string
-		kind   commandEvidenceKind
-		masked bool
-	}{
-		// The program or its tests ran, and the line reports how.
-		{"python3 app.py", evidenceExecution, false},
-		{"timeout 10 python3 app.py", evidenceExecution, false},
-		{"FOO=1 python3 app.py", evidenceExecution, false},
-		{"cd app && python3 main.py", evidenceExecution, false},
-		{"(cd app && pytest)", evidenceExecution, false},
-		{"(cd app && pytest) > log.txt 2>&1", evidenceExecution, false},
-		{`bash -c "pytest -q"`, evidenceExecution, false},
-		{`bash -lc 'pytest -q'`, evidenceExecution, false},
-		{`sh -ec "python3 a.py; python3 b.py"`, evidenceExecution, false},
-		{`bash -euo pipefail -c "pytest | tail -5"`, evidenceExecution, false},
-		{"uv run pytest", evidenceExecution, false},
-		{"uv run --with requests app.py", evidenceExecution, false},
-		{"poetry run python app.py", evidenceExecution, false},
-		{"bundle exec rspec", evidenceExecution, false},
-		{"npx --yes jest", evidenceExecution, false},
-		{"node app.js", evidenceExecution, false},
-		{"java -jar app.jar", evidenceExecution, false},
-		{"java App.java", evidenceExecution, false},
-		{"javac App.java && java App", evidenceExecution, false},
-		{"php index.php", evidenceExecution, false},
-		{"bash run.sh", evidenceExecution, false},
-		{"go run main.go", evidenceExecution, false},
-		{"./solve.py", evidenceExecution, false},
-		{"echo '1 2' | python3 solve.py", evidenceExecution, false},
-		{"python3 solve.py < input.txt", evidenceExecution, false},
-		{"pytest || exit 1", evidenceExecution, false},
-		{"set -o pipefail; pytest | tail -5", evidenceExecution, false},
-		{"set -e; pytest; echo done", evidenceExecution, false},
-		{"make test", evidenceExecution, false},
-		{"make check", evidenceExecution, false},
-		{"pytest && ruff check .", evidenceExecution, false},
-		{"python3 -m unittest discover", evidenceExecution, false},
-		{"python3 - <<'EOF'\nimport app\nprint(app.solve())\nEOF", evidenceExecution, false},
-		{"lua main.lua", evidenceExecution, false},
-		{"bun app.ts", evidenceExecution, false},
-		{"dotnet test", evidenceExecution, false},
-		{"swift main.swift", evidenceExecution, false},
-		{"mvn test", evidenceExecution, false},
-
-		// Well formed is not working.
-		{"python3 -m py_compile app.py", evidenceStatic, false},
-		{`python3 -c "import ast; ast.parse(open('app.py').read())"`, evidenceStatic, false},
-		{`python3 -c "import ast, sys; ast.parse(open(sys.argv[1]).read())" app.py`, evidenceStatic, false},
-		{"node --check app.js", evidenceStatic, false},
-		{"bash -n run.sh", evidenceStatic, false},
-		{"php -l index.php", evidenceStatic, false},
-		{"ruby -c app.rb", evidenceStatic, false},
-		{"perl -c app.pl", evidenceStatic, false},
-		{"deno check main.ts", evidenceStatic, false},
-		{"bun build", evidenceStatic, false},
-		{"swift build", evidenceStatic, false},
-		{"java -version", evidenceStatic, false},
-		{`cd app && bash -c "ruff check ."`, evidenceStatic, false},
-		{"ruff check .", evidenceStatic, false},
-		{"mypy app.py", evidenceStatic, false},
-		{"npx tsc --noEmit", evidenceStatic, false},
-		{"go build ./...", evidenceStatic, false},
-		{"go vet ./...", evidenceStatic, false},
-		{"cargo build", evidenceStatic, false},
-		{"npm run build", evidenceStatic, false},
-		{"npm run lint:fix", evidenceStatic, false},
-		{"yarn build", evidenceStatic, false},
-		{"make", evidenceStatic, false},
-		{"make lint", evidenceStatic, false},
-		{"make typecheck", evidenceStatic, false},
-		{"pytest --collect-only -q", evidenceStatic, false},
-		{"python3 -m pytest --co", evidenceStatic, false},
-		{"python3 --version", evidenceStatic, false},
-		{"node -v", evidenceStatic, false},
-		{"python3 app.py --help", evidenceStatic, false},
-		{"node app.js --version", evidenceStatic, false},
-		{"./app --version", evidenceStatic, false},
-		{"python3 -m py_compile app.py && echo OK", evidenceStatic, false},
-
-		// Recon and setup.
-		{"ls -la", evidenceNone, false},
-		{"cat app.py", evidenceNone, false},
-		{"echo hi", evidenceNone, false},
-		{"pip install flask", evidenceNone, false},
-		{"python3 -m pip install flask", evidenceNone, false},
-		{"python3 -m venv .venv", evidenceNone, false},
-		{"npm install", evidenceNone, false},
-		{"make install", evidenceNone, false},
-		{"curl -I http://localhost:5000/", evidenceNone, false},
-		{"java", evidenceNone, false},
-		{"FOO=1", evidenceNone, false},
-
-		// The verifying part ran, and the line's status is something else's.
-		{"pytest | tail -5", evidenceNone, true},
-		{"pytest -q 2>&1 | tail -20", evidenceNone, true},
-		{"pytest || true", evidenceNone, true},
-		{"python3 app.py; echo done", evidenceNone, true},
-		{"python3 app.py &", evidenceNone, true},
-		{"python3 app.py 2>&1 | tee out.log", evidenceNone, true},
-		{"pytest && echo PASS || echo FAIL", evidenceNone, true},
-		{"python3 app.py | grep -q 42", evidenceNone, true},
-		{`bash -c "pytest | tail -5"`, evidenceNone, true},
-		// curl without -f exits 0 on an error page.
-		{"curl http://localhost:5000/", evidenceNone, true},
-		{"curl -s http://localhost:5000/ | head -5", evidenceNone, true},
-
-		// A page fetched in a way an HTTP error would fail.
-		{"curl -sf http://localhost:5000/", evidenceProbe, false},
-		{"curl -s --fail-with-body http://localhost:5000/", evidenceProbe, false},
-		{"curl -s http://localhost:5000/ | grep -q Welcome", evidenceProbe, false},
-		{"curl -s http://localhost:5000/api | jq -e .ok", evidenceProbe, false},
-		{"wget -qO- http://localhost:5000/", evidenceProbe, false},
-		// The background start is hidden, the probe after it is not.
-		{"python3 app.py & sleep 1 && curl -sf localhost:5000", evidenceProbe, true},
-	}
-	for _, c := range cases {
-		ev := classifyCommandEvidence(c.cmd)
-		if ev.Kind != c.kind || ev.Masked != c.masked {
-			t.Errorf("%q: kind=%s masked=%v, want kind=%s masked=%v",
-				c.cmd, ev.Kind, ev.Masked, c.kind, c.masked)
-		}
-		if ev.Masked && ev.MaskNote == "" {
-			t.Errorf("%q: masked with no note for the model", c.cmd)
-		}
-	}
-}
 
 func TestMaskNoteNamesWhatHidTheResult(t *testing.T) {
 	for cmd, want := range map[string]string{
@@ -154,7 +25,7 @@ func TestMaskNoteNamesWhatHidTheResult(t *testing.T) {
 		// The first result hidden is the one the note names.
 		"pytest | tail -5; python3 app.py &": "`| tail`",
 	} {
-		if note := classifyCommandEvidence(cmd).MaskNote; !strings.Contains(note, want) {
+		if note := shellcmd.ClassifyCommandEvidence(cmd).MaskNote; !strings.Contains(note, want) {
 			t.Errorf("%q: note %q does not name %s", cmd, note, want)
 		}
 	}
@@ -175,7 +46,7 @@ func TestCoveringSegments(t *testing.T) {
 		"cd app && pytest && python3 main.py":        {"cd app", "pytest", "python3 main.py"},
 	} {
 		var got []string
-		for _, seg := range classifyCommandEvidence(cmd).Covering {
+		for _, seg := range shellcmd.ClassifyCommandEvidence(cmd).Covering {
 			got = append(got, strings.TrimSpace(seg))
 		}
 		if strings.Join(got, "|") != strings.Join(want, "|") {
@@ -189,71 +60,33 @@ func TestCoveringSegments(t *testing.T) {
 // segment so a reader of the command still sees what it imports.
 func TestHereDocumentsAreNotSplit(t *testing.T) {
 	cmd := "cat > app.py <<'EOF'\nimport os; print(1) | x && y\nEOF\npython3 app.py"
-	segs, ops, bodies := splitTopLevelShell(cmd)
+	segs, ops, bodies := shellcmd.SplitTopLevelShell(cmd)
 	if len(segs) != 2 || strings.TrimSpace(segs[1]) != "python3 app.py" {
 		t.Fatalf("segs=%q ops=%q", segs, ops)
 	}
 	if bodies[0] != "import os; print(1) | x && y" || bodies[1] != "" {
 		t.Fatalf("bodies=%q", bodies)
 	}
-	if ev := classifyCommandEvidence(cmd); ev.Kind != evidenceExecution || ev.Masked {
+	if ev := shellcmd.ClassifyCommandEvidence(cmd); ev.Kind != shellcmd.EvidenceExecution || ev.Masked {
 		t.Fatalf("heredoc then run: %+v", ev)
 	}
 	tabbed := "cat <<-EOF\n\tfoo; bar\n\tEOF\npytest"
-	if segs, _, _ := splitTopLevelShell(tabbed); len(segs) != 2 {
+	if segs, _, _ := shellcmd.SplitTopLevelShell(tabbed); len(segs) != 2 {
 		t.Fatalf("<<- body was split: %q", segs)
 	}
 	run := "python3 - <<'EOF'\nimport store\nstore.add(1)\nEOF"
-	ev := classifyCommandEvidence(run)
+	ev := shellcmd.ClassifyCommandEvidence(run)
 	if len(ev.Honest) != 1 || !strings.Contains(ev.Honest[0], "import store") {
 		t.Fatalf("the body did not stay with its command: %q", ev.Honest)
 	}
 	if !executionAttempt(strings.Join(ev.Honest, " && "), "store.py") {
 		t.Fatal("an import inside a here-document is not an execution attempt")
 	}
-	viaShell := classifyCommandEvidence("bash -c 'python3 -' <<'EOF'\nimport store\nEOF")
+	viaShell := shellcmd.ClassifyCommandEvidence("bash -c 'python3 -' <<'EOF'\nimport store\nEOF")
 	if len(viaShell.Honest) != 1 || !strings.Contains(viaShell.Honest[0], "import store") {
 		t.Fatalf("the body did not stay with the shell that reads it: %q", viaShell.Honest)
 	}
 }
-
-// An escaped operator, a backtick substitution and a here-string stay inside
-// their segment; `|&` is a pipe.
-func TestSplitTopLevelShell(t *testing.T) {
-	for _, c := range []struct {
-		cmd  string
-		segs []string
-		ops  []string
-	}{
-		{`echo a\;b; pytest`, []string{`echo a\;b`, " pytest"}, []string{";"}},
-		{"echo `a; b` && pytest", []string{"echo `a; b` ", " pytest"}, []string{"&&"}},
-		{`python3 app.py <<< "1 2" && pytest`, []string{`python3 app.py <<< "1 2" `, " pytest"}, []string{"&&"}},
-		{"pytest |& tail", []string{"pytest ", " tail"}, []string{"|"}},
-	} {
-		segs, ops, _ := splitTopLevelShell(c.cmd)
-		if !slices.Equal(segs, c.segs) || !slices.Equal(ops, c.ops) {
-			t.Errorf("splitTopLevelShell(%q) = %q, %q; want %q, %q", c.cmd, segs, ops, c.segs, c.ops)
-		}
-	}
-}
-
-// programWords looks past each wrapper to the program it runs.
-func TestProgramWords(t *testing.T) {
-	for in, want := range map[string]string{
-		"nohup python3 app.py":              "python3 app.py",
-		"env -i FOO=1 python3 app.py":       "python3 app.py",
-		"nice -n 5 python3 app.py":          "python3 app.py",
-		"stdbuf -oL python3 app.py":         "python3 app.py",
-		"timeout -s KILL 10 python3 app.py": "python3 app.py",
-		"time":                              "",
-	} {
-		if got := strings.Join(programWords(shellFields(in)), " "); got != want {
-			t.Errorf("programWords(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
-// --- what the loop records -----------------------------------------------------
 
 func ranClean(stdout string) *wire.ToolResult {
 	b, _ := json.Marshal(wire.RunCommandOutput{Stdout: stdout})
@@ -517,7 +350,7 @@ func TestRunCommandForEachExecutableLanguage(t *testing.T) {
 		if got := runCommandFor(path); got != want {
 			t.Errorf("runCommandFor(%q) = %q, want %q", path, got, want)
 		}
-		if !classifyCommandEvidence(runCommandFor(path)).Kind.verifies() {
+		if !shellcmd.ClassifyCommandEvidence(runCommandFor(path)).Kind.Verifies() {
 			t.Errorf("the command quoted for %s does not count as verification", path)
 		}
 	}
@@ -587,98 +420,6 @@ func TestARunnerCoversWhatItDiscovers(t *testing.T) {
 	}
 }
 
-// A segment that runs no program, or a program that is not a runner, adds
-// nothing; `python -m unittest` takes test*.py; a Go package run takes only
-// the package's .go files; a file two roots discover is listed once.
-func TestRunnerEntries(t *testing.T) {
-	for _, c := range []struct {
-		command    string
-		candidates []string
-		want       []string
-	}{
-		{"FOO=1 && python3 -m unittest", []string{"test_calc.py", "calc.py"}, []string{"test_calc.py"}},
-		{"python3 app.py && pytest", []string{"app.py", "test_app.py"}, []string{"test_app.py"}},
-		{"go run .", []string{"main.go", "notes.py"}, []string{"main.go"}},
-		{"pytest tests tests/unit", []string{"tests/unit/test_u.py"}, []string{"tests/unit/test_u.py"}},
-	} {
-		if got := runnerEntries(c.command, "/w", c.candidates); !slices.Equal(got, c.want) {
-			t.Errorf("runnerEntries(%q) = %q, want %q", c.command, got, c.want)
-		}
-	}
-}
-
-// shellScript gives the script that a shell runs inline, with the options the
-// shell was started with put in front of it. A shell without a -c script gives
-// none.
-func TestShellScript(t *testing.T) {
-	for _, c := range []struct {
-		seg    string
-		script string
-		ok     bool
-	}{
-		{`bash -c "x"`, "x", true},
-		{`bash -lc 'x'`, "x", true},
-		{`sh -ec "x"`, "set -e\nx", true},
-		{`bash -o pipefail -c "x"`, "set -o pipefail\nx", true},
-		{`bash -euo pipefail -c "x"`, "set -e\nset -o pipefail\nx", true},
-		{"bash run.sh", "", false},
-		{"sh -e", "", false},
-		{"bash", "", false},
-		{"bash -c", "", false},
-		{`bash -n -c "x"`, "", false},
-		{`python3 -c "x"`, "", false},
-	} {
-		script, ok := shellScript(c.seg)
-		if script != c.script || ok != c.ok {
-			t.Errorf("shellScript(%q) = %q, %v; want %q, %v", c.seg, script, ok, c.script, c.ok)
-		}
-	}
-}
-
-// compileStep judges each build tool by its own rule: a compiler always
-// compiles; go, cargo, dotnet and swift compile with `build`; Maven and Gradle
-// with compile, build, package or assemble; npm, pnpm and yarn with a build
-// script; make with any target that is not a test or a run.
-func TestCompileStep(t *testing.T) {
-	for seg, want := range map[string]bool{
-		"javac App.java":     true,
-		"gcc main.c -o main": true,
-		"python3 app.py":     false,
-		"go build ./...":     true,
-		"go test ./...":      false,
-		"cargo build":        true,
-		"cargo package":      false,
-		"dotnet build":       true,
-		"dotnet test":        false,
-		"swift build":        true,
-		"swift package":      false,
-		"mvn compile":        true,
-		"mvn test":           false,
-		"./mvnw package":     true,
-		"./mvnw verify":      false,
-		"gradle assemble":    true,
-		"gradle test":        false,
-		"./gradlew build":    true,
-		"./gradlew run":      false,
-		"npm run build":      true,
-		"npm test":           false,
-		"pnpm build":         true,
-		"pnpm test":          false,
-		"yarn run compile":   true,
-		"yarn start":         false,
-		"make":               true,
-		"make test":          false,
-	} {
-		if got := compileStep(seg); got != want {
-			t.Errorf("compileStep(%q) = %v, want %v", seg, got, want)
-		}
-	}
-}
-
-// Inline code that touches no file the session changed ran nothing the work is
-// made of. `python -c "print(1)"` must not pass the fix-intent gate or clear
-// an earlier red run of the real program.
-
 func TestInlineCodeThatTouchesNothingDoesNotClearAFailure(t *testing.T) {
 	ctx, dir := sepCtx(t, sepContract([]string{"fix.py"}, nil))
 	sepWrite(t, ctx, dir, "fix.py", "def f():\n    return 1 / 0\n\nprint(f())\n")
@@ -737,9 +478,9 @@ func TestInlineCode(t *testing.T) {
 		{`python3 -m pytest -c setup.cfg`, "", false},
 		{`python3 -X dev -c "print(1)"`, "print(1)", true},
 	} {
-		code, ok := inlineCode(c.seg)
+		code, ok := shellcmd.InlineCode(c.seg)
 		if ok != c.ok || code != c.code {
-			t.Errorf("inlineCode(%q) = %q, %v; want %q, %v", c.seg, code, ok, c.code, c.ok)
+			t.Errorf("shellcmd.InlineCode(%q) = %q, %v; want %q, %v", c.seg, code, ok, c.code, c.ok)
 		}
 	}
 }

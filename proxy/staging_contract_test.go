@@ -121,7 +121,7 @@ func TestADuplicateCommandIdentityIsRefused(t *testing.T) {
 }
 
 func TestTheDeclaredSetMayNotExceedTheStagingBudget(t *testing.T) {
-	// maxTaskContractEntries is an input ceiling, not an execution policy.
+	// MaxTaskContractEntries is an input ceiling, not an execution policy.
 	req := stagingReq("a", "b", "c", "d", "e")
 	if ok, why := req.validate(); ok {
 		t.Error("five commands ran against a four-command budget")

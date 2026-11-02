@@ -279,7 +279,7 @@ func TestALaterDecisionSupersedesTheEarlierGrant(t *testing.T) {
 // but it holds no room: otherwise a long run would stop being able to deliver.
 func TestGrantCapacityCountsOnlyLiveGrants(t *testing.T) {
 	w := newGrantWorld(t)
-	// Filled directly. A contract may declare at most maxTaskContractEntries
+	// Filled directly. A contract may declare at most MaxTaskContractEntries
 	// outputs, which equals the capacity, so no client can reach the limit
 	// through declared targets.
 	w.ctx.grantMu.Lock()

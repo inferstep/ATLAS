@@ -324,7 +324,7 @@ func (r stagingCommandResult) passedClean() bool {
 // stagingBudget is what staging is allowed to spend, stated separately from
 // the TaskContract's maximum.
 //
-// maxTaskContractEntries is an input-validation ceiling -- it says what a
+// MaxTaskContractEntries is an input-validation ceiling -- it says what a
 // request may legally declare, not what this machine will run. Executing 64
 // commands per candidate because the wire permits 64 is how a validation limit
 // becomes an execution policy, so the two are kept apart and this one is

@@ -70,7 +70,7 @@ pull_requests:
     proxy/guardrails*: the guards
     proxy/permissions.go: the guards
     proxy/authorization_*: the guards
-    proxy/shell_wrapper.go: the guards
+    proxy/internal/shellcmd/*: the guards
     proxy/internal/workspacefs/*: the guards
     proxy/internal/logsafe/*: the guards
     sandbox/executor_server.py: the guards

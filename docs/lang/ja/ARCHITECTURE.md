@@ -117,9 +117,10 @@ K3s デプロイパス（`scripts/install.sh`、`templates/` 内のマニフェ�
 | `mutation_scope.go` | モデルのツールコールから正確なファイル・編集スコープを導出し、候補が要求対象以外を変更できないようにする |
 | `obligation_kinds.go` | リクエストの義務を判断と台帳から導出し、配信がそれを満たしたかを確かめる |
 | `obligations.go` | 実行の義務が呼び出し側の宣言した契約と ATLAS のレガシー推論のどちらに由来するかを選び、その決定をリクエストに束ねたまま保つ |
-| `command_evidence.go` | シェルコマンドが何を実証するか: 実行、プローブ、静的チェック、または無。またコマンドラインがその部位の終了ステータスを報告するかどうか |
+| `internal/shellcmd/command_evidence.go` | シェルコマンドが何を実証するか: 実行、プローブ、静的チェック、または無。またコマンドラインがその部位の終了ステータスを報告するかどうか |
 | `guardrails*.go` | ツールごとのステアリングガード（縮約、コマンド/モジュール欠落のステア、doctype 除去）。`guardrails_reply.go` は序文のフレーズを正規化し、完了チェックが将来の作業を告知するだけの応答を認識できるようにする |
-| `shell_wrapper.go` | `validateShellCommand` の背後にあるコマンドポリシー: 複合コマンドを分割し、実行ラッパー（`sh -c`、`eval` など）の中を最大 16 層まで調べ、壊滅的なコマンドと検査できないラッパーを拒否 |
+| `internal/shellcmd/shell_wrapper.go` | `validateShellCommand` の背後にあるコマンドポリシー: 複合コマンドを分割し、実行ラッパー（`sh -c`、`eval` など）の中を最大 16 層まで調べ、壊滅的なコマンドと検査できないラッパーを拒否 |
+| `internal/shellcmd/destructive.go` | どのコマンドにも許されないシェルの形。破壊的な削除、フォークボム、デバイスへの書き込み |
 | `events.go` | 型付きエンベロープのブローカー（`/events`）と SSE の配管 |
 | `internal/v3client/client.go` | v3-service の `/v3/generate` + `/v3/plan` 向け SSE クライアント。呼び出しの上限 `ATLAS_V3_TIMEOUT` は `v3_bridge.go` に残ります |
 | `types.go` | 共有型、ティア、ターン上限 |

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/itigges22/atlas-proxy/internal/shellcmd"
 	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
@@ -447,7 +448,7 @@ func TestCommandProgram(t *testing.T) {
 		"./run.sh --fast":                  "run.sh",
 		"":                                 "",
 	} {
-		if got := commandProgram(cmd); got != want {
+		if got := shellcmd.CommandProgram(cmd); got != want {
 			t.Errorf("commandProgram(%q) = %q, want %q", cmd, got, want)
 		}
 	}
