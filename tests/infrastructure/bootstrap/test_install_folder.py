@@ -1,7 +1,7 @@
 """The scripts of scripts/install/ work from that folder, and the two that gate a deploy refuse.
 
-No test here reaches a real stack. Each runs a copy of the script in pytest's own
-folder, with stand-ins for `docker` and `curl` first on the path.
+No test here reaches a real stack. A test that runs a whole script runs a copy in
+pytest's own folder, with stand-ins for `docker` and `curl` first on the path.
 """
 import os
 import shutil
@@ -9,8 +9,36 @@ import stat
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[3]
 INSTALL = ROOT / "scripts" / "install"
+
+
+@pytest.mark.parametrize("name, root_line", [
+    ("atlas-llama-macos.sh", "ATLAS_ROOT="),
+    ("atlas-setup-macos.sh", "ATLAS_ROOT="),
+    ("build-containers.sh", "REPO_ROOT="),
+    ("download-models.sh", "REPO_ROOT="),
+    ("deploy-gated.sh", 'cd "$(dirname "$0")'),
+    ("verify-deployed.sh", 'cd "$(dirname "$0")'),
+])
+def test_a_moved_script_finds_the_repo_root(tmp_path, name, root_line):
+    script = INSTALL / name
+    lines = script.read_text(encoding="utf-8").splitlines()
+    (found,) = [line for line in lines if line.startswith(root_line)]
+
+    # The script's own line, with the two names it relies on set as the script sets them.
+    shell = f'SCRIPT_DIR="{INSTALL}"\n{found}\necho "${{ATLAS_ROOT:-${{REPO_ROOT:-$PWD}}}}"\n'
+    done = subprocess.run(["bash", "-c", shell, str(script)], capture_output=True, text=True, timeout=30,
+                          cwd=tmp_path, env={"PATH": os.environ["PATH"]})
+
+    assert done.stdout.strip() == str(ROOT), done.stderr
+
+
+@pytest.mark.parametrize("name", ["build-containers.sh", "generate-manifests.sh", "uninstall.sh", "verify-install.sh"])
+def test_a_moved_script_loads_the_shared_library_from_its_folder(name):
+    assert 'source "$SCRIPT_DIR/../lib/config.sh"' in (INSTALL / name).read_text(encoding="utf-8")
 
 
 def test_install_runs_the_build_script_in_its_folder(tmp_path):

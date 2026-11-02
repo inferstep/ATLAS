@@ -987,8 +987,9 @@ def _parse_args(argv: Optional[List[str]]) -> argparse.Namespace:
              "fallback (PC-114, #114) — works on basically any GPU + "
              "CPU lavapipe, ~30%% slower than the native backends. "
              "`metal` is the macOS hybrid path (#32) — native llama-server "
-             "+ Docker for the rest. Requires running ./scripts/"
-             "atlas-setup-macos.sh first. See docs/SETUP_MACOS.md.")
+             "+ Docker for the rest. Requires running "
+             "./scripts/install/atlas-setup-macos.sh first. See "
+             "docs/SETUP_MACOS.md.")
     parser.add_argument("--no-color", action="store_true")
     args = parser.parse_args(argv)
     return args

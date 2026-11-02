@@ -19,7 +19,7 @@ def test_metal_onboarding_never_starts_cuda_container(monkeypatch, tmp_path):
         start=True, color=False,
     )
     assert ready is False
-    assert "atlas-llama-macos.sh" in detail
+    assert "scripts/install/atlas-llama-macos.sh" in detail
     assert "will not start the CUDA container" in detail
 
 
