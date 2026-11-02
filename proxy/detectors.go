@@ -46,6 +46,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // repeatObservation is what a detector saw at the moment it fired.
@@ -706,7 +708,7 @@ func tracebackExclusion(ctx *AgentContext) ([]string, string) {
 // next run and return the directed steer as the result — the code is unchanged,
 // so re-running can only crash the same way. The block clears itself naturally:
 // once the model edits, the most recent tool result is the edit, not the crash.
-func runBlockAfterTraceback(ctx *AgentContext) *ToolResult {
+func runBlockAfterTraceback(ctx *AgentContext) *wire.ToolResult {
 	for i := len(ctx.Messages) - 1; i >= 0; i-- {
 		m := ctx.Messages[i]
 		if m.Role != "tool" {
@@ -727,7 +729,7 @@ func runBlockAfterTraceback(ctx *AgentContext) *ToolResult {
 		if steer == "" {
 			return nil
 		}
-		return &ToolResult{Success: false, Error: "Re-running is blocked: the code is unchanged, so it will crash exactly the same way. Edit the code FIRST, then run. " + steer}
+		return &wire.ToolResult{Success: false, Error: "Re-running is blocked: the code is unchanged, so it will crash exactly the same way. Edit the code FIRST, then run. " + steer}
 	}
 	return nil
 }
@@ -907,7 +909,7 @@ func recordFailedToolCall(ctx *AgentContext, toolName string, args json.RawMessa
 // P-safety/INTEGRITY#4).
 func retryIdentity(toolName string, args json.RawMessage) string {
 	if toolName == "structural_edit" {
-		var in StructuralEditInput
+		var in wire.StructuralEditInput
 		if json.Unmarshal(args, &in) == nil && in.Path != "" && in.Selector != "" {
 			body := sha1.Sum([]byte(in.Content))
 			h := sha1.Sum([]byte(toolName + "|path:" + signaturePath(in.Path) + "|sel:" + in.Selector +

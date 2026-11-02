@@ -29,7 +29,7 @@ import (
 	"github.com/itigges22/atlas-tui/internal/debuglog"
 )
 
-// ChatEvent mirrors the SSEEvent shape in proxy/types.go.
+// ChatEvent mirrors the SSEEvent shape in proxy/internal/wire/messages.go.
 // Different from Envelope — this is the older, simpler chat protocol.
 type ChatEvent struct {
 	Type string          `json:"type"`
@@ -312,7 +312,7 @@ const (
 )
 
 // taskContract is the optional structured declaration sent with a request.
-// Field tags MUST match proxy/types.go's TaskContract.
+// Field tags MUST match proxy/internal/taskcontract/task_contract.go's TaskContract.
 //
 // ExpectedOutputs and Verification stay empty from the TUI: a person typing
 // into a chat box has told the client nothing structured about which files

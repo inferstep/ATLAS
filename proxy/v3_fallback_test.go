@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // The V3 service-error fallback: generation was entered, it failed, and the
@@ -156,7 +158,7 @@ func (st *fallbackStub) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func runFallback(t *testing.T, o fallbackOpts) (*ToolResult, string, *fallbackStub, []string) {
+func runFallback(t *testing.T, o fallbackOpts) (*wire.ToolResult, string, *fallbackStub, []string) {
 	t.Helper()
 	dir := t.TempDir()
 	reqCtx, cancel := context.WithCancel(context.Background())
@@ -187,7 +189,7 @@ func runFallback(t *testing.T, o fallbackOpts) (*ToolResult, string, *fallbackSt
 	ctx.V3URL = srv.URL
 	ctx.SandboxURL = srv.URL
 	ctx.SessionWrites[o.rel] = true
-	ctx.Messages = []AgentMessage{
+	ctx.Messages = []wire.AgentMessage{
 		{Role: "user", Content: "write the module"},
 		{Role: "tool", ToolName: "read_file", Content: o.prior},
 	}
@@ -241,7 +243,7 @@ func assertSeq(t *testing.T, st *fallbackStub, want ...string) {
 }
 
 // A fallback write is the model's own bytes: no provenance may claim otherwise.
-func assertNoV3Provenance(t *testing.T, res *ToolResult) {
+func assertNoV3Provenance(t *testing.T, res *wire.ToolResult) {
 	t.Helper()
 	if res.V3Used || res.CandidatesTested != 0 || res.WinningScore != 0 ||
 		res.PhaseSolved != "" || len(res.VerificationEvidence) != 0 {
@@ -259,9 +261,9 @@ func TestFallbackPassesAndWritesBaseline(t *testing.T) {
 	if !res.Success || disk != fbTier2Python {
 		t.Fatalf("fallback write did not land: success=%v", res.Success)
 	}
-	if res.MutationStatus != MutationApplied ||
-		res.ValidationKind != ValidationKindSyntax ||
-		res.ValidationStatus != ValidationPassed {
+	if res.MutationStatus != wire.MutationApplied ||
+		res.ValidationKind != wire.ValidationKindSyntax ||
+		res.ValidationStatus != wire.ValidationPassed {
 		t.Errorf("got %q/%q/%q, want applied/syntax/passed",
 			res.MutationStatus, res.ValidationKind, res.ValidationStatus)
 	}
@@ -287,9 +289,9 @@ func TestFallbackCheckerUnavailableStillWrites(t *testing.T) {
 	if !res.Success || disk != fbTier2Python {
 		t.Fatal("fail-open fallback write did not land")
 	}
-	if res.MutationStatus != MutationApplied ||
-		res.ValidationKind != ValidationKindSyntax ||
-		res.ValidationStatus != ValidationNotRun {
+	if res.MutationStatus != wire.MutationApplied ||
+		res.ValidationKind != wire.ValidationKindSyntax ||
+		res.ValidationStatus != wire.ValidationNotRun {
 		t.Errorf("got %q/%q/%q, want applied/syntax/not_run",
 			res.MutationStatus, res.ValidationKind, res.ValidationStatus)
 	}
@@ -309,9 +311,9 @@ func TestFallbackNoCheckApplies(t *testing.T) {
 	if !res.Success || disk != debugRustProposal {
 		t.Fatalf("fallback write did not land: success=%v", res.Success)
 	}
-	if res.MutationStatus != MutationApplied ||
-		res.ValidationKind != ValidationKindNone ||
-		res.ValidationStatus != ValidationNotApplicable {
+	if res.MutationStatus != wire.MutationApplied ||
+		res.ValidationKind != wire.ValidationKindNone ||
+		res.ValidationStatus != wire.ValidationNotApplicable {
 		t.Errorf("got %q/%q/%q, want applied/none/not_applicable",
 			res.MutationStatus, res.ValidationKind, res.ValidationStatus)
 	}
@@ -342,9 +344,9 @@ func TestFallbackFreshCheckRefusesBrokenBaseline(t *testing.T) {
 	if want := fallbackSyntaxRejection(st.target, fbTier2Python, fbSyntaxDetail); res.Error != want {
 		t.Errorf("rejection text changed:\n got %q\nwant %q", res.Error, want)
 	}
-	if res.MutationStatus != MutationRefused ||
-		res.ValidationKind != ValidationKindSyntax ||
-		res.ValidationStatus != ValidationFailed {
+	if res.MutationStatus != wire.MutationRefused ||
+		res.ValidationKind != wire.ValidationKindSyntax ||
+		res.ValidationStatus != wire.ValidationFailed {
 		t.Errorf("got %q/%q/%q, want refused/syntax/failed",
 			res.MutationStatus, res.ValidationKind, res.ValidationStatus)
 	}
@@ -379,9 +381,9 @@ func TestFallbackStructuralRefusalOutranksPassingSyntax(t *testing.T) {
 	if !strings.Contains(res.Error, "missing_helper") {
 		t.Fatalf("refusal came from a different gate: %q", res.Error)
 	}
-	if res.MutationStatus != MutationRefused ||
-		res.ValidationKind != ValidationKindStructural ||
-		res.ValidationStatus != ValidationFailed {
+	if res.MutationStatus != wire.MutationRefused ||
+		res.ValidationKind != wire.ValidationKindStructural ||
+		res.ValidationStatus != wire.ValidationFailed {
 		t.Errorf("got %q/%q/%q, want refused/structural/failed",
 			res.MutationStatus, res.ValidationKind, res.ValidationStatus)
 	}
@@ -420,10 +422,10 @@ func TestFallbackPassedThenWriteFailure(t *testing.T) {
 	if disk != fbUnresolvedPython {
 		t.Fatalf("prior bytes changed on a failed write: %q", disk)
 	}
-	if res.MutationStatus != MutationFailed {
+	if res.MutationStatus != wire.MutationFailed {
 		t.Errorf("MutationStatus = %q, want failed", res.MutationStatus)
 	}
-	if res.ValidationKind != ValidationKindSyntax || res.ValidationStatus != ValidationPassed {
+	if res.ValidationKind != wire.ValidationKindSyntax || res.ValidationStatus != wire.ValidationPassed {
 		t.Errorf("validation = %q/%q, want syntax/passed -- the observation on "+
 			"those exact bytes survives the mutation failure",
 			res.ValidationKind, res.ValidationStatus)

@@ -6,6 +6,9 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // Does what lands agree with what was decided?
@@ -117,7 +120,7 @@ func agreementRows() []agreementRow {
 		{name: "existing syntax baseline with equal evidence",
 			contract: declared, wantWinner: true,
 			before: func(t *testing.T, w *routeWorld) {
-				seedBaseline(t, w, ValidationKindSyntax, "")
+				seedBaseline(t, w, wire.ValidationKindSyntax, "")
 			}},
 
 		{name: "existing behavioral baseline re-established by the same command",
@@ -125,20 +128,20 @@ func agreementRows() []agreementRow {
 			commands:   map[string]stubEffect{"python3 solve.py": {ExitCode: 0}},
 			wantWinner: true,
 			before: func(t *testing.T, w *routeWorld) {
-				seedBaseline(t, w, ValidationKindSyntax, "python3 solve.py")
+				seedBaseline(t, w, wire.ValidationKindSyntax, "python3 solve.py")
 			}},
 
 		{name: "existing behavioral baseline with syntax only",
 			contract: declared,
 			before: func(t *testing.T, w *routeWorld) {
-				seedBaseline(t, w, ValidationKindSyntax, "python3 solve.py")
+				seedBaseline(t, w, wire.ValidationKindSyntax, "python3 solve.py")
 			}},
 
 		{name: "existing behavioral baseline and a different command",
 			contract: withCommands("ruff check ."),
 			commands: map[string]stubEffect{"ruff check .": {ExitCode: 0}},
 			before: func(t *testing.T, w *routeWorld) {
-				seedBaseline(t, w, ValidationKindSyntax, "python3 solve.py")
+				seedBaseline(t, w, wire.ValidationKindSyntax, "python3 solve.py")
 			}},
 
 		{name: "undeclared target",
@@ -172,14 +175,14 @@ func agreementRows() []agreementRow {
 
 // seedBaseline puts a validated artifact at the target before anything is
 // authorized, so the row's baseline-preservation requirement is real.
-func seedBaseline(t *testing.T, w *routeWorld, kind ValidationKind, command string) {
+func seedBaseline(t *testing.T, w *routeWorld, kind wire.ValidationKind, command string) {
 	t.Helper()
 	if err := os.WriteFile(w.path, []byte(routeBaseline), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	observeDeliverable(w.ctx, w.path, []byte(routeBaseline), kind, ValidationPassed, "")
+	observeDeliverable(w.ctx, w.path, []byte(routeBaseline), kind, wire.ValidationPassed, "")
 	if command != "" {
-		w.ctx.VerificationEvidence = append(w.ctx.VerificationEvidence, VerificationRecord{
+		w.ctx.VerificationEvidence = append(w.ctx.VerificationEvidence, taskcontract.VerificationRecord{
 			Command: command,
 			Covered: map[string]string{w.path: contentSHA256(routeBaseline)}, Turn: 1,
 		})
@@ -288,7 +291,7 @@ func TestAModelGeneratedSelfTestNeverDelivers(t *testing.T) {
 	ev, evID := w.mustObserve(t)
 	// The model ran its own test and it passed, labelled as what it is.
 	forged := ev
-	forged.Provenance.Source = ProvenanceModelGenerated
+	forged.Provenance.Source = wire.ProvenanceModelGenerated
 	a := w.authorize(evID, nil, forged)
 	if a.Decision.Authorized {
 		t.Error("a model-generated record authorized a candidate")
@@ -307,7 +310,7 @@ func TestALegacyRecordNeitherAuthorizesNorBlocks(t *testing.T) {
 		"solve.py", authPy, true)
 	ev, evID := w.mustObserve(t)
 	// An envelope from before provenance existed.
-	legacy := &V3EvidenceEnvelope{WireVersion: "0.0.1"}
+	legacy := &wire.V3EvidenceEnvelope{WireVersion: "0.0.1"}
 	a := w.authorize(evID, legacy, ev)
 	if a.Decision.Reason != ReasonLegacyRecord {
 		t.Errorf("reason %q, want legacy_record", a.Decision.Reason)
@@ -433,7 +436,7 @@ func TestAnUnavailableStructuralGateRefusesRatherThanDelivers(t *testing.T) {
 	w.ctx.SandboxURL = "http://127.0.0.1:1"
 
 	out := fallbackSyntaxOutcomeFor(w.ctx, w.path, routeWinner).aggregate()
-	if out.Status != ValidationNotRun {
+	if out.Status != wire.ValidationNotRun {
 		t.Fatalf("gate reported %q with the sandbox down, want not_run", out.Status)
 	}
 	if _, _, produced := observeDeliveredCandidateSyntax(w.ctx, mintRouteEntry(w.ctx), w.path, routeWinner, out); produced {

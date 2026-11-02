@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // syntaxStub answers the whole-file syntax check the terminal consults.
@@ -424,11 +426,11 @@ func TestEveryTerminalProducerGoesThroughTheOneEmitter(t *testing.T) {
 // NormalizeTerminalStatus is how these tests read a terminal event's status, as
 // a consumer must. Absent, malformed, unknown, or from a future producer all
 // become incomplete, never completed.
-func NormalizeTerminalStatus(raw string) TerminalStatus {
-	if s := TerminalStatus(raw); s.Classified() {
+func NormalizeTerminalStatus(raw string) wire.TerminalStatus {
+	if s := wire.TerminalStatus(raw); s.Classified() {
 		return s
 	}
-	return TerminalIncomplete
+	return wire.TerminalIncomplete
 }
 
 func TestUnclassifiedStatusFailsClosedAtTheEmitter(t *testing.T) {
@@ -436,7 +438,7 @@ func TestUnclassifiedStatusFailsClosedAtTheEmitter(t *testing.T) {
 		if NormalizeTerminalStatus(raw).Completed() {
 			t.Errorf("consumer read %q as completed", raw)
 		}
-		if TerminalStatus(raw).Classified() {
+		if wire.TerminalStatus(raw).Classified() {
 			t.Errorf("%q counts as a named outcome", raw)
 		}
 	}
@@ -453,8 +455,8 @@ func TestUnclassifiedStatusFailsClosedAtTheEmitter(t *testing.T) {
 			json.Unmarshal(b, &got)
 		}
 	}
-	emitTerminal(ctx, nil, TerminalStatus("nonsense"), "made_up", "whatever")
-	if got["status"] != string(TerminalIncomplete) {
+	emitTerminal(ctx, nil, wire.TerminalStatus("nonsense"), "made_up", "whatever")
+	if got["status"] != string(wire.TerminalIncomplete) {
 		t.Errorf("emitter accepted an unclassified status: %v", got)
 	}
 	if got["reason"] != "unclassified_producer" {
@@ -484,9 +486,9 @@ func TestOnlyOneTerminalEventPerSession(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			if i%2 == 0 {
-				emitTerminal(ctx, nil, TerminalTimedOut, "work_deadline", "timed out")
+				emitTerminal(ctx, nil, wire.TerminalTimedOut, "work_deadline", "timed out")
 			} else {
-				emitTerminal(ctx, nil, TerminalCompleted, "deliverables_demonstrated", "done")
+				emitTerminal(ctx, nil, wire.TerminalCompleted, "deliverables_demonstrated", "done")
 			}
 		}(i)
 	}
@@ -511,7 +513,7 @@ func TestLegacyConsumersStillSeeSummaryOnly(t *testing.T) {
 			raw = string(b)
 		}
 	}
-	emitTerminal(ctx, nil, TerminalStopped, "repeat_detector", "Stopped: because.")
+	emitTerminal(ctx, nil, wire.TerminalStopped, "repeat_detector", "Stopped: because.")
 
 	var legacy struct {
 		Summary string `json:"summary"`
@@ -650,7 +652,7 @@ func TestFalseSuccessSummariesNeverShipOnANonCompletedRun(t *testing.T) {
 			}
 			ctx := NewAgentContext(t.TempDir(), Tier2Medium)
 			st := &runState{madeProductiveChange: true}
-			got := honestTerminalSummary(ctx, st, TerminalIncomplete, "deliverables_not_demonstrated", prose)
+			got := honestTerminalSummary(ctx, st, wire.TerminalIncomplete, "deliverables_not_demonstrated", prose)
 			if completionClaimIn(got) != "" {
 				t.Errorf("a completion claim survived:\n%s", got)
 			}
@@ -685,27 +687,27 @@ func TestEveryNonCompletedTerminalIsHonest(t *testing.T) {
 	// One row per terminal producer, with the status and reason it emits.
 	producers := []struct {
 		reason  string
-		status  TerminalStatus
+		status  wire.TerminalStatus
 		summary string
 	}{
-		{"workspace_misaligned", TerminalFailed, "proxy and sandbox workspaces are not aligned"},
-		{"inference_failed", TerminalFailed, "Stopped: the model call failed, so the run could not continue."},
-		{"text_instead_of_work", TerminalIncomplete, "The reply was cut short — it had begun repeating itself."},
-		{"unusable_model_output", TerminalStopped, "Stopped after 3 unparseable responses."},
-		{"deliverables_not_demonstrated", TerminalIncomplete, ""},
-		{"delete_intent_unestablished", TerminalIncomplete, ""},
-		{"text_reply", TerminalIncomplete, ""},
-		{"failure_ceiling", TerminalStopped, "Stopped after 9 failed tool calls with nothing landing on disk."},
-		{"same_target_failures", TerminalStopped, "Wrote your changes to disk; couldn't verify them automatically."},
-		{"turn_budget_exhausted", TerminalIncomplete, "I ran out of turns for this request before finishing."},
-		{"oversized_tool_content", TerminalStopped, "Stopped: content too large for tool calls."},
-		{"repeated_refusal", TerminalStopped, "Stopped: the same `write_file` call was re-sent after being refused."},
-		{"repeat_detector", TerminalStopped, "Stopped: the same tool call kept repeating without making progress."},
-		{"work_deadline", TerminalTimedOut, "Stopped: the session ran out of time before the work finished."},
-		{"cancelled", TerminalIncomplete, "Stopped: the run was cancelled before the work finished."},
-		{"unclassified_producer", TerminalIncomplete, ""},
-		{"clarification_requested", TerminalIncomplete, ""},
-		{"investigation_handed_back", TerminalIncomplete, ""},
+		{"workspace_misaligned", wire.TerminalFailed, "proxy and sandbox workspaces are not aligned"},
+		{"inference_failed", wire.TerminalFailed, "Stopped: the model call failed, so the run could not continue."},
+		{"text_instead_of_work", wire.TerminalIncomplete, "The reply was cut short — it had begun repeating itself."},
+		{"unusable_model_output", wire.TerminalStopped, "Stopped after 3 unparseable responses."},
+		{"deliverables_not_demonstrated", wire.TerminalIncomplete, ""},
+		{"delete_intent_unestablished", wire.TerminalIncomplete, ""},
+		{"text_reply", wire.TerminalIncomplete, ""},
+		{"failure_ceiling", wire.TerminalStopped, "Stopped after 9 failed tool calls with nothing landing on disk."},
+		{"same_target_failures", wire.TerminalStopped, "Wrote your changes to disk; couldn't verify them automatically."},
+		{"turn_budget_exhausted", wire.TerminalIncomplete, "I ran out of turns for this request before finishing."},
+		{"oversized_tool_content", wire.TerminalStopped, "Stopped: content too large for tool calls."},
+		{"repeated_refusal", wire.TerminalStopped, "Stopped: the same `write_file` call was re-sent after being refused."},
+		{"repeat_detector", wire.TerminalStopped, "Stopped: the same tool call kept repeating without making progress."},
+		{"work_deadline", wire.TerminalTimedOut, "Stopped: the session ran out of time before the work finished."},
+		{"cancelled", wire.TerminalIncomplete, "Stopped: the run was cancelled before the work finished."},
+		{"unclassified_producer", wire.TerminalIncomplete, ""},
+		{"clarification_requested", wire.TerminalIncomplete, ""},
+		{"investigation_handed_back", wire.TerminalIncomplete, ""},
 	}
 	// Each producer runs twice: with nothing written, and after a write.
 	for _, p := range producers {
@@ -741,7 +743,7 @@ func TestFallbackDescribesTheArtifactItCanSee(t *testing.T) {
 		ctx, dir := syntaxVerdictCtx(t, true)
 		os.WriteFile(filepath.Join(dir, "solve.py"), []byte("A = 1\n"), 0o644)
 		st := &runState{madeProductiveChange: true, expectedOutputs: []string{"solve.py"}}
-		got := honestTerminalSummary(ctx, st, TerminalTimedOut, "work_deadline", "")
+		got := honestTerminalSummary(ctx, st, wire.TerminalTimedOut, "work_deadline", "")
 		if !strings.Contains(got, "parses") {
 			t.Errorf("valid bytes not disclosed: %s", got)
 		}
@@ -754,7 +756,7 @@ func TestFallbackDescribesTheArtifactItCanSee(t *testing.T) {
 		ctx, dir := syntaxVerdictCtx(t, false)
 		os.WriteFile(filepath.Join(dir, "solve.py"), []byte("def f(\n"), 0o644)
 		st := &runState{madeProductiveChange: true, expectedOutputs: []string{"solve.py"}}
-		got := honestTerminalSummary(ctx, st, TerminalTimedOut, "work_deadline", "")
+		got := honestTerminalSummary(ctx, st, wire.TerminalTimedOut, "work_deadline", "")
 		if !strings.Contains(got, "unverified") {
 			t.Errorf("invalid bytes not disclosed as unverified: %s", got)
 		}
@@ -763,7 +765,7 @@ func TestFallbackDescribesTheArtifactItCanSee(t *testing.T) {
 	t.Run("stopped with nothing on disk", func(t *testing.T) {
 		ctx, _ := syntaxVerdictCtx(t, true)
 		st := &runState{}
-		got := honestTerminalSummary(ctx, st, TerminalStopped, "repeat_detector", "")
+		got := honestTerminalSummary(ctx, st, wire.TerminalStopped, "repeat_detector", "")
 		if !strings.Contains(got, "Nothing was written") {
 			t.Errorf("empty workspace not disclosed: %s", got)
 		}
@@ -775,14 +777,14 @@ func TestCompletedRunKeepsItsSummary(t *testing.T) {
 	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
 	st := &runState{madeProductiveChange: true}
 	prose := "I have successfully implemented the interval priority logic in solve.py."
-	got := honestTerminalSummary(ctx, st, TerminalCompleted, "deliverables_demonstrated", prose)
+	got := honestTerminalSummary(ctx, st, wire.TerminalCompleted, "deliverables_demonstrated", prose)
 	if got != prose {
 		t.Errorf("a verified completion had its summary rewritten:\n%s", got)
 	}
-	if modelProseIfAuthorized(TerminalCompleted, prose) != prose {
+	if modelProseIfAuthorized(wire.TerminalCompleted, prose) != prose {
 		t.Error("authorized prose was withheld")
 	}
-	if modelProseIfAuthorized(TerminalIncomplete, prose) != "" {
+	if modelProseIfAuthorized(wire.TerminalIncomplete, prose) != "" {
 		t.Error("unauthorized prose passed through")
 	}
 }
@@ -799,16 +801,16 @@ func TestCompletedRunKeepsItsSummary(t *testing.T) {
 func TestLegacyReaderNeverSeesSuccessOnANonCompletedRun(t *testing.T) {
 	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
 	cases := []struct {
-		status  TerminalStatus
+		status  wire.TerminalStatus
 		reason  string
 		summary string
 	}{
-		{TerminalCompleted, "deliverables_demonstrated", "I have successfully implemented solve.py and all tests pass."},
-		{TerminalIncomplete, "deliverables_not_demonstrated", falseSuccessSummaries["overlay3"]},
-		{TerminalIncomplete, "delete_intent_unestablished", ""},
-		{TerminalStopped, "repeat_detector", "Stopped: the same tool call kept repeating."},
-		{TerminalTimedOut, "work_deadline", ""},
-		{TerminalFailed, "inference_failed", ""},
+		{wire.TerminalCompleted, "deliverables_demonstrated", "I have successfully implemented solve.py and all tests pass."},
+		{wire.TerminalIncomplete, "deliverables_not_demonstrated", falseSuccessSummaries["overlay3"]},
+		{wire.TerminalIncomplete, "delete_intent_unestablished", ""},
+		{wire.TerminalStopped, "repeat_detector", "Stopped: the same tool call kept repeating."},
+		{wire.TerminalTimedOut, "work_deadline", ""},
+		{wire.TerminalFailed, "inference_failed", ""},
 	}
 	for _, c := range cases {
 		t.Run(c.reason+"/"+string(c.status), func(t *testing.T) {
@@ -998,7 +1000,7 @@ func TestUnnamedDeliverablesNeverCompleteWithNothingWritten(t *testing.T) {
 	t.Logf("turns=%d status=%q reason=%q summary=%.100s",
 		*turns, terminal["status"], terminal["reason"], terminal["summary"])
 
-	if terminal["status"] != string(TerminalIncomplete) {
+	if terminal["status"] != string(wire.TerminalIncomplete) {
 		t.Fatalf("status = %q, want incomplete", terminal["status"])
 	}
 	if terminal["reason"] != "action_demanded_unmet" {
@@ -1044,7 +1046,7 @@ func TestTextExitCannotCompleteAnUnmetActionRequest(t *testing.T) {
 	}
 	t.Logf("text exit: status=%q reason=%q summary=%.100s",
 		terminal["status"], terminal["reason"], terminal["summary"])
-	if terminal["status"] != string(TerminalIncomplete) {
+	if terminal["status"] != string(wire.TerminalIncomplete) {
 		t.Fatalf("status = %q, want incomplete", terminal["status"])
 	}
 	if terminal["reason"] != "action_demanded_unmet" {
@@ -1078,7 +1080,7 @@ func TestUnmetVerificationDowngradesAndActionWins(t *testing.T) {
 		got, _ := os.ReadFile(filepath.Join(dir, "solve.py"))
 		t.Logf("verify-unmet: status=%q reason=%q disk=%q",
 			terminal["status"], terminal["reason"], string(got))
-		if terminal["status"] == string(TerminalCompleted) {
+		if terminal["status"] == string(wire.TerminalCompleted) {
 			t.Errorf("completed with verification demanded and unmet")
 		}
 		if terminal["reason"] != "verification_demanded_unmet" {
@@ -1097,7 +1099,7 @@ func TestUnmetVerificationDowngradesAndActionWins(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Logf("both-unmet: status=%q reason=%q", terminal["status"], terminal["reason"])
-		if terminal["status"] != string(TerminalIncomplete) {
+		if terminal["status"] != string(wire.TerminalIncomplete) {
 			t.Fatalf("status = %q", terminal["status"])
 		}
 		if terminal["reason"] != "action_demanded_unmet" {
@@ -1125,7 +1127,7 @@ func TestReadOnlyRequestsStillComplete(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Logf("%s exit: status=%q reason=%q", exit, terminal["status"], terminal["reason"])
-			if terminal["status"] != string(TerminalCompleted) {
+			if terminal["status"] != string(wire.TerminalCompleted) {
 				t.Errorf("a read-only question did not complete: status=%q reason=%q",
 					terminal["status"], terminal["reason"])
 			}
@@ -1155,14 +1157,14 @@ func TestSuccessfulCompletionsAreUnchanged(t *testing.T) {
 	t.Run("named deliverable", func(t *testing.T) {
 		terminal, ctx, got := run(t, "Create solve.py that prints 1, then run it.")
 		t.Logf("named: status=%q reason=%q", terminal["status"], terminal["reason"])
-		if terminal["status"] != string(TerminalCompleted) {
+		if terminal["status"] != string(wire.TerminalCompleted) {
 			t.Fatalf("status=%q reason=%q", terminal["status"], terminal["reason"])
 		}
 		d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
 		if d == nil || d.CurrentHash != hashBytes([]byte(got)) {
 			t.Error("ledger does not describe the final bytes")
 		}
-		if k, s := d.CurrentValidation(); s != ValidationPassed || k != ValidationKindSyntax {
+		if k, s := d.CurrentValidation(); s != wire.ValidationPassed || k != wire.ValidationKindSyntax {
 			t.Errorf("completion over %v/%v", k, s)
 		}
 		// A genuinely completed run keeps the model's account.
@@ -1174,7 +1176,7 @@ func TestSuccessfulCompletionsAreUnchanged(t *testing.T) {
 	t.Run("unnamed deliverable actually written", func(t *testing.T) {
 		terminal, _, _ := run(t, "Write a small script and run it.")
 		t.Logf("unnamed: status=%q reason=%q", terminal["status"], terminal["reason"])
-		if terminal["status"] != string(TerminalCompleted) {
+		if terminal["status"] != string(wire.TerminalCompleted) {
 			t.Errorf("a run that wrote and verified did not complete: status=%q reason=%q",
 				terminal["status"], terminal["reason"])
 		}
@@ -1215,7 +1217,7 @@ func TestAnUnfinishedDeliverableEndsWithTheMostSpecificReason(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Logf("%s: status=%q reason=%q", c.path, terminal["status"], terminal["reason"])
-			if terminal["status"] == string(TerminalCompleted) {
+			if terminal["status"] == string(wire.TerminalCompleted) {
 				t.Fatalf("%s completed", c.path)
 			}
 			if terminal["reason"] != c.wantReason {
@@ -1244,7 +1246,7 @@ func TestRefusedUnsafeMutationsCannotComplete(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Logf("%s: status=%q reason=%q", c.name, terminal["status"], terminal["reason"])
-			if terminal["status"] == string(TerminalCompleted) {
+			if terminal["status"] == string(wire.TerminalCompleted) {
 				t.Errorf("a refused unsafe mutation completed: reason=%q", terminal["reason"])
 			}
 			if got, _ := os.ReadFile(filepath.Join(dir, ".env")); string(got) != "S=1\n" {
@@ -1364,7 +1366,7 @@ func TestATextDeliverableMayDemonstrate(t *testing.T) {
 	ctx, _ := bracketCheckCtx(t)
 	args, _ := json.Marshal(map[string]string{"path": "notes.txt", "content": "ordinary notes\n"})
 	res := executeToolCall("write_file", args, ctx)
-	if res.ValidationKind != ValidationKindNone || res.ValidationStatus != ValidationNotApplicable {
+	if res.ValidationKind != wire.ValidationKindNone || res.ValidationStatus != wire.ValidationNotApplicable {
 		t.Fatalf("expected none/not_applicable, got %s/%s",
 			res.ValidationKind, res.ValidationStatus)
 	}
@@ -1374,7 +1376,7 @@ func TestATextDeliverableMayDemonstrate(t *testing.T) {
 	// The internal record is untouched: no fake syntax pass.
 	d := ctx.Ledger[ledgerKey(ctx, "notes.txt")]
 	k, s := d.CurrentValidation()
-	if k != ValidationKindNone || s != ValidationNotApplicable {
+	if k != wire.ValidationKindNone || s != wire.ValidationNotApplicable {
 		t.Errorf("the ledger was relabelled: %v/%v", k, s)
 	}
 }
@@ -1449,13 +1451,13 @@ func TestNonCodeDeliverableCompletesThroughTheLoop(t *testing.T) {
 	d := ctx.Ledger[ledgerKey(ctx, "notes.txt")]
 	t.Logf("ordinary text: status=%q reason=%q hash_matches=%v",
 		terminal["status"], terminal["reason"], d != nil && d.CurrentHash == hashBytes(got))
-	if terminal["status"] != string(TerminalCompleted) {
+	if terminal["status"] != string(wire.TerminalCompleted) {
 		t.Errorf("status = %q, want completed (reason=%q)", terminal["status"], terminal["reason"])
 	}
 	if d == nil || d.CurrentHash != hashBytes(got) {
 		t.Error("the ledger hash does not match disk")
 	}
-	if k, s := d.CurrentValidation(); k != ValidationKindNone || s != ValidationNotApplicable {
+	if k, s := d.CurrentValidation(); k != wire.ValidationKindNone || s != wire.ValidationNotApplicable {
 		t.Errorf("the internal record was relabelled: %v/%v", k, s)
 	}
 }
@@ -1475,7 +1477,7 @@ func TestUnsupportedCodeDoesNotCompleteThroughTheLoop(t *testing.T) {
 	d := ctx.Ledger[ledgerKey(ctx, "lib.rs")]
 	t.Logf("unsupported code: status=%q reason=%q hash_matches=%v",
 		terminal["status"], terminal["reason"], d != nil && d.CurrentHash == hashBytes(got))
-	if terminal["status"] == string(TerminalCompleted) {
+	if terminal["status"] == string(wire.TerminalCompleted) {
 		t.Errorf("unsupported code completed (reason=%q)", terminal["reason"])
 	}
 }

@@ -1,7 +1,7 @@
 // Protocol types for the atlas-proxy public client API.
 //
 // Mirrors extensions/vscode/src/client/types.ts and docs/API.md; the field
-// tags in proxy/types.go are the source of truth, so every name here that
+// tags in proxy/internal/wire/ are the source of truth, so every name here that
 // differs from the Kotlin identifier is pinned with @SerialName to the exact
 // wire name.
 //

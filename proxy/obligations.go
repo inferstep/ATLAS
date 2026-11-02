@@ -1,5 +1,7 @@
 package main
 
+import "github.com/itigges22/atlas-proxy/internal/taskcontract"
+
 // Where a run's obligations came from.
 //
 // Two sources can name the files a run must produce, and merging them is what
@@ -21,39 +23,6 @@ package main
 // contract, at the point the request already resolved it -- nothing the model
 // later emits can change which source spoke.
 
-type ObligationSource string
-
-const (
-	// ObligationSourceLegacy: the caller declared no knowledge of this class,
-	// so ATLAS's own inference stands, unchanged.
-	ObligationSourceLegacy ObligationSource = "legacy"
-	// ObligationSourceContractDeclared: the caller stated it knows, and its
-	// list is the obligation -- including when that list is empty.
-	ObligationSourceContractDeclared ObligationSource = "contract_declared"
-)
-
-// obligationDecision is one class's answer, with everything needed to say why
-// it holds and which request it belongs to.
-type obligationDecision struct {
-	// Items are the canonical obligations: paths for outputs, exact command
-	// strings for verification. Empty from a declared source is authoritative
-	// none; empty from legacy is "the heuristic found nothing".
-	Items []string
-	// Typed is the verification class's per-command declaration, keyed by the
-	// exact command in Items. Every command has an entry: a typed one where
-	// the client declared it, the legacy one otherwise. Empty for the output
-	// class, which declares paths and not commands.
-	Typed  map[string]VerificationRequirement
-	Source ObligationSource
-	// KnowledgeSpecified is true only when the caller stated `declared`. It is
-	// what separates "no obligations" from "no knowledge of obligations", and
-	// downstream gates must consult it rather than len(Items).
-	KnowledgeSpecified bool
-	// RequestID binds the decision to the request that produced it, so a
-	// decision cannot be carried into another one.
-	RequestID string
-}
-
 // requestIDOf is the request this decision belongs to, or "" when the context
 // carries none. A decision without an identity cannot be shown to belong to
 // the request that made it.
@@ -64,60 +33,23 @@ func requestIDOf(ctx *AgentContext) string {
 	return requestIDFromContext(ctx.Ctx)
 }
 
-// declaredItems returns the caller's list and whether it may be used as
-// authority.
-//
-// The unstated case carries the legacy compatibility rule, and carries it HERE
-// rather than only at the request boundary: a contract that reached policy
-// without passing through normalizeKnowledge -- a fixture, an internal caller,
-// a future decode path -- must reach the same answer the boundary would have.
-// Two places deciding what a caller meant is the defect this file exists to
-// remove, so the rule lives in one place and both readers use it.
-//
-//	unstated + non-empty list  a legacy client always meant "these are the
-//	                           obligations", so it keeps that meaning
-//	unstated + empty or absent the storage those clients were written against
-//	                           could not tell [] from omitted, so this cannot
-//	                           be promoted to authoritative none
-//
-// Fails closed otherwise: an unrecognised knowledge value, and a `declared`
-// with no list at all, both fall back to legacy. Neither can arrive through
-// validateTaskContract, and if one ever does it must not become authority.
-func declaredItems(knowledge ObligationKnowledge, present bool, items []string) ([]string, bool) {
-	switch knowledge {
-	case KnowledgeDeclared:
-		if !present {
-			return nil, false
-		}
-	case "":
-		if !present || len(items) == 0 {
-			return nil, false
-		}
-	default:
-		return nil, false
-	}
-	out := make([]string, 0, len(items))
-	out = append(out, items...)
-	return out, true
-}
-
 // resolveOutputObligation is THE decision about which files this run owes.
 //
 // Called once, from the agent loop, against the contract the request boundary
 // already validated and canonicalised. It reads no shadow state: the capture's
 // copy of the contract exists to be compared with production, and a policy
 // that read it would be comparing production with itself.
-func resolveOutputObligation(ctx *AgentContext, userMessage string) obligationDecision {
-	d := obligationDecision{Source: ObligationSourceLegacy, RequestID: requestIDOf(ctx)}
-	var tc *TaskContract
+func resolveOutputObligation(ctx *AgentContext, userMessage string) taskcontract.ObligationDecision {
+	d := taskcontract.ObligationDecision{Source: taskcontract.ObligationSourceLegacy, RequestID: requestIDOf(ctx)}
+	var tc *taskcontract.TaskContract
 	if ctx != nil {
 		tc = ctx.TaskContract
 	}
 	if tc != nil {
-		if items, ok := declaredItems(tc.OutputKnowledge, tc.OutputsPresent(),
+		if items, ok := taskcontract.DeclaredItems(tc.OutputKnowledge, tc.OutputsPresent(),
 			tc.OutputPaths()); ok {
 			d.Items = items
-			d.Source = ObligationSourceContractDeclared
+			d.Source = taskcontract.ObligationSourceContractDeclared
 			d.KnowledgeSpecified = true
 			return d
 		}
@@ -129,9 +61,9 @@ func resolveOutputObligation(ctx *AgentContext, userMessage string) obligationDe
 
 // resolveVerificationObligation is THE decision about which commands this run
 // owes. Same shape, same rules, decided independently of the output class.
-func resolveVerificationObligation(ctx *AgentContext) obligationDecision {
-	d := obligationDecision{Source: ObligationSourceLegacy, RequestID: requestIDOf(ctx)}
-	var tc *TaskContract
+func resolveVerificationObligation(ctx *AgentContext) taskcontract.ObligationDecision {
+	d := taskcontract.ObligationDecision{Source: taskcontract.ObligationSourceLegacy, RequestID: requestIDOf(ctx)}
+	var tc *taskcontract.TaskContract
 	if ctx != nil {
 		tc = ctx.TaskContract
 	}
@@ -139,11 +71,11 @@ func resolveVerificationObligation(ctx *AgentContext) obligationDecision {
 		// Both lists, merged by exact command identity before the knowledge
 		// rule is applied. A client that sent only typed requirements declared
 		// its commands, and one that sent both declared their union.
-		if items, ok := declaredItems(tc.VerificationKnowledge, tc.VerificationPresent(),
-			verificationCommandsOf(tc)); ok {
+		if items, ok := taskcontract.DeclaredItems(tc.VerificationKnowledge, tc.VerificationPresent(),
+			taskcontract.VerificationCommandsOf(tc)); ok {
 			d.Items = items
-			d.Typed = verificationRequirementsFor(tc)
-			d.Source = ObligationSourceContractDeclared
+			d.Typed = taskcontract.VerificationRequirementsFor(tc)
+			d.Source = taskcontract.ObligationSourceContractDeclared
 			d.KnowledgeSpecified = true
 			return d
 		}
@@ -161,10 +93,10 @@ func resolveVerificationObligation(ctx *AgentContext) obligationDecision {
 // read in one place: a producer that decoded the contract for itself would be a
 // second reader able to disagree with the derivation about what the client
 // asked for.
-func requestVerificationRequirement(ctx *AgentContext, command string) (VerificationRequirement, bool) {
+func requestVerificationRequirement(ctx *AgentContext, command string) (taskcontract.VerificationRequirement, bool) {
 	decision := resolveVerificationObligation(ctx)
 	if !decision.KnowledgeSpecified {
-		return VerificationRequirement{}, false
+		return taskcontract.VerificationRequirement{}, false
 	}
 	req, ok := decision.Typed[command]
 	return req, ok
@@ -185,7 +117,7 @@ func requestVerificationRequirement(ctx *AgentContext, command string) (Verifica
 // request with no contract declared nothing. Read here, in the owner that
 // already reads the validated contract, so no decision elsewhere reads it.
 func requestDeclaresWork(ctx *AgentContext) bool {
-	return ctx != nil && ctx.TaskContract != nil && ctx.TaskContract.TaskMode == TaskModeWork
+	return ctx != nil && ctx.TaskContract != nil && ctx.TaskContract.TaskMode == taskcontract.TaskModeWork
 }
 
 func outputKnowledgeDeclared(ctx *AgentContext) bool {

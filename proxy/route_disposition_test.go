@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // --- the vocabularies are closed ------------------------------------------
@@ -385,7 +387,7 @@ func TestARefusalCarriesItsRouteEntry(t *testing.T) {
 		TargetPath:    "solve.py",
 		CandidateHash: contentSHA256("candidate\n"),
 		RouteEntry:    entry,
-		Identity:      V3EvidenceProvenance{RequestID: "req-attr"},
+		Identity:      wire.V3EvidenceProvenance{RequestID: "req-attr"},
 	}
 	recs := captureShadow(t, func() {
 		recordAuthorizationDecision(ctx, in, AuthorizationDecision{
@@ -419,7 +421,7 @@ func TestTwoRefusalsInOneRequestStayApart(t *testing.T) {
 		for _, e := range []routeEntry{first, second} {
 			recordAuthorizationDecision(ctx, authorizationInput{
 				TargetPath: "solve.py", CandidateHash: contentSHA256("c-" + e.ID),
-				RouteEntry: e, Identity: V3EvidenceProvenance{RequestID: "req-attr"},
+				RouteEntry: e, Identity: wire.V3EvidenceProvenance{RequestID: "req-attr"},
 			}, AuthorizationDecision{Authorized: false, Reason: ReasonTargetNotDeclared})
 		}
 	})
@@ -440,7 +442,7 @@ func TestAnUnattributableRefusalIsStillWritten(t *testing.T) {
 	recs := captureShadow(t, func() {
 		recordAuthorizationDecision(ctx, authorizationInput{
 			TargetPath: "solve.py", CandidateHash: contentSHA256("x"),
-			Identity: V3EvidenceProvenance{RequestID: "req-attr"},
+			Identity: wire.V3EvidenceProvenance{RequestID: "req-attr"},
 		}, AuthorizationDecision{Authorized: false, Reason: ReasonTargetNotDeclared})
 	})
 	got := recordsOfKind(recs, "candidate_authorization_decision")

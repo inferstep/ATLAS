@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // Running a client's declared commands against a candidate, in a workspace
@@ -179,7 +181,7 @@ type stagingObservation struct {
 	// Outcome is how the executor says the command ended. Canonicalised at
 	// the decode, so an executor that predates the vocabulary arrives as
 	// unclassified and cannot be scored as a completion.
-	Outcome ExecutionOutcome `json:"-"`
+	Outcome wire.ExecutionOutcome `json:"-"`
 	// Cancelled is set by this side when the request context ended the call.
 	Cancelled bool `json:"-"`
 	Path      string
@@ -254,7 +256,7 @@ func stagingRun(ctx *AgentContext, command string, overlay map[string]string,
 	}
 	obs := stagingObservation{
 		Success: sr.Success, ExitCode: sr.ExitCode, TimedOut: sr.TimedOut,
-		Outcome: canonicalExecutionOutcome(sr.Outcome),
+		Outcome: wire.CanonicalExecutionOutcome(sr.Outcome),
 		Path:    observePath,
 	}
 	if sr.Observation != nil {
@@ -316,12 +318,12 @@ func stagingApplyObservation(out *stagingCommandResult, obs stagingObservation,
 		out.Outcome = stagingMutatedWorkspace
 	case obs.TimedOut:
 		out.Outcome = stagingTimedOut
-	case executionStoppedByResource(obs.Outcome):
+	case wire.ExecutionStoppedByResource(obs.Outcome):
 		// Ahead of the exit-code branches on purpose. A memory-killed pytest
 		// exits non-zero, and reading that as exited_nonzero would record a
 		// behavioural failure of the candidate over a run that never finished.
 		out.Outcome = stagingResourceExhausted
-	case !executionCompleted(obs.Outcome):
+	case !wire.CommandCompleted(obs.Outcome):
 		// Cancelled, spawn-failed, or an executor this build cannot read. None
 		// of them ran to an end, and none may be scored as one.
 		out.Outcome = stagingUnobservable

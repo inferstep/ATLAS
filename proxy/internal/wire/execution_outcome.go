@@ -1,9 +1,4 @@
-package main
-
-import (
-	"os"
-	"strconv"
-)
+package wire
 
 // How an untrusted command ended, as a fact rather than as an exit code.
 //
@@ -53,12 +48,12 @@ func knownExecutionOutcome(o ExecutionOutcome) bool {
 	return false
 }
 
-// canonicalExecutionOutcome keeps an unknown value out of every decision.
+// CanonicalExecutionOutcome keeps an unknown value out of every decision.
 //
 // An empty field is an executor older than this vocabulary. It is read as
 // unclassified rather than as completed, so a deployment skew fails toward
 // refusing evidence instead of toward inventing it.
-func canonicalExecutionOutcome(raw string) ExecutionOutcome {
+func CanonicalExecutionOutcome(raw string) ExecutionOutcome {
 	o := ExecutionOutcome(raw)
 	if raw == "" || !knownExecutionOutcome(o) {
 		return ExecutionUnclassified
@@ -66,20 +61,20 @@ func canonicalExecutionOutcome(raw string) ExecutionOutcome {
 	return o
 }
 
-// executionCompleted reports whether the command reached its own end.
+// CommandCompleted reports whether the command reached its own end.
 //
 // THE predicate. Nothing else may ask "was it a resource kill" by listing
 // members, because a member added later would then be silently treated as a
 // completion by every site that forgot to update its list.
-func executionCompleted(o ExecutionOutcome) bool {
+func CommandCompleted(o ExecutionOutcome) bool {
 	// Canonicalised first, because a RunCommandOutput built in Go -- a
 	// transport failure, a refusal, a fixture -- carries the zero value and
 	// never passed the decode. An empty outcome is an unclassified one
 	// everywhere, and it is never a completion.
-	return canonicalExecutionOutcome(string(o)) == ExecutionCompleted
+	return CanonicalExecutionOutcome(string(o)) == ExecutionCompleted
 }
 
-// executionKnownIncomplete reports whether this build can SEE that the command
+// ExecutionKnownIncomplete reports whether this build can SEE that the command
 // did not reach its own end.
 //
 // It is the weaker of the two questions, and it exists because the two callers
@@ -96,29 +91,29 @@ func executionCompleted(o ExecutionOutcome) bool {
 // authorization evidence over bytes about to be delivered and an unread
 // executor cannot support that. A tool result the model reads and an
 // authorization the machine acts on are different bars, on purpose.
-func executionKnownIncomplete(o ExecutionOutcome) bool {
-	c := canonicalExecutionOutcome(string(o))
+func ExecutionKnownIncomplete(o ExecutionOutcome) bool {
+	c := CanonicalExecutionOutcome(string(o))
 	return c != ExecutionCompleted && c != ExecutionUnclassified
 }
 
-// executionStoppedByResource reports whether a ceiling ended it. Used only for
+// ExecutionStoppedByResource reports whether a ceiling ended it. Used only for
 // wording and telemetry; no decision keys off it, because "not completed" is
 // already the whole answer.
-func executionStoppedByResource(o ExecutionOutcome) bool {
-	switch canonicalExecutionOutcome(string(o)) {
+func ExecutionStoppedByResource(o ExecutionOutcome) bool {
+	switch CanonicalExecutionOutcome(string(o)) {
 	case ExecutionMemoryExhausted, ExecutionProcessLimit, ExecutionOutputLimit:
 		return true
 	}
 	return false
 }
 
-// executionOutcomeMessage is what the MODEL is told.
+// ExecutionOutcomeMessage is what the MODEL is told.
 //
 // Bounded and actionable, and deliberately free of host limits, pids, cgroup
 // paths, addresses and deployment detail: the model can act on "this used too
 // much memory to finish", and can do nothing with the number except try to
 // stay under it, which is not a thing it can reason about reliably.
-func executionOutcomeMessage(o ExecutionOutcome) string {
+func ExecutionOutcomeMessage(o ExecutionOutcome) string {
 	switch o {
 	case ExecutionMemoryExhausted:
 		return "the command was stopped because it used too much memory to finish. " +
@@ -140,21 +135,4 @@ func executionOutcomeMessage(o ExecutionOutcome) string {
 			"says nothing about the code."
 	}
 	return ""
-}
-
-// hostAddressSpaceKiB is the per-command address-space ceiling for host
-// execution, in the KiB `ulimit -v` speaks, read from the same operator value
-// the sandbox uses so the two cannot drift into separate memory policies.
-func hostAddressSpaceKiB() int64 {
-	bytes := int64(2 * 1024 * 1024 * 1024)
-	if raw := os.Getenv("ATLAS_EXEC_MEMORY_BYTES"); raw != "" {
-		if n, err := strconv.ParseInt(raw, 10, 64); err == nil && n >= 64*1024*1024 {
-			bytes = n
-		}
-	}
-	// Address space, not resident memory, so it is read as a multiple of the
-	// operator's memory value rather than as that value: a mapping is
-	// reserved before it is touched, and a ceiling set AT the resident number
-	// refuses reservations a command never grows into.
-	return int64(float64(bytes) * 1.5 / 1024)
 }

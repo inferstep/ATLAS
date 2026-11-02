@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // A server that is started in the foreground never exits, so the sandbox
@@ -16,7 +18,7 @@ const shellAnswerForAServerStoppedAtTheTimeLimit = `{"success":false,` +
 	`"stdout":" * Serving Flask app 'app'\n * Running on http://127.0.0.1:5000\n","stderr":"",` +
 	`"exit_code":-15,"elapsed_ms":30021,"timed_out":true,"outcome":"timed_out","peak_memory_bytes":31457280}`
 
-func resultOfRunCommand(t *testing.T, shellAnswer string) *ToolResult {
+func resultOfRunCommand(t *testing.T, shellAnswer string) *wire.ToolResult {
 	t.Helper()
 	sandbox := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

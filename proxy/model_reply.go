@@ -11,6 +11,8 @@ import (
 	"strings"
 	"unicode/utf16"
 	"unicode/utf8"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // ------------------------------------------------------------------------
@@ -216,7 +218,7 @@ func parseFailureFeedback(ctx *AgentContext, raw, streamCut string) (string, str
 	return category, "Your tool call was cut off at the per-turn token cap. " + diag
 }
 
-func extractModelResponse(raw string) (ModelResponse, error) {
+func extractModelResponse(raw string) (wire.ModelResponse, error) {
 	raw = strings.TrimSpace(raw)
 
 	// Try direct parse first. Capture the error so we can surface it
@@ -224,7 +226,7 @@ func extractModelResponse(raw string) (ModelResponse, error) {
 	// real diagnostics ("invalid character '\\n' in string literal",
 	// "unexpected end of JSON input") were silently swallowed and the
 	// agent loop just got "could not parse JSON" with no clue why.
-	var resp ModelResponse
+	var resp wire.ModelResponse
 	directErr := json.Unmarshal([]byte(raw), &resp)
 	if directErr == nil {
 		liftMissingArgs(&resp, raw)
@@ -309,7 +311,7 @@ func balancedObjectEnd(raw string, start int) int {
 // lift every non-envelope top-level field into a synthetic args object.
 // This is purely a recovery path; the system prompt still teaches the
 // canonical shape.
-func liftMissingArgs(resp *ModelResponse, raw string) {
+func liftMissingArgs(resp *wire.ModelResponse, raw string) {
 	// If Type is a known tool name, treat it as a tool_call with
 	// that tool. The model emitted {"type":"read_file","path":"..."}
 	// instead of {"type":"tool_call","name":"read_file","args":{...}}.

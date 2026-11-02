@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // canonicalToolArgs is the single reading of a tool call's arguments. It decodes
@@ -52,7 +54,7 @@ func canonicalToolArgs(name string, args json.RawMessage, ctx *AgentContext) (js
 // allowed, replaces its arguments with the single reading the check judged, so
 // every later reader of the call works from that one form. It returns a refusal,
 // or "" to proceed; on a refusal the call's arguments are left unchanged.
-func enforceWorkspacePaths(parsed *ModelResponse, ctx *AgentContext) string {
+func enforceWorkspacePaths(parsed *wire.ModelResponse, ctx *AgentContext) string {
 	canonical, rejection := canonicalToolArgs(parsed.Name, parsed.Args, ctx)
 	if rejection != "" {
 		return rejection

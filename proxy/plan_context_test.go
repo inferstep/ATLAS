@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // More files were read than fit into the context of a revised plan. The
@@ -41,7 +43,7 @@ func TestEachRequestCutsAContextFileToItsLimit(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "written.py"), []byte(big), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	var sent V3GenerateRequest
+	var sent wire.V3GenerateRequest
 	v3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v3/generate" {
 			if err := json.NewDecoder(r.Body).Decode(&sent); err != nil {

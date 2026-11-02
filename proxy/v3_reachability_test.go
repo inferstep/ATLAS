@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // Whether the candidate pipeline can contribute to delivered software for the
@@ -194,7 +196,7 @@ func (w *reachWorld) serve(rw http.ResponseWriter, r *http.Request) {
 }
 
 // write makes the model's own write_file call, through the real dispatch.
-func (w *reachWorld) write(t *testing.T) *ToolResult {
+func (w *reachWorld) write(t *testing.T) *wire.ToolResult {
 	t.Helper()
 	args, err := json.Marshal(map[string]string{"path": "inventory.py", "content": reachBaseline})
 	if err != nil {
@@ -234,7 +236,7 @@ func TestARequestWithNoDeliverableTargetNeverReachesTheProducer(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newReachWorld(t, tc.contract)
-			var res *ToolResult
+			var res *wire.ToolResult
 			recs := captureShadow(t, func() { res = w.write(t) })
 			if res == nil || !res.Success {
 				t.Fatalf("the model's own write failed: %+v", res)
@@ -262,7 +264,7 @@ func TestARequestWithNoDeliverableTargetLandsTheModelsOwnBytes(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newReachWorld(t, tc.contract)
-			var res *ToolResult
+			var res *wire.ToolResult
 			captureShadow(t, func() { res = w.write(t) })
 			if res == nil || !res.Success {
 				t.Fatalf("the model's own write failed: %+v", res)
@@ -287,7 +289,7 @@ func TestARequestWithNoDeliverableTargetLandsTheModelsOwnBytes(t *testing.T) {
 // comes from the model's own tool call, not from anything supplied here.
 func TestTheSelectedCandidateIsAppliedByteExactlyAndRechecked(t *testing.T) {
 	w := newReachWorld(t, reachWork)
-	var res *ToolResult
+	var res *wire.ToolResult
 	recs := captureShadow(t, func() { res = w.write(t) })
 	if res == nil || !res.Success {
 		t.Fatalf("the write failed: %+v", res)
@@ -318,7 +320,7 @@ func TestTheSelectedCandidateIsAppliedByteExactlyAndRechecked(t *testing.T) {
 	// Rechecked: the bytes that landed pass their own check, asked of the
 	// same owner the completion boundary asks.
 	if st := fallbackSyntaxOutcomeFor(w.ctx, filepath.Join(w.dir, "inventory.py"),
-		w.disk(t)).aggregate().Status; st != ValidationPassed {
+		w.disk(t)).aggregate().Status; st != wire.ValidationPassed {
 		t.Errorf("the delivered bytes were not rechecked clean: %v", st)
 	}
 	// And the licence says which rule earned it. An automatic delivery read
@@ -354,7 +356,7 @@ func TestADeliveryIsNotAClaimThatTheRequestIsComplete(t *testing.T) {
 		t.Fatalf("precondition: the candidate did not land: got %v", got)
 	}
 	status, reason := finalizeCompletion(w.ctx, &runState{}, reachProse, "")
-	if status == TerminalCompleted {
+	if status == wire.TerminalCompleted {
 		t.Errorf("a delivered, parsing candidate was read as a finished request (%q)", reason)
 	}
 	// The deliverable gate still answers for itself rather than deferring to
@@ -497,7 +499,7 @@ func TestBrokenBytesStillNeverReachTheProducer(t *testing.T) {
 	w := newReachWorld(t, reachWork)
 	w.broken[reachBrokenWinner] = true
 	args, _ := json.Marshal(map[string]string{"path": "inventory.py", "content": reachBrokenWinner})
-	var res *ToolResult
+	var res *wire.ToolResult
 	recs := captureShadow(t, func() { res = executeToolCall("write_file", args, w.ctx) })
 	if res == nil || !res.Success {
 		t.Fatalf("a new broken file should land with a warning: %+v", res)
@@ -505,14 +507,14 @@ func TestBrokenBytesStillNeverReachTheProducer(t *testing.T) {
 	if w.v3Calls != 0 {
 		t.Errorf("the producer was consulted %d times on bytes that do not parse", w.v3Calls)
 	}
-	var out WriteFileOutput
+	var out wire.WriteFileOutput
 	if err := json.Unmarshal(res.Data, &out); err != nil {
 		t.Fatalf("the write reported no decodable payload: %v", err)
 	}
 	if out.Warning == "" {
 		t.Error("broken bytes landed without a warning")
 	}
-	if res.ValidationStatus != ValidationFailed {
+	if res.ValidationStatus != wire.ValidationFailed {
 		t.Errorf("the failing check was reported as %v", res.ValidationStatus)
 	}
 	var reasons []string
@@ -544,7 +546,7 @@ func TestTheRepairLoopStillTakesTheFastPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	w.ctx.SessionWrites["inventory.py"] = true
-	w.ctx.Messages = []AgentMessage{
+	w.ctx.Messages = []wire.AgentMessage{
 		{Role: "user", Content: reachProse},
 		{Role: "assistant", Content: "running it"},
 		{Role: "tool", ToolName: "run_command", Content: `{"success":false,"data":{"stderr":` +
@@ -556,7 +558,7 @@ func TestTheRepairLoopStillTakesTheFastPath(t *testing.T) {
 	// The repair attempt itself: different bytes from what is on disk, which is
 	// what a session mid-debug actually sends.
 	args, _ := json.Marshal(map[string]string{"path": "inventory.py", "content": reachWinner})
-	var res *ToolResult
+	var res *wire.ToolResult
 	recs := captureShadow(t, func() { res = executeToolCall("write_file", args, w.ctx) })
 	if res == nil || !res.Success {
 		t.Fatalf("the direct write failed: %+v", res)
@@ -606,7 +608,7 @@ func TestUnmeasurableEvidenceLandsOnTheSelectionBasis(t *testing.T) {
 		`"expected_outputs":["inventory.py"]}`
 	w := newReachWorld(t, declared)
 	w.unsupported = true
-	var res *ToolResult
+	var res *wire.ToolResult
 	recs := captureShadow(t, func() { res = w.write(t) })
 	if res == nil || !res.Success {
 		t.Fatalf("the write failed: %+v", res)

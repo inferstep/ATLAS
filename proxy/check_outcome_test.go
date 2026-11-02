@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // Outcome table for the whole-file sandbox check. The flat (string, bool) API
@@ -35,19 +37,19 @@ func TestSandboxSyntaxOutcomeTable(t *testing.T) {
 
 	cases := []struct {
 		name, path, url string
-		want            ValidationStatus
+		want            wire.ValidationStatus
 	}{
 		// Applicability is decided BEFORE availability: an unsupported
 		// extension is not_applicable even with no sandbox configured.
-		{"unsupported extension, no sandbox", "notes.txt", "", ValidationNotApplicable},
-		{"unsupported extension, sandbox up", "notes.txt", valid.URL, ValidationNotApplicable},
-		{"jinja is not whole-file gated", "page.jinja", valid.URL, ValidationNotApplicable},
-		{"applicable, no sandbox", "mod.py", "", ValidationNotRun},
-		{"applicable, unreachable", "mod.py", deadURL, ValidationNotRun},
-		{"applicable, non-200", "mod.py", five00.URL, ValidationNotRun},
-		{"applicable, undecodable", "mod.py", broken.URL, ValidationNotRun},
-		{"demonstrated pass", "mod.py", valid.URL, ValidationPassed},
-		{"demonstrated failure", "mod.py", invalid.URL, ValidationFailed},
+		{"unsupported extension, no sandbox", "notes.txt", "", wire.ValidationNotApplicable},
+		{"unsupported extension, sandbox up", "notes.txt", valid.URL, wire.ValidationNotApplicable},
+		{"jinja is not whole-file gated", "page.jinja", valid.URL, wire.ValidationNotApplicable},
+		{"applicable, no sandbox", "mod.py", "", wire.ValidationNotRun},
+		{"applicable, unreachable", "mod.py", deadURL, wire.ValidationNotRun},
+		{"applicable, non-200", "mod.py", five00.URL, wire.ValidationNotRun},
+		{"applicable, undecodable", "mod.py", broken.URL, wire.ValidationNotRun},
+		{"demonstrated pass", "mod.py", valid.URL, wire.ValidationPassed},
+		{"demonstrated failure", "mod.py", invalid.URL, wire.ValidationFailed},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -57,12 +59,12 @@ func TestSandboxSyntaxOutcomeTable(t *testing.T) {
 			if got.Status != c.want {
 				t.Errorf("Status = %q, want %q (detail %q)", got.Status, c.want, got.Detail)
 			}
-			if got.Status == ValidationPassed && !got.attempted() {
+			if got.Status == wire.ValidationPassed && !got.attempted() {
 				t.Error("a pass must count as attempted")
 			}
 			// Only a demonstrated failure may refuse.
 			_, ok := checkFallbackSyntax(ctx, c.path, "A = 1\n")
-			if wantOK := c.want != ValidationFailed; ok != wantOK {
+			if wantOK := c.want != wire.ValidationFailed; ok != wantOK {
 				t.Errorf("ok = %v, want %v -- fail-open behavior changed", ok, wantOK)
 			}
 		})
@@ -73,8 +75,8 @@ func TestSandboxSyntaxOutcomeTable(t *testing.T) {
 // the write is not refused.
 func TestSandboxSyntaxOutcomeWithANilContextIsNotRun(t *testing.T) {
 	got := sandboxSyntaxOutcome(nil, "mod.py", "A = 1\n")
-	if got.Status != ValidationNotRun {
-		t.Errorf("Status = %q, want %q (detail %q)", got.Status, ValidationNotRun, got.Detail)
+	if got.Status != wire.ValidationNotRun {
+		t.Errorf("Status = %q, want %q (detail %q)", got.Status, wire.ValidationNotRun, got.Detail)
 	}
 	if _, ok := checkFallbackSyntax(nil, "mod.py", "A = 1\n"); !ok {
 		t.Error("ok = false, want true -- fail-open behavior changed")
@@ -82,27 +84,27 @@ func TestSandboxSyntaxOutcomeWithANilContextIsNotRun(t *testing.T) {
 }
 
 func TestFallbackSyntaxAggregate(t *testing.T) {
-	pass := checkOutcome{Status: ValidationPassed}
-	fail := checkOutcome{Status: ValidationFailed, Detail: "boom"}
-	notRun := checkOutcome{Status: ValidationNotRun, Detail: "unreachable"}
-	na := checkOutcome{Status: ValidationNotApplicable}
-	unk := checkOutcome{Status: ValidationUnknown}
+	pass := checkOutcome{Status: wire.ValidationPassed}
+	fail := checkOutcome{Status: wire.ValidationFailed, Detail: "boom"}
+	notRun := checkOutcome{Status: wire.ValidationNotRun, Detail: "unreachable"}
+	na := checkOutcome{Status: wire.ValidationNotApplicable}
+	unk := checkOutcome{Status: wire.ValidationUnknown}
 
 	for _, c := range []struct {
 		name string
 		in   fallbackSyntaxOutcome
-		want ValidationStatus
+		want wire.ValidationStatus
 	}{
-		{"failure is decisive over pass", fallbackSyntaxOutcome{pass, fail}, ValidationFailed},
-		{"failure is decisive over not_run", fallbackSyntaxOutcome{notRun, fail}, ValidationFailed},
-		{"applicable unavailable wins over pass", fallbackSyntaxOutcome{pass, notRun}, ValidationNotRun},
-		{"pass plus not_applicable", fallbackSyntaxOutcome{pass, na}, ValidationPassed},
-		{"not_applicable plus pass", fallbackSyntaxOutcome{na, pass}, ValidationPassed},
-		{"all not_applicable", fallbackSyntaxOutcome{na, na}, ValidationNotApplicable},
-		{"unknown surfaces as unknown, not not_run", fallbackSyntaxOutcome{pass, unk}, ValidationUnknown},
-		{"unknown alone surfaces as unknown", fallbackSyntaxOutcome{unk, na}, ValidationUnknown},
-		{"failure still decisive over unknown", fallbackSyntaxOutcome{unk, fail}, ValidationFailed},
-		{"unknown outranks not_run", fallbackSyntaxOutcome{notRun, unk}, ValidationUnknown},
+		{"failure is decisive over pass", fallbackSyntaxOutcome{pass, fail}, wire.ValidationFailed},
+		{"failure is decisive over not_run", fallbackSyntaxOutcome{notRun, fail}, wire.ValidationFailed},
+		{"applicable unavailable wins over pass", fallbackSyntaxOutcome{pass, notRun}, wire.ValidationNotRun},
+		{"pass plus not_applicable", fallbackSyntaxOutcome{pass, na}, wire.ValidationPassed},
+		{"not_applicable plus pass", fallbackSyntaxOutcome{na, pass}, wire.ValidationPassed},
+		{"all not_applicable", fallbackSyntaxOutcome{na, na}, wire.ValidationNotApplicable},
+		{"unknown surfaces as unknown, not not_run", fallbackSyntaxOutcome{pass, unk}, wire.ValidationUnknown},
+		{"unknown alone surfaces as unknown", fallbackSyntaxOutcome{unk, na}, wire.ValidationUnknown},
+		{"failure still decisive over unknown", fallbackSyntaxOutcome{unk, fail}, wire.ValidationFailed},
+		{"unknown outranks not_run", fallbackSyntaxOutcome{notRun, unk}, wire.ValidationUnknown},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := c.in.aggregate(); got.Status != c.want {
@@ -141,13 +143,13 @@ func TestFallbackSyntaxJinjaEmbeddedPassIsAPass(t *testing.T) {
 	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
 	ctx.SandboxURL, ctx.V3URL = svc.URL, svc.URL
 	o := fallbackSyntaxOutcomeFor(ctx, jinjaPage, pageWithScript)
-	if o.WholeFile.Status != ValidationNotApplicable {
+	if o.WholeFile.Status != wire.ValidationNotApplicable {
 		t.Errorf("WholeFile = %q, want not_applicable", o.WholeFile.Status)
 	}
-	if o.Embedded.Status != ValidationPassed {
+	if o.Embedded.Status != wire.ValidationPassed {
 		t.Errorf("Embedded = %q, want passed", o.Embedded.Status)
 	}
-	if got := o.aggregate().Status; got != ValidationPassed {
+	if got := o.aggregate().Status; got != wire.ValidationPassed {
 		t.Errorf("aggregate = %q, want passed", got)
 	}
 	if calls != 1 {
@@ -159,13 +161,13 @@ func TestFallbackSyntaxJinjaEmbeddedUnavailableIsNotRun(t *testing.T) {
 	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
 	ctx.SandboxURL, ctx.V3URL = "", "" // service absent
 	o := fallbackSyntaxOutcomeFor(ctx, jinjaPage, pageWithScript)
-	if o.WholeFile.Status != ValidationNotApplicable {
+	if o.WholeFile.Status != wire.ValidationNotApplicable {
 		t.Errorf("WholeFile = %q, want not_applicable", o.WholeFile.Status)
 	}
-	if o.Embedded.Status != ValidationNotRun {
+	if o.Embedded.Status != wire.ValidationNotRun {
 		t.Errorf("Embedded = %q, want not_run", o.Embedded.Status)
 	}
-	if got := o.aggregate().Status; got != ValidationNotRun {
+	if got := o.aggregate().Status; got != wire.ValidationNotRun {
 		t.Errorf("aggregate = %q, want not_run", got)
 	}
 }
@@ -178,7 +180,7 @@ func TestFallbackSyntaxJinjaEmbeddedFindingIsAFailure(t *testing.T) {
 	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
 	ctx.SandboxURL, ctx.V3URL = svc.URL, svc.URL
 	agg := fallbackSyntaxOutcomeFor(ctx, jinjaPage, pageWithScript).aggregate()
-	if agg.Status != ValidationFailed {
+	if agg.Status != wire.ValidationFailed {
 		t.Fatalf("aggregate = %q, want failed", agg.Status)
 	}
 	if !strings.HasPrefix(agg.Detail, embeddedScriptErrPrefix) {
@@ -199,16 +201,16 @@ func TestFallbackSyntaxWholeFileFailureShortCircuitsTheEmbeddedCall(t *testing.T
 	ctx.SandboxURL, ctx.V3URL = svc.URL, svc.URL
 	// .html IS whole-file gated, and the stub fails it.
 	o := fallbackSyntaxOutcomeFor(ctx, "page.html", pageWithScript)
-	if o.WholeFile.Status != ValidationFailed {
+	if o.WholeFile.Status != wire.ValidationFailed {
 		t.Fatalf("WholeFile = %q, want failed", o.WholeFile.Status)
 	}
 	if calls != 0 {
 		t.Errorf("embedded calls = %d, want 0 -- the short circuit was lost", calls)
 	}
-	if o.Embedded.Status != ValidationNotRun {
+	if o.Embedded.Status != wire.ValidationNotRun {
 		t.Errorf("Embedded = %q, want not_run (skipped but applicable)", o.Embedded.Status)
 	}
-	if o.aggregate().Status != ValidationFailed {
+	if o.aggregate().Status != wire.ValidationFailed {
 		t.Error("aggregate must remain the whole-file failure")
 	}
 }
@@ -220,13 +222,13 @@ func TestFallbackSyntaxNoEmbeddedContentIsNotApplicable(t *testing.T) {
 	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
 	ctx.SandboxURL, ctx.V3URL = "", svc.URL
 	o := fallbackSyntaxOutcomeFor(ctx, jinjaPage, "<html><p>no script here</p></html>")
-	if o.Embedded.Status != ValidationNotApplicable {
+	if o.Embedded.Status != wire.ValidationNotApplicable {
 		t.Errorf("Embedded = %q, want not_applicable", o.Embedded.Status)
 	}
 	if calls != 0 {
 		t.Errorf("embedded calls = %d, want 0", calls)
 	}
-	if o.aggregate().Status != ValidationNotApplicable {
+	if o.aggregate().Status != wire.ValidationNotApplicable {
 		t.Errorf("aggregate = %q, want not_applicable", o.aggregate().Status)
 	}
 }
@@ -246,7 +248,7 @@ func ledgerCtx(t *testing.T) *AgentContext {
 func TestFirstPassedObservationCreatesACheckpoint(t *testing.T) {
 	ctx := ledgerCtx(t)
 	body := []byte("x = 1\n")
-	observeDeliverable(ctx, "solve.py", body, ValidationKindSyntax, ValidationPassed, "")
+	observeDeliverable(ctx, "solve.py", body, wire.ValidationKindSyntax, wire.ValidationPassed, "")
 	d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
 	if d == nil || d.CheckpointHash != hashBytes(body) {
 		t.Fatalf("no checkpoint created: %+v", d)
@@ -254,15 +256,15 @@ func TestFirstPassedObservationCreatesACheckpoint(t *testing.T) {
 	if string(d.CheckpointBytes) != string(body) {
 		t.Errorf("checkpoint bytes wrong: %q", d.CheckpointBytes)
 	}
-	if k, s := d.CurrentValidation(); k != ValidationKindSyntax || s != ValidationPassed {
+	if k, s := d.CurrentValidation(); k != wire.ValidationKindSyntax || s != wire.ValidationPassed {
 		t.Errorf("current validation = %v/%v", k, s)
 	}
 }
 
 func TestALaterPassedHashReplacesTheCheckpoint(t *testing.T) {
 	ctx := ledgerCtx(t)
-	observeDeliverable(ctx, "solve.py", []byte("v1\n"), ValidationKindSyntax, ValidationPassed, "")
-	observeDeliverable(ctx, "solve.py", []byte("v2222\n"), ValidationKindSyntax, ValidationPassed, "")
+	observeDeliverable(ctx, "solve.py", []byte("v1\n"), wire.ValidationKindSyntax, wire.ValidationPassed, "")
+	observeDeliverable(ctx, "solve.py", []byte("v2222\n"), wire.ValidationKindSyntax, wire.ValidationPassed, "")
 	d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
 	if string(d.CheckpointBytes) != "v2222\n" {
 		t.Errorf("newer passed bytes did not replace the checkpoint: %q", d.CheckpointBytes)
@@ -277,16 +279,16 @@ func TestALaterPassedHashReplacesTheCheckpoint(t *testing.T) {
 func TestOnlyAnExplicitPassPromotes(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
-		kind   ValidationKind
-		status ValidationStatus
+		kind   wire.ValidationKind
+		status wire.ValidationStatus
 		reason string
 	}{
-		{"failed", ValidationKindSyntax, ValidationFailed, ""},
-		{"not run", ValidationKindSyntax, ValidationNotRun, ""},
-		{"not applicable", ValidationKindSyntax, ValidationNotApplicable, ""},
-		{"unknown", ValidationKindSyntax, ValidationUnknown, ""},
+		{"failed", wire.ValidationKindSyntax, wire.ValidationFailed, ""},
+		{"not run", wire.ValidationKindSyntax, wire.ValidationNotRun, ""},
+		{"not applicable", wire.ValidationKindSyntax, wire.ValidationNotApplicable, ""},
+		{"unknown", wire.ValidationKindSyntax, wire.ValidationUnknown, ""},
 		// A snapshot taken before a change has no verdict of its own.
-		{"baseline snapshot", ValidationKindUnknown, ValidationUnknown, "pre-mutation snapshot"},
+		{"baseline snapshot", wire.ValidationKindUnknown, wire.ValidationUnknown, "pre-mutation snapshot"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := ledgerCtx(t)
@@ -304,8 +306,8 @@ func TestOnlyAnExplicitPassPromotes(t *testing.T) {
 
 func TestCanonicalAliasesShareOneEntry(t *testing.T) {
 	ctx := ledgerCtx(t)
-	observeDeliverable(ctx, "solve.py", []byte("a\n"), ValidationKindSyntax, ValidationPassed, "")
-	observeDeliverable(ctx, "./solve.py", []byte("bb\n"), ValidationKindSyntax, ValidationPassed, "")
+	observeDeliverable(ctx, "solve.py", []byte("a\n"), wire.ValidationKindSyntax, wire.ValidationPassed, "")
+	observeDeliverable(ctx, "./solve.py", []byte("bb\n"), wire.ValidationKindSyntax, wire.ValidationPassed, "")
 	if len(ctx.Ledger) != 1 {
 		t.Fatalf("aliases created %d entries: %v", len(ctx.Ledger), ctx.Ledger)
 	}
@@ -316,14 +318,14 @@ func TestCanonicalAliasesShareOneEntry(t *testing.T) {
 
 func TestStaleHashMakesValidationHistoricalNotCurrent(t *testing.T) {
 	ctx := ledgerCtx(t)
-	observeDeliverable(ctx, "solve.py", []byte("good\n"), ValidationKindSyntax, ValidationPassed, "")
+	observeDeliverable(ctx, "solve.py", []byte("good\n"), wire.ValidationKindSyntax, wire.ValidationPassed, "")
 	d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
 	d.CurrentHash = hashBytes([]byte("something else\n")) // disk moved under us
 	k, s := d.CurrentValidation()
-	if s != ValidationUnknown || k != ValidationKindUnknown {
+	if s != wire.ValidationUnknown || k != wire.ValidationKindUnknown {
 		t.Errorf("stale verdict presented as current: %v/%v", k, s)
 	}
-	if d.ValidationStatus != ValidationPassed {
+	if d.ValidationStatus != wire.ValidationPassed {
 		t.Error("historical evidence must be preserved, not erased")
 	}
 }
@@ -334,18 +336,18 @@ func TestCommandRehashKeepsUnchangedAndInvalidatesMutated(t *testing.T) {
 	noisy := filepath.Join(ctx.WorkingDir, "noisy.py")
 	os.WriteFile(quiet, []byte("q\n"), 0o644)
 	os.WriteFile(noisy, []byte("n\n"), 0o644)
-	observeDeliverable(ctx, "quiet.py", []byte("q\n"), ValidationKindSyntax, ValidationPassed, "")
-	observeDeliverable(ctx, "noisy.py", []byte("n\n"), ValidationKindSyntax, ValidationPassed, "")
+	observeDeliverable(ctx, "quiet.py", []byte("q\n"), wire.ValidationKindSyntax, wire.ValidationPassed, "")
+	observeDeliverable(ctx, "noisy.py", []byte("n\n"), wire.ValidationKindSyntax, wire.ValidationPassed, "")
 
 	// A shell effect rewrites one of them.
 	os.WriteFile(noisy, []byte("rewritten by a command\n"), 0o644)
 	invalidateTrackedValidation(ctx)
 
-	if _, s := ctx.Ledger[ledgerKey(ctx, "quiet.py")].CurrentValidation(); s != ValidationPassed {
+	if _, s := ctx.Ledger[ledgerKey(ctx, "quiet.py")].CurrentValidation(); s != wire.ValidationPassed {
 		t.Error("an unchanged file lost its verdict")
 	}
 	nd := ctx.Ledger[ledgerKey(ctx, "noisy.py")]
-	if _, s := nd.CurrentValidation(); s != ValidationUnknown {
+	if _, s := nd.CurrentValidation(); s != wire.ValidationUnknown {
 		t.Error("a command-mutated file kept a verdict about bytes that are gone")
 	}
 	if nd.CurrentHash != hashBytes([]byte("rewritten by a command\n")) {
@@ -358,7 +360,7 @@ func TestCommandRehashKeepsUnchangedAndInvalidatesMutated(t *testing.T) {
 
 func TestDeleteTombstonesRetainsBytesAndProhibitsRestore(t *testing.T) {
 	ctx := ledgerCtx(t)
-	observeDeliverable(ctx, "solve.py", []byte("x\n"), ValidationKindSyntax, ValidationPassed, "")
+	observeDeliverable(ctx, "solve.py", []byte("x\n"), wire.ValidationKindSyntax, wire.ValidationPassed, "")
 	tombstoneDeliverable(ctx, "solve.py", "deleted")
 	d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
 	if !d.Tombstoned || !d.RestoreProhibited {
@@ -367,7 +369,7 @@ func TestDeleteTombstonesRetainsBytesAndProhibitsRestore(t *testing.T) {
 	if len(d.CheckpointBytes) == 0 {
 		t.Error("bytes should be retained for a later policy decision")
 	}
-	if _, s := d.CurrentValidation(); s != ValidationUnknown {
+	if _, s := d.CurrentValidation(); s != wire.ValidationUnknown {
 		t.Error("a deleted file has no current validation")
 	}
 }
@@ -375,7 +377,7 @@ func TestDeleteTombstonesRetainsBytesAndProhibitsRestore(t *testing.T) {
 func TestCheckpointCeilingsAreDeterministicAndFailClosed(t *testing.T) {
 	ctx := ledgerCtx(t)
 	big := make([]byte, maxCheckpointFileBytes+1)
-	observeDeliverable(ctx, "big.py", big, ValidationKindSyntax, ValidationPassed, "")
+	observeDeliverable(ctx, "big.py", big, wire.ValidationKindSyntax, wire.ValidationPassed, "")
 	d := ctx.Ledger[ledgerKey(ctx, "big.py")]
 	if d.CheckpointHash != "" {
 		t.Error("an over-ceiling file was checkpointed")
@@ -383,7 +385,7 @@ func TestCheckpointCeilingsAreDeterministicAndFailClosed(t *testing.T) {
 	if d.CheckpointUnavailable == "" {
 		t.Error("checkpoint_unavailable must be recorded explicitly")
 	}
-	if _, s := d.CurrentValidation(); s != ValidationPassed {
+	if _, s := d.CurrentValidation(); s != wire.ValidationPassed {
 		t.Error("the observation must survive even when the bytes cannot")
 	}
 
@@ -393,13 +395,13 @@ func TestCheckpointCeilingsAreDeterministicAndFailClosed(t *testing.T) {
 	chunk := make([]byte, maxCheckpointFileBytes)
 	for i := 0; i < maxCheckpointSessionBytes/maxCheckpointFileBytes; i++ {
 		observeDeliverable(ctx2, fmt.Sprintf("f%d.py", i), chunk,
-			ValidationKindSyntax, ValidationPassed, "")
+			wire.ValidationKindSyntax, wire.ValidationPassed, "")
 	}
 	held := 0
 	for _, d := range ctx2.Ledger {
 		held += len(d.CheckpointBytes)
 	}
-	observeDeliverable(ctx2, "one_too_many.py", chunk, ValidationKindSyntax, ValidationPassed, "")
+	observeDeliverable(ctx2, "one_too_many.py", chunk, wire.ValidationKindSyntax, wire.ValidationPassed, "")
 	after := 0
 	for _, d := range ctx2.Ledger {
 		after += len(d.CheckpointBytes)

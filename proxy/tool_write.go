@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/itigges22/atlas-proxy/internal/logsafe"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
@@ -22,18 +23,18 @@ import (
 func writeFileTool() *ToolDef {
 	return &ToolDef{
 		Name:   "write_file",
-		Effect: ToolEffectDirectMutation,
+		Effect: wire.ToolEffectDirectMutation,
 		Description: "Create a NEW file from scratch. Creates parent directories if needed. " +
 			"For any file longer than a few lines, set content to \"@fenced\" and provide " +
 			"the file as a plain fenced code block when asked — code embedded in a JSON " +
 			"string loses parens and newlines to escaping. " +
 			"DO NOT use to overwrite existing files — for existing files use structural_edit (whole function/class/element rewrite) or edit_file (≤10-line surgical change). " +
 			"If a write_file call is rejected because the path already exists, switch to structural_edit (whole-block rewrite) or edit_file (surgical change). DO NOT retry with edit_file simply because the file is large.",
-		InputSchema: WriteFileInput{},
+		InputSchema: wire.WriteFileInput{},
 		ReadOnly:    false,
 		Destructive: true,
-		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (res *ToolResult, execErr error) {
-			var input WriteFileInput
+		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (res *wire.ToolResult, execErr error) {
+			var input wire.WriteFileInput
 			if err := json.Unmarshal(rawInput, &input); err != nil {
 				return nil, errNoMutation(fmt.Errorf("invalid input: %w", err))
 			}
@@ -99,7 +100,7 @@ func writeFileTool() *ToolDef {
 // writeFileEarlyRefusal is the refusal a write meets before it is classified:
 // a new file that should start from its siblings, or bytes that echo the file
 // already there. nil when neither applies.
-func writeFileEarlyRefusal(ctx *AgentContext, input WriteFileInput, path string) *ToolResult {
+func writeFileEarlyRefusal(ctx *AgentContext, input wire.WriteFileInput, path string) *wire.ToolResult {
 	// Pattern-matching reflex. When the model creates a
 	// NEW file in a non-empty directory of similar files (HTML
 	// alongside HTML, route handler alongside route handlers),
@@ -130,7 +131,7 @@ func writeFileEarlyRefusal(ctx *AgentContext, input WriteFileInput, path string)
 
 // writeFileTier is the tier of the file a write lands in, which the real
 // cyclomatic complexity may raise but never lower.
-func writeFileTier(ctx *AgentContext, input WriteFileInput) Tier {
+func writeFileTier(ctx *AgentContext, input wire.WriteFileInput) Tier {
 	// Per-file tier classification — determines V3 pipeline activation
 	fileTier := classifyFileTier(input.Path, input.Content)
 	// Real cyclomatic complexity from tree-sitter
@@ -150,7 +151,7 @@ func writeFileTier(ctx *AgentContext, input WriteFileInput) Tier {
 // writeFileByRoute applies the regression gate every write meets, then sends
 // the write to the V3 pipeline or down the direct route, as the activation
 // owner decides.
-func writeFileByRoute(ctx *AgentContext, input WriteFileInput, path string, fileTier Tier, iterating bool) (*ToolResult, error) {
+func writeFileByRoute(ctx *AgentContext, input wire.WriteFileInput, path string, fileTier Tier, iterating bool) (*wire.ToolResult, error) {
 	proposalCheck, baselineCheck, refusal := writeRegressionGate(ctx, input, path)
 	if refusal != nil {
 		return refusal, nil
@@ -183,7 +184,7 @@ func writeFileByRoute(ctx *AgentContext, input WriteFileInput, path string, file
 // writeRegressionGate refuses to replace bytes on disk that parse with bytes
 // that do not. It returns what it observed of the proposal and of the bytes on
 // disk, Unknown for a side it did not evaluate, and the refusal if it refused.
-func writeRegressionGate(ctx *AgentContext, input WriteFileInput, path string) (checkOutcome, checkOutcome, *ToolResult) {
+func writeRegressionGate(ctx *AgentContext, input wire.WriteFileInput, path string) (checkOutcome, checkOutcome, *wire.ToolResult) {
 	// Regression protection for existing code, independent of tier
 	// and of whether V3 is configured: the healthy->broken rule
 	// exists to protect WORKING code, and a small file, or any file
@@ -203,11 +204,11 @@ func writeRegressionGate(ctx *AgentContext, input WriteFileInput, path string) (
 	// passed, not_run and not_applicable that a route needs in order to
 	// classify its own result. Each side is evaluated at most once per
 	// dispatch; ValidationUnknown means "not evaluated here".
-	proposalCheck := checkOutcome{Status: ValidationUnknown}
-	baselineCheck := checkOutcome{Status: ValidationUnknown}
+	proposalCheck := checkOutcome{Status: wire.ValidationUnknown}
+	baselineCheck := checkOutcome{Status: wire.ValidationUnknown}
 	if _, statErr := os.Stat(path); statErr == nil {
 		proposalCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, input.Content).aggregate()
-		if proposalCheck.Status == ValidationFailed {
+		if proposalCheck.Status == wire.ValidationFailed {
 			synErr := proposalCheck.Detail
 			if prior, priorOK := readOriginalForGate(path); priorOK {
 				baselineCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, prior).aggregate()
@@ -217,12 +218,12 @@ func writeRegressionGate(ctx *AgentContext, input WriteFileInput, path string) (
 					// The check examined input.Content, which is exactly
 					// the content that would have been written, and the
 					// refusal happens before any byte reaches disk.
-					return proposalCheck, baselineCheck, &ToolResult{
+					return proposalCheck, baselineCheck, &wire.ToolResult{
 						Success:          false,
 						Error:            fallbackSyntaxRejection(input.Path, input.Content, synErr),
-						MutationStatus:   MutationRefused,
-						ValidationKind:   ValidationKindSyntax,
-						ValidationStatus: ValidationFailed,
+						MutationStatus:   wire.MutationRefused,
+						ValidationKind:   wire.ValidationKindSyntax,
+						ValidationStatus: wire.ValidationFailed,
 						ValidationDetail: synErr,
 					}
 				}
@@ -235,16 +236,16 @@ func writeRegressionGate(ctx *AgentContext, input WriteFileInput, path string) (
 // writeFileThroughV3 is the route of a write the pipeline sees. Bytes that do
 // not parse never reach the pipeline: they land with a warning as a new file
 // or as a repair of a file already broken, and are refused otherwise.
-func writeFileThroughV3(ctx *AgentContext, input WriteFileInput, path string, fileTier Tier,
-	proposalCheck, baselineCheck checkOutcome) (*ToolResult, error) {
+func writeFileThroughV3(ctx *AgentContext, input wire.WriteFileInput, path string, fileTier Tier,
+	proposalCheck, baselineCheck checkOutcome) (*wire.ToolResult, error) {
 	// The regression gate above evaluated these exact bytes
 	// whenever the destination exists, so the evaluation here is
 	// for the case it skipped: a file that does not exist yet,
 	// which is this gate's main case.
-	if proposalCheck.Status == ValidationUnknown {
+	if proposalCheck.Status == wire.ValidationUnknown {
 		proposalCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, input.Content).aggregate()
 	}
-	if proposalCheck.Status == ValidationFailed {
+	if proposalCheck.Status == wire.ValidationFailed {
 		synErr := proposalCheck.Detail
 		// Feeding V3 broken content wastes its whole budget, so
 		// V3 is skipped either way. What happens to the bytes
@@ -266,7 +267,7 @@ func writeFileThroughV3(ctx *AgentContext, input WriteFileInput, path string, fi
 		// guarantees the broken version survives. Same
 		// healthy->broken rule the fast-path below already uses.
 		if prior, priorOK := readOriginalForGate(path); priorOK {
-			if baselineCheck.Status == ValidationUnknown {
+			if baselineCheck.Status == wire.ValidationUnknown {
 				baselineCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, prior).aggregate()
 			}
 			if baselineAllowsRepair(baselineCheck) {
@@ -288,12 +289,12 @@ func writeFileThroughV3(ctx *AgentContext, input WriteFileInput, path string, fi
 		// baseline arrives here too: without a baseline there is
 		// no healthy->broken comparison to make, and the
 		// conservative answer is the refusal.
-		return &ToolResult{
+		return &wire.ToolResult{
 			Success:          false,
 			Error:            fallbackSyntaxRejection(input.Path, input.Content, synErr),
-			MutationStatus:   MutationRefused,
-			ValidationKind:   ValidationKindSyntax,
-			ValidationStatus: ValidationFailed,
+			MutationStatus:   wire.MutationRefused,
+			ValidationKind:   wire.ValidationKindSyntax,
+			ValidationStatus: wire.ValidationFailed,
 			ValidationDetail: synErr,
 		}, nil
 	}
@@ -318,10 +319,10 @@ func writeFileThroughV3(ctx *AgentContext, input WriteFileInput, path string, fi
 // writeFileDirectRoute is the route of a write the pipeline does not see: the
 // gates of the active-debug fast path, or the structural gate of the direct
 // write, and then the landing.
-func writeFileDirectRoute(ctx *AgentContext, input WriteFileInput, path string, iterating bool,
-	proposalCheck, baselineCheck checkOutcome) (*ToolResult, error) {
+func writeFileDirectRoute(ctx *AgentContext, input wire.WriteFileInput, path string, iterating bool,
+	proposalCheck, baselineCheck checkOutcome) (*wire.ToolResult, error) {
 	if iterating {
-		var refusal *ToolResult
+		var refusal *wire.ToolResult
 		proposalCheck, refusal = writeFastPathGates(ctx, input, path, proposalCheck, baselineCheck)
 		if refusal != nil {
 			return refusal, nil
@@ -359,12 +360,12 @@ func writeFileDirectRoute(ctx *AgentContext, input WriteFileInput, path string, 
 				// request therefore does not prove the gate ran; only
 				// the refusal does.
 				rejection := structuralWriteRejection(input.Path, introduced)
-				return &ToolResult{
+				return &wire.ToolResult{
 					Success:          false,
 					Error:            rejection,
-					MutationStatus:   MutationRefused,
-					ValidationKind:   ValidationKindStructural,
-					ValidationStatus: ValidationFailed,
+					MutationStatus:   wire.MutationRefused,
+					ValidationKind:   wire.ValidationKindStructural,
+					ValidationStatus: wire.ValidationFailed,
 					ValidationDetail: rejection,
 				}, nil
 			}
@@ -377,8 +378,8 @@ func writeFileDirectRoute(ctx *AgentContext, input WriteFileInput, path string, 
 // writeFastPathGates are the gates of the active-debug fast path, which skips
 // the pipeline. It returns the observation of the proposal, made here when
 // nothing had made it yet, and the refusal when a gate refused.
-func writeFastPathGates(ctx *AgentContext, input WriteFileInput, path string,
-	proposalCheck, baselineCheck checkOutcome) (checkOutcome, *ToolResult) {
+func writeFastPathGates(ctx *AgentContext, input wire.WriteFileInput, path string,
+	proposalCheck, baselineCheck checkOutcome) (checkOutcome, *wire.ToolResult) {
 	log.Printf("[write_file] active edit-test-fix loop on %s — fast-path direct write (V3 skipped)", input.Path)
 	// The file already exists this session; read its on-disk
 	// content once and run both gates against it with the
@@ -395,10 +396,10 @@ func writeFastPathGates(ctx *AgentContext, input WriteFileInput, path string,
 	// it fires on a file the session wrote and just watched fail.
 	// Evaluate here only for the residual case where it was not --
 	// the file has been deleted since that write.
-	if proposalCheck.Status == ValidationUnknown {
+	if proposalCheck.Status == wire.ValidationUnknown {
 		proposalCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, input.Content).aggregate()
 	}
-	if proposalCheck.Status == ValidationFailed {
+	if proposalCheck.Status == wire.ValidationFailed {
 		// Reaching here with a demonstrably failing proposal means
 		// the gate above did not decide: either the baseline
 		// demonstrably failed (repair-in-progress), or there was
@@ -407,7 +408,7 @@ func writeFastPathGates(ctx *AgentContext, input WriteFileInput, path string,
 		// readOriginalForGate yields "" for it, which the checker
 		// finds healthy, so the regression is still refused rather
 		// than landing unexamined.
-		if baselineCheck.Status == ValidationUnknown {
+		if baselineCheck.Status == wire.ValidationUnknown {
 			baselineCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, original).aggregate()
 		}
 		if !baselineAllowsRepair(baselineCheck) {
@@ -415,12 +416,12 @@ func writeFastPathGates(ctx *AgentContext, input WriteFileInput, path string,
 			// The check examined input.Content, the exact bytes
 			// that would have been written, and nothing has
 			// reached disk at this point.
-			return proposalCheck, &ToolResult{
+			return proposalCheck, &wire.ToolResult{
 				Success:          false,
 				Error:            fallbackSyntaxRejection(input.Path, input.Content, synErr),
-				MutationStatus:   MutationRefused,
-				ValidationKind:   ValidationKindSyntax,
-				ValidationStatus: ValidationFailed,
+				MutationStatus:   wire.MutationRefused,
+				ValidationKind:   wire.ValidationKindSyntax,
+				ValidationStatus: wire.ValidationFailed,
 				ValidationDetail: synErr,
 			}
 		}
@@ -438,11 +439,11 @@ func writeFastPathGates(ctx *AgentContext, input WriteFileInput, path string,
 			// Syntax ran first and PASSED on these exact bytes; the
 			// structural check is what refused them, so structural
 			// is the decisive outcome.
-			return proposalCheck, &ToolResult{Success: false,
+			return proposalCheck, &wire.ToolResult{Success: false,
 				Error:            structuralWriteRejection(input.Path, introduced),
-				MutationStatus:   MutationRefused,
-				ValidationKind:   ValidationKindStructural,
-				ValidationStatus: ValidationFailed,
+				MutationStatus:   wire.MutationRefused,
+				ValidationKind:   wire.ValidationKindStructural,
+				ValidationStatus: wire.ValidationFailed,
 				ValidationDetail: structuralWriteRejection(input.Path, introduced),
 			}
 		}
@@ -454,7 +455,7 @@ func writeFastPathGates(ctx *AgentContext, input WriteFileInput, path string,
 // pipeline: with a warning when a new file, or a file already broken, does not
 // parse, and refused when they break an embedded script or repeat the entry
 // point.
-func landDirectWrite(ctx *AgentContext, input WriteFileInput, path string, proposalCheck checkOutcome) (*ToolResult, error) {
+func landDirectWrite(ctx *AgentContext, input wire.WriteFileInput, path string, proposalCheck checkOutcome) (*wire.ToolResult, error) {
 	// A new file is checked here: a file being created has no "before"
 	// state for the healthy->broken rule, so whether it parses is
 	// decidable, and a new file that does not parse lands with a
@@ -469,10 +470,10 @@ func landDirectWrite(ctx *AgentContext, input WriteFileInput, path string, propo
 	// default.
 	_, statErr := os.Stat(path)
 	isNew := os.IsNotExist(statErr)
-	newFileCheck := checkOutcome{Status: ValidationUnknown}
+	newFileCheck := checkOutcome{Status: wire.ValidationUnknown}
 	if isNew {
 		newFileCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, input.Content).aggregate()
-		if newFileCheck.Status == ValidationFailed {
+		if newFileCheck.Status == wire.ValidationFailed {
 			log.Printf("[write_file] new file %s does not parse — writing with a warning (%s)",
 				logPath(input.Path), truncateStr(newFileCheck.Detail, 80))
 			return writeNewFileWithWarning(path, input.Path, input.Content, newFileCheck.Detail, ctx)
@@ -489,7 +490,7 @@ func landDirectWrite(ctx *AgentContext, input WriteFileInput, path string, propo
 	// and the completion gate know; the model has to be told too, or
 	// {"bytes_written":1243} reads as a clean write and it cannot
 	// reconcile the failing run with a write it was told was fine.
-	if proposalCheck.Status == ValidationFailed {
+	if proposalCheck.Status == wire.ValidationFailed {
 		log.Printf("[write_file] %s: landing an unparseable rewrite with a warning (%s)",
 			logPath(input.Path), logsafe.DiagnosticSummary(proposalCheck.Detail))
 		return preflightWarnedWrite(path, input.Path, input.Content, proposalCheck, ctx)
@@ -503,18 +504,18 @@ func landDirectWrite(ctx *AgentContext, input WriteFileInput, path string, propo
 	if original, ok := readOriginalForGate(path); ok {
 		if msg := embeddedScriptGate(ctx, path, original, input.Content); msg != "" {
 			log.Printf("[write_file] direct write breaks an embedded script in %s — rejecting", logPath(input.Path))
-			return &ToolResult{Success: false, Error: msg,
-				MutationStatus:   MutationRefused,
-				ValidationKind:   ValidationKindStructural,
-				ValidationStatus: ValidationFailed,
+			return &wire.ToolResult{Success: false, Error: msg,
+				MutationStatus:   wire.MutationRefused,
+				ValidationKind:   wire.ValidationKindStructural,
+				ValidationStatus: wire.ValidationFailed,
 				ValidationDetail: msg}, nil
 		}
 		if msg := duplicateMainGuard(path, original, input.Content); msg != "" {
 			log.Printf("[write_file] direct write duplicates the module entrypoint in %s — rejecting", logPath(input.Path))
-			return &ToolResult{Success: false, Error: msg,
-				MutationStatus:   MutationRefused,
-				ValidationKind:   ValidationKindStructural,
-				ValidationStatus: ValidationFailed,
+			return &wire.ToolResult{Success: false, Error: msg,
+				MutationStatus:   wire.MutationRefused,
+				ValidationKind:   wire.ValidationKindStructural,
+				ValidationStatus: wire.ValidationFailed,
 				ValidationDetail: msg}, nil
 		}
 	}
@@ -524,8 +525,8 @@ func landDirectWrite(ctx *AgentContext, input WriteFileInput, path string, propo
 
 // writeDirectAndObserve writes the bytes of a direct write and attaches the
 // observation its route already holds of exactly those bytes.
-func writeDirectAndObserve(ctx *AgentContext, input WriteFileInput, path string, isNew bool,
-	newFileCheck, proposalCheck checkOutcome) (*ToolResult, error) {
+func writeDirectAndObserve(ctx *AgentContext, input wire.WriteFileInput, path string, isNew bool,
+	newFileCheck, proposalCheck checkOutcome) (*wire.ToolResult, error) {
 	logMandatoryChecks(ctx, "write_file", input.Path, "direct")
 	// T1: Direct write — config, data, boilerplate
 	res, err := writeFileRecorded(path, input.Content, ctx)
@@ -538,7 +539,7 @@ func writeDirectAndObserve(ctx *AgentContext, input WriteFileInput, path string,
 	switch {
 	case isNew:
 		res, err = applyRouteObservation(res, err, newFileCheck)
-	case proposalCheck.Status != ValidationUnknown:
+	case proposalCheck.Status != wire.ValidationUnknown:
 		// Every remaining route through this write -- the active-debug
 		// fast path and the ordinary direct write over an existing
 		// file -- already holds an observation of these exact bytes.
@@ -628,7 +629,7 @@ func fileIsSourceCode(path string) bool {
 // On an EXISTING file a rejection stops working code being clobbered with
 // garbage. On a new file there is nothing to protect, and a rejection forbids
 // the one loop that works: write it, run it, read the real traceback, fix it.
-func writeNewFileWithWarning(path, inputPath, content, synErr string, ctx *AgentContext) (*ToolResult, error) {
+func writeNewFileWithWarning(path, inputPath, content, synErr string, ctx *AgentContext) (*wire.ToolResult, error) {
 	logMandatoryChecks(ctx, "write_file", inputPath, "syntax failed, landing with a warning")
 	res, err := writeFileRecorded(path, content, ctx)
 	if err != nil || res == nil || !res.Success {
@@ -640,7 +641,7 @@ func writeNewFileWithWarning(path, inputPath, content, synErr string, ctx *Agent
 	// CORRECTION of a warned write would be refused as an overwrite of an
 	// unread existing file.
 	ctx.SessionWrites[inputPath] = true
-	out := WriteFileOutput{
+	out := wire.WriteFileOutput{
 		BytesWritten: len(content),
 		Warning: fmt.Sprintf(
 			"written, but it does not parse (%s).%s Run it now and read the "+
@@ -653,9 +654,9 @@ func writeNewFileWithWarning(path, inputPath, content, synErr string, ctx *Agent
 	// exactly `content`, so the failure describes the bytes on disk. Applied
 	// and failed are orthogonal here on purpose: the file landed AND it does
 	// not parse, which is the documented debugging policy.
-	res.MutationStatus = MutationApplied
-	res.ValidationKind = ValidationKindSyntax
-	res.ValidationStatus = ValidationFailed
+	res.MutationStatus = wire.MutationApplied
+	res.ValidationKind = wire.ValidationKindSyntax
+	res.ValidationStatus = wire.ValidationFailed
 	res.ValidationDetail = synErr
 	return res, nil
 }
@@ -668,7 +669,7 @@ func writeNewFileWithWarning(path, inputPath, content, synErr string, ctx *Agent
 // land. When they do not, the writer reports not_run, which is honest for a
 // layer that ran no check of its own -- but this route did run one, on exactly
 // these bytes, and a failed mutation does not unmake that observation.
-func preflightWarnedWrite(path, inputPath, content string, o checkOutcome, ctx *AgentContext) (*ToolResult, error) {
+func preflightWarnedWrite(path, inputPath, content string, o checkOutcome, ctx *AgentContext) (*wire.ToolResult, error) {
 	res, err := writeNewFileWithWarning(path, inputPath, content, o.Detail, ctx)
 	return applyRouteObservation(res, err, o)
 }
@@ -679,7 +680,7 @@ func preflightWarnedWrite(path, inputPath, content string, o checkOutcome, ctx *
 // whichever write path ran; otherwise the evidence gate fires on files the
 // model has just created. Every write path reaches writeFileDirect through
 // this one function, so a new path cannot skip the record.
-func writeFileRecorded(path, content string, ctx *AgentContext) (*ToolResult, error) {
+func writeFileRecorded(path, content string, ctx *AgentContext) (*wire.ToolResult, error) {
 	res, err := writeFileDirect(path, content)
 	if err == nil && res != nil && res.Success && ctx != nil {
 		ctx.RecordBodySeen(path)
@@ -694,9 +695,9 @@ func writeFileRecorded(path, content string, ctx *AgentContext) (*ToolResult, er
 // outward ToolResult synthesised at the boundary is enriched.
 type classifiedError struct {
 	err              error
-	mutationStatus   MutationStatus
-	validationKind   ValidationKind
-	validationStatus ValidationStatus
+	mutationStatus   wire.MutationStatus
+	validationKind   wire.ValidationKind
+	validationStatus wire.ValidationStatus
 }
 
 func (c *classifiedError) Error() string { return c.err.Error() }
@@ -708,11 +709,11 @@ func (c *classifiedError) Unwrap() error { return c.err }
 // passed -- not_run for recognised code, not_applicable otherwise -- because
 // writeFileDirect runs no check of its own.
 func failedMutation(path string, err error) error {
-	kind, status := ValidationKindNone, ValidationNotApplicable
+	kind, status := wire.ValidationKindNone, wire.ValidationNotApplicable
 	if _, gated := syntaxGateLanguages[strings.ToLower(filepath.Ext(path))]; gated {
-		kind, status = ValidationKindSyntax, ValidationNotRun
+		kind, status = wire.ValidationKindSyntax, wire.ValidationNotRun
 	}
-	return &classifiedError{err: err, mutationStatus: MutationFailed,
+	return &classifiedError{err: err, mutationStatus: wire.MutationFailed,
 		validationKind: kind, validationStatus: status}
 }
 
@@ -725,19 +726,19 @@ func failedMutation(path string, err error) error {
 // Success, from the extension, or from a wrapper's ok boolean. Unknown is
 // preserved rather than normalised, so the result stays visibly unclassified
 // and a sentinel can catch the producer defect.
-func overlayValidation(res *ToolResult, o checkOutcome) {
+func overlayValidation(res *wire.ToolResult, o checkOutcome) {
 	if res == nil {
 		return
 	}
 	res.ValidationStatus = o.Status
 	res.ValidationDetail = o.Detail
 	switch o.Status {
-	case ValidationNotApplicable:
-		res.ValidationKind = ValidationKindNone
-	case ValidationUnknown:
-		res.ValidationKind = ValidationKindUnknown
+	case wire.ValidationNotApplicable:
+		res.ValidationKind = wire.ValidationKindNone
+	case wire.ValidationUnknown:
+		res.ValidationKind = wire.ValidationKindUnknown
 	default:
-		res.ValidationKind = ValidationKindSyntax
+		res.ValidationKind = wire.ValidationKindSyntax
 	}
 }
 
@@ -754,12 +755,12 @@ func overlayValidationOnError(err error, o checkOutcome) error {
 	}
 	ce.validationStatus = o.Status
 	switch o.Status {
-	case ValidationNotApplicable:
-		ce.validationKind = ValidationKindNone
-	case ValidationUnknown:
-		ce.validationKind = ValidationKindUnknown
+	case wire.ValidationNotApplicable:
+		ce.validationKind = wire.ValidationKindNone
+	case wire.ValidationUnknown:
+		ce.validationKind = wire.ValidationKindUnknown
 	default:
-		ce.validationKind = ValidationKindSyntax
+		ce.validationKind = wire.ValidationKindSyntax
 	}
 	return err
 }
@@ -769,7 +770,7 @@ func overlayValidationOnError(err error, o checkOutcome) error {
 // observation because they are orthogonal facts: checked bytes can still fail
 // to land, and bytes that landed can still be the ones that do not parse.
 // Keeping it in one place is what makes two routes provably identical here.
-func applyRouteObservation(res *ToolResult, err error, o checkOutcome) (*ToolResult, error) {
+func applyRouteObservation(res *wire.ToolResult, err error, o checkOutcome) (*wire.ToolResult, error) {
 	if err != nil {
 		return res, overlayValidationOnError(err, o)
 	}
@@ -801,11 +802,11 @@ func atomicReplaceFile(path string, content []byte) error {
 
 // writeFileDirect writes content to disk atomically (temp file plus rename, see
 // atomicReplaceFile). This is where any write_file tool call ultimately lands.
-func writeFileDirect(path, content string) (*ToolResult, error) {
+func writeFileDirect(path, content string) (*wire.ToolResult, error) {
 	if err := atomicReplaceFile(path, []byte(content)); err != nil {
 		return nil, failedMutation(path, err)
 	}
-	out := WriteFileOutput{BytesWritten: len(content)}
+	out := wire.WriteFileOutput{BytesWritten: len(content)}
 	outBytes, _ := json.Marshal(out)
 	// Slice 1 classification. The bytes are on disk after the rename, so the
 	// mutation is demonstrated rather than intended.
@@ -815,13 +816,13 @@ func writeFileDirect(path, content string) (*ToolResult, error) {
 	// caller that did validate these exact bytes upgrades it, and one that
 	// did not leaves the truth visible. Claiming passed because a write
 	// succeeded is the conflation this whole contract exists to remove.
-	kind, status := ValidationKindNone, ValidationNotApplicable
+	kind, status := wire.ValidationKindNone, wire.ValidationNotApplicable
 	if _, gated := syntaxGateLanguages[strings.ToLower(filepath.Ext(path))]; gated {
-		kind, status = ValidationKindSyntax, ValidationNotRun
+		kind, status = wire.ValidationKindSyntax, wire.ValidationNotRun
 	}
-	return &ToolResult{
+	return &wire.ToolResult{
 		Success: true, Data: outBytes,
-		MutationStatus: MutationApplied,
+		MutationStatus: wire.MutationApplied,
 		ValidationKind: kind, ValidationStatus: status,
 	}, nil
 }

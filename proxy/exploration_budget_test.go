@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 )
 
 // A request that demands no change is answered by reading, and its writes are
@@ -37,9 +39,9 @@ func TestAnAnswerOnlyRequestIsAQuestionOrAProhibition(t *testing.T) {
 		ctx  *AgentContext
 		want bool
 	}{
-		{&AgentContext{TaskContract: &TaskContract{TaskMode: TaskModeQuestion}}, true},
+		{&AgentContext{TaskContract: &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeQuestion}}, true},
 		{&AgentContext{HumanTask: "Just explain the parser. Do not change any code."}, true},
-		{&AgentContext{TaskContract: &TaskContract{TaskMode: TaskModeWork}}, false},
+		{&AgentContext{TaskContract: &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork}}, false},
 		{&AgentContext{HumanTask: "Fix the tie-break in the planner."}, false},
 	}
 	for i, c := range cases {

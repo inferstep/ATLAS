@@ -8,6 +8,9 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // The observe-only feasibility decision: whether this invocation has a path to
@@ -19,7 +22,7 @@ func feasibilityFor(t *testing.T, contract string, files map[string]string) Feas
 	_ = ctx
 	return decideInvocationFeasibility(feasibilityInput{
 		Obligations:       obs,
-		AuthorizedTargets: authorizedTargets(obs),
+		AuthorizedTargets: taskcontract.AuthorizedTargets(obs),
 		Producible:        producibleStrengthsWith(true),
 	})
 }
@@ -90,12 +93,12 @@ func TestFeasibilityMatrix(t *testing.T) {
 				`"verification_knowledge":"declared","verification":["pytest -q"]}`, nil)
 		d := decideInvocationFeasibility(feasibilityInput{
 			Obligations:       obs,
-			AuthorizedTargets: authorizedTargets(obs),
-			Producible:        map[string]string{ObligationSyntacticValidity: "syntax"},
+			AuthorizedTargets: taskcontract.AuthorizedTargets(obs),
+			Producible:        map[string]string{taskcontract.ObligationSyntacticValidity: "syntax"},
 		})
 		expectFeasibility(t, "declared command", d, false, FeasibilityAdapterCannotMeasure)
 		if len(d.Unreachable) != 1 ||
-			!strings.HasPrefix(d.Unreachable[0], ObligationDeclaredCommand+":") {
+			!strings.HasPrefix(d.Unreachable[0], taskcontract.ObligationDeclaredCommand+":") {
 			t.Errorf("unreachable %v, want the declared command", d.Unreachable)
 		}
 	})
@@ -111,11 +114,11 @@ func TestFeasibilityOfAPreservedBaseline(t *testing.T) {
 		disk := fileSHA256(ctx, resolved)
 		ctx.LedgerMu.Lock()
 		if ctx.Ledger == nil {
-			ctx.Ledger = map[string]*DeliverableState{}
+			ctx.Ledger = map[string]*taskcontract.DeliverableState{}
 		}
-		ctx.Ledger[resolved] = &DeliverableState{
+		ctx.Ledger[resolved] = &taskcontract.DeliverableState{
 			Path: resolved, CurrentHash: disk, Generation: 1,
-			ValidationKind: ValidationKindSyntax, ValidationStatus: ValidationPassed,
+			ValidationKind: wire.ValidationKindSyntax, ValidationStatus: wire.ValidationPassed,
 			ValidatedHash: disk,
 		}
 		ctx.LedgerMu.Unlock()
@@ -124,7 +127,7 @@ func TestFeasibilityOfAPreservedBaseline(t *testing.T) {
 		obs := requestObligations(ctx)
 		d := decideInvocationFeasibility(feasibilityInput{
 			Obligations:       obs,
-			AuthorizedTargets: authorizedTargets(obs),
+			AuthorizedTargets: taskcontract.AuthorizedTargets(obs),
 			Producible:        producibleStrengthsWith(true),
 		})
 		// Preservation has no producer and never will. It is reachable because
@@ -137,7 +140,7 @@ func TestFeasibilityOfAPreservedBaseline(t *testing.T) {
 	t.Run("behavioural baseline is unreachable without behavioural evidence", func(t *testing.T) {
 		ctx, _ := rolesFixture(t, "", map[string]string{"solve.py": "print(7)\n"})
 		resolved := resolveAgentPath(ctx, "solve.py")
-		ctx.VerificationEvidence = append(ctx.VerificationEvidence, VerificationRecord{
+		ctx.VerificationEvidence = append(ctx.VerificationEvidence, taskcontract.VerificationRecord{
 			Command: "python3 solve.py",
 			Covered: map[string]string{resolved: fileSHA256(ctx, resolved)}, Turn: 1,
 		})
@@ -146,8 +149,8 @@ func TestFeasibilityOfAPreservedBaseline(t *testing.T) {
 		obs := requestObligations(ctx)
 		in := feasibilityInput{
 			Obligations:       obs,
-			AuthorizedTargets: authorizedTargets(obs),
-			Producible:        map[string]string{ObligationSyntacticValidity: "syntax"},
+			AuthorizedTargets: taskcontract.AuthorizedTargets(obs),
+			Producible:        map[string]string{taskcontract.ObligationSyntacticValidity: "syntax"},
 		}
 		d := decideInvocationFeasibility(in)
 		expectFeasibility(t, "behavioural baseline, syntax only", d, false,
@@ -163,7 +166,7 @@ func TestFeasibilityOfAPreservedBaseline(t *testing.T) {
 		ctx, _ := rolesFixture(t, "", map[string]string{"solve.py": "print(7)\n"})
 		resolved := resolveAgentPath(ctx, "solve.py")
 		disk := fileSHA256(ctx, resolved)
-		ctx.VerificationEvidence = append(ctx.VerificationEvidence, VerificationRecord{
+		ctx.VerificationEvidence = append(ctx.VerificationEvidence, taskcontract.VerificationRecord{
 			Command: "python3 solve.py",
 			Covered: map[string]string{resolved: disk}, Turn: 1,
 		})
@@ -172,7 +175,7 @@ func TestFeasibilityOfAPreservedBaseline(t *testing.T) {
 		obs := requestObligations(ctx)
 		d := decideInvocationFeasibility(feasibilityInput{
 			Obligations:       obs,
-			AuthorizedTargets: authorizedTargets(obs),
+			AuthorizedTargets: taskcontract.AuthorizedTargets(obs),
 			Producible:        producibleStrengthsWith(true),
 		})
 		// The floor is the baseline's, and staging can reach it. Preservation
@@ -190,10 +193,10 @@ func TestFeasibilityOfAPreservedBaseline(t *testing.T) {
 // contract, no target, or a kind with no role -- there is no closure path.
 func TestFeasibilityNeedsAClosablePrerequisite(t *testing.T) {
 	t.Run("unsupported obligation", func(t *testing.T) {
-		exists, _ := newTaskObligation(ObligationArtifactExists, "a.py", "", true)
-		unsup, _ := newTaskObligation(ObligationUnsupported, "a thing", "", true)
+		exists, _ := taskcontract.NewTaskObligation(taskcontract.ObligationArtifactExists, "a.py", "", true)
+		unsup, _ := taskcontract.NewTaskObligation(taskcontract.ObligationUnsupported, "a thing", "", true)
 		d := decideInvocationFeasibility(feasibilityInput{
-			Obligations:       []taskObligation{exists, unsup},
+			Obligations:       []taskcontract.TaskObligation{exists, unsup},
 			AuthorizedTargets: []string{"a.py"},
 			Producible:        producibleStrengthsWith(true),
 		})
@@ -216,9 +219,9 @@ func TestFeasibilityNeedsAClosablePrerequisite(t *testing.T) {
 	t.Run("a prerequisite with no target", func(t *testing.T) {
 		// Authoritative none for outputs, a declared command for verification.
 		// Even if the command had a producer there would be nothing to deliver.
-		cmd, _ := newTaskObligation(ObligationSyntacticValidity, "a.py", "", true)
+		cmd, _ := taskcontract.NewTaskObligation(taskcontract.ObligationSyntacticValidity, "a.py", "", true)
 		d := decideInvocationFeasibility(feasibilityInput{
-			Obligations:       []taskObligation{cmd},
+			Obligations:       []taskcontract.TaskObligation{cmd},
 			AuthorizedTargets: nil,
 			Producible:        producibleStrengthsWith(true),
 		})
@@ -226,11 +229,11 @@ func TestFeasibilityNeedsAClosablePrerequisite(t *testing.T) {
 	})
 
 	t.Run("unknown obligation kind", func(t *testing.T) {
-		forged := taskObligation{ID: "forged:0", Kind: "forged", Subject: "a.py",
+		forged := taskcontract.TaskObligation{ID: "forged:0", Kind: "forged", Subject: "a.py",
 			RequiredStrength: "syntax", Required: true}
-		exists, _ := newTaskObligation(ObligationArtifactExists, "a.py", "", true)
+		exists, _ := taskcontract.NewTaskObligation(taskcontract.ObligationArtifactExists, "a.py", "", true)
 		d := decideInvocationFeasibility(feasibilityInput{
-			Obligations:       []taskObligation{exists, forged},
+			Obligations:       []taskcontract.TaskObligation{exists, forged},
 			AuthorizedTargets: []string{"a.py"},
 			Producible:        producibleStrengthsWith(true),
 		})
@@ -250,7 +253,7 @@ func TestALaterInvocationRecomputesFromWhatIsAvailableThen(t *testing.T) {
 			`"verification_knowledge":"declared","verification":["pytest -q"]}`, nil)
 	in := feasibilityInput{
 		Obligations:       obs,
-		AuthorizedTargets: authorizedTargets(obs),
+		AuthorizedTargets: taskcontract.AuthorizedTargets(obs),
 		Producible:        producibleStrengthsWith(true),
 	}
 	withStaging := decideInvocationFeasibility(in)
@@ -262,7 +265,7 @@ func TestALaterInvocationRecomputesFromWhatIsAvailableThen(t *testing.T) {
 	// about what THIS invocation could produce, recomputed from what exists
 	// then, never a property carried forward.
 	without := in
-	without.Producible = map[string]string{ObligationSyntacticValidity: "syntax"}
+	without.Producible = map[string]string{taskcontract.ObligationSyntacticValidity: "syntax"}
 	other := decideInvocationFeasibility(without)
 	if other.Feasible {
 		t.Error("a declared command with no producer was called feasible")
@@ -377,15 +380,15 @@ func TestTheFeasibilityRecordCarriesNoContent(t *testing.T) {
 func TestTheTwoBaselineDerivationsAgree(t *testing.T) {
 	const witness = "command-identity"
 	for _, required := range []string{"syntax", "behavioral", "oracle"} {
-		o, ok := newTaskObligation(ObligationBaselinePreserved, "/w/solve.py", required, true)
+		o, ok := taskcontract.NewTaskObligation(taskcontract.ObligationBaselinePreserved, "/w/solve.py", required, true)
 		if !ok {
 			t.Fatalf("%s baseline obligation refused", required)
 		}
 		for _, producible := range []map[string]string{
 			{},
-			{ObligationSyntacticValidity: "syntax"},
-			{ObligationSyntacticValidity: "syntax", ObligationDeclaredCommand: "behavioral"},
-			{ObligationDeclaredExample: "oracle"},
+			{taskcontract.ObligationSyntacticValidity: "syntax"},
+			{taskcontract.ObligationSyntacticValidity: "syntax", taskcontract.ObligationDeclaredCommand: "behavioral"},
+			{taskcontract.ObligationDeclaredExample: "oracle"},
 		} {
 			// The strongest thing this build could put in front of the
 			// authorization decision, named by the baseline's own witness so
@@ -393,8 +396,8 @@ func TestTheTwoBaselineDerivationsAgree(t *testing.T) {
 			var evidence []proxyEvidence
 			for _, strength := range producible {
 				evidence = append(evidence, proxyEvidence{
-					Outcome: ValidationPassed,
-					Provenance: V3EvidenceProvenance{
+					Outcome: wire.ValidationPassed,
+					Provenance: wire.V3EvidenceProvenance{
 						ObservedStrength: strength, CommandIdentity: witness,
 					},
 				})

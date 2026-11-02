@@ -14,6 +14,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // --- The one terminal emitter ------------------------------------------------
@@ -22,10 +25,10 @@ import (
 // not English to match in `summary`. It fires at most once per session: a
 // timeout racing a completion produces one event, not two, and whichever
 // arrives first is the outcome.
-func emitTerminal(ctx *AgentContext, st *runState, status TerminalStatus, reason, summary string) {
+func emitTerminal(ctx *AgentContext, st *runState, status wire.TerminalStatus, reason, summary string) {
 	if !status.Classified() {
 		// A producer that did not name its outcome does not get to imply one.
-		status, reason = TerminalIncomplete, "unclassified_producer"
+		status, reason = wire.TerminalIncomplete, "unclassified_producer"
 	}
 	ctx.terminalOnce.Do(func() {
 		// Nothing may be delivered from here on. An authorization that
@@ -87,7 +90,7 @@ func emitTerminal(ctx *AgentContext, st *runState, status TerminalStatus, reason
 // withheldForOpenRepairs is the terminal to report: no run that leaves a file it
 // wrote unparseable is reported completed, whichever path reached here
 // (repair.go).
-func withheldForOpenRepairs(ctx *AgentContext, st *runState, status TerminalStatus, reason string) (TerminalStatus, string) {
+func withheldForOpenRepairs(ctx *AgentContext, st *runState, status wire.TerminalStatus, reason string) (wire.TerminalStatus, string) {
 	if st == nil {
 		return status, reason
 	}
@@ -95,7 +98,7 @@ func withheldForOpenRepairs(ctx *AgentContext, st *runState, status TerminalStat
 	if open := st.openRepairs(); len(open) > 0 && status.Completed() {
 		log.Printf("[agent] terminal %s/%s with %s unparseable — reporting repair_unfinished",
 			status, reason, repairNames(open))
-		return TerminalIncomplete, "repair_unfinished"
+		return wire.TerminalIncomplete, "repair_unfinished"
 	}
 	return status, reason
 }
@@ -437,7 +440,7 @@ func finalizeOnWorkDeadline(ctx *AgentContext, st *runState) {
 	// 5. One terminal, on the response lifetime, inside the reserve. A
 	// timeout never claims completion, whatever is on disk afterwards.
 	wrote := st != nil && st.madeProductiveChange
-	emitTerminal(ctx, st, TerminalTimedOut, "work_deadline",
+	emitTerminal(ctx, st, wire.TerminalTimedOut, "work_deadline",
 		sessionTimeoutSummary(ctx, wrote, recovered))
 }
 
@@ -522,7 +525,7 @@ func finishCancelledRun(ctx *AgentContext, st *runState, turn int) error {
 		ctx.cancelWork()
 	}
 	reapSessionBackgroundJobs(ctx)
-	emitTerminal(ctx, st, TerminalIncomplete, "cancelled",
+	emitTerminal(ctx, st, wire.TerminalIncomplete, "cancelled",
 		"Stopped: the run was cancelled before the work finished."+liveBackgroundJobNote(ctx))
 	return nil
 }
@@ -628,7 +631,7 @@ const deletionSummaryLimit = 5
 // every other status it guarantees three properties --
 // there is a summary, it carries no completion claim, and it says plainly that
 // the task was not confirmed finished.
-func honestTerminalSummary(ctx *AgentContext, st *runState, status TerminalStatus,
+func honestTerminalSummary(ctx *AgentContext, st *runState, status wire.TerminalStatus,
 	reason, summary string) string {
 	if status.Completed() {
 		out := completedTerminalSummary(ctx, reason, summary)
@@ -735,7 +738,7 @@ func completedTerminalSummary(ctx *AgentContext, reason, summary string) string 
 // to say, or said something the run cannot support. It reports only facts the
 // server holds: what the outcome was, whether anything is on disk, and whether
 // the deliverables were shown to be valid.
-func serverTerminalFallback(ctx *AgentContext, st *runState, status TerminalStatus, reason string) string {
+func serverTerminalFallback(ctx *AgentContext, st *runState, status wire.TerminalStatus, reason string) string {
 	var sb strings.Builder
 	switch {
 	case reason == "clarification_requested":
@@ -749,11 +752,11 @@ func serverTerminalFallback(ctx *AgentContext, st *runState, status TerminalStat
 	case unresolvedFinding(st, reason) != "":
 		sb.WriteString("Stopped: a check at the end still failed after the agent was sent back to fix it — " +
 			unresolvedFinding(st, reason) + ".")
-	case status == TerminalTimedOut:
+	case status == wire.TerminalTimedOut:
 		sb.WriteString("Stopped: the session ran out of time before the work finished.")
-	case status == TerminalFailed:
+	case status == wire.TerminalFailed:
 		sb.WriteString("Stopped: the run could not continue.")
-	case status == TerminalStopped:
+	case status == wire.TerminalStopped:
 		sb.WriteString("Stopped: the run was cut short before the work finished.")
 	default:
 		sb.WriteString("Stopped: the run ended without finishing the task.")
@@ -825,7 +828,7 @@ func unresolvedFinding(st *runState, reason string) string {
 // modelProseIfAuthorized passes the model's own account through only where the
 // completion gate has already agreed with it. Elsewhere it returns "", and the
 // server composes the summary instead.
-func modelProseIfAuthorized(status TerminalStatus, prose string) string {
+func modelProseIfAuthorized(status wire.TerminalStatus, prose string) string {
 	if status.Completed() {
 		return prose
 	}
@@ -865,7 +868,7 @@ func modelProseIfAuthorized(status TerminalStatus, prose string) string {
 //
 // completedReason lets an exit name its own reason for a genuine completion
 // (the text exit says text_reply); empty keeps the deliverable evidence's.
-func finalizeCompletion(ctx *AgentContext, st *runState, userMessage, completedReason string) (TerminalStatus, string) {
+func finalizeCompletion(ctx *AgentContext, st *runState, userMessage, completedReason string) (wire.TerminalStatus, string) {
 	// Settle what can be settled FIRST, so the evidence the rest of this
 	// function reads is about a workspace nothing is still writing to.
 	liveJobs := settleBackgroundHazard(ctx)
@@ -875,25 +878,25 @@ func finalizeCompletion(ctx *AgentContext, st *runState, userMessage, completedR
 	// message says what was tried on it (repairHandoff).
 	st.refreshRepairs(ctx, st.turn, "")
 	if len(st.openRepairs()) > 0 {
-		return TerminalIncomplete, "repair_unfinished"
+		return wire.TerminalIncomplete, "repair_unfinished"
 	}
 
 	ok, why := terminalCompletionAllowed(ctx, st.expectedOutputs)
 	if !ok {
-		return TerminalIncomplete, why
+		return wire.TerminalIncomplete, why
 	}
 	if st.actionDemandedAndUnmet(ctx, userMessage) {
-		return TerminalIncomplete, "action_demanded_unmet"
+		return wire.TerminalIncomplete, "action_demanded_unmet"
 	}
 	if st.verificationDemandedAndUnmet() {
-		return TerminalIncomplete, "verification_demanded_unmet"
+		return wire.TerminalIncomplete, "verification_demanded_unmet"
 	}
 	// A declared work request cannot finish on prose, existence, a parse, or a
 	// command that named nothing. Evaluated here, in the one finalizer both the
 	// model's `done` and the text exit call, so the two cannot drift.
 	if d := decideVerificationDemand(ctx, ctx.TaskContract, st.expectedOutputs); d.Required && !d.Met {
 		log.Printf("[agent] work contract: no current bound verification for %q", d.Missing)
-		return TerminalIncomplete, "verification_demanded_unmet"
+		return wire.TerminalIncomplete, "verification_demanded_unmet"
 	}
 	// A candidate this run authorized and delivered owes one more thing that
 	// could not be answered before it landed: that it is still there, at the
@@ -905,23 +908,23 @@ func finalizeCompletion(ctx *AgentContext, st *runState, userMessage, completedR
 	// obligation.
 	if owed, why := postDeliverySettlementOwed(ctx); owed {
 		log.Printf("[agent] authorized delivery is not settled: %s", why)
-		return TerminalIncomplete, "post_delivery_settlement_pending"
+		return wire.TerminalIncomplete, "post_delivery_settlement_pending"
 	}
 	// The model asking to finish is part of the evidence. A prose reply after a
 	// mutation is a chat turn, not a completion claim, so it stays honest even
 	// when everything else is satisfied. Bounded continuation is a later slice.
 	if tc := ctx.TaskContract; completedReason == "text_reply" && tc != nil &&
-		tc.TaskMode == TaskModeWork && st.madeProductiveChange {
-		return TerminalIncomplete, "work_not_declared_complete"
+		tc.TaskMode == taskcontract.TaskModeWork && st.madeProductiveChange {
+		return wire.TerminalIncomplete, "work_not_declared_complete"
 	}
 	if reason := st.replyIncompleteReason(); reason != "" {
-		return TerminalIncomplete, reason
+		return wire.TerminalIncomplete, reason
 	}
 	// Something may still be writing. A hash taken now describes an instant,
 	// not a result, and nothing here can tell a quiet process from a finished
 	// one -- only a confirmed exit can.
 	if len(liveJobs) > 0 || workspaceHazardous(ctx) {
-		return TerminalIncomplete, "background_work_unresolved"
+		return wire.TerminalIncomplete, "background_work_unresolved"
 	}
 	// Settle first, from the workspace as it is now. A debt can become
 	// resolved without another tool call -- a deletion of a path that was
@@ -934,7 +937,7 @@ func finalizeCompletion(ctx *AgentContext, st *runState, userMessage, completedR
 	// reached a state anything could check. A success elsewhere does not
 	// settle it.
 	if hasUnresolvedDebt(st) {
-		return TerminalIncomplete, "unresolved_mutation_debt"
+		return wire.TerminalIncomplete, "unresolved_mutation_debt"
 	}
 	// A gate that spent its bounces with its finding still true, where the
 	// finding is a fact about the delivered work: a claim-check gap (a
@@ -943,12 +946,12 @@ func finalizeCompletion(ctx *AgentContext, st *runState, userMessage, completedR
 	// more specific reason above keeps its place. The heuristic gates stand as
 	// caveats in the summary instead.
 	if reason := st.unresolvedGateReason(); reason != "" {
-		return TerminalIncomplete, reason
+		return wire.TerminalIncomplete, reason
 	}
 	if completedReason != "" {
-		return TerminalCompleted, completedReason
+		return wire.TerminalCompleted, completedReason
 	}
-	return TerminalCompleted, why
+	return wire.TerminalCompleted, why
 }
 
 // replyIncompleteReason is why the closing itself is not an answer, or "".

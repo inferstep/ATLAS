@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/itigges22/atlas-proxy/internal/logsafe"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // fencedWatchdog arms the fenced sub-call's progress watchdog on cancel, with
@@ -49,7 +50,7 @@ func fencedWatchdog(cancel context.CancelFunc) (*time.Timer, func(), func()) {
 // rawResponseForFence renders the tool call as the assistant turn the
 // fenced-content sub-call replays. Marshalling the parsed struct rather than
 // reusing raw model text keeps the sub-call deterministic.
-func rawResponseForFence(parsed ModelResponse) string {
+func rawResponseForFence(parsed wire.ModelResponse) string {
 	b, err := json.Marshal(parsed)
 	if err != nil {
 		return "{\"type\":\"tool_call\",\"name\":\"write_file\"}"
@@ -275,7 +276,7 @@ type fencedFetch struct {
 	ctx     *AgentContext
 	path    string
 	tag     string
-	msgs    []AgentMessage
+	msgs    []wire.AgentMessage
 	lastErr error
 }
 
@@ -321,10 +322,10 @@ func (f *fencedFetch) ask(grammar string, attempt int, attemptStart time.Time) f
 	}
 	got := content != ""
 	contentBytes := len(content)
-	Emit(Envelope{
-		EventID:    NewEventID(),
+	Emit(wire.Envelope{
+		EventID:    wire.NewEventID(),
 		Timestamp:  float64(time.Now().UnixNano()) / 1e9,
-		Type:       EvtStageEnd,
+		Type:       wire.EvtStageEnd,
 		Stage:      "fenced_fetch",
 		DurationMS: elapsed.Milliseconds(),
 		Payload: map[string]interface{}{
@@ -411,8 +412,8 @@ func (f *fencedFetch) settle(a fencedAnswer, attempt int) (string, bool, error) 
 		attempt+1, path, framing, len(reply), ctx.LastStreamCut,
 		ctx.FencedFailures[fencedKey(ctx, path)], maxFencedFailuresPerPath,
 		logsafe.TextSummary(reply))
-	f.msgs = append(f.msgs, AgentMessage{Role: "assistant", Content: reply},
-		AgentMessage{Role: "user", Content: fencedRetryNote(framing, tag)})
+	f.msgs = append(f.msgs, wire.AgentMessage{Role: "assistant", Content: reply},
+		wire.AgentMessage{Role: "user", Content: fencedRetryNote(framing, tag)})
 	return "", false, nil
 }
 

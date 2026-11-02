@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // Refusal guidance names selectors that exist, never a placeholder. A
@@ -172,7 +174,7 @@ func TestSelectorsComeFromTheFile(t *testing.T) {
 // The step-restriction note and the tool-ban note name real selectors too.
 func TestSteeringNotesNameRealSelectors(t *testing.T) {
 	ctx := capturedSolveWorld(t, nil)
-	ctx.Messages = []AgentMessage{
+	ctx.Messages = []wire.AgentMessage{
 		{Role: "user", Content: "fix it"},
 		{Role: "tool", ToolName: "write_file", Content: `{"success":false,"error":"File solve.py already exists (41 lines). Use structural_edit"}`},
 	}

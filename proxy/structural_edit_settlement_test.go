@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // A clean structural_edit must settle its own mutation debt.
@@ -26,12 +28,12 @@ func TestAStructuralEditRecordsTheCheckersVerdictOnItsBytes(t *testing.T) {
 	for _, tc := range []struct {
 		name             string
 		checkerSaysValid bool
-		wantStatus       ValidationStatus
+		wantStatus       wire.ValidationStatus
 		wantSettles      bool
 		wantWarning      bool
 	}{
-		{"clean edit settles its own debt", true, ValidationPassed, true, false},
-		{"broken edit is recorded as broken", false, ValidationFailed, false, true},
+		{"clean edit settles its own debt", true, wire.ValidationPassed, true, false},
+		{"broken edit is recorded as broken", false, wire.ValidationFailed, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -78,7 +80,7 @@ func TestAStructuralEditRecordsTheCheckersVerdictOnItsBytes(t *testing.T) {
 			if res.ValidationStatus != tc.wantStatus {
 				t.Errorf("validation = %q, want %q: the checker was asked", res.ValidationStatus, tc.wantStatus)
 			}
-			var out StructuralEditOutput
+			var out wire.StructuralEditOutput
 			if err := json.Unmarshal(res.Data, &out); err != nil {
 				t.Fatalf("output is not StructuralEditOutput: %v", err)
 			}

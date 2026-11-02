@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/itigges22/atlas-proxy/internal/wire"
 	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
@@ -177,11 +178,11 @@ func FuzzExtractModelResponse(f *testing.F) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		envelope, err := json.Marshal(ModelResponse{Type: "tool_call", Name: "write_file", Args: args})
+		envelope, err := json.Marshal(wire.ModelResponse{Type: "tool_call", Name: "write_file", Args: args})
 		if err != nil {
 			t.Fatal(err)
 		}
-		var want ModelResponse
+		var want wire.ModelResponse
 		if err := json.Unmarshal(envelope, &want); err != nil {
 			t.Fatal(err)
 		}
@@ -382,59 +383,59 @@ func handlerPaths(tool string, args []byte) (paths []string, ok bool) {
 	decode := func(v any) bool { return json.Unmarshal(args, v) == nil }
 	switch tool {
 	case "read_file":
-		var in ReadFileInput
+		var in wire.ReadFileInput
 		ok = decode(&in)
 		return []string{in.Path}, ok
 	case "outline_file":
-		var in OutlineInput
+		var in wire.OutlineInput
 		ok = decode(&in)
 		return []string{in.Path}, ok
 	case "write_file":
-		var in WriteFileInput
+		var in wire.WriteFileInput
 		ok = decode(&in)
 		return []string{in.Path}, ok
 	case "edit_file":
-		var in EditFileInput
+		var in wire.EditFileInput
 		ok = decode(&in)
 		return []string{in.Path}, ok
 	case "structural_edit":
-		var in StructuralEditInput
+		var in wire.StructuralEditInput
 		ok = decode(&in)
 		return []string{in.Path}, ok
 	case "insert_after":
-		var in InsertAfterInput
+		var in wire.InsertAfterInput
 		ok = decode(&in)
 		return []string{in.Path}, ok
 	case "replace_lines":
-		var in ReplaceLinesInput
+		var in wire.ReplaceLinesInput
 		ok = decode(&in)
 		return []string{in.Path}, ok
 	case "delete_file":
-		var in DeleteFileInput
+		var in wire.DeleteFileInput
 		ok = decode(&in)
 		return []string{in.Path}, ok
 	case "move_file":
-		var in MoveFileInput
+		var in wire.MoveFileInput
 		ok = decode(&in)
 		return []string{in.Source, in.Destination}, ok
 	case "search_files":
-		var in SearchFilesInput
+		var in wire.SearchFilesInput
 		ok = decode(&in)
 		return []string{in.Path}, ok
 	case "find_file":
-		var in FindFileInput
+		var in wire.FindFileInput
 		ok = decode(&in)
 		return []string{in.Path}, ok
 	case "list_directory":
-		var in ListDirectoryInput
+		var in wire.ListDirectoryInput
 		ok = decode(&in)
 		return []string{in.Path}, ok
 	case "run_command":
-		var in RunCommandInput
+		var in wire.RunCommandInput
 		ok = decode(&in)
 		return []string{in.Cwd}, ok
 	case "run_background":
-		var in RunBackgroundInput
+		var in wire.RunBackgroundInput
 		ok = decode(&in)
 		return []string{in.Cwd}, ok
 	}

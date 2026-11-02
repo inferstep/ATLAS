@@ -68,7 +68,7 @@ from typing import Any, Dict, Optional
 # ---------------------------------------------------------------------------
 
 # Terminal outcomes carried by a `done` payload's optional `status` key. The
-# proxy owns the vocabulary (proxy/types.go); this is the consumer half.
+# proxy owns the vocabulary (proxy/internal/wire/); this is the consumer half.
 TERMINAL_STATUSES = (
     "completed",
     "incomplete",

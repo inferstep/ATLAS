@@ -5,6 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // Staged evidence is the strong kind: it names the request, the invocation,
@@ -18,8 +21,8 @@ type stagedCmdWorld struct {
 	target string
 	hash   string
 	id     stagingIdentity
-	ob     taskObligation
-	tc     *TaskContract
+	ob     taskcontract.TaskObligation
+	tc     *taskcontract.TaskContract
 }
 
 const stagedDeclaredCommand = "pytest"
@@ -41,9 +44,9 @@ func newStagedCmdWorld(t *testing.T) *stagedCmdWorld {
 	}
 	ctx.SessionWrites["solve.py"] = true
 	hash := contentSHA256(body)
-	observeDeliverable(ctx, "solve.py", []byte(body), ValidationKindSyntax, ValidationPassed, "")
+	observeDeliverable(ctx, "solve.py", []byte(body), wire.ValidationKindSyntax, wire.ValidationPassed, "")
 
-	ob, ok := newTaskObligation(ObligationDeclaredCommand, stagedDeclaredCommand, VerificationKindRuntime, true)
+	ob, ok := taskcontract.NewTaskObligation(taskcontract.ObligationDeclaredCommand, stagedDeclaredCommand, taskcontract.VerificationKindRuntime, true)
 	if !ok {
 		t.Fatal("obligation")
 	}
@@ -192,11 +195,11 @@ func TestStagedEvidenceStopsCountingWhenItsContextChanges(t *testing.T) {
 			if err := os.WriteFile(w.target, []byte(body), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			observeDeliverable(w.ctx, "solve.py", []byte(body), ValidationKindSyntax, ValidationPassed, "")
+			observeDeliverable(w.ctx, "solve.py", []byte(body), wire.ValidationKindSyntax, wire.ValidationPassed, "")
 		}},
 		{"a ledger that does not validate these bytes", func(t *testing.T, w *stagedCmdWorld) {
 			w.ctx.LedgerMu.Lock()
-			w.ctx.Ledger[ledgerKey(w.ctx, w.target)].ValidationStatus = ValidationUnknown
+			w.ctx.Ledger[ledgerKey(w.ctx, w.target)].ValidationStatus = wire.ValidationUnknown
 			w.ctx.LedgerMu.Unlock()
 		}},
 	} {
@@ -214,7 +217,7 @@ func TestStagedEvidenceStopsCountingWhenItsContextChanges(t *testing.T) {
 func TestAModelCommandNotInTheContractCannotSatisfyCommandDemand(t *testing.T) {
 	w := newStagedCmdWorld(t)
 	// The model runs something plausible of its own invention, staged and green.
-	invented, ok := newTaskObligation(ObligationDeclaredCommand, "python3 -m pytest -q", VerificationKindRuntime, true)
+	invented, ok := taskcontract.NewTaskObligation(taskcontract.ObligationDeclaredCommand, "python3 -m pytest -q", taskcontract.VerificationKindRuntime, true)
 	if !ok {
 		t.Fatal("obligation")
 	}

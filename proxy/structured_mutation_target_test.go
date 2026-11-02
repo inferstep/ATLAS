@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // The interactive request. A person typed into the TUI; the client declared
@@ -144,7 +146,7 @@ func TestStructuredRouteStillHonoursHardVetoes(t *testing.T) {
 	} {
 		out := decideCandidatePolicy(policyContext(t),
 			advisoryInput{
-				Observed:          checkOutcome{Status: ValidationPassed},
+				Observed:          checkOutcome{Status: wire.ValidationPassed},
 				TargetDeclared:    false,
 				TargetAuthorized:  false,
 				ScopeAdmits:       true,
@@ -298,7 +300,7 @@ func TestStructuredMutationTargetOwnership(t *testing.T) {
 
 // It never feeds obligations, completion, permissions, or the delete tool.
 func TestTheStructuredTargetFeedsNoObligationPermissionOrDeletion(t *testing.T) {
-	for _, f := range []string{"obligations.go", "obligation_kinds.go", "permissions.go", "delivery_settlement.go"} {
+	for _, f := range append(packageFiles(t, "internal/taskcontract"), "obligations.go", "obligation_kinds.go", "permissions.go", "delivery_settlement.go") {
 		body := readSourceForTest(t, f)
 		for _, banned := range []string{"structuredMutationTargetGrounds", "targetGroundingStructuredMutationTarget", "TargetGrounding"} {
 			if strings.Contains(body, banned) {
@@ -321,7 +323,7 @@ func TestTheStructuredTargetFeedsNoObligationPermissionOrDeletion(t *testing.T) 
 // path as its only delivery: guarded elsewhere, re-asserted here.
 func TestTheMintStillBindsToTheScopeAndNeverWidensDeclaredOutputs(t *testing.T) {
 	mint := readSourceForTest(t, "authorization_grant.go")
-	for _, must := range []string{"scopeAdmitsCandidate", "targetIsAuthorized(in.Obligations, target)", "structuredMutationTargetGrounds"} {
+	for _, must := range []string{"scopeAdmitsCandidate", "taskcontract.TargetIsAuthorized(in.Obligations, target)", "structuredMutationTargetGrounds"} {
 		if !strings.Contains(mint, must) {
 			t.Errorf("the mint no longer contains %s", must)
 		}

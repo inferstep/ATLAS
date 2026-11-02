@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // A tool call that arrives cut off -- the stream was stopped because the output
@@ -199,7 +201,7 @@ func cutCallDiagnostic(ctx *AgentContext, raw string) string {
 	name := filepath.Base(path)
 	constants := largeStringConstants(path, source)
 	selector := rc.Args["selector"]
-	var regions []EmbeddedRegion
+	var regions []wire.EmbeddedRegion
 	if strings.HasSuffix(path, ".py") {
 		_, _, regions = outlineViaV3(ctx, path, source)
 	}
@@ -256,7 +258,7 @@ func selectorSpan(ctx *AgentContext, path, source, selector string) (lineSpan, b
 	if !ok {
 		return lineSpan{}, false
 	}
-	var syms []OutlineSymbol
+	var syms []wire.OutlineSymbol
 	if strings.HasSuffix(path, ".py") {
 		if v3, ok, _ := outlineViaV3(ctx, path, source); ok {
 			syms = v3

@@ -47,6 +47,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // ---------------------------------------------------------------------------
@@ -117,11 +119,11 @@ func allTools() []*ToolDef {
 // here would conceal a missed local producer.
 //
 // Nothing here reads Success. Classification is never inferred from it.
-func executeToolCall(name string, args json.RawMessage, ctx *AgentContext) *ToolResult {
+func executeToolCall(name string, args json.RawMessage, ctx *AgentContext) *wire.ToolResult {
 	tool := getTool(name)
 	canonical, rejection := canonicalToolArgs(name, args, ctx) // one reading for every reader below
 	if rejection != "" {
-		return &ToolResult{Success: false, Error: rejection, MutationStatus: MutationNone, ValidationKind: ValidationKindNone, ValidationStatus: ValidationNotApplicable}
+		return &wire.ToolResult{Success: false, Error: rejection, MutationStatus: wire.MutationNone, ValidationKind: wire.ValidationKindNone, ValidationStatus: wire.ValidationNotApplicable}
 	}
 	args = canonical
 	// What a shell command changes is observed around it (applyShellChanges):
@@ -143,8 +145,8 @@ func executeToolCall(name string, args json.RawMessage, ctx *AgentContext) *Tool
 	// Runs after classification so it sees the final evidence, and returns the
 	// same result either way — nothing downstream can observe that it ran.
 	recordLedgerEffect(name, args, ctx, result)
-	if observeShell && result != nil && result.MutationStatus != MutationNone &&
-		result.MutationStatus != MutationRefused {
+	if observeShell && result != nil && result.MutationStatus != wire.MutationNone &&
+		result.MutationStatus != wire.MutationRefused {
 		after := snapshotWorkspace(ctx.WorkingDir)
 		applyShellChanges(ctx, before, after, name)
 		if name == "run_background" {
@@ -160,41 +162,41 @@ func executeToolCall(name string, args json.RawMessage, ctx *AgentContext) *Tool
 
 // classifyByEffect fills only what the effect class alone can prove, and only
 // where a local producer has not already spoken.
-func classifyByEffect(effect ToolEffect, result *ToolResult) {
+func classifyByEffect(effect wire.ToolEffect, result *wire.ToolResult) {
 	if !effect.BoundaryClassifiable() {
 		return
 	}
-	if result.MutationStatus == MutationUnknown {
+	if result.MutationStatus == wire.MutationUnknown {
 		switch effect {
-		case ToolEffectReadOnly:
+		case wire.ToolEffectReadOnly:
 			// Cannot mutate by construction, on success or failure alike.
-			result.MutationStatus = MutationNone
-		case ToolEffectCommandUnobserved:
+			result.MutationStatus = wire.MutationNone
+		case wire.ToolEffectCommandUnobserved:
 			// Conservative: once dispatch reached the handler, a subprocess or
 			// background job may have started and written before failing,
 			// timing out, or being killed. Only a branch that proves no
 			// execution began may claim MutationNone, and it does so locally.
-			result.MutationStatus = MutationUnobserved
+			result.MutationStatus = wire.MutationUnobserved
 		}
 	}
-	if result.ValidationKind == ValidationKindUnknown {
+	if result.ValidationKind == wire.ValidationKindUnknown {
 		// Neither class performs content validation. Saying so explicitly is
 		// different from leaving it unknown.
-		result.ValidationKind = ValidationKindNone
-		result.ValidationStatus = ValidationNotApplicable
+		result.ValidationKind = wire.ValidationKindNone
+		result.ValidationStatus = wire.ValidationNotApplicable
 	}
 }
 
-func executeToolCallInner(name string, args json.RawMessage, ctx *AgentContext) *ToolResult {
+func executeToolCallInner(name string, args json.RawMessage, ctx *AgentContext) *wire.ToolResult {
 	tool := getTool(name)
 	if tool == nil {
-		return &ToolResult{
+		return &wire.ToolResult{
 			Success: false,
 			Error:   fmt.Sprintf("unknown tool: %s", name),
 			// Refused before dispatch: no handler ran, so nothing could have
 			// started or mutated. This is provable, not conservative.
-			MutationStatus: MutationNone,
-			ValidationKind: ValidationKindNone, ValidationStatus: ValidationNotApplicable,
+			MutationStatus: wire.MutationNone,
+			ValidationKind: wire.ValidationKindNone, ValidationStatus: wire.ValidationNotApplicable,
 		}
 	}
 
@@ -207,20 +209,20 @@ func executeToolCallInner(name string, args json.RawMessage, ctx *AgentContext) 
 	// what shape to send.
 	trimmed := strings.TrimSpace(string(args))
 	if trimmed == "" || trimmed == "null" {
-		return &ToolResult{
+		return &wire.ToolResult{
 			Success: false,
 			Error:   missingArgsHint(name),
 			// Pre-dispatch: no handler ran.
-			MutationStatus: MutationNone,
-			ValidationKind: ValidationKindNone, ValidationStatus: ValidationNotApplicable,
+			MutationStatus: wire.MutationNone,
+			ValidationKind: wire.ValidationKindNone, ValidationStatus: wire.ValidationNotApplicable,
 		}
 	}
 	// Safety deny-list — sensitive targets (.env, *.pem, *credentials*,
 	// destructive shell patterns) are refused in every permission mode.
 	if denied, reason := shouldDenyToolCall(name, args); denied {
-		return &ToolResult{Success: false, Error: fmt.Sprintf("%s refused: %s", name, reason),
-			MutationStatus: MutationNone,
-			ValidationKind: ValidationKindNone, ValidationStatus: ValidationNotApplicable}
+		return &wire.ToolResult{Success: false, Error: fmt.Sprintf("%s refused: %s", name, reason),
+			MutationStatus: wire.MutationNone,
+			ValidationKind: wire.ValidationKindNone, ValidationStatus: wire.ValidationNotApplicable}
 	}
 	// The user forbade changing anything. Enforced here, at the one dispatch
 	// every tool passes through, and keyed on the tool's declared effect, not
@@ -230,9 +232,9 @@ func executeToolCallInner(name string, args json.RawMessage, ctx *AgentContext) 
 	// `sed -i`, `rm`, a `>` redirect) exactly as it does for write_file.
 	if reason := readOnlyRequestRefusal(tool, ctx); reason != "" {
 		log.Printf("[tools] %s refused: the request forbids changing the workspace", name)
-		return &ToolResult{Success: false, Error: reason,
-			MutationStatus: MutationNone,
-			ValidationKind: ValidationKindNone, ValidationStatus: ValidationNotApplicable}
+		return &wire.ToolResult{Success: false, Error: reason,
+			MutationStatus: wire.MutationNone,
+			ValidationKind: wire.ValidationKindNone, ValidationStatus: wire.ValidationNotApplicable}
 	}
 
 	result, err := tool.Execute(args, ctx)
@@ -246,7 +248,7 @@ func executeToolCallInner(name string, args json.RawMessage, ctx *AgentContext) 
 		if len(args) > 200 && strings.Contains(errMsg, "unexpected end of JSON") {
 			errMsg = "Tool call was truncated (output too long for context window). Use smaller, targeted edit_file calls instead of full write_file rewrites."
 		}
-		failed := &ToolResult{
+		failed := &wire.ToolResult{
 			Success: false,
 			Error:   errMsg,
 		}
@@ -299,13 +301,13 @@ func missingArgsHint(name string) string {
 func runCommandTool() *ToolDef {
 	return &ToolDef{
 		Name:        "run_command",
-		Effect:      ToolEffectCommandUnobserved,
+		Effect:      wire.ToolEffectCommandUnobserved,
 		Description: "Execute a shell command and WAIT for it to exit. Returns stdout, stderr, and exit code. Use for building, testing, and verifying code: `pytest`, `npm test`, `go build`, `curl`, `ls`. NOT for anything that doesn't exit on its own — a server, watcher, or `--watch` build blocks here until the timeout kills it, and the port it bound may still be held when you retry, so the identical command fails again with \"address already in use\". Use `run_background` for those.",
-		InputSchema: RunCommandInput{},
+		InputSchema: wire.RunCommandInput{},
 		ReadOnly:    false,
 		Destructive: true,
-		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*ToolResult, error) {
-			var input RunCommandInput
+		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*wire.ToolResult, error) {
+			var input wire.RunCommandInput
 			if err := json.Unmarshal(rawInput, &input); err != nil {
 				return nil, fmt.Errorf("invalid input: %w", err)
 			}
@@ -314,7 +316,7 @@ func runCommandTool() *ToolDef {
 			// host execution is honored only under fully-trusted (else
 			// downgraded to the sandbox below).
 			if !ctx.TrustMode.commandsAllowed() {
-				return &ToolResult{Success: false, Error: untrustedRefusal}, nil
+				return &wire.ToolResult{Success: false, Error: untrustedRefusal}, nil
 			}
 
 			timeoutSec := 30
@@ -338,7 +340,7 @@ func runCommandTool() *ToolDef {
 			// readable: reading a file was never the unsafe part.
 			if refusal := executionEnvelopeRefusal(envelopeFromEnv()); refusal != "" {
 				log.Printf("[run_command] %s", refusal)
-				return &ToolResult{
+				return &wire.ToolResult{
 					Success: false,
 					Error: "commands cannot be run in this deployment: its memory " +
 						"limits add up to more than the machine has, so a command " +
@@ -351,7 +353,7 @@ func runCommandTool() *ToolDef {
 
 			outBytes, _ := json.Marshal(out)
 			errMsg := runCommandErrorMessage(ctx, input, out)
-			return &ToolResult{
+			return &wire.ToolResult{
 				Success: runCommandVerifiable(out),
 				Data:    outBytes,
 				Error:   errMsg,
@@ -363,7 +365,7 @@ func runCommandTool() *ToolDef {
 // runCommandOutput runs the command where the session may run it: on the host
 // when it is fully trusted and asked for that, and otherwise in the sandbox,
 // whose absence is reported as the command's own failure.
-func runCommandOutput(ctx *AgentContext, input RunCommandInput, cwd string, timeoutSec int) RunCommandOutput {
+func runCommandOutput(ctx *AgentContext, input wire.RunCommandInput, cwd string, timeoutSec int) wire.RunCommandOutput {
 	// Route shell execution through the sandbox container.
 	// The proxy is a slim Go binary with no python/pip/node, so
 	// running locally meant every "verify" command failed with
@@ -382,7 +384,7 @@ func runCommandOutput(ctx *AgentContext, input RunCommandInput, cwd string, time
 	// The shell-op safety gate (validateShellCommand) still
 	// fired upstream regardless of target. cwd is translated
 	// to the host path so the command lands in the right dir.
-	var out RunCommandOutput
+	var out wire.RunCommandOutput
 	var err error
 	// Host execution requires fully-trusted; otherwise a
 	// host request is downgraded to sandbox so the trust
@@ -398,7 +400,7 @@ func runCommandOutput(ctx *AgentContext, input RunCommandInput, cwd string, time
 		out, err = runViaSandbox(ctx, input.Command, cwd, timeoutSec)
 		if err != nil {
 			log.Printf("[run_command] sandbox unavailable: %v", err)
-			out = RunCommandOutput{
+			out = wire.RunCommandOutput{
 				Stderr:   fmt.Sprintf("sandbox unavailable: %v", err),
 				ExitCode: 1,
 			}
@@ -410,7 +412,7 @@ func runCommandOutput(ctx *AgentContext, input RunCommandInput, cwd string, time
 // runCommandErrorMessage is what the model is told went wrong with a command:
 // a kill on the timeout, a stop at a resource ceiling, a failure with its last
 // words, or an end the command did not reach. "" when nothing did.
-func runCommandErrorMessage(ctx *AgentContext, input RunCommandInput, out RunCommandOutput) string {
+func runCommandErrorMessage(ctx *AgentContext, input wire.RunCommandInput, out wire.RunCommandOutput) string {
 	var errMsg string
 	if out.TimedOut && out.ExitCode == 0 {
 		// A kill that left a zero status behind. Saying nothing here
@@ -422,16 +424,16 @@ func runCommandErrorMessage(ctx *AgentContext, input RunCommandInput, out RunCom
 	// and a MemoryError on stderr, "your test suite is broken" and
 	// "your test suite never finished" are the same message, and only
 	// one of them is actionable.
-	if resourceMsg := executionOutcomeMessage(out.Outcome); resourceMsg != "" &&
-		executionStoppedByResource(out.Outcome) {
+	if resourceMsg := wire.ExecutionOutcomeMessage(out.Outcome); resourceMsg != "" &&
+		wire.ExecutionStoppedByResource(out.Outcome) {
 		errMsg = resourceMsg
 	} else if out.ExitCode != 0 {
 		errMsg = nonZeroExitMessage(ctx, input, out)
 	}
-	if errMsg == "" && !executionCompleted(out.Outcome) {
+	if errMsg == "" && !wire.CommandCompleted(out.Outcome) {
 		// Exit zero from a command that did not reach its own end.
 		// Silence here would read as success.
-		if m := executionOutcomeMessage(out.Outcome); m != "" {
+		if m := wire.ExecutionOutcomeMessage(out.Outcome); m != "" {
 			errMsg = m
 		}
 	}
@@ -440,7 +442,7 @@ func runCommandErrorMessage(ctx *AgentContext, input RunCommandInput, out RunCom
 
 // nonZeroExitMessage is a failed command's last words: its stderr, else the
 // last line of its stdout, else its exit code, with the hints that apply.
-func nonZeroExitMessage(ctx *AgentContext, input RunCommandInput, out RunCommandOutput) string {
+func nonZeroExitMessage(ctx *AgentContext, input wire.RunCommandInput, out wire.RunCommandOutput) string {
 	errMsg := strings.TrimSpace(out.Stderr)
 	if errMsg == "" {
 		if s := strings.TrimSpace(out.Stdout); s != "" {
@@ -463,7 +465,7 @@ func nonZeroExitMessage(ctx *AgentContext, input RunCommandInput, out RunCommand
 // local exec). Timeout is in seconds and is enforced server-side; we
 // add a generous client-side margin so the HTTP call doesn't kill
 // long-running commands prematurely.
-func runViaSandbox(ctx *AgentContext, command, cwd string, timeoutSec int) (RunCommandOutput, error) {
+func runViaSandbox(ctx *AgentContext, command, cwd string, timeoutSec int) (wire.RunCommandOutput, error) {
 	body, _ := json.Marshal(map[string]interface{}{
 		"command": command,
 		"cwd":     cwd,
@@ -478,13 +480,13 @@ func runViaSandbox(ctx *AgentContext, command, cwd string, timeoutSec int) (RunC
 	}
 	httpReq, err := http.NewRequestWithContext(reqCtx, "POST", endpoint, bytes.NewReader(body))
 	if err != nil {
-		return RunCommandOutput{}, err
+		return wire.RunCommandOutput{}, err
 	}
 	httpReq.Header.Set(headerContentType, contentTypeJSON)
 	client := &http.Client{Timeout: time.Duration(timeoutSec+30) * time.Second}
 	resp, err := client.Do(httpReq)
 	if err != nil {
-		return RunCommandOutput{}, err
+		return wire.RunCommandOutput{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
@@ -495,14 +497,14 @@ func runViaSandbox(ctx *AgentContext, command, cwd string, timeoutSec int) (RunC
 			Detail string `json:"detail"`
 		}
 		_ = json.NewDecoder(serviceAnswer(resp.Body)).Decode(&errBody)
-		return RunCommandOutput{
+		return wire.RunCommandOutput{
 			Stderr:   fmt.Sprintf("sandbox /shell %d: %s", resp.StatusCode, errBody.Detail),
 			ExitCode: 1,
 		}, nil
 	}
-	var out RunCommandOutput
+	var out wire.RunCommandOutput
 	if err := decodeShellResponse(resp.Body, &out); err != nil {
-		return RunCommandOutput{}, err
+		return wire.RunCommandOutput{}, err
 	}
 	return out, nil
 }
@@ -513,7 +515,7 @@ func runViaSandbox(ctx *AgentContext, command, cwd string, timeoutSec int) (RunC
 // timed_out is decoded, not inferred. The executor sets it structurally when
 // it kills a command, precisely so nothing downstream has to recognise
 // "Execution timed out after 5s" in a stderr string to reach a decision.
-func decodeShellResponse(body io.Reader, out *RunCommandOutput) error {
+func decodeShellResponse(body io.Reader, out *wire.RunCommandOutput) error {
 	var sr struct {
 		Success         bool   `json:"success"`
 		Stdout          string `json:"stdout"`
@@ -529,14 +531,14 @@ func decodeShellResponse(body io.Reader, out *RunCommandOutput) error {
 	}
 	stdout := truncateStr(sr.Stdout, 8000)
 	stderr := truncateStr(sr.Stderr, 4000)
-	*out = RunCommandOutput{
+	*out = wire.RunCommandOutput{
 		Stdout: stdout, Stderr: stderr, ExitCode: sr.ExitCode,
 		TimedOut:        sr.TimedOut,
 		OutputTruncated: len(stdout) < len(sr.Stdout) || len(stderr) < len(sr.Stderr),
 		// Canonicalised at the boundary, so an executor that predates the
 		// vocabulary -- or one that grows a member this build has not been
 		// taught -- arrives as unclassified rather than as a completion.
-		Outcome:         canonicalExecutionOutcome(sr.Outcome),
+		Outcome:         wire.CanonicalExecutionOutcome(sr.Outcome),
 		PeakMemoryBytes: sr.PeakMemoryBytes,
 	}
 	return nil
@@ -549,7 +551,7 @@ func decodeShellResponse(body io.Reader, out *RunCommandOutput) error {
 // its own timeout flag. Refusal, cancellation and an unreachable sandbox all
 // arrive here as a nonzero status set by the caller that observed them, so
 // none of them can pass. No string is examined.
-func runCommandVerifiable(out RunCommandOutput) bool {
+func runCommandVerifiable(out wire.RunCommandOutput) bool {
 	// Exit zero is not enough, and never was. A command stopped at a memory
 	// ceiling exits non-zero, but a command stopped at one after its last
 	// assertion passed could exit zero -- and either way it did not run to its
@@ -562,7 +564,7 @@ func runCommandVerifiable(out RunCommandOutput) bool {
 	// without making it safer. Candidate authorization asks the stricter
 	// question, in stagingApplyObservation, because that is where evidence
 	// mints a licence.
-	return out.ExitCode == 0 && !out.TimedOut && !executionKnownIncomplete(out.Outcome)
+	return out.ExitCode == 0 && !out.TimedOut && !wire.ExecutionKnownIncomplete(out.Outcome)
 }
 
 // runLocally executes a command only when the operator explicitly selects
@@ -570,7 +572,7 @@ func runCommandVerifiable(out RunCommandOutput) bool {
 // here implicitly. Host mode removes the container backstop entirely:
 // the only thing between model output and the host shell is
 // validateShellCommand's catastrophe-only blocklist.
-func runLocally(command, cwd string, timeout time.Duration) RunCommandOutput {
+func runLocally(command, cwd string, timeout time.Duration) wire.RunCommandOutput {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	// The same address-space ceiling the sandbox installs, from the same
@@ -617,7 +619,7 @@ func runLocally(command, cwd string, timeout time.Duration) RunCommandOutput {
 
 	so, se := stdout.String(), stderr.String()
 	outStr, errStr := truncateStr(so, 8000), truncateStr(se, 4000)
-	return RunCommandOutput{
+	return wire.RunCommandOutput{
 		Stdout: outStr, Stderr: errStr, ExitCode: exitCode,
 		// Structural on this path too: the deadline is what this side observed,
 		// not something a reader has to find in the message it appended.
@@ -1010,13 +1012,13 @@ func truncateStr(s string, maxLen int) string {
 // that were fully formed and could have landed. The difference is what a
 // later policy needs: refused means a candidate existed and was judged;
 // none means there was never anything to write.
-func noMutation(msg string) *ToolResult {
-	return &ToolResult{
+func noMutation(msg string) *wire.ToolResult {
+	return &wire.ToolResult{
 		Success:          false,
 		Error:            msg,
-		MutationStatus:   MutationNone,
-		ValidationKind:   ValidationKindNone,
-		ValidationStatus: ValidationNotApplicable,
+		MutationStatus:   wire.MutationNone,
+		ValidationKind:   wire.ValidationKindNone,
+		ValidationStatus: wire.ValidationNotApplicable,
 	}
 }
 
@@ -1024,21 +1026,21 @@ func noMutation(msg string) *ToolResult {
 // the boundary turns into a failed ToolResult while preserving the producer's
 // classification.
 func errNoMutation(err error) error {
-	return &classifiedError{err: err, mutationStatus: MutationNone,
-		validationKind: ValidationKindNone, validationStatus: ValidationNotApplicable}
+	return &classifiedError{err: err, mutationStatus: wire.MutationNone,
+		validationKind: wire.ValidationKindNone, validationStatus: wire.ValidationNotApplicable}
 }
 
 // refusedNoCheck classifies a guard that declined fully-formed bytes on a
 // policy the guard can decide without reading them as code -- a shrinkage
 // heuristic, a duplicate-edit guard. Nothing was validated, so the validation
 // fields say so rather than borrowing the refusal as a verdict.
-func refusedNoCheck(msg string) *ToolResult {
-	return &ToolResult{
+func refusedNoCheck(msg string) *wire.ToolResult {
+	return &wire.ToolResult{
 		Success:          false,
 		Error:            msg,
-		MutationStatus:   MutationRefused,
-		ValidationKind:   ValidationKindNone,
-		ValidationStatus: ValidationNotApplicable,
+		MutationStatus:   wire.MutationRefused,
+		ValidationKind:   wire.ValidationKindNone,
+		ValidationStatus: wire.ValidationNotApplicable,
 	}
 }
 
@@ -1047,21 +1049,21 @@ func refusedNoCheck(msg string) *ToolResult {
 // hold the new bytes, the old bytes, or a temp file, so the mutation is
 // failed and no verdict is offered.
 func errFailedMutationSyntaxUnrun(err error) error {
-	return errFailedMutation(err, ValidationKindSyntax, ValidationNotRun)
+	return errFailedMutation(err, wire.ValidationKindSyntax, wire.ValidationNotRun)
 }
 
 // errFailedMutation is failedMutation without the extension lookup, for a
 // producer that knows a write was attempted and left the target in an
 // indeterminate state.
-func errFailedMutation(err error, kind ValidationKind, status ValidationStatus) error {
-	return &classifiedError{err: err, mutationStatus: MutationFailed,
+func errFailedMutation(err error, kind wire.ValidationKind, status wire.ValidationStatus) error {
+	return &classifiedError{err: err, mutationStatus: wire.MutationFailed,
 		validationKind: kind, validationStatus: status}
 }
 
 // noteContentChange tells the model, in a successful result, about a change
 // ATLAS made to the content it sent, so no such change is silent. It is a
 // separate key from "warning", which marks a landed file as pending execution.
-func noteContentChange(res *ToolResult, note string) {
+func noteContentChange(res *wire.ToolResult, note string) {
 	if res == nil || !res.Success || note == "" {
 		return
 	}
@@ -1125,7 +1127,7 @@ var dependencyManifests = []string{"requirements.txt", "pyproject.toml", "Pipfil
 
 // immediateExitMessage reports a job that exited before it could serve
 // anything, in the words of its own output.
-func immediateExitMessage(ctx *AgentContext, command string, out RunBackgroundOutput) string {
+func immediateExitMessage(ctx *AgentContext, command string, out wire.RunBackgroundOutput) string {
 	var sb strings.Builder
 	code := 0
 	if out.ExitCode != nil {
@@ -1224,4 +1226,35 @@ func offendingLineNote(content, synErr string) string {
 		fmt.Fprintf(&sb, "%s%d\t%s\n", marker, i, truncateStr(lines[i-1], 160))
 	}
 	return strings.TrimRight(sb.String(), "\n")
+}
+
+// ToolDef defines a tool that the model can call.
+type ToolDef struct {
+	// Effect is required. The registry exhaustiveness test fails on any
+	// production tool left at ToolEffectUnknown.
+	Effect wire.ToolEffect
+
+	Name        string
+	Description string
+	InputSchema interface{} // Go struct with json tags, marshaled to JSON Schema
+	Execute     func(input json.RawMessage, ctx *AgentContext) (*wire.ToolResult, error)
+	ReadOnly    bool // true = can run in parallel, no side effects
+	Destructive bool // true = requires permission confirmation
+}
+
+// hostAddressSpaceKiB is the per-command address-space ceiling for host
+// execution, in the KiB `ulimit -v` speaks, read from the same operator value
+// the sandbox uses so the two cannot drift into separate memory policies.
+func hostAddressSpaceKiB() int64 {
+	bytes := int64(2 * 1024 * 1024 * 1024)
+	if raw := os.Getenv("ATLAS_EXEC_MEMORY_BYTES"); raw != "" {
+		if n, err := strconv.ParseInt(raw, 10, 64); err == nil && n >= 64*1024*1024 {
+			bytes = n
+		}
+	}
+	// Address space, not resident memory, so it is read as a multiple of the
+	// operator's memory value rather than as that value: a mapping is
+	// reserved before it is touched, and a ceiling set AT the resident number
+	// refuses reservations a command never grows into.
+	return int64(float64(bytes) * 1.5 / 1024)
 }

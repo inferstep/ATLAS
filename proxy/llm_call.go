@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // ---------------------------------------------------------------------------
@@ -80,7 +82,7 @@ func callLLMConstrained(ctx *AgentContext) (string, int, error) {
 	// next-action prompt; the temperature bump escapes the EOS-local
 	// minimum that the json_object grammar can wedge the model into.
 	log.Printf("[agent] empty LLM response, retrying with temp=0.7 + continuation nudge")
-	nudged := append(append([]AgentMessage(nil), messages...), AgentMessage{
+	nudged := append(append([]wire.AgentMessage(nil), messages...), wire.AgentMessage{
 		Role:    "user",
 		Content: `Continue. Respond with one JSON object: {"type":"tool_call","name":"<tool>","args":{...}} for the next action, or {"type":"done","summary":"..."} if the task is complete. Do not emit empty content.`,
 	})
@@ -100,7 +102,7 @@ func callLLMConstrained(ctx *AgentContext) (string, int, error) {
 // (tracebackExclusion); after a write_file rejection on an existing
 // .py/.html file it adds an ephemeral [system note] and a GBNF grammar
 // without edit_file and write_file. See callLLMConstrained for why.
-func buildStepRequest(ctx *AgentContext) ([]AgentMessage, string) {
+func buildStepRequest(ctx *AgentContext) ([]wire.AgentMessage, string) {
 	// Plan-progress reminder. Rendered whenever ctx.Plan has steps; not
 	// persisted to ctx.Messages, so it does not accumulate. Lands AT
 	// THE TAIL of the messages so the model sees it as the most recent
@@ -113,11 +115,11 @@ func buildStepRequest(ctx *AgentContext) ([]AgentMessage, string) {
 	// run tools so the model can't loop on re-running and is forced to edit the
 	// fix site the traceback names. Takes precedence over the write_file case.
 	if tbExcluded, tbNote := tracebackExclusion(ctx); len(tbExcluded) > 0 {
-		messages := append([]AgentMessage(nil), ctx.Messages...)
+		messages := append([]wire.AgentMessage(nil), ctx.Messages...)
 		if planReminder != "" {
-			messages = append(messages, AgentMessage{Role: "user", Content: planReminder})
+			messages = append(messages, wire.AgentMessage{Role: "user", Content: planReminder})
 		}
-		messages = append(messages, AgentMessage{Role: "user", Content: tbNote})
+		messages = append(messages, wire.AgentMessage{Role: "user", Content: tbNote})
 		log.Printf("[agent] traceback step-restriction: banning run tools, forcing an edit")
 		return messages, buildGBNFGrammarForTools(tbExcluded)
 	}
@@ -127,8 +129,8 @@ func buildStepRequest(ctx *AgentContext) ([]AgentMessage, string) {
 		if planReminder == "" {
 			return ctx.Messages, ""
 		}
-		messages := append([]AgentMessage(nil), ctx.Messages...)
-		messages = append(messages, AgentMessage{Role: "user", Content: planReminder})
+		messages := append([]wire.AgentMessage(nil), ctx.Messages...)
+		messages = append(messages, wire.AgentMessage{Role: "user", Content: planReminder})
 		return messages, ""
 	}
 
@@ -144,11 +146,11 @@ func buildStepRequest(ctx *AgentContext) ([]AgentMessage, string) {
 		selectorGuidanceOrOutline(target, source),
 		target,
 	)
-	messages := append([]AgentMessage(nil), ctx.Messages...)
+	messages := append([]wire.AgentMessage(nil), ctx.Messages...)
 	if planReminder != "" {
-		messages = append(messages, AgentMessage{Role: "user", Content: planReminder})
+		messages = append(messages, wire.AgentMessage{Role: "user", Content: planReminder})
 	}
-	messages = append(messages, AgentMessage{Role: "user", Content: note})
+	messages = append(messages, wire.AgentMessage{Role: "user", Content: note})
 
 	grammar := buildGBNFGrammarForTools(excluded)
 	log.Printf("[agent] step-restriction active: banning %v from tool-name enum (ext=%q) — BiasBusters #2/#3", excluded, ext)
@@ -216,7 +218,7 @@ func stepExclusionTarget(ctx *AgentContext) ([]string, string) {
 // file. The format (see surgical-edit gate) is:
 //
 //	"File <path> already exists (<n> lines). ..."
-func rejectedWritePath(msg AgentMessage) (string, bool) {
+func rejectedWritePath(msg wire.AgentMessage) (string, bool) {
 	if msg.ToolName != "write_file" || !strings.Contains(msg.Content, "already exists") {
 		return "", false
 	}
@@ -494,7 +496,7 @@ var llmStreamClient = &http.Client{
 // output, not a fresh user instruction. ctx.Messages keeps the semantic "tool"
 // role so trim-pinning and the step/traceback exclusions that key off ToolName
 // still work.
-func toWireMessages(messages []AgentMessage) []map[string]string {
+func toWireMessages(messages []wire.AgentMessage) []map[string]string {
 	wire := make([]map[string]string, len(messages))
 	for i, msg := range messages {
 		role := msg.Role
@@ -673,7 +675,7 @@ func numberedRestatement(ctx *AgentContext, path, content string) string {
 // level (for example to ban edit_file and write_file from the tool-name
 // production for a single decision). With a grammar the json_object
 // response_format is dropped, because GBNF is the more specific constraint.
-func callLLMOnceWithGrammar(ctx *AgentContext, messages []AgentMessage, temperature float64, grammar string) (string, int, error) {
+func callLLMOnceWithGrammar(ctx *AgentContext, messages []wire.AgentMessage, temperature float64, grammar string) (string, int, error) {
 	return callLLMOnceRestating(ctx, messages, temperature, grammar, "")
 }
 
@@ -746,7 +748,7 @@ func llmRequestBody(wireMessages []map[string]string, temperature float64, gramm
 // callLLMOnceRestating is callLLMOnceWithGrammar with restateOnly: the caller
 // names the file this request is about, and no other file's contents are
 // appended to it (see appendLastReadRestatementFor).
-func callLLMOnceRestating(ctx *AgentContext, messages []AgentMessage, temperature float64,
+func callLLMOnceRestating(ctx *AgentContext, messages []wire.AgentMessage, temperature float64,
 	grammar, restateOnly string) (string, int, error) {
 	// Stale from the previous turn otherwise, which would blame a clean
 	// parse failure on a cut that happened earlier.
@@ -843,7 +845,7 @@ func callLLMOnceRestating(ctx *AgentContext, messages []AgentMessage, temperatur
 // startPromptProgress starts the poller that streams the prompt's progress to
 // the client while the model reads it, and returns the function that stops
 // the poller and the one that waits until it has exited.
-func startPromptProgress(ctx *AgentContext, llamaURL string, messages []AgentMessage) (func(), func()) {
+func startPromptProgress(ctx *AgentContext, llamaURL string, messages []wire.AgentMessage) (func(), func()) {
 	// Estimate total prompt tokens (chars/4 — works for English + code
 	// within ~10–20%) so the prompt-progress poller has a baseline even
 	// when /slots doesn't expose n_prompt_tokens directly.

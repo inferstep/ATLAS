@@ -14,6 +14,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 func newPermCtx(dir string) *AgentContext {
@@ -357,9 +360,9 @@ func deletePermCtx(t *testing.T, sessionID, dir string) (*AgentContext, context.
 
 // captureRequest runs awaitPermission and hands back the emitted event.
 func captureRequest(t *testing.T, ctx *AgentContext, callID, args string,
-	answer func()) (PermissionRequest, bool, int) {
+	answer func()) (wire.PermissionRequest, bool, int) {
 	t.Helper()
-	var got PermissionRequest
+	var got wire.PermissionRequest
 	requests := 0
 	var mu sync.Mutex
 	ctx.StreamFn = func(et string, data interface{}) {
@@ -369,7 +372,7 @@ func captureRequest(t *testing.T, ctx *AgentContext, callID, args string,
 		mu.Lock()
 		defer mu.Unlock()
 		requests++
-		if pr, ok := data.(PermissionRequest); ok {
+		if pr, ok := data.(wire.PermissionRequest); ok {
 			got = pr
 		}
 	}
@@ -1262,7 +1265,7 @@ func TestApprovalBindsToTheFilesystemObject(t *testing.T) {
 // approveAndDelete runs the real handshake, the real tool, and the real ledger
 // effect, returning whether a fulfilled record was produced.
 func approveAndDelete(t *testing.T, ctx *AgentContext, sess, callID, rel string,
-	decision string, churn func()) (*fulfilledDeletion, *ToolResult) {
+	decision string, churn func()) (*fulfilledDeletion, *wire.ToolResult) {
 	t.Helper()
 	args := json.RawMessage(`{"path":"` + rel + `"}`)
 	allowed := true
@@ -1375,12 +1378,12 @@ func TestRemovingASymlinkNeverFulfilsItsTarget(t *testing.T) {
 func TestUnapprovedAbsenceIsNotFulfilled(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "a.py"), []byte("A\n"), 0o644)
-	ctx := &AgentContext{WorkingDir: dir, Ledger: map[string]*DeliverableState{}}
+	ctx := &AgentContext{WorkingDir: dir, Ledger: map[string]*taskcontract.DeliverableState{}}
 	// Something else removes it; the ledger is told about a delete call.
 	os.Remove(filepath.Join(dir, "a.py"))
 	args := json.RawMessage(`{"path":"a.py"}`)
 	recordLedgerEffect("delete_file", args, ctx,
-		&ToolResult{Success: true, MutationStatus: MutationApplied})
+		&wire.ToolResult{Success: true, MutationStatus: wire.MutationApplied})
 	if _, ok := fulfilledDeletionFor(ctx, filepath.Join(dir, "a.py")); ok {
 		t.Error("an absence with no user approval became fulfilled authority")
 	}
@@ -1389,7 +1392,7 @@ func TestUnapprovedAbsenceIsNotFulfilled(t *testing.T) {
 	os.Rename(filepath.Join(dir, "old.py"), filepath.Join(dir, "new.py"))
 	recordLedgerEffect("move_file",
 		json.RawMessage(`{"source":"old.py","destination":"new.py"}`), ctx,
-		&ToolResult{Success: true, MutationStatus: MutationApplied})
+		&wire.ToolResult{Success: true, MutationStatus: wire.MutationApplied})
 	if _, ok := fulfilledDeletionFor(ctx, filepath.Join(dir, "old.py")); ok {
 		t.Error("a move source became a fulfilled deletion")
 	}
@@ -1503,14 +1506,14 @@ func TestFulfilledDeletionsArePromotedInOnePlace(t *testing.T) {
 	}
 }
 
-// The record is internal: no wire type carries it. The wire types are in
-// types.go and, for the tools' inputs and outputs, in tool_io.go.
+// The record is internal: no wire type carries it.
 func TestTheDeletionRecordNeverReachesTheWire(t *testing.T) {
-	wire := readSourceForTest(t, "types.go") + readSourceForTest(t, "tool_io.go")
-	for _, leak := range []string{"`json:\"fulfilled", "`json:\"approved_delete",
-		"`json:\"deletion_attempt"} {
-		if strings.Contains(wire, leak) {
-			t.Errorf("the internal deletion record reached the wire: %s", leak)
+	for _, file := range wireFiles(t) {
+		for _, leak := range []string{"`json:\"fulfilled", "`json:\"approved_delete",
+			"`json:\"deletion_attempt"} {
+			if strings.Contains(readSourceForTest(t, file), leak) {
+				t.Errorf("the internal deletion record reached the wire in %s: %s", file, leak)
+			}
 		}
 	}
 }

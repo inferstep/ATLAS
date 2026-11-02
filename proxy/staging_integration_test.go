@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 )
 
 // Candidate staging against the REAL executor process.
@@ -111,7 +113,7 @@ func (w *integrationWorld) declare(commands ...string) {
 	for i, c := range commands {
 		w.req.Commands = append(w.req.Commands, stagingCommand{
 			Text: c, Identity: contentSHA256(c),
-			ObligationID: ObligationDeclaredCommand + ":" + contentSHA256(c)[:32],
+			ObligationID: taskcontract.ObligationDeclaredCommand + ":" + contentSHA256(c)[:32],
 			Index:        i, Count: len(commands),
 		})
 	}
@@ -155,7 +157,7 @@ func TestRealExecutorStagesTheExactCandidateForACleanPass(t *testing.T) {
 	if got.TargetHashBefore != contentSHA256(integrationCode) {
 		t.Error("the real executor did not stage the exact candidate")
 	}
-	if len(res.authorizingOutcomes()) != 1 {
+	if len(cleanPasses(res)) != 1 {
 		t.Error("a clean pass authorized nothing")
 	}
 	if !res.WorkspaceDestroyed {
@@ -197,7 +199,7 @@ func TestRealExecutorClassifiesEveryStagedOutcome(t *testing.T) {
 			if got.Outcome != c.want {
 				t.Errorf("outcome %q, want %q (exit %d)", got.Outcome, c.want, got.ExitStatus)
 			}
-			if len(res.authorizingOutcomes()) != 0 {
+			if len(cleanPasses(res)) != 0 {
 				t.Errorf("%s authorized its obligation", c.name)
 			}
 			if !res.WorkspaceDestroyed {
@@ -227,7 +229,7 @@ func TestRealExecutorRunIsCancellable(t *testing.T) {
 	if res.Complete {
 		t.Error("a cancelled set claimed to be complete")
 	}
-	if len(res.authorizingOutcomes()) != 0 {
+	if len(cleanPasses(res)) != 0 {
 		t.Error("a cancelled run authorized")
 	}
 	w.assertProductionWorkspaceUntouched(t)
@@ -264,7 +266,7 @@ func TestRealExecutorRunsTheWholeDeclaredSetInOrder(t *testing.T) {
 	}
 	// The one that failed leaves its own obligation owed, and takes neither of
 	// the others down with it.
-	if got := res.authorizingOutcomes(); len(got) != 2 {
+	if got := cleanPasses(res); len(got) != 2 {
 		t.Errorf("authorizing %v, want the two that passed", got)
 	}
 	// Every command saw the same staged bytes: the second one's failure did

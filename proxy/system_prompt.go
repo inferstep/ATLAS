@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // ---------------------------------------------------------------------------
@@ -142,7 +144,7 @@ func writeProjectFiles(sb *strings.Builder, filesRead map[string]string) {
 // user message alone. Plans are advisory (the agent layer doesn't hard-block
 // off-plan calls), but having them in the system prompt visibly improves
 // first-call accuracy.
-func writePlan(sb *strings.Builder, plan *Plan) {
+func writePlan(sb *strings.Builder, plan *wire.Plan) {
 	if plan == nil || len(plan.Steps) == 0 {
 		return
 	}
@@ -347,7 +349,7 @@ func parallelSlots() int {
 // and the most recent file-content tool result (the file being edited).
 // Either is -1 when absent. Shared by trimMessages (which re-injects
 // them) and budgetedKeepLast (which must COUNT them — see below).
-func pinnedIndices(msgs []AgentMessage) (pinIdx, filePinIdx int) {
+func pinnedIndices(msgs []wire.AgentMessage) (pinIdx, filePinIdx int) {
 	pinIdx, filePinIdx = -1, -1
 	for i := len(msgs) - 1; i >= 1; i-- {
 		if msgs[i].Role == "user" {
@@ -375,7 +377,7 @@ func pinnedIndices(msgs []AgentMessage) (pinIdx, filePinIdx int) {
 // ignored them would under-count the real prompt by the size of the pinned
 // read_file, and the request could exceed the per-slot context (a
 // llama-server 400 exceed_context_size).
-func budgetedKeepLast(msgs []AgentMessage) int {
+func budgetedKeepLast(msgs []wire.AgentMessage) int {
 	if len(msgs) == 0 {
 		return 0
 	}
@@ -415,7 +417,7 @@ func budgetedKeepLast(msgs []AgentMessage) int {
 // window we don't duplicate it.
 //
 // Assumes msgs[0] is the system prompt.
-func trimMessages(msgs []AgentMessage, keepLast int) []AgentMessage {
+func trimMessages(msgs []wire.AgentMessage, keepLast int) []wire.AgentMessage {
 	if len(msgs) <= keepLast+1 {
 		return msgs
 	}
@@ -432,7 +434,7 @@ func trimMessages(msgs []AgentMessage, keepLast int) []AgentMessage {
 	pinIdx, filePinIdx := pinnedIndices(msgs)
 
 	tailStart := len(msgs) - keepLast
-	out := make([]AgentMessage, 0, keepLast+3)
+	out := make([]wire.AgentMessage, 0, keepLast+3)
 	out = append(out, msgs[0])
 	if pinIdx >= 1 && pinIdx < tailStart {
 		out = append(out, msgs[pinIdx])
@@ -441,7 +443,7 @@ func trimMessages(msgs []AgentMessage, keepLast int) []AgentMessage {
 	// templates that reject orphan tool messages) when it falls outside the
 	// kept tail.
 	if filePinIdx >= 1 && filePinIdx < tailStart && filePinIdx != pinIdx {
-		out = append(out, AgentMessage{
+		out = append(out, wire.AgentMessage{
 			Role:    "user",
 			Content: "[system note]: current contents of the file you are editing (do not invent symbols or lines not shown here):\n" + msgs[filePinIdx].Content,
 		})

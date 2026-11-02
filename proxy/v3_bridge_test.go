@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // fakePlanServer streams a canned SSE plan response that mirrors what
@@ -64,7 +66,7 @@ func TestCallV3PlanStreamingParsesResult(t *testing.T) {
 		mu.Unlock()
 	}
 
-	plan, err := callV3PlanStreaming(context.Background(), srv.URL, V3PlanRequest{
+	plan, err := callV3PlanStreaming(context.Background(), srv.URL, wire.V3PlanRequest{
 		UserMessage: "add a hello endpoint",
 		WorkingDir:  "/workspace",
 	}, cb)
@@ -109,7 +111,7 @@ func TestCallV3PlanStreamingMissingResult(t *testing.T) {
 	srv := fakePlanServer(t, sse)
 	defer srv.Close()
 
-	_, err := callV3PlanStreaming(context.Background(), srv.URL, V3PlanRequest{UserMessage: "x"}, nil)
+	_, err := callV3PlanStreaming(context.Background(), srv.URL, wire.V3PlanRequest{UserMessage: "x"}, nil)
 	if err == nil {
 		t.Fatal("expected error for missing result event")
 	}
@@ -198,7 +200,7 @@ func TestCallV3GenerateStreamingParsesResultAndProgress(t *testing.T) {
 	var stages []string
 	var gotData map[string]interface{}
 	result, err := callV3GenerateStreaming(context.Background(), srv.URL,
-		V3GenerateRequest{FilePath: "a.py"},
+		wire.V3GenerateRequest{FilePath: "a.py"},
 		func(stage, detail string, data map[string]interface{}) {
 			stages = append(stages, stage)
 			gotData = data
@@ -224,7 +226,7 @@ func TestCallV3GenerateStreamingNon200IsAnError(t *testing.T) {
 	defer srv.Close()
 
 	_, err := callV3GenerateStreaming(context.Background(), srv.URL,
-		V3GenerateRequest{}, nil)
+		wire.V3GenerateRequest{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "503") {
 		t.Errorf("err = %v, want the 503 surfaced", err)
 	}
@@ -244,7 +246,7 @@ func TestCallV3GenerateStreamingMissingResultIsAnError(t *testing.T) {
 	defer srv.Close()
 
 	_, err := callV3GenerateStreaming(context.Background(), srv.URL,
-		V3GenerateRequest{}, nil)
+		wire.V3GenerateRequest{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "without sending a result event") {
 		t.Errorf("err = %v, want a stream that really ended empty", err)
 	}
@@ -260,7 +262,7 @@ func TestCallV3GenerateStreamingUndecodableResultNamesTheDecodeFailure(t *testin
 	defer srv.Close()
 
 	_, err := callV3GenerateStreaming(context.Background(), srv.URL,
-		V3GenerateRequest{}, nil)
+		wire.V3GenerateRequest{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "could not decode") {
 		t.Errorf("err = %v, want the decode failure named", err)
 	}
@@ -318,7 +320,7 @@ func TestCallV3GenerateStreamingEndsAStalledStream(t *testing.T) {
 			}
 
 			start := time.Now()
-			_, err := callV3GenerateStreaming(sessionCtx, srv.URL, V3GenerateRequest{}, nil)
+			_, err := callV3GenerateStreaming(sessionCtx, srv.URL, wire.V3GenerateRequest{}, nil)
 			elapsed := time.Since(start)
 
 			if err == nil {
@@ -351,7 +353,7 @@ func TestCancelAbortsAStalledV3Stream(t *testing.T) {
 	time.AfterFunc(150*time.Millisecond, cancel)
 
 	start := time.Now()
-	_, err := callV3GenerateStreaming(callCtx, srv.URL, V3GenerateRequest{}, nil)
+	_, err := callV3GenerateStreaming(callCtx, srv.URL, wire.V3GenerateRequest{}, nil)
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -440,7 +442,7 @@ func TestGeneratePlanWithoutV3URLIsNil(t *testing.T) {
 func TestLatestUserMessagePrefersHumanTask(t *testing.T) {
 	ctx := &AgentContext{
 		HumanTask: "write a debounce filter over readings.txt",
-		Messages: []AgentMessage{
+		Messages: []wire.AgentMessage{
 			{Role: "user", Content: "write a debounce filter over readings.txt"},
 			{Role: "assistant", Content: `{"type":"tool_call"}`},
 			{Role: "user", Content: "[system note]: run the program standalone"},
@@ -454,7 +456,7 @@ func TestLatestUserMessagePrefersHumanTask(t *testing.T) {
 
 func TestLatestUserMessageFallbackSkipsSyntheticNotes(t *testing.T) {
 	ctx := &AgentContext{ // no HumanTask: context built outside the loop
-		Messages: []AgentMessage{
+		Messages: []wire.AgentMessage{
 			{Role: "user", Content: "the real task"},
 			{Role: "user", Content: "[system note]: lessons from previous sessions"},
 		},
@@ -474,13 +476,13 @@ func TestAuthorizedV3ReplacementIsTheOnlyGate(t *testing.T) {
 
 	for _, tc := range []struct {
 		name         string
-		result       *V3GenerateResponse
+		result       *wire.V3GenerateResponse
 		wantProposal string
 	}{
-		{"passed, no evidence", &V3GenerateResponse{Passed: true, Code: alternative}, alternative},
-		{"not passed, no evidence", &V3GenerateResponse{Passed: false, Code: alternative}, alternative},
-		{"passed, no code", &V3GenerateResponse{Passed: true, Code: ""}, baseline},
-		{"not passed, no code", &V3GenerateResponse{Passed: false, Code: ""}, baseline},
+		{"passed, no evidence", &wire.V3GenerateResponse{Passed: true, Code: alternative}, alternative},
+		{"not passed, no evidence", &wire.V3GenerateResponse{Passed: false, Code: alternative}, alternative},
+		{"passed, no code", &wire.V3GenerateResponse{Passed: true, Code: ""}, baseline},
+		{"not passed, no code", &wire.V3GenerateResponse{Passed: false, Code: ""}, baseline},
 		{"no result", nil, baseline},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -885,7 +887,7 @@ func TestEditPathAuthorizesOnlyThroughTheSharedGate(t *testing.T) {
 }
 
 // codeOf is the bytes a response offered, or "" for none.
-func codeOf(result *V3GenerateResponse) string {
+func codeOf(result *wire.V3GenerateResponse) string {
 	if result == nil {
 		return ""
 	}
@@ -908,18 +910,18 @@ func TestCallV3GenerateStreamingSendsTheCapItApplies(t *testing.T) {
 
 	t.Setenv("ATLAS_V3_TIMEOUT", "300")
 	// No session deadline: the configured ceiling.
-	if _, err := callV3GenerateStreaming(context.Background(), srv.URL, V3GenerateRequest{}, nil); err != nil {
+	if _, err := callV3GenerateStreaming(context.Background(), srv.URL, wire.V3GenerateRequest{}, nil); err != nil {
 		t.Fatal(err)
 	}
 	// 6s of session left: half of it, whatever a caller put in the field.
 	sessionCtx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancel()
-	if _, err := callV3GenerateStreaming(sessionCtx, srv.URL, V3GenerateRequest{BudgetMs: 999999}, nil); err != nil {
+	if _, err := callV3GenerateStreaming(sessionCtx, srv.URL, wire.V3GenerateRequest{BudgetMs: 999999}, nil); err != nil {
 		t.Fatal(err)
 	}
 	// Uncapped: no cap is sent, and the service keeps its own reading.
 	t.Setenv("ATLAS_V3_TIMEOUT", "0")
-	if _, err := callV3GenerateStreaming(context.Background(), srv.URL, V3GenerateRequest{BudgetMs: 5}, nil); err != nil {
+	if _, err := callV3GenerateStreaming(context.Background(), srv.URL, wire.V3GenerateRequest{BudgetMs: 5}, nil); err != nil {
 		t.Fatal(err)
 	}
 

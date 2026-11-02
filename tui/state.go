@@ -188,7 +188,7 @@ func payloadString(p map[string]interface{}, key string) string {
 // plan_revise marks the plan as "being revised" and the next
 // plan_loaded supersedes it.
 
-// planStep mirrors proxy/types.go PlanStep with a Satisfied flag the
+// planStep mirrors proxy/internal/wire/messages.go PlanStep with a Satisfied flag the
 // TUI flips when a tool call hits this step.
 type planStep struct {
 	ID        string `json:"id"`

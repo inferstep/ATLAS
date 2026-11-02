@@ -972,7 +972,7 @@ CRITERION_PARSES = "parses"
 # observes, each backed by an evaluator: python_compile requires only that the
 # artifact parses, which is what it measures. What a TASK owes is not declared
 # here. The proxy derives that from the validated request
-# (proxy/obligation_kinds.go), and none of it reaches this service.
+# (proxy/internal/taskcontract/obligation_kinds.go), and none of it reaches this service.
 
 SUPPORT_ALWAYS = "always"
 SUPPORT_NEVER = "never"

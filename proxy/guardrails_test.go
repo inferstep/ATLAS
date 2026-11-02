@@ -6,6 +6,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // A repair request: the verification gate asks for a passing run before done.
@@ -149,10 +152,10 @@ func TestWantsStateChange(t *testing.T) {
 // contract says: the read-only guard refuses every edit of such a run, so a
 // demand for one could never be met.
 func TestAForbiddenChangeIsNeverAlsoDemanded(t *testing.T) {
-	work := &TaskContract{TaskMode: TaskModeWork}
+	work := &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork}
 	for _, c := range []struct {
 		name     string
-		contract *TaskContract
+		contract *taskcontract.TaskContract
 		ask      string
 		tier     Tier
 		required bool
@@ -257,15 +260,15 @@ func TestLooksLikeStub(t *testing.T) {
 // is evidence: one the planner rated well, with more than one step, and that
 // the matcher is tracking (at least one step matched).
 func TestPlanIncompleteMessage(t *testing.T) {
-	plan := &Plan{WinningScore: 0.8, Steps: []PlanStep{
+	plan := &wire.Plan{WinningScore: 0.8, Steps: []wire.PlanStep{
 		{ID: "s1", Action: "replace setInterval with a variable-delay loop"},
 		{ID: "s2", Action: "decrement the delay by 3ms per food eaten"},
 	}}
-	weak := &Plan{WinningScore: 0.2, Steps: plan.Steps}
-	oneStep := &Plan{WinningScore: 0.8, Steps: plan.Steps[:1]}
+	weak := &wire.Plan{WinningScore: 0.2, Steps: plan.Steps}
+	oneStep := &wire.Plan{WinningScore: 0.8, Steps: plan.Steps[:1]}
 	for _, c := range []struct {
 		name      string
-		plan      *Plan
+		plan      *wire.Plan
 		satisfied []bool
 		wants     []string // nil: done may go ahead
 	}{
@@ -355,7 +358,7 @@ func TestAnExplicitReadOnlyRequestRefusesEveryMutatingTool(t *testing.T) {
 func TestRunningATestCoversTheCodeTheTestImports(t *testing.T) {
 	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
 	ctx.PermissionMode = PermissionYolo
-	ctx.TaskContract = &TaskContract{TaskMode: TaskModeWork}
+	ctx.TaskContract = &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork}
 	writeAsTheModel(t, ctx, "stats.py", "def mean(v):\n    return sum(v) / len(v)\n\n\ndef median(v):\n    s = sorted(v)\n    return s[len(s) // 2]\n")
 	writeAsTheModel(t, ctx, "test_stats.py", "from stats import mean, median\n\nassert mean([1, 2, 3]) == 2\nassert median([3, 1, 2]) == 2\nprint('passed')\n")
 
@@ -363,7 +366,7 @@ func TestRunningATestCoversTheCodeTheTestImports(t *testing.T) {
 	if _, ok := covered[resolveAgentPath(ctx, "stats.py")]; !ok {
 		t.Fatalf("running the test did not cover the code it imports; covered=%v", covered)
 	}
-	ctx.VerificationEvidence = append(ctx.VerificationEvidence, VerificationRecord{
+	ctx.VerificationEvidence = append(ctx.VerificationEvidence, taskcontract.VerificationRecord{
 		Command: "python3 test_stats.py", Covered: covered, Turn: 1,
 	})
 	if d := decideVerificationDemand(ctx, ctx.TaskContract, nil); d.Required && !d.Met {

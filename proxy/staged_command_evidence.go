@@ -1,5 +1,10 @@
 package main
 
+import (
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
+	"github.com/itigges22/atlas-proxy/internal/wire"
+)
+
 // Declared commands run against exact candidate bytes, before that candidate
 // ever touches the user's workspace.
 //
@@ -43,15 +48,15 @@ type stagedCommandFulfillment struct {
 // or changed the candidate or the workspace it was measuring produces nothing
 // here -- a fact recorded as "unmet" by the caller, not softened into a
 // weaker kind of evidence.
-func recordStagedCommandFulfillment(ctx *AgentContext, o taskObligation,
+func recordStagedCommandFulfillment(ctx *AgentContext, o taskcontract.TaskObligation,
 	r stagingCommandResult, id stagingIdentity) {
 	if ctx == nil {
 		return
 	}
-	if r.Outcome != stagingExitedZero || r.MutatedTarget || r.MutatedWorkspace {
+	if !r.passedClean() {
 		return
 	}
-	if o.Kind != ObligationDeclaredCommand || r.ObligationID != o.ID {
+	if o.Kind != taskcontract.ObligationDeclaredCommand || r.ObligationID != o.ID {
 		return
 	}
 	// The command that ran is the command the client declared, matched by the
@@ -114,7 +119,7 @@ func stagedFulfillmentCurrent(ctx *AgentContext, f stagedCommandFulfillment) boo
 	ctx.LedgerMu.Lock()
 	d := ctx.Ledger[ledgerKey(ctx, f.TargetPath)]
 	var current, validated string
-	var status ValidationStatus
+	var status wire.ValidationStatus
 	var tombstoned bool
 	if d != nil {
 		current, validated, status, tombstoned =
@@ -125,7 +130,7 @@ func stagedFulfillmentCurrent(ctx *AgentContext, f stagedCommandFulfillment) boo
 		return false
 	}
 	return current == f.CandidateHash && validated == f.CandidateHash &&
-		status == ValidationPassed
+		status == wire.ValidationPassed
 }
 
 // stagedCommandSatisfied answers the exact-command question from staged
@@ -134,7 +139,7 @@ func stagedCommandSatisfied(ctx *AgentContext, want string) bool {
 	if ctx == nil {
 		return false
 	}
-	id, ok := obligationID(ObligationDeclaredCommand, want)
+	id, ok := taskcontract.ObligationID(taskcontract.ObligationDeclaredCommand, want)
 	if !ok {
 		return false
 	}

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // What a shell command writes, changes or removes reaches the ledger, so a
@@ -38,7 +40,7 @@ func shellWorld(t *testing.T, userFiles map[string]string) (*AgentContext, strin
 func shell(t *testing.T, ctx *AgentContext, command string) {
 	t.Helper()
 	timeout := 20
-	args, _ := json.Marshal(RunCommandInput{Command: command, Timeout: &timeout})
+	args, _ := json.Marshal(wire.RunCommandInput{Command: command, Timeout: &timeout})
 	if res := executeToolCall("run_command", args, ctx); res == nil || !res.Success {
 		t.Fatalf("%q did not run: %+v", command, res)
 	}
@@ -116,7 +118,7 @@ func TestAnUnobservedShellEffectIsACaveat(t *testing.T) {
 	}
 	status, reason := finalizeCompletion(ctx, st, "Write app.py.", "")
 	summary := honestTerminalSummary(ctx, st, status, reason, "Finished.")
-	if status != TerminalCompleted || !strings.Contains(summary, "too large to observe") {
+	if status != wire.TerminalCompleted || !strings.Contains(summary, "too large to observe") {
 		t.Fatalf("terminal = %s/%s summary %q", status, reason, summary)
 	}
 }

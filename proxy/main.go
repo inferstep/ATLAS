@@ -1193,7 +1193,7 @@ func installTokenTransport() {
 const APIVersion = "1.0.0"
 
 // ProtocolVersion is the SSE event-envelope contract version (see
-// proxy/events.go / atlas.cli.events).
+// proxy/internal/wire/events.go / atlas.cli.events).
 const ProtocolVersion = 1
 
 type ErrorCode string

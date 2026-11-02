@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // The V3 preflight gate: the syntax question asked BEFORE the pipeline is
@@ -125,7 +127,7 @@ func (st *preflightStub) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func runPreflight(t *testing.T, o preflightOpts) (*ToolResult, string, *preflightStub) {
+func runPreflight(t *testing.T, o preflightOpts) (*wire.ToolResult, string, *preflightStub) {
 	t.Helper()
 	dir := t.TempDir()
 	st := &preflightStub{unavailableFor: o.unavailableFor}
@@ -155,7 +157,7 @@ func runPreflight(t *testing.T, o preflightOpts) (*ToolResult, string, *prefligh
 	// tool action is a READ: the active-debug predicate must be false, or the
 	// fast path would take this write instead.
 	ctx.SessionWrites[o.rel] = true
-	ctx.Messages = []AgentMessage{
+	ctx.Messages = []wire.AgentMessage{
 		{Role: "user", Content: "write the module"},
 		{Role: "tool", ToolName: "read_file", Content: o.baseline},
 	}
@@ -233,9 +235,9 @@ func TestPreflightWarnsOnBrokenNewFile(t *testing.T) {
 	if !strings.Contains(string(res.Data), "does not parse") {
 		t.Errorf("warning lost from the result payload: %s", res.Data)
 	}
-	if res.MutationStatus != MutationApplied ||
-		res.ValidationKind != ValidationKindSyntax ||
-		res.ValidationStatus != ValidationFailed {
+	if res.MutationStatus != wire.MutationApplied ||
+		res.ValidationKind != wire.ValidationKindSyntax ||
+		res.ValidationStatus != wire.ValidationFailed {
 		t.Errorf("got %q/%q/%q, want applied/syntax/failed",
 			res.MutationStatus, res.ValidationKind, res.ValidationStatus)
 	}
@@ -257,9 +259,9 @@ func TestPreflightWarnedRepairOverBrokenBaseline(t *testing.T) {
 	if disk != preflightBroken {
 		t.Fatalf("bytes on disk are not the proposal: %q", disk)
 	}
-	if res.MutationStatus != MutationApplied ||
-		res.ValidationKind != ValidationKindSyntax ||
-		res.ValidationStatus != ValidationFailed {
+	if res.MutationStatus != wire.MutationApplied ||
+		res.ValidationKind != wire.ValidationKindSyntax ||
+		res.ValidationStatus != wire.ValidationFailed {
 		t.Errorf("got %q/%q/%q, want applied/syntax/failed",
 			res.MutationStatus, res.ValidationKind, res.ValidationStatus)
 	}
@@ -281,9 +283,9 @@ func TestPreflightRefusesRegressionOverHealthyBaseline(t *testing.T) {
 	if want := fallbackSyntaxRejection("solve.py", preflightBroken, preflightSyntaxDetail); res.Error != want {
 		t.Errorf("rejection text changed:\n got %q\nwant %q", res.Error, want)
 	}
-	if res.MutationStatus != MutationRefused ||
-		res.ValidationKind != ValidationKindSyntax ||
-		res.ValidationStatus != ValidationFailed {
+	if res.MutationStatus != wire.MutationRefused ||
+		res.ValidationKind != wire.ValidationKindSyntax ||
+		res.ValidationStatus != wire.ValidationFailed {
 		t.Errorf("got %q/%q/%q, want refused/syntax/failed",
 			res.MutationStatus, res.ValidationKind, res.ValidationStatus)
 	}
@@ -309,9 +311,9 @@ func TestPreflightRefusesWhenBaselineEvidenceIsUnavailable(t *testing.T) {
 	if disk != preflightBaselineHealthy {
 		t.Fatalf("refused write changed the file: %q", disk)
 	}
-	if res.MutationStatus != MutationRefused ||
-		res.ValidationKind != ValidationKindSyntax ||
-		res.ValidationStatus != ValidationFailed {
+	if res.MutationStatus != wire.MutationRefused ||
+		res.ValidationKind != wire.ValidationKindSyntax ||
+		res.ValidationStatus != wire.ValidationFailed {
 		t.Errorf("got %q/%q/%q, want refused/syntax/failed",
 			res.MutationStatus, res.ValidationKind, res.ValidationStatus)
 	}
@@ -338,9 +340,9 @@ func TestPreflightRefusesWhenBaselineCannotBeRead(t *testing.T) {
 	if disk != "" && disk != preflightBaselineHealthy {
 		t.Fatalf("refused write changed the file: %q", disk)
 	}
-	if res.MutationStatus != MutationRefused ||
-		res.ValidationKind != ValidationKindSyntax ||
-		res.ValidationStatus != ValidationFailed {
+	if res.MutationStatus != wire.MutationRefused ||
+		res.ValidationKind != wire.ValidationKindSyntax ||
+		res.ValidationStatus != wire.ValidationFailed {
 		t.Errorf("got %q/%q/%q, want refused/syntax/failed",
 			res.MutationStatus, res.ValidationKind, res.ValidationStatus)
 	}
@@ -367,10 +369,10 @@ func TestPreflightWarnedWriteFilesystemFailure(t *testing.T) {
 	if !strings.Contains(res.Error, "cannot write") {
 		t.Fatalf("failure did not occur at the temp write: %q", res.Error)
 	}
-	if res.MutationStatus != MutationFailed {
+	if res.MutationStatus != wire.MutationFailed {
 		t.Errorf("MutationStatus = %q, want failed", res.MutationStatus)
 	}
-	if res.ValidationKind != ValidationKindSyntax || res.ValidationStatus != ValidationFailed {
+	if res.ValidationKind != wire.ValidationKindSyntax || res.ValidationStatus != wire.ValidationFailed {
 		t.Errorf("validation = %q/%q, want syntax/failed -- the observation on "+
 			"those exact bytes is not erased by the write failing",
 			res.ValidationKind, res.ValidationStatus)

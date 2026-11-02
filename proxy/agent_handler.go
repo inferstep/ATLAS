@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
@@ -152,7 +154,7 @@ type agentRequest struct {
 	RemovedFeasibilityMode string `json:"feasibility_mode,omitempty"`
 	// What the client declares about the request. Optional, and absent
 	// stays distinguishable from present-and-empty.
-	TaskContract *TaskContract `json:"task_contract,omitempty"`
+	TaskContract *taskcontract.TaskContract `json:"task_contract,omitempty"`
 }
 
 // readAgentRequest decodes a /v1/agent request, or answers it with the HTTP
@@ -247,7 +249,7 @@ func seedPriorHistory(ctx *AgentContext, req *agentRequest) {
 		if n > 40 {
 			req.History = req.History[n-40:]
 		}
-		ctx.PriorHistory = make([]AgentMessage, 0, len(req.History))
+		ctx.PriorHistory = make([]wire.AgentMessage, 0, len(req.History))
 		for _, h := range req.History {
 			// Only accept the two roles that make sense as conversation
 			// history; anything else is skipped silently rather than
@@ -258,7 +260,7 @@ func seedPriorHistory(ctx *AgentContext, req *agentRequest) {
 			if h.Content == "" {
 				continue
 			}
-			ctx.PriorHistory = append(ctx.PriorHistory, AgentMessage{
+			ctx.PriorHistory = append(ctx.PriorHistory, wire.AgentMessage{
 				Role:    h.Role,
 				Content: h.Content,
 			})
@@ -343,7 +345,7 @@ func openEventStream(w http.ResponseWriter, ctx *AgentContext) (http.Flusher, bo
 	// events fire.
 	var streamMu sync.Mutex
 	ctx.StreamFn = func(eventType string, data interface{}) {
-		event := SSEEvent{Type: eventType, Data: data}
+		event := wire.SSEEvent{Type: eventType, Data: data}
 		eventJSON, _ := json.Marshal(event)
 		streamMu.Lock()
 		defer streamMu.Unlock()

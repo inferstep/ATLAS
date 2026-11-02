@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // A syntax gate on a NEW file would put the proxy's judgement in place of
@@ -33,7 +35,7 @@ func TestBrokenContentToANewFileLandsWithAWarning(t *testing.T) {
 	if _, statErr := os.Stat(path); statErr != nil {
 		t.Fatalf("file must be on disk: %v", statErr)
 	}
-	var out WriteFileOutput
+	var out wire.WriteFileOutput
 	if json.Unmarshal(res.Data, &out) != nil || out.Warning == "" {
 		t.Fatalf("result must carry the warning: %s", string(res.Data))
 	}
@@ -414,7 +416,7 @@ func TestPendingWarnedRunIsASetOfActiveWarnings(t *testing.T) {
 			// are fine.
 			if d := ctx.Ledger[ledgerKey(ctx, "solve.py")]; d == nil {
 				t.Fatal("solve.py is not in the ledger")
-			} else if _, status := d.CurrentValidation(); status != ValidationPassed {
+			} else if _, status := d.CurrentValidation(); status != wire.ValidationPassed {
 				t.Errorf("solve.py should be exact-hash passed, got %s", status)
 			}
 		})

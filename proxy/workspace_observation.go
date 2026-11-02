@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // What a shell command did to the workspace.
@@ -140,7 +142,7 @@ func applyShellChanges(ctx *AgentContext, before, after workspaceSnapshot, sourc
 			continue
 		}
 		log.Printf("[ledger] %s written by %s — now a deliverable of this session", rel, source)
-		observePathFromDisk(ctx, rel, ValidationKindUnknown, ValidationUnknown, source)
+		observePathFromDisk(ctx, rel, wire.ValidationKindUnknown, wire.ValidationUnknown, source)
 	}
 	if before.truncated || after.truncated {
 		return // an absence in a partial walk is not a removal

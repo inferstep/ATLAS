@@ -5,6 +5,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // The planner is prompted to name tools verbatim, so a freeform action
@@ -92,7 +95,7 @@ func TestMatchPlanStep(t *testing.T) {
 	if got := matchPlanStep(nil, nil, "read_file", nil); got != -1 {
 		t.Errorf("with no plan: matched step %d, want -1", got)
 	}
-	plan := &Plan{Steps: []PlanStep{
+	plan := &wire.Plan{Steps: []wire.PlanStep{
 		{ID: "s1", Action: "read_file", Target: "templates/index.html"},
 		{ID: "s2", Action: "edit_file", Target: "templates/index.html"},
 		{ID: "s3", Action: "run_command", Target: "curl http://localhost:5000/"},
@@ -140,7 +143,7 @@ func TestRecordPlanAdherence(t *testing.T) {
 		t.Fatal("with no plan, satisfied steps were allocated")
 	}
 
-	ctx.Plan = &Plan{VerifyStep: "s2", Steps: []PlanStep{
+	ctx.Plan = &wire.Plan{VerifyStep: "s2", Steps: []wire.PlanStep{
 		{ID: "s1", Action: "read_file", Target: "app.py"},
 		{ID: "s2", Action: "run_command", Target: "pytest"},
 	}}
@@ -188,7 +191,7 @@ func TestRevisePlanGuardsEmitNoEvent(t *testing.T) {
 	}{
 		{"nil plan", &AgentContext{Plan: nil}},
 		{"at the revision cap", &AgentContext{
-			Plan:          &Plan{Steps: []PlanStep{{ID: "s1", Action: "read_file", Target: "a.py"}}},
+			Plan:          &wire.Plan{Steps: []wire.PlanStep{{ID: "s1", Action: "read_file", Target: "a.py"}}},
 			PlanRevisions: planMaxRevisions,
 		}},
 	} {
@@ -209,24 +212,24 @@ func TestRevisePlanGuardsEmitNoEvent(t *testing.T) {
 // A revision with the same steps is not a revision, whatever its rationale
 // says; revisePlan then drops the plan rather than bounce the model on it again.
 func TestSamePlanSteps(t *testing.T) {
-	readThenEdit := func(rationale string) *Plan {
-		return &Plan{Rationale: rationale, Steps: []PlanStep{
+	readThenEdit := func(rationale string) *wire.Plan {
+		return &wire.Plan{Rationale: rationale, Steps: []wire.PlanStep{
 			{ID: "s1", Action: "read_file", Target: "app.py"},
 			{ID: "s2", Action: "structural_edit", Target: "app.py"},
 		}}
 	}
 	for _, c := range []struct {
 		name string
-		a, b *Plan
+		a, b *wire.Plan
 		want bool
 	}{
 		{"the same steps", readThenEdit(""), readThenEdit(""), true},
 		{"the same steps, reworded", readThenEdit("fix it"), readThenEdit("repair the thing"), true},
-		{"different actions", readThenEdit(""), &Plan{Steps: []PlanStep{
+		{"different actions", readThenEdit(""), &wire.Plan{Steps: []wire.PlanStep{
 			{ID: "s1", Action: "edit_file", Target: "app.py"},
 			{ID: "s2", Action: "run_command", Target: "pytest"},
 		}}, false},
-		{"a different number of steps", readThenEdit(""), &Plan{Steps: []PlanStep{
+		{"a different number of steps", readThenEdit(""), &wire.Plan{Steps: []wire.PlanStep{
 			{ID: "s1", Action: "read_file", Target: "app.py"},
 		}}, false},
 		{"no first plan", nil, readThenEdit(""), false},
@@ -247,12 +250,12 @@ func TestPlanVerifyHint(t *testing.T) {
 	generic := "the appropriate test/curl/run command"
 	for _, c := range []struct {
 		name string
-		plan *Plan
+		plan *wire.Plan
 		want string
 	}{
 		{"no plan", nil, generic},
-		{"a plan with no verify step", &Plan{VerifyStep: ""}, generic},
-		{"a verify step", &Plan{VerifyStep: "pytest -q test_app.py"}, "pytest -q test_app.py"},
+		{"a plan with no verify step", &wire.Plan{VerifyStep: ""}, generic},
+		{"a verify step", &wire.Plan{VerifyStep: "pytest -q test_app.py"}, "pytest -q test_app.py"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := planVerifyHint(c.plan); got != c.want {
@@ -270,11 +273,11 @@ func TestPlanVerifyHint(t *testing.T) {
 func planWorld(t *testing.T) *AgentContext {
 	t.Helper()
 	ctx, _ := exactEditWorld(t, "app.py", "x = 1\n")
-	steps := []PlanStep{
+	steps := []wire.PlanStep{
 		{ID: "s1", Action: "write_file", Target: "app.py"},
 		{ID: "s2", Action: "run_command", Target: "python3 app.py"},
 	}
-	ctx.Plan = &Plan{Steps: steps, VerifyStep: "s2"}
+	ctx.Plan = &wire.Plan{Steps: steps, VerifyStep: "s2"}
 	ctx.PlanStepsSatisfied = make([]bool, len(steps))
 	return ctx
 }
@@ -344,16 +347,16 @@ func recordWarnedValidation(t *testing.T, ctx *AgentContext, rel string) {
 	ctx.LedgerMu.Lock()
 	defer ctx.LedgerMu.Unlock()
 	if ctx.Ledger == nil {
-		ctx.Ledger = map[string]*DeliverableState{}
+		ctx.Ledger = map[string]*taskcontract.DeliverableState{}
 	}
 	d := ctx.Ledger[key]
 	if d == nil {
-		d = &DeliverableState{}
+		d = &taskcontract.DeliverableState{}
 		ctx.Ledger[key] = d
 	}
 	h := fileSHA256(ctx, rel)
 	d.CurrentHash, d.ValidatedHash = h, h
-	d.ValidationKind, d.ValidationStatus = ValidationKindSyntax, ValidationFailed
+	d.ValidationKind, d.ValidationStatus = wire.ValidationKindSyntax, wire.ValidationFailed
 	d.ValidationDetail = "SyntaxError: unmatched ')' (line 111)"
 }
 
@@ -365,7 +368,7 @@ func clearValidation(t *testing.T, ctx *AgentContext, rel string) {
 	if d := ctx.Ledger[key]; d != nil {
 		h := fileSHA256(ctx, rel)
 		d.CurrentHash, d.ValidatedHash = h, h
-		d.ValidationKind, d.ValidationStatus = ValidationKindSyntax, ValidationPassed
+		d.ValidationKind, d.ValidationStatus = wire.ValidationKindSyntax, wire.ValidationPassed
 		d.ValidationDetail = ""
 	}
 }
@@ -375,8 +378,8 @@ func clearValidation(t *testing.T, ctx *AgentContext, rel string) {
 // say `curl http://127.0.0.1:5000` while the app serves on 5001. Anything
 // else keeps the literal rule.
 
-func flaskPlan() *Plan {
-	return &Plan{VerifyStep: "s5", Steps: []PlanStep{
+func flaskPlan() *wire.Plan {
+	return &wire.Plan{VerifyStep: "s5", Steps: []wire.PlanStep{
 		{ID: "s1", Action: "read_file", Target: "app.py"},
 		{ID: "s2", Action: "structural_edit", Target: "app.py"},
 		{ID: "s3", Action: "structural_edit", Target: "app.py"},
@@ -386,7 +389,7 @@ func flaskPlan() *Plan {
 }
 
 func runArgs(cmd string) json.RawMessage {
-	b, _ := json.Marshal(RunCommandInput{Command: cmd})
+	b, _ := json.Marshal(wire.RunCommandInput{Command: cmd})
 	return b
 }
 
@@ -417,7 +420,7 @@ func TestWhatSatisfiesTheVerifyStep(t *testing.T) {
 // Only the verify step is relaxed: an ordinary run_command step still needs
 // its own command.
 func TestOtherCommandStepsKeepTheLiteralRule(t *testing.T) {
-	plan := &Plan{VerifyStep: "s3", Steps: []PlanStep{
+	plan := &wire.Plan{VerifyStep: "s3", Steps: []wire.PlanStep{
 		{ID: "s1", Action: "run_command", Target: "pip install -r requirements.txt"},
 		{ID: "s2", Action: "run_command", Target: "pytest tests/test_api.py"},
 		{ID: "s3", Action: "run_command", Target: "pytest"},
@@ -465,7 +468,7 @@ func orderCtx(t *testing.T, lastAction string) (*AgentContext, *bgSandbox) {
 	ctx := NewAgentContext(dir, Tier2Medium)
 	ctx.SandboxURL = sandbox.URL
 	ctx.BackgroundJobs = map[string]string{"job1": "python3 app.py"}
-	ctx.Plan = &Plan{WinningScore: 0.9, VerifyStep: "s3", Steps: []PlanStep{
+	ctx.Plan = &wire.Plan{WinningScore: 0.9, VerifyStep: "s3", Steps: []wire.PlanStep{
 		{ID: "s1", Action: "structural_edit", Target: "app.py"},
 		{ID: "s2", Action: "run_background", Target: "python3 app.py"},
 		{ID: "s3", Action: lastAction, Target: "python3 check.py"},
