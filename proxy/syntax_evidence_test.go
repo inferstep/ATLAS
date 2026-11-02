@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // The first trusted evidence producer, and every way it must decline.
@@ -86,11 +88,11 @@ func TestAnExactCandidateSyntaxPassProducesOneBoundRecord(t *testing.T) {
 	if !ok {
 		t.Fatal("a passing structural check produced no evidence")
 	}
-	if ev.Outcome != ValidationPassed {
+	if ev.Outcome != wire.ValidationPassed {
 		t.Errorf("outcome %q, want passed", ev.Outcome)
 	}
 	p := ev.Provenance
-	if p.Source != ProvenanceProxyOwnedValidation {
+	if p.Source != wire.ProvenanceProxyOwnedValidation {
 		t.Errorf("source %q, want proxy_owned_validation", p.Source)
 	}
 	if p.CandidateHash != contentSHA256(code) {
@@ -131,7 +133,7 @@ func TestASyntaxFailureIsBoundAndCarriesNoAuthority(t *testing.T) {
 	if !ok {
 		t.Fatal("a demonstrated failure produced no observation at all")
 	}
-	if ev.Outcome != ValidationFailed || live.Status != ValidationFailed {
+	if ev.Outcome != wire.ValidationFailed || live.Status != wire.ValidationFailed {
 		t.Errorf("producer said %q and the live gate %q, want both failed", ev.Outcome, live.Status)
 	}
 	if ev.Provenance.CandidateHash == "" || ev.Provenance.ObligationID == "" {
@@ -300,16 +302,16 @@ func TestEveryIdentityMismatchFailsClosed(t *testing.T) {
 	}
 	for _, c := range []struct {
 		name string
-		mut  func(*V3EvidenceProvenance)
+		mut  func(*wire.V3EvidenceProvenance)
 	}{
-		{"request", func(p *V3EvidenceProvenance) { p.RequestID = "req-other" }},
-		{"invocation", func(p *V3EvidenceProvenance) { p.InvocationID = "inv-2" }},
-		{"candidate instance", func(p *V3EvidenceProvenance) { p.CandidateInstanceID = "cand-2" }},
-		{"candidate hash", func(p *V3EvidenceProvenance) { p.CandidateHash = contentSHA256("other") }},
-		{"workspace generation", func(p *V3EvidenceProvenance) { p.WorkspaceGeneration++ }},
-		{"workspace state", func(p *V3EvidenceProvenance) { p.WorkspaceStateHash = "moved" }},
-		{"baseline", func(p *V3EvidenceProvenance) { p.BaselineIdentity = "syntax:baseline-b" }},
-		{"obligation", func(p *V3EvidenceProvenance) { p.ObligationID = "syntactic_validity:other" }},
+		{"request", func(p *wire.V3EvidenceProvenance) { p.RequestID = "req-other" }},
+		{"invocation", func(p *wire.V3EvidenceProvenance) { p.InvocationID = "inv-2" }},
+		{"candidate instance", func(p *wire.V3EvidenceProvenance) { p.CandidateInstanceID = "cand-2" }},
+		{"candidate hash", func(p *wire.V3EvidenceProvenance) { p.CandidateHash = contentSHA256("other") }},
+		{"workspace generation", func(p *wire.V3EvidenceProvenance) { p.WorkspaceGeneration++ }},
+		{"workspace state", func(p *wire.V3EvidenceProvenance) { p.WorkspaceStateHash = "moved" }},
+		{"baseline", func(p *wire.V3EvidenceProvenance) { p.BaselineIdentity = "syntax:baseline-b" }},
+		{"obligation", func(p *wire.V3EvidenceProvenance) { p.ObligationID = "syntactic_validity:other" }},
 	} {
 		asked := held
 		c.mut(&asked)
@@ -377,7 +379,7 @@ func TestLegacyEvidenceRemainsNonAuthorizing(t *testing.T) {
 	if !ok {
 		t.Fatal("no evidence to test")
 	}
-	for _, source := range []string{ProvenanceLegacy, ProvenanceModelGenerated, ProvenanceUnknown} {
+	for _, source := range []string{wire.ProvenanceLegacy, wire.ProvenanceModelGenerated, wire.ProvenanceUnknown} {
 		forged := ev
 		forged.Provenance.Source = source
 		if authorized, _ := forged.Authorizes(); authorized {

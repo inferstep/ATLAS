@@ -1,5 +1,5 @@
 // Request/response and SSE event shapes for the atlas-proxy public client
-// API. Mirrors docs/API.md and the Go structs in proxy/types.go /
+// API. Mirrors docs/API.md and the Go structs in proxy/internal/wire/ /
 // tui/chat.go — field tags there are the source of truth.
 
 /** One prior-turn message replayed to the proxy on each /v1/agent call.

@@ -14,6 +14,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // The fenced sub-call is bounded by progress, not by total time. A model can
@@ -88,7 +90,7 @@ func TestSlowButProgressingFencedPayloadSurvives(t *testing.T) {
 	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
 	ctx.InferenceURL = srv.URL
 	ctx.Ctx = context.Background()
-	out, _, err := callLLMOnceWithGrammar(ctx, []AgentMessage{{Role: "user", Content: "x"}},
+	out, _, err := callLLMOnceWithGrammar(ctx, []wire.AgentMessage{{Role: "user", Content: "x"}},
 		0.2, rawEmissionSentinel)
 	if err != nil {
 		t.Fatalf("progressing stream was cut: %v", err)
@@ -118,7 +120,7 @@ func TestReasoningDoesNotResetTheProgressTimer(t *testing.T) {
 	session, endSession := context.WithTimeout(context.Background(), time.Minute)
 	defer endSession()
 	ctx.Ctx = session
-	out, _, _ := callLLMOnceWithGrammar(ctx, []AgentMessage{{Role: "user", Content: "x"}},
+	out, _, _ := callLLMOnceWithGrammar(ctx, []wire.AgentMessage{{Role: "user", Content: "x"}},
 		0.2, rawEmissionSentinel)
 	if cut := ctx.LastFencedStream.Cut; cut != "stalled" {
 		t.Errorf("watchdog cut = %q, want %q", cut, "stalled")
@@ -142,7 +144,7 @@ func TestOrdinaryTurnsAreNotBoundedByTheFencedWatchdog(t *testing.T) {
 	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
 	ctx.InferenceURL = srv.URL
 	ctx.Ctx = context.Background()
-	out, _, err := callLLMOnceWithGrammar(ctx, []AgentMessage{{Role: "user", Content: "x"}}, 0.2, "")
+	out, _, err := callLLMOnceWithGrammar(ctx, []wire.AgentMessage{{Role: "user", Content: "x"}}, 0.2, "")
 	if err != nil {
 		t.Fatalf("ordinary turn was cut by the fenced watchdog: %v", err)
 	}
@@ -181,7 +183,7 @@ func TestARawSubCallWithNoFenceOpenerIsCut(t *testing.T) {
 
 	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
 	ctx.InferenceURL = srv.URL
-	reply, _, err := callLLMOnceRestating(ctx, []AgentMessage{{Role: "user", Content: "Send the file."}},
+	reply, _, err := callLLMOnceRestating(ctx, []wire.AgentMessage{{Role: "user", Content: "Send the file."}},
 		0.2, rawEmissionSentinel, "")
 	if err != nil {
 		t.Fatal(err)
@@ -212,7 +214,7 @@ func TestSessionCancellationAbortsTheFencedFetch(t *testing.T) {
 	}()
 	before := runtime.NumGoroutine()
 	start := time.Now()
-	callLLMOnceWithGrammar(ctx, []AgentMessage{{Role: "user", Content: "x"}}, 0.2, rawEmissionSentinel)
+	callLLMOnceWithGrammar(ctx, []wire.AgentMessage{{Role: "user", Content: "x"}}, 0.2, rawEmissionSentinel)
 	if el := time.Since(start); el > 10*time.Second {
 		t.Fatalf("cancellation did not propagate: %v", el)
 	}

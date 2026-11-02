@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // The lens is required (docs/adr/0011-the-lens-is-required.md).
@@ -207,7 +209,7 @@ func (s *runState) stopLensDown(ctx *AgentContext, tool, reason string) error {
 		"success": false,
 		"error":   "not run: the geometric lens stopped answering",
 	})
-	emitTerminal(ctx, s, TerminalFailed, "lens_unavailable",
+	emitTerminal(ctx, s, wire.TerminalFailed, "lens_unavailable",
 		lensUnavailableSummary(reason, s.madeProductiveChange)+liveBackgroundJobNote(ctx))
 	return nil
 }

@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // A repair request: the verification gate asks for a passing run before done.
@@ -257,15 +259,15 @@ func TestLooksLikeStub(t *testing.T) {
 // is evidence: one the planner rated well, with more than one step, and that
 // the matcher is tracking (at least one step matched).
 func TestPlanIncompleteMessage(t *testing.T) {
-	plan := &Plan{WinningScore: 0.8, Steps: []PlanStep{
+	plan := &wire.Plan{WinningScore: 0.8, Steps: []wire.PlanStep{
 		{ID: "s1", Action: "replace setInterval with a variable-delay loop"},
 		{ID: "s2", Action: "decrement the delay by 3ms per food eaten"},
 	}}
-	weak := &Plan{WinningScore: 0.2, Steps: plan.Steps}
-	oneStep := &Plan{WinningScore: 0.8, Steps: plan.Steps[:1]}
+	weak := &wire.Plan{WinningScore: 0.2, Steps: plan.Steps}
+	oneStep := &wire.Plan{WinningScore: 0.8, Steps: plan.Steps[:1]}
 	for _, c := range []struct {
 		name      string
-		plan      *Plan
+		plan      *wire.Plan
 		satisfied []bool
 		wants     []string // nil: done may go ahead
 	}{

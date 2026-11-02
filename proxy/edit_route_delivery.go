@@ -6,6 +6,8 @@ import (
 	"errors"
 	"log"
 	"path/filepath"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // Trusted candidate delivery for the edit routes.
@@ -27,10 +29,10 @@ import (
 // should write itself, exactly as it did before.
 type editRouteOutcome struct {
 	Delivered bool
-	Result    *ToolResult
+	Result    *wire.ToolResult
 	Content   string
 	Meta      V3EditMetadata
-	Cancelled *ToolResult
+	Cancelled *wire.ToolResult
 }
 
 // deliverEditCandidate runs one edit attempt through the protected chain.
@@ -69,7 +71,7 @@ func deliverEditCandidate(ctx *AgentContext, tool, path, relPath,
 	// entry. The edit route genuinely starts a V3 stage, and an observer
 	// watching the event stream could otherwise see a decision that said
 	// generation proceeded with nothing on the stream to match it.
-	Emit(NewEnvelope(EvtStageStart, "v3", map[string]interface{}{
+	Emit(wire.NewEnvelope(wire.EvtStageStart, "v3", map[string]interface{}{
 		"detail":      "file=" + filepath.Base(path),
 		"route_entry": entry.ID,
 	}))
@@ -121,7 +123,7 @@ func deliverEditCandidate(ctx *AgentContext, tool, path, relPath,
 	if keep.Result != nil && improved != edited {
 		// The model computed `edited`; `improved` is what went to disk. The
 		// agent loop checks disk against this and tells the model.
-		keep.Result.Substituted = &supersededWrite{Path: resolveAgentPath(ctx, path),
+		keep.Result.Substituted = &wire.SupersededWrite{Path: resolveAgentPath(ctx, path),
 			Rel: relPath, Submitted: edited, Delivered: improved}
 	}
 	return keep
@@ -205,7 +207,7 @@ type editCandidateEvidence struct {
 func collectEditCandidateEvidence(ctx *AgentContext, entry routeEntry, lifecycle *routeLifecycle,
 	tool, path, improved string, scope mutationScope, scopeOK bool) (editCandidateEvidence, bool) {
 	observed := fallbackSyntaxOutcomeFor(ctx, path, improved).aggregate()
-	if observed.Status == ValidationFailed {
+	if observed.Status == wire.ValidationFailed {
 		log.Printf("[%s] the candidate does not parse — keeping the caller's content", tool)
 		lifecycle.finish(ctx, routingRevokedByGate, contentSHA256(improved), "")
 		return editCandidateEvidence{}, false
@@ -315,13 +317,13 @@ func decideEditCandidateDelivery(ctx *AgentContext, entry routeEntry, lifecycle 
 func editResultPayload(tool, code string) []byte {
 	switch tool {
 	case "edit_file", "insert_after", "replace_lines":
-		body, err := json.Marshal(EditFileOutput{OK: true})
+		body, err := json.Marshal(wire.EditFileOutput{OK: true})
 		if err != nil {
 			return nil
 		}
 		return body
 	case "structural_edit":
-		body, err := json.Marshal(StructuralEditOutput{OK: true, BytesNew: len(code)})
+		body, err := json.Marshal(wire.StructuralEditOutput{OK: true, BytesNew: len(code)})
 		if err != nil {
 			return nil
 		}
@@ -336,8 +338,8 @@ func editResultPayload(tool, code string) []byte {
 // all stay with the one owner; only the result shape is the tool's, so an edit
 // answers with an edit result and the loop's tool-call accounting and mutation
 // debt describe the call that actually happened.
-func editDeliveryWriter(tool string) func(string, string, *AgentContext) (*ToolResult, error) {
-	return func(path, code string, ctx *AgentContext) (*ToolResult, error) {
+func editDeliveryWriter(tool string) func(string, string, *AgentContext) (*wire.ToolResult, error) {
+	return func(path, code string, ctx *AgentContext) (*wire.ToolResult, error) {
 		res, err := writeFileRecorded(path, code, ctx)
 		if err != nil || res == nil {
 			return res, err

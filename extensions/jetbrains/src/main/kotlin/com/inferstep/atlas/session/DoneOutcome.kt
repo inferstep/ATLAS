@@ -12,7 +12,7 @@ package com.inferstep.atlas.session
 
 import com.inferstep.atlas.protocol.DonePayload
 
-/** The terminal statuses the proxy sends (proxy/types.go, TerminalStatus). */
+/** The terminal statuses the proxy sends (proxy/internal/wire/messages.go, TerminalStatus). */
 private val KNOWN_STATUSES = setOf("completed", "incomplete", "stopped", "timed_out", "failed")
 
 private const val MISSING_STATUS = "incomplete"

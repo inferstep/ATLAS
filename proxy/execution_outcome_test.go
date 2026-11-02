@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // A command that was stopped is not a command that failed.
@@ -14,34 +16,6 @@ import (
 // test. Reading it as one would record a behavioural failure of a candidate
 // that nothing observed.
 
-func TestOnlyOneOutcomeMeansTheCommandFinished(t *testing.T) {
-	for _, o := range []ExecutionOutcome{
-		ExecutionCompleted, ExecutionTimedOut, ExecutionMemoryExhausted,
-		ExecutionProcessLimit, ExecutionOutputLimit, ExecutionCancelled,
-		ExecutionSpawnFailed, ExecutionUnclassified,
-	} {
-		if !knownExecutionOutcome(o) {
-			t.Errorf("%q is not in the closed set", o)
-		}
-		if executionCompleted(o) != (o == ExecutionCompleted) {
-			t.Errorf("%q answers the completion question wrongly", o)
-		}
-	}
-	if knownExecutionOutcome("invented") {
-		t.Error("an invented outcome was accepted")
-	}
-	// An executor that has not been taught this vocabulary, and one that grew
-	// a member this build has not been taught, both fail closed.
-	for _, raw := range []string{"", "invented", "COMPLETED", "completed "} {
-		if got := canonicalExecutionOutcome(raw); got != ExecutionUnclassified {
-			t.Errorf("%q canonicalised to %q, want unclassified", raw, got)
-		}
-	}
-	if canonicalExecutionOutcome("completed") != ExecutionCompleted {
-		t.Error("the one completion member does not survive canonicalisation")
-	}
-}
-
 // A test suite killed at the memory ceiling, decoded from the executor: exit 1
 // and a MemoryError on stderr, byte for byte what a failing suite looks like.
 // Only the outcome field tells them apart.
@@ -49,33 +23,33 @@ func TestAMemoryKilledVerificationIsNotAFailedOne(t *testing.T) {
 	body := `{"success":false,"stdout":"","stderr":"MemoryError\n","exit_code":1,` +
 		`"elapsed_ms":2100,"timed_out":false,"outcome":"memory_exhausted",` +
 		`"peak_memory_bytes":2100000000}`
-	var out RunCommandOutput
+	var out wire.RunCommandOutput
 	if err := decodeShellResponse(strings.NewReader(body), &out); err != nil {
 		t.Fatal(err)
 	}
-	if out.Outcome != ExecutionMemoryExhausted {
+	if out.Outcome != wire.ExecutionMemoryExhausted {
 		t.Fatalf("outcome %q", out.Outcome)
 	}
 	if runCommandVerifiable(out) {
 		t.Error("a memory-killed command was accepted as verification")
 	}
 	// And the same exit code from a command that DID finish is a real failure.
-	finished := RunCommandOutput{ExitCode: 1, Outcome: ExecutionCompleted}
+	finished := wire.RunCommandOutput{ExitCode: 1, Outcome: wire.ExecutionCompleted}
 	if runCommandVerifiable(finished) {
 		t.Error("a genuinely failing command verified")
 	}
-	passed := RunCommandOutput{ExitCode: 0, Outcome: ExecutionCompleted}
+	passed := wire.RunCommandOutput{ExitCode: 0, Outcome: wire.ExecutionCompleted}
 	if !runCommandVerifiable(passed) {
 		t.Error("a command that passed and finished did not verify")
 	}
 	// Exit zero from a command the executor SAID was stopped is not
 	// verification either: a suite killed after its last assertion passed can
 	// still exit zero, and it did not finish.
-	for _, o := range []ExecutionOutcome{
-		ExecutionMemoryExhausted, ExecutionProcessLimit, ExecutionOutputLimit,
-		ExecutionCancelled, ExecutionSpawnFailed,
+	for _, o := range []wire.ExecutionOutcome{
+		wire.ExecutionMemoryExhausted, wire.ExecutionProcessLimit, wire.ExecutionOutputLimit,
+		wire.ExecutionCancelled, wire.ExecutionSpawnFailed,
 	} {
-		if runCommandVerifiable(RunCommandOutput{ExitCode: 0, Outcome: o}) {
+		if runCommandVerifiable(wire.RunCommandOutput{ExitCode: 0, Outcome: o}) {
 			t.Errorf("exit zero under %q verified something", o)
 		}
 	}
@@ -84,11 +58,11 @@ func TestAMemoryKilledVerificationIsNotAFailedOne(t *testing.T) {
 // An older executor answers without the field. It must not read as success.
 func TestAnExecutorThatDoesNotSpeakTheVocabularyFailsClosed(t *testing.T) {
 	body := `{"success":true,"stdout":"ok","stderr":"","exit_code":0,"elapsed_ms":10}`
-	var out RunCommandOutput
+	var out wire.RunCommandOutput
 	if err := decodeShellResponse(strings.NewReader(body), &out); err != nil {
 		t.Fatal(err)
 	}
-	if out.Outcome != ExecutionUnclassified {
+	if out.Outcome != wire.ExecutionUnclassified {
 		t.Fatalf("a missing outcome decoded as %q", out.Outcome)
 	}
 	// It is NOT refused: a proxy that called every command failed because its
@@ -99,28 +73,28 @@ func TestAnExecutorThatDoesNotSpeakTheVocabularyFailsClosed(t *testing.T) {
 	if !runCommandVerifiable(out) {
 		t.Error("an unclassified execution was refused outright")
 	}
-	if executionKnownIncomplete(ExecutionUnclassified) {
+	if wire.ExecutionKnownIncomplete(wire.ExecutionUnclassified) {
 		t.Error("silence was treated as a verdict")
 	}
-	for _, o := range []ExecutionOutcome{
-		ExecutionMemoryExhausted, ExecutionProcessLimit, ExecutionOutputLimit,
-		ExecutionCancelled, ExecutionSpawnFailed, ExecutionTimedOut,
+	for _, o := range []wire.ExecutionOutcome{
+		wire.ExecutionMemoryExhausted, wire.ExecutionProcessLimit, wire.ExecutionOutputLimit,
+		wire.ExecutionCancelled, wire.ExecutionSpawnFailed, wire.ExecutionTimedOut,
 	} {
-		if !executionKnownIncomplete(o) {
+		if !wire.ExecutionKnownIncomplete(o) {
 			t.Errorf("%q did not deny verification", o)
 		}
 	}
-	if executionKnownIncomplete(ExecutionCompleted) {
+	if wire.ExecutionKnownIncomplete(wire.ExecutionCompleted) {
 		t.Error("a completed command denied verification")
 	}
 }
 
 // What the model is told, and what it is not told.
 func TestTheModelIsToldWhatHappenedAndNothingAboutTheHost(t *testing.T) {
-	for _, o := range []ExecutionOutcome{
-		ExecutionMemoryExhausted, ExecutionProcessLimit, ExecutionOutputLimit,
+	for _, o := range []wire.ExecutionOutcome{
+		wire.ExecutionMemoryExhausted, wire.ExecutionProcessLimit, wire.ExecutionOutputLimit,
 	} {
-		msg := executionOutcomeMessage(o)
+		msg := wire.ExecutionOutcomeMessage(o)
 		if msg == "" {
 			t.Errorf("%q tells the model nothing", o)
 			continue
@@ -136,7 +110,7 @@ func TestTheModelIsToldWhatHappenedAndNothingAboutTheHost(t *testing.T) {
 		}
 	}
 	// A completed command has nothing extra to say.
-	if executionOutcomeMessage(ExecutionCompleted) != "" {
+	if wire.ExecutionOutcomeMessage(wire.ExecutionCompleted) != "" {
 		t.Error("a completed command carries a resource message")
 	}
 }
@@ -152,25 +126,25 @@ func TestStagingSeparatesAStoppedCommandFromAFailedOne(t *testing.T) {
 	}
 	cases := []struct {
 		name    string
-		outcome ExecutionOutcome
+		outcome wire.ExecutionOutcome
 		exit    int
 		success bool
 		want    stagingCommandOutcome
 		wantWhy AuthorizationReason
 	}{
-		{"memory killed", ExecutionMemoryExhausted, 1, false,
+		{"memory killed", wire.ExecutionMemoryExhausted, 1, false,
 			stagingResourceExhausted, ReasonEvidenceResourceExhausted},
-		{"too many processes", ExecutionProcessLimit, -15, false,
+		{"too many processes", wire.ExecutionProcessLimit, -15, false,
 			stagingResourceExhausted, ReasonEvidenceResourceExhausted},
-		{"output flood", ExecutionOutputLimit, -13, false,
+		{"output flood", wire.ExecutionOutputLimit, -13, false,
 			stagingResourceExhausted, ReasonEvidenceResourceExhausted},
-		{"genuinely failed", ExecutionCompleted, 1, false,
+		{"genuinely failed", wire.ExecutionCompleted, 1, false,
 			stagingExitedNonZero, ReasonEvidenceExecutionFailed},
-		{"genuinely passed", ExecutionCompleted, 0, true,
+		{"genuinely passed", wire.ExecutionCompleted, 0, true,
 			stagingExitedZero, ""},
-		{"executor too old", ExecutionUnclassified, 0, true,
+		{"executor too old", wire.ExecutionUnclassified, 0, true,
 			stagingUnobservable, ReasonProducerNotRun},
-		{"spawn failed", ExecutionSpawnFailed, -1, false,
+		{"spawn failed", wire.ExecutionSpawnFailed, -1, false,
 			stagingUnobservable, ReasonProducerNotRun},
 	}
 	for _, tc := range cases {
@@ -203,7 +177,7 @@ func TestStagingSeparatesAStoppedCommandFromAFailedOne(t *testing.T) {
 func TestResourceExhaustionVetoesForTheRightReason(t *testing.T) {
 	for _, eligible := range []bool{false, true} {
 		out := decideCandidatePolicy(policyContext(t), advisoryInput{
-			Observed:         checkOutcome{Status: ValidationPassed},
+			Observed:         checkOutcome{Status: wire.ValidationPassed},
 			TargetDeclared:   true,
 			TargetAuthorized: true,
 			ScopeAdmits:      true,
@@ -306,7 +280,7 @@ func TestTheHostRouteIsBoundedByTheSameNumbers(t *testing.T) {
 		t.Error("the host route computes a memory size of its own")
 	}
 	// And the number it uses comes from the operator variable the executor reads.
-	owner, err := os.ReadFile("execution_outcome.go")
+	owner, err := os.ReadFile("tools.go")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +333,7 @@ func TestTheExecutorWireCarriesTheOutcome(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"outcome":"memory_exhausted"}`), &probe); err != nil {
 		t.Fatal(err)
 	}
-	if canonicalExecutionOutcome(probe.Outcome) != ExecutionMemoryExhausted {
+	if wire.CanonicalExecutionOutcome(probe.Outcome) != wire.ExecutionMemoryExhausted {
 		t.Error("the wire name and the vocabulary have drifted apart")
 	}
 }

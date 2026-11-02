@@ -1,6 +1,10 @@
 package main
 
-import "log"
+import (
+	"log"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
+)
 
 // Where an authorization becomes bytes on disk.
 //
@@ -91,7 +95,7 @@ func (a deliveryAuthorization) holds(b grantBasis) bool {
 // the candidate had nothing to show for itself, when in truth nothing was
 // checked -- and that is the wrong thing to go and fix.
 func authorizeCandidateDelivery(ctx *AgentContext, entry routeEntry, path, code string,
-	id candidateEvidenceIdentity, envelope *V3EvidenceEnvelope,
+	id candidateEvidenceIdentity, envelope *wire.V3EvidenceEnvelope,
 	evidence []proxyEvidence, selectedCandidateID string,
 	unmet map[string]AuthorizationReason, observed checkOutcome,
 	scope mutationScope, automatic automaticIntent) deliveryAuthorization {
@@ -183,11 +187,11 @@ func authorizeCandidateDelivery(ctx *AgentContext, entry routeEntry, path, code 
 // must bind to: the live request, the candidate's hash, and the workspace and
 // baseline as they are now.
 func liveEvidenceIdentity(ctx *AgentContext, id candidateEvidenceIdentity,
-	hash, resolved string) V3EvidenceProvenance {
+	hash, resolved string) wire.V3EvidenceProvenance {
 	// The identity evidence must bind to, built HERE from the live request and
 	// the workspace as it stands. Never copied off a record being checked.
 	generation, stateHash := workspaceIdentity(ctx)
-	asked := V3EvidenceProvenance{
+	asked := wire.V3EvidenceProvenance{
 		RequestID:           requestIDOf(ctx),
 		InvocationID:        id.InvocationID,
 		CandidateInstanceID: id.CandidateInstanceID,
@@ -342,13 +346,13 @@ type candidateDeliveryRequest struct {
 	// Basis is why a licence would exist, kept even when capture-only takes it
 	// away, so the acquisition can record which rule earned it.
 	Basis grantBasis
-	Write func(path, code string, ctx *AgentContext) (*ToolResult, error)
+	Write func(path, code string, ctx *AgentContext) (*wire.ToolResult, error)
 }
 
 // deliverAuthorizedCandidate is the new-file route's spelling of the owner.
 func deliverAuthorizedCandidate(ctx *AgentContext, path, code string,
 	g *authorizationGrant, observed checkOutcome, met []string,
-	baselinePreserved bool) (*ToolResult, deliveryOutcome, error) {
+	baselinePreserved bool) (*wire.ToolResult, deliveryOutcome, error) {
 	return deliverCandidateBytes(ctx, candidateDeliveryRequest{
 		Tool: "write_file", Path: path, Code: code, Grant: g,
 		Observed: observed, MetCommands: met,
@@ -358,7 +362,7 @@ func deliverAuthorizedCandidate(ctx *AgentContext, path, code string,
 
 // deliverCandidateBytes is THE owner of candidate delivery, for every route.
 func deliverCandidateBytes(ctx *AgentContext,
-	req candidateDeliveryRequest) (*ToolResult, deliveryOutcome, error) {
+	req candidateDeliveryRequest) (*wire.ToolResult, deliveryOutcome, error) {
 	path, code, g := req.Path, req.Code, req.Grant
 	observed, met, baselinePreserved := req.Observed, req.MetCommands, req.BaselinePreserved
 	tool := req.Tool
@@ -443,7 +447,7 @@ func deliverCandidateBytes(ctx *AgentContext,
 		out.Reason = "delivered_bytes_unreadable"
 	case out.Hash != g.CandidateHash:
 		out.Reason = "delivered_bytes_are_not_the_authorized_ones"
-	case observed.Status == ValidationFailed:
+	case observed.Status == wire.ValidationFailed:
 		out.Reason = "post_write_validation_failed"
 	default:
 		out.Delivered = true
@@ -526,16 +530,16 @@ func baselineObligationsSatisfied(obs []taskObligation, d AuthorizationDecision)
 // unmet; only one is an outage.
 func classifyStructuralUnmet(ctx *AgentContext, resolved string,
 	observed checkOutcome, unmet map[string]AuthorizationReason) map[string]AuthorizationReason {
-	if ctx == nil || observed.Status == ValidationPassed {
+	if ctx == nil || observed.Status == wire.ValidationPassed {
 		return unmet
 	}
 	var why AuthorizationReason
 	switch {
 	case observed.ProducerUnavailable:
 		why = ReasonProducerUnavailable
-	case observed.Status == ValidationNotRun, observed.Status == ValidationUnknown:
+	case observed.Status == wire.ValidationNotRun, observed.Status == wire.ValidationUnknown:
 		why = ReasonProducerNotRun
-	case observed.Status == ValidationFailed:
+	case observed.Status == wire.ValidationFailed:
 		// It ran and found against these bytes. That IS a fact about the
 		// candidate, and the only one in this set that is.
 		why = ReasonEvidenceExecutionFailed
@@ -559,13 +563,13 @@ func classifyStructuralUnmet(ctx *AgentContext, resolved string,
 // kind is the validation kind an observation implies, using exactly the
 // mapping overlayValidation already applies. Having it in one place is what
 // stops a refusal path from classifying the same outcome differently.
-func (o checkOutcome) kind() ValidationKind {
+func (o checkOutcome) kind() wire.ValidationKind {
 	switch o.Status {
-	case ValidationNotApplicable:
-		return ValidationKindNone
-	case ValidationUnknown:
-		return ValidationKindUnknown
+	case wire.ValidationNotApplicable:
+		return wire.ValidationKindNone
+	case wire.ValidationUnknown:
+		return wire.ValidationKindUnknown
 	default:
-		return ValidationKindSyntax
+		return wire.ValidationKindSyntax
 	}
 }

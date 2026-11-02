@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // The observe-only feasibility decision: whether this invocation has a path to
@@ -115,7 +117,7 @@ func TestFeasibilityOfAPreservedBaseline(t *testing.T) {
 		}
 		ctx.Ledger[resolved] = &DeliverableState{
 			Path: resolved, CurrentHash: disk, Generation: 1,
-			ValidationKind: ValidationKindSyntax, ValidationStatus: ValidationPassed,
+			ValidationKind: wire.ValidationKindSyntax, ValidationStatus: wire.ValidationPassed,
 			ValidatedHash: disk,
 		}
 		ctx.LedgerMu.Unlock()
@@ -393,8 +395,8 @@ func TestTheTwoBaselineDerivationsAgree(t *testing.T) {
 			var evidence []proxyEvidence
 			for _, strength := range producible {
 				evidence = append(evidence, proxyEvidence{
-					Outcome: ValidationPassed,
-					Provenance: V3EvidenceProvenance{
+					Outcome: wire.ValidationPassed,
+					Provenance: wire.V3EvidenceProvenance{
 						ObservedStrength: strength, CommandIdentity: witness,
 					},
 				})

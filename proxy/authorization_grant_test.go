@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // A grant is the difference between "these bytes were authorized" and "these
@@ -55,7 +57,7 @@ func newGrantWorldWithCode(t *testing.T, code string, commands ...string) *grant
 		Obligations:   requestObligations(w.ctx),
 		TargetPath:    w.path,
 		CandidateHash: contentSHA256(w.code),
-		Identity: V3EvidenceProvenance{
+		Identity: wire.V3EvidenceProvenance{
 			RequestID:           requestIDOf(w.ctx),
 			InvocationID:        evID.InvocationID,
 			CandidateInstanceID: evID.CandidateInstanceID,
@@ -178,7 +180,7 @@ func TestAnUnauthorizedDecisionMintsNothing(t *testing.T) {
 		{"declared command without evidence", []string{"pytest -q"}, func(w *grantWorld) {
 			var kept []proxyEvidence
 			for _, e := range w.in.Evidence {
-				if e.Provenance.Source != ProvenanceClientDeclaredVerification {
+				if e.Provenance.Source != wire.ProvenanceClientDeclaredVerification {
 					kept = append(kept, e)
 				}
 			}
@@ -187,15 +189,15 @@ func TestAnUnauthorizedDecisionMintsNothing(t *testing.T) {
 		// With a V3 service record, the strict basis also needs the record to
 		// be readable and its adapter to support the artifact.
 		{"a service record that cannot be read", nil, func(w *grantWorld) {
-			w.in.Envelope = &V3EvidenceEnvelope{Evaluation: V3EvidenceEvaluation{Supported: true}}
+			w.in.Envelope = &wire.V3EvidenceEnvelope{Evaluation: wire.V3EvidenceEvaluation{Supported: true}}
 		}},
 		{"an adapter that does not support the artifact", nil, func(w *grantWorld) {
-			w.in.Envelope = &V3EvidenceEnvelope{
-				WireVersion: evidenceWireMajor + ".0",
-				Identity: V3EvidenceIdentity{ContractID: "contract", ContractVersion: "1", ArtifactScope: "file",
+			w.in.Envelope = &wire.V3EvidenceEnvelope{
+				WireVersion: "1.0",
+				Identity: wire.V3EvidenceIdentity{ContractID: "contract", ContractVersion: "1", ArtifactScope: "file",
 					EvaluationContextHash: "context", CalibrationID: "calibration"},
-				Evaluation: V3EvidenceEvaluation{ExecutionStatus: "ok", EvidenceStrength: "syntax"},
-				Selection:  V3EvidenceSelection{Status: "no_verified_winner"},
+				Evaluation: wire.V3EvidenceEvaluation{ExecutionStatus: "ok", EvidenceStrength: "syntax"},
+				Selection:  wire.V3EvidenceSelection{Status: "no_verified_winner"},
 			}
 		}},
 		{"output knowledge not declared", nil, func(w *grantWorld) { w.in.OutputKnowledgeDeclared = false }},
@@ -569,7 +571,7 @@ func TestUnrelatedSuccessNeitherRetiresNorRefreshesAGrant(t *testing.T) {
 		t.Fatal(err)
 	}
 	observeDeliverable(w.ctx, other, []byte("# notes\n"),
-		ValidationKindNone, ValidationNotApplicable, "")
+		wire.ValidationKindNone, wire.ValidationNotApplicable, "")
 
 	w.ctx.grantMu.Lock()
 	still := w.ctx.grants[g.ID]
@@ -608,7 +610,7 @@ func TestAGrantIsOneTimeAcrossAnUnrelatedSuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	observeDeliverable(w.ctx, other, []byte("# notes\n"),
-		ValidationKindNone, ValidationNotApplicable, "")
+		wire.ValidationKindNone, wire.ValidationNotApplicable, "")
 	if _, why := consumeAuthorizationGrant(w.ctx, w.claim()); why != string(grantConsumed) {
 		t.Errorf("the second spending got %q, want %q", why, grantConsumed)
 	}

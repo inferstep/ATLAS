@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // A background job that already exited did not start. When the job exits
@@ -264,7 +266,7 @@ func TestTheImmediateExitMessageCarriesTheJobsOwnOutput(t *testing.T) {
 	dir := t.TempDir()
 	ctx := NewAgentContext(dir, Tier2Medium)
 	code := 1
-	out := RunBackgroundOutput{JobID: "j1", ExitCode: &code, Stderr: []string{
+	out := wire.RunBackgroundOutput{JobID: "j1", ExitCode: &code, Stderr: []string{
 		"Traceback (most recent call last):", "ModuleNotFoundError: No module named 'flask'"}}
 	msg := immediateExitMessage(ctx, "python app.py", out)
 	for _, want := range []string{"exited immediately with status 1", "nothing to probe",

@@ -84,7 +84,7 @@ def test_every_write_path_goes_through_the_pipeline(bodies, tool):
 def _steps_of_the_write_route() -> str:
     """The bodies of the gates that applyWriteGates runs. A gate's name anywhere else in the tool runs nothing."""
     src = _tool_source()
-    listed = re.search(r"func applyWriteGates\(.*?\[\]func\(\*v3Write\) \*ToolResult\{(.*?)\n\t\} \{", src, re.S)
+    listed = re.search(r"func applyWriteGates\(.*?\[\]func\(\*v3Write\) \*wire\.ToolResult\{(.*?)\n\t\} \{", src, re.S)
     assert listed, "applyWriteGates has no list of gates — did the write route get restructured?"
     names = re.findall(r"\w+", listed.group(1))
     assert names, "applyWriteGates lists no gate"

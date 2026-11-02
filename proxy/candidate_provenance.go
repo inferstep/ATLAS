@@ -1,5 +1,7 @@
 package main
 
+import "github.com/itigges22/atlas-proxy/internal/wire"
+
 // Where the bytes on disk came from, said plainly enough to show a user.
 //
 // The terminal is the last place this is still knowable. Once a file is
@@ -65,7 +67,7 @@ func emitDeliveryProvenance(ctx *AgentContext, path, provenance string,
 	if !deliveryProvenanceValues[provenance] {
 		return
 	}
-	Emit(NewEnvelope(EvtMetric, "candidate_policy", map[string]interface{}{
+	Emit(wire.NewEnvelope(wire.EvtMetric, "candidate_policy", map[string]interface{}{
 		"path":          logPath(path),
 		"provenance":    provenance,
 		"decision":      string(out.Decision),

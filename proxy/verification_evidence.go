@@ -3,6 +3,8 @@ package main
 import (
 	"sort"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // Evidence that a command the CLIENT required ran, and what it ran against.
@@ -108,14 +110,14 @@ func produceDeclaredVerificationEvidence(ctx *AgentContext, req verificationEvid
 	}
 
 	p := declaredVerificationProvenance(ctx, req, requestID, requirement)
-	outcome := ValidationFailed
+	outcome := wire.ValidationFailed
 	// Passing means the exact command exited zero having changed neither the
 	// candidate it was testing nor anything else it could see. A command that
 	// rewrote its own subject proved something about bytes that no longer
 	// exist.
 	if req.Result.Outcome == stagingExitedZero &&
 		!req.Result.MutatedTarget && !req.Result.MutatedWorkspace {
-		outcome = ValidationPassed
+		outcome = wire.ValidationPassed
 	}
 	return proxyEvidence{Provenance: p, Outcome: outcome}, true
 }
@@ -149,9 +151,9 @@ func verificationRunAdmissible(ctx *AgentContext, req verificationEvidenceReques
 // declared command: the identity the run was bound to, the command by hash,
 // and the strength the run may be said to have shown.
 func declaredVerificationProvenance(ctx *AgentContext, req verificationEvidenceRequest,
-	requestID string, requirement VerificationRequirement) V3EvidenceProvenance {
-	p := V3EvidenceProvenance{
-		Source:              ProvenanceClientDeclaredVerification,
+	requestID string, requirement VerificationRequirement) wire.V3EvidenceProvenance {
+	p := wire.V3EvidenceProvenance{
+		Source:              wire.ProvenanceClientDeclaredVerification,
 		RequestID:           requestID,
 		RouteEntryID:        req.Identity.RouteEntryID,
 		InvocationID:        req.Identity.InvocationID,
@@ -209,7 +211,7 @@ func declaredVerificationCoverage(obligations []taskObligation,
 	evidence []proxyEvidence) (met []string, missing []string) {
 	authorized := map[string]bool{}
 	for _, e := range evidence {
-		if e.Provenance.Source != ProvenanceClientDeclaredVerification {
+		if e.Provenance.Source != wire.ProvenanceClientDeclaredVerification {
 			continue
 		}
 		if ok, _ := e.Authorizes(); !ok {

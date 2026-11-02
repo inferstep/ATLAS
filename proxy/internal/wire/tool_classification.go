@@ -1,15 +1,9 @@
 // What a tool may do to the workspace (ToolEffect, declared on each ToolDef),
 // and the closed vocabularies in which a tool result says what happened:
 // MutationStatus, ValidationKind and ValidationStatus, with
-// ToolResult.Classified over all three. ToolResult itself is in types.go.
+// ToolResult.Classified over all three. ToolResult itself is in messages.go.
 
-package main
-
-import "encoding/json"
-
-// ---------------------------------------------------------------------------
-// Tool definitions
-// ---------------------------------------------------------------------------
+package wire
 
 // ToolEffect declares what a tool is CAPABLE of doing to workspace state. It
 // is a property of the tool, not of any one call, and it lives on ToolDef so a
@@ -47,20 +41,6 @@ const (
 // and letting the boundary fill it in would conceal a missed producer.
 func (e ToolEffect) BoundaryClassifiable() bool {
 	return e == ToolEffectReadOnly || e == ToolEffectCommandUnobserved
-}
-
-// ToolDef defines a tool that the model can call.
-type ToolDef struct {
-	// Effect is required. The registry exhaustiveness test fails on any
-	// production tool left at ToolEffectUnknown.
-	Effect ToolEffect
-
-	Name        string
-	Description string
-	InputSchema interface{} // Go struct with json tags, marshaled to JSON Schema
-	Execute     func(input json.RawMessage, ctx *AgentContext) (*ToolResult, error)
-	ReadOnly    bool // true = can run in parallel, no side effects
-	Destructive bool // true = requires permission confirmation
 }
 
 // MutationStatus reports what happened to the filesystem, separately from

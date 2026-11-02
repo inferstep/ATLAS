@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // The interactive request. A person typed into the TUI; the client declared
@@ -144,7 +146,7 @@ func TestStructuredRouteStillHonoursHardVetoes(t *testing.T) {
 	} {
 		out := decideCandidatePolicy(policyContext(t),
 			advisoryInput{
-				Observed:          checkOutcome{Status: ValidationPassed},
+				Observed:          checkOutcome{Status: wire.ValidationPassed},
 				TargetDeclared:    false,
 				TargetAuthorized:  false,
 				ScopeAdmits:       true,

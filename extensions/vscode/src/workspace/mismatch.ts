@@ -54,7 +54,7 @@ export function fileOpPaths(tool: string, args: unknown): { primary: string; sec
 	}
 	const record = args as Record<string, unknown>;
 	if (tool === 'move_file') {
-		// MoveFileInput: source + destination (proxy/types.go).
+		// MoveFileInput: source + destination (proxy/internal/wire/tool_io.go).
 		const source = record['source'];
 		const destination = record['destination'];
 		return typeof source === 'string' && typeof destination === 'string'

@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // --- Recovery from the run-first state (C5) ---------------------------------
@@ -163,7 +165,7 @@ func TestC5RecoveryReachesAVerifiedCompletion(t *testing.T) {
 		}
 	}
 	// A completed terminal over validated bytes.
-	if terminal["status"] != string(TerminalCompleted) {
+	if terminal["status"] != string(wire.TerminalCompleted) {
 		t.Fatalf("recovery did not reach a verified completion: status=%q reason=%q summary=%s",
 			terminal["status"], terminal["reason"], terminal["summary"])
 	}
@@ -174,7 +176,7 @@ func TestC5RecoveryReachesAVerifiedCompletion(t *testing.T) {
 	if d == nil || d.CurrentHash != hashBytes(got) {
 		t.Fatal("the ledger does not describe the final bytes")
 	}
-	if k, s := d.CurrentValidation(); s != ValidationPassed || k != ValidationKindSyntax {
+	if k, s := d.CurrentValidation(); s != wire.ValidationPassed || k != wire.ValidationKindSyntax {
 		t.Errorf("completion authorized over %v/%v rather than a current syntax pass", k, s)
 	}
 	// Nothing was run for the model: each command was its own.
@@ -432,7 +434,7 @@ func TestFencedChannelRecoveryReachesAVerifiedCompletion(t *testing.T) {
 		}
 	}
 	// A completed terminal over validated bytes.
-	if terminal["status"] != string(TerminalCompleted) {
+	if terminal["status"] != string(wire.TerminalCompleted) {
 		t.Fatalf("recovery did not reach a verified completion: status=%q reason=%q summary=%s",
 			terminal["status"], terminal["reason"], terminal["summary"])
 	}
@@ -446,7 +448,7 @@ func TestFencedChannelRecoveryReachesAVerifiedCompletion(t *testing.T) {
 	if d == nil || d.CurrentHash != hashBytes(got) {
 		t.Fatal("the ledger does not describe the final bytes")
 	}
-	if k, s := d.CurrentValidation(); s != ValidationPassed || k != ValidationKindSyntax {
+	if k, s := d.CurrentValidation(); s != wire.ValidationPassed || k != wire.ValidationKindSyntax {
 		t.Errorf("completion authorized over %v/%v rather than a current syntax pass", k, s)
 	}
 	// The allowance is unchanged and recovery started nothing.
@@ -688,7 +690,7 @@ func TestAfterFencedExhaustionACorrectArtifactIsVerifiedNotRewritten(t *testing.
 	if *subcalls > maxFencedFailuresPerPath {
 		t.Errorf("%d sub-generations after exhaustion", *subcalls)
 	}
-	if !TerminalStatus(terminal["status"]).Classified() {
+	if !wire.TerminalStatus(terminal["status"]).Classified() {
 		t.Error("no classified terminal")
 	}
 }

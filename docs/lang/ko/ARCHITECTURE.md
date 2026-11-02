@@ -305,7 +305,7 @@ API 계약은 [API.md § POST /v3/plan](../../API.md#post-v3plan)에 문서화�
 | 파일 | 역할 |
 |---|---|
 | `proxy/v3_bridge.go` | `callV3PlanStreaming(reqCtx, v3URL, req, onProgress)` — SSE 스트림을 열고, 진행 이벤트를 콜백으로 전달하며, `event: result` 프레임에서 최종 `Plan`을 반환합니다. `reqCtx`가 에이전트의 요청 컨텍스트를 묶으므로 `/cancel`은 진행 중인 계획을 중단합니다. V3 파이프라인 실행용 `callV3GenerateStreaming`과 같은 구조입니다. |
-| `proxy/types.go` | `V3PlanRequest`, `Plan`, `PlanStep` 타입. `AgentContext`에 `Plan`, `PlanStepsSatisfied[]`, `PlanOffStreak`, `PlanRevisions`가 추가됩니다. |
+| `proxy/internal/wire/` | `V3PlanRequest`, `Plan`, `PlanStep` 타입. `AgentContext`에 `Plan`, `PlanStepsSatisfied[]`, `PlanOffStreak`, `PlanRevisions`가 추가됩니다. |
 | `proxy/plan_generation.go` | `samplePlanContext()`는 플래너를 위해 우선 파일(app.py, templates/index.html, package.json, …)을 순회합니다. `shouldGeneratePlan()`은 티어, 메시지 길이, 읽기 전용 요청 여부로 판단합니다. `generatePlan()`은 브리지를 실행하고, 토큰별 잡음을 버리며, 전체 단계 목록과 함께 `plan_loaded`를 내보냅니다. |
 | `proxy/gates_plan.go` | `matchPlanStep()`(도구 이름과 경로 접미사의 느슨한 일치), `recordPlanAdherence()`(도구 호출별 집계. 어떤 단계와도 일치하지 않는 정찰 호출 — `read_file`/`list_directory`/`find_file`/`search_files` — 은 중립이며 `off_streak`를 늘리지 않습니다), `revisePlan()`(`FilesRead`를 추가 컨텍스트로 넘겨 다시 생성). |
 

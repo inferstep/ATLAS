@@ -5,6 +5,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // Configuration, telemetry and provenance, checked as facts about the build
@@ -32,7 +34,7 @@ func TestNeitherModelNorServiceSelectsTheMode(t *testing.T) {
 		}
 	}
 	// The wire shape a service answers with carries no policy field at all.
-	types, err := os.ReadFile("types.go")
+	types, err := os.ReadFile("internal/wire/v3.go")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,13 +60,13 @@ func TestNeitherModelNorServiceSelectsTheMode(t *testing.T) {
 func TestAutomaticDeliversOnlyWhatTheOwnerAuthorized(t *testing.T) {
 	ctx := policyContext(t)
 	in := advisoryInput{
-		Observed:         checkOutcome{Status: ValidationPassed},
+		Observed:         checkOutcome{Status: wire.ValidationPassed},
 		TargetDeclared:   true,
 		TargetAuthorized: true,
 		ScopeAdmits:      true,
 		Evidence: []proxyEvidence{{
-			Provenance: V3EvidenceProvenance{Source: ProvenanceClientDeclaredVerification},
-			Outcome:    ValidationPassed,
+			Provenance: wire.V3EvidenceProvenance{Source: wire.ProvenanceClientDeclaredVerification},
+			Outcome:    wire.ValidationPassed,
 		}},
 	}
 	// Without the owner's answer it keeps the baseline: no floor was met and
@@ -87,7 +89,7 @@ func TestAutomaticDeliversOnlyWhatTheOwnerAuthorized(t *testing.T) {
 	}
 	// A veto still outranks it.
 	vetoed := in
-	vetoed.Observed = checkOutcome{Status: ValidationFailed}
+	vetoed.Observed = checkOutcome{Status: wire.ValidationFailed}
 	if got := decideCandidatePolicy(ctx, vetoed, false); got.Decision != PolicyCandidateRejectedHardVeto {
 		t.Errorf("a syntax failure under automatic decided %q", got.Decision)
 	} else if got.Delivers {
@@ -223,16 +225,12 @@ func TestCaptureDisabledIsInert(t *testing.T) {
 // Neither the model nor the service can set the delivered provenance: the
 // field is not on any wire type they fill.
 func TestNoWireTypeCarriesTheDeliveryProvenance(t *testing.T) {
-	types, err := os.ReadFile("types.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := string(types)
+	body := readSourceForTest(t, "internal/wire/v3.go") + readSourceForTest(t, "internal/wire/messages.go")
 	for _, typeName := range []string{"type V3GenerateResponse struct",
 		"type WriteFileOutput struct", "type modelFacingResult struct"} {
 		start := strings.Index(body, typeName)
 		if start < 0 {
-			t.Errorf("types.go holds no %q, so its check reads nothing; name the file that holds it", typeName)
+			t.Errorf("internal/wire holds no %q, so its check reads nothing; name the file that holds it", typeName)
 			continue
 		}
 		decl := body[start : start+strings.Index(body[start:], "\n}")]

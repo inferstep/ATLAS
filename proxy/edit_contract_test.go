@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // Literal edit arguments are applied exactly as sent.
@@ -35,7 +37,7 @@ func exactEditWorld(t *testing.T, name, content string) (*AgentContext, string) 
 	return ctx, path
 }
 
-func exactEditCall(t *testing.T, ctx *AgentContext, tool string, args map[string]interface{}) *ToolResult {
+func exactEditCall(t *testing.T, ctx *AgentContext, tool string, args map[string]interface{}) *wire.ToolResult {
 	t.Helper()
 	raw, _ := json.Marshal(args)
 	return executeToolCall(tool, raw, ctx)

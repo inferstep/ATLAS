@@ -510,7 +510,7 @@ use.
 | `v3-service/pipeline.py` | Orchestration: runs verifiers, supplies the selected record | Decide wire shape |
 | `v3-service/adapters.py` | Adapter knowledge: which criteria an adapter can observe, what its grading means in contract terms, and the live-record → contract-record bridge | Decide closure, ranking or selection |
 | `v3-service/main.py` | Transport: calls `adapters.evidence_envelope`, writes its output | Hold any policy — pinned by `test_main_serialises_but_decides_nothing` |
-| `proxy/types.go` | The one Go wire representation, beside `V3GenerateResponse` | — |
+| `proxy/internal/wire/v3.go` | The one Go wire representation, beside `V3GenerateResponse` | — |
 | `proxy/v3_bridge.go` | The response boundary: decode plus strict validation and availability | Re-derive domain policy, or infer strength from `passed`/`phase_solved`/`winning_score`/`verification_evidence` |
 
 No separate evidence module exists on either side, and no compatibility module

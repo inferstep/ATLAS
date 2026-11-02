@@ -1,7 +1,7 @@
 // Client-side prediction of what a file-writing tool call will do, computed at
 // permission time from the CURRENT local file. Needed because the diff has to
 // be shown BEFORE the user allows the call — and for structural_edit even the
-// result carries no new content (proxy/types.go StructuralEditOutput is
+// result carries no new content (proxy/internal/wire/tool_io.go StructuralEditOutput is
 // ok/selector/language/byte counts only), so the post-state can only be
 // predicted here.
 //

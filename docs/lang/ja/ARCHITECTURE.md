@@ -122,6 +122,11 @@ K3s デプロイパス（`scripts/install.sh`、`templates/` 内のマニフェ�
 | `events.go` | 型付きエンベロープのブローカー（`/events`）と SSE の配管 |
 | `v3_bridge.go` | v3-service の `/v3/generate` + `/v3/plan` 向け SSE クライアント |
 | `types.go` | 共有型、ティア、ターン上限 |
+| `internal/wire/messages.go` | モデルのメッセージ、ツール結果、計画など、境界を越える型 |
+| `internal/wire/v3.go` | V3 サービスのリクエスト、レスポンス、証拠エンベロープとその検証 |
+| `internal/wire/tool_io.go` | 各ツールの引数と出力。モデルが読み書きする JSON |
+| `internal/wire/tool_classification.go` | ツール結果が起きたことを表す閉じた語彙 |
+| `internal/wire/events.go` | `/events` のエンベロープ |
 | `advisory_policy.go` | モデルの提案を保持するか候補を配信するかを決定する。検証と選択ルールの前にハード拒否権を適用する |
 | `authorization_decision.go` | 候補の証拠がタスクの認可要件（対象スコープと、既存ファイルの検証済み挙動の保存を含む）を満たすかチェックする |
 | `authorization_grant.go` | 正確な候補・対象・ワークスペース状態に束ねられた一回使い切りの許可を作成・消費・退役させる |
@@ -138,7 +143,7 @@ K3s デプロイパス（`scripts/install.sh`、`templates/` 内のマニフェ�
 | `delivery_settlement.go` | 完了した候補配信を記録し、認可された成果物が一致するバイトと台帳状態でまだ存在するかチェックする |
 | `edit_route_delivery.go` | 編集ツールの候補を認可と配信に通し、発元ツールの結果形式とフォールバック内容を保持する |
 | `evidence_wiring.go` | 構文と宣言コマンドの証拠生成者を候補ルートに接続し、候補識別子を割り当て、利用可能・欠落の証拠を記録する |
-| `execution_outcome.go` | コマンドの完了・中断・リソース枯渇を分類し、不完全な実行が成功した検証として数えられないようにする |
+| `internal/wire/execution_outcome.go` | コマンドの完了・中断・リソース枯渇を分類し、不完全な実行が成功した検証として数えられないようにする |
 | `feasibility_decision.go` | 生成の前に、利用可能な証拠生成者がタスクを充足できるかを評価し、生成を制御せずにその評価を記録する |
 | `fenced_framing.go` | 完全なフェンス済みファイルペイロードを認識し、その内容を抽出し、フレーミング文法とリトライガイダンスを供給する |
 | `old_str_watch.go` | ストリーミング中の編集テキストが対象ファイルに一致できなくなった時点で暴走を止め、回復ガイダンスを供給する |
@@ -443,7 +448,7 @@ API の契約は [API.md § POST /v3/plan](../../API.md#post-v3plan) に記載�
 | ファイル | 役割 |
 |---|---|
 | `proxy/v3_bridge.go` | `callV3PlanStreaming(reqCtx, v3URL, req, onProgress)` — SSE ストリームを開き、進捗イベントをコールバックに転送し、`event: result` フレームから最終的な `Plan` を返します。`reqCtx` がエージェントのリクエストコンテキストを結び付けるので、`/cancel` は実行中のプランを中止します。V3 パイプライン実行用の `callV3GenerateStreaming` と同じ形です。 |
-| `proxy/types.go` | `V3PlanRequest`、`Plan`、`PlanStep` 型。`AgentContext` に `Plan`、`PlanStepsSatisfied[]`、`PlanOffStreak`、`PlanRevisions` が加わります。 |
+| `proxy/internal/wire/` | `V3PlanRequest`、`Plan`、`PlanStep` 型。`AgentContext` に `Plan`、`PlanStepsSatisfied[]`、`PlanOffStreak`、`PlanRevisions` が加わります。 |
 | `proxy/plan_generation.go` | `samplePlanContext()` はプランナーのために優先ファイル（app.py、templates/index.html、package.json など）をたどります。`shouldGeneratePlan()` はティア、メッセージ長、読み取り専用のリクエストかどうかで判定します。`generatePlan()` はブリッジを実行し、トークンごとのノイズを捨て、全ステップのリストを付けて `plan_loaded` を発行します。 |
 | `proxy/gates_plan.go` | `matchPlanStep()`（ツール名とパス末尾の緩い一致）、`recordPlanAdherence()`（ツールコールごとの集計。どのステップにも一致しない偵察コール — `read_file`/`list_directory`/`find_file`/`search_files` — は中立で、`off_streak` を延ばしません）、`revisePlan()`（`FilesRead` を追加コンテキストとして引き継いで再生成）。 |
 

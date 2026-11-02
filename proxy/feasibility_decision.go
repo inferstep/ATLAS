@@ -3,6 +3,8 @@ package main
 import (
 	"sort"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // Whether this invocation could close its task at all, asked before generation
@@ -96,11 +98,11 @@ func producibleStrengthsWith(sandboxReachable bool) map[string]string {
 		// speak, and saying so is the whole point.
 		return out
 	}
-	if evidenceProducerStatus[ProvenanceProxyOwnedValidation] == evidenceProducerWired {
+	if evidenceProducerStatus[wire.ProvenanceProxyOwnedValidation] == evidenceProducerWired {
 		// The proxy's own gate: structural validity, at syntax.
 		out[ObligationSyntacticValidity] = "syntax"
 	}
-	if evidenceProducerStatus[ProvenanceClientDeclaredVerification] == evidenceProducerWired {
+	if evidenceProducerStatus[wire.ProvenanceClientDeclaredVerification] == evidenceProducerWired {
 		out[ObligationDeclaredCommand] = "behavioral"
 	}
 	return out
@@ -192,7 +194,7 @@ func decideInvocationFeasibility(in feasibilityInput) FeasibilityDecision {
 			note(FeasibilityNoTrustedSource, o.ID)
 			continue
 		}
-		if strengthRank(available) < strengthRank(o.RequiredStrength) {
+		if wire.StrengthRank(available) < wire.StrengthRank(o.RequiredStrength) {
 			note(FeasibilityNoTrustedSource, o.ID)
 		}
 	}
@@ -323,7 +325,7 @@ func baselineFloorReachable(required string, producible map[string]string) bool 
 		if kind == ObligationBaselinePreserved {
 			continue
 		}
-		if strengthRank(strength) >= strengthRank(required) {
+		if wire.StrengthRank(strength) >= wire.StrengthRank(required) {
 			return true
 		}
 	}

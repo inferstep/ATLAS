@@ -160,7 +160,7 @@ func TestTheRouteEntryIsNeverDecodedFromInput(t *testing.T) {
 	if mints != 1 {
 		t.Fatalf("mintRouteEntry declared %d times", mints)
 	}
-	for _, file := range append(append([]string{"types.go", "tool_io.go"}, agentFiles...), toolFiles...) {
+	for _, file := range append(append(wireFiles(t), agentFiles...), toolFiles...) {
 		body := readSourceForTest(t, file)
 		if strings.Contains(body, `json:"route_entry_id"`) ||
 			strings.Contains(body, `json:"route_entry"`) {
@@ -175,7 +175,7 @@ func TestTheV3StageEnvelopeGainedOneAdditiveField(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(body)
-	i := strings.Index(s, `Emit(NewEnvelope(EvtStageStart, "v3"`)
+	i := strings.Index(s, `Emit(wire.NewEnvelope(wire.EvtStageStart, "v3"`)
 	if i < 0 {
 		t.Fatal("the v3 stage envelope is gone")
 	}

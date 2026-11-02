@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // Staged evidence is the strong kind: it names the request, the invocation,
@@ -41,7 +43,7 @@ func newStagedCmdWorld(t *testing.T) *stagedCmdWorld {
 	}
 	ctx.SessionWrites["solve.py"] = true
 	hash := contentSHA256(body)
-	observeDeliverable(ctx, "solve.py", []byte(body), ValidationKindSyntax, ValidationPassed, "")
+	observeDeliverable(ctx, "solve.py", []byte(body), wire.ValidationKindSyntax, wire.ValidationPassed, "")
 
 	ob, ok := newTaskObligation(ObligationDeclaredCommand, stagedDeclaredCommand, VerificationKindRuntime, true)
 	if !ok {
@@ -192,11 +194,11 @@ func TestStagedEvidenceStopsCountingWhenItsContextChanges(t *testing.T) {
 			if err := os.WriteFile(w.target, []byte(body), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			observeDeliverable(w.ctx, "solve.py", []byte(body), ValidationKindSyntax, ValidationPassed, "")
+			observeDeliverable(w.ctx, "solve.py", []byte(body), wire.ValidationKindSyntax, wire.ValidationPassed, "")
 		}},
 		{"a ledger that does not validate these bytes", func(t *testing.T, w *stagedCmdWorld) {
 			w.ctx.LedgerMu.Lock()
-			w.ctx.Ledger[ledgerKey(w.ctx, w.target)].ValidationStatus = ValidationUnknown
+			w.ctx.Ledger[ledgerKey(w.ctx, w.target)].ValidationStatus = wire.ValidationUnknown
 			w.ctx.LedgerMu.Unlock()
 		}},
 	} {

@@ -3,6 +3,8 @@ package main
 import (
 	"errors"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // The new-file route obtains a stronger validation observation than
@@ -14,20 +16,20 @@ func TestOverlayValidationOnSuccess(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		in   checkOutcome
-		want ValidationStatus
-		kind ValidationKind
+		want wire.ValidationStatus
+		kind wire.ValidationKind
 	}{
-		{"passed", checkOutcome{Status: ValidationPassed}, ValidationPassed, ValidationKindSyntax},
-		{"not_run", checkOutcome{Status: ValidationNotRun, Detail: "sandbox unreachable"},
-			ValidationNotRun, ValidationKindSyntax},
-		{"not_applicable", checkOutcome{Status: ValidationNotApplicable},
-			ValidationNotApplicable, ValidationKindNone},
-		{"failed", checkOutcome{Status: ValidationFailed, Detail: "SyntaxError"},
-			ValidationFailed, ValidationKindSyntax},
+		{"passed", checkOutcome{Status: wire.ValidationPassed}, wire.ValidationPassed, wire.ValidationKindSyntax},
+		{"not_run", checkOutcome{Status: wire.ValidationNotRun, Detail: "sandbox unreachable"},
+			wire.ValidationNotRun, wire.ValidationKindSyntax},
+		{"not_applicable", checkOutcome{Status: wire.ValidationNotApplicable},
+			wire.ValidationNotApplicable, wire.ValidationKindNone},
+		{"failed", checkOutcome{Status: wire.ValidationFailed, Detail: "SyntaxError"},
+			wire.ValidationFailed, wire.ValidationKindSyntax},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			res := &ToolResult{Success: true, MutationStatus: MutationApplied,
-				ValidationKind: ValidationKindSyntax, ValidationStatus: ValidationNotRun}
+			res := &wire.ToolResult{Success: true, MutationStatus: wire.MutationApplied,
+				ValidationKind: wire.ValidationKindSyntax, ValidationStatus: wire.ValidationNotRun}
 			overlayValidation(res, c.in)
 			if res.ValidationStatus != c.want {
 				t.Errorf("ValidationStatus = %q, want %q", res.ValidationStatus, c.want)
@@ -39,7 +41,7 @@ func TestOverlayValidationOnSuccess(t *testing.T) {
 				t.Errorf("detail = %q, want %q", res.ValidationDetail, c.in.Detail)
 			}
 			// Mutation facts and Success are never touched by the overlay.
-			if res.MutationStatus != MutationApplied || !res.Success {
+			if res.MutationStatus != wire.MutationApplied || !res.Success {
 				t.Error("overlay altered mutation or Success")
 			}
 		})
@@ -49,9 +51,9 @@ func TestOverlayValidationOnSuccess(t *testing.T) {
 // Unknown must fail closed: it stays Unknown so a sentinel can catch the
 // producer defect, and never becomes passed or not_run.
 func TestOverlayUnknownFailsClosed(t *testing.T) {
-	res := &ToolResult{Success: true, MutationStatus: MutationApplied}
-	overlayValidation(res, checkOutcome{Status: ValidationUnknown})
-	if res.ValidationStatus != ValidationUnknown {
+	res := &wire.ToolResult{Success: true, MutationStatus: wire.MutationApplied}
+	overlayValidation(res, checkOutcome{Status: wire.ValidationUnknown})
+	if res.ValidationStatus != wire.ValidationUnknown {
 		t.Fatalf("ValidationStatus = %q, want unknown", res.ValidationStatus)
 	}
 	if res.ValidationStatus.Passed() {
@@ -66,7 +68,7 @@ func TestOverlayUnknownFailsClosed(t *testing.T) {
 // checked and passed can still fail to land.
 func TestOverlayValidationOnClassifiedError(t *testing.T) {
 	base := failedMutation("mod.py", errors.New("cannot rename temp file: boom"))
-	out := overlayValidationOnError(base, checkOutcome{Status: ValidationPassed})
+	out := overlayValidationOnError(base, checkOutcome{Status: wire.ValidationPassed})
 
 	if out == nil {
 		t.Fatal("the non-nil error contract was broken")
@@ -78,10 +80,10 @@ func TestOverlayValidationOnClassifiedError(t *testing.T) {
 	if !errors.As(out, &ce) {
 		t.Fatal("classification carrier lost")
 	}
-	if ce.mutationStatus != MutationFailed {
+	if ce.mutationStatus != wire.MutationFailed {
 		t.Errorf("mutationStatus = %q, want failed", ce.mutationStatus)
 	}
-	if ce.validationStatus != ValidationPassed || ce.validationKind != ValidationKindSyntax {
+	if ce.validationStatus != wire.ValidationPassed || ce.validationKind != wire.ValidationKindSyntax {
 		t.Errorf("validation = %q/%q, want syntax/passed",
 			ce.validationKind, ce.validationStatus)
 	}
@@ -91,7 +93,7 @@ func TestOverlayValidationOnClassifiedError(t *testing.T) {
 // classification where no producer made one.
 func TestOverlayLeavesUntypedErrorsAlone(t *testing.T) {
 	plain := errors.New("some unrelated failure")
-	out := overlayValidationOnError(plain, checkOutcome{Status: ValidationPassed})
+	out := overlayValidationOnError(plain, checkOutcome{Status: wire.ValidationPassed})
 	var ce *classifiedError
 	if errors.As(out, &ce) {
 		t.Fatal("an untyped error must not gain a classification carrier")

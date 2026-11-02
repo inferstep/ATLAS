@@ -5,6 +5,8 @@ import (
 	"io"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // endless is an answer of one byte, again and again, that never ends.
@@ -23,7 +25,7 @@ func (b endless) Read(p []byte) (int, error) {
 func TestAServiceAnswerOverTheBoundIsAnError(t *testing.T) {
 	readAll := func(answer io.Reader) (int64, error) { return io.Copy(io.Discard, serviceAnswer(answer)) }
 	decodeShell := func(answer io.Reader) (int64, error) {
-		var out RunCommandOutput
+		var out wire.RunCommandOutput
 		return 0, decodeShellResponse(answer, &out)
 	}
 	for _, c := range []struct {

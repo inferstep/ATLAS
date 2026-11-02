@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // typedCommandObligation returns the world's declared-command obligation.
@@ -279,7 +281,7 @@ func TestTypedBehavioralStillNeedsACleanRun(t *testing.T) {
 			if !ok {
 				return // no record at all is the strongest form of no authority
 			}
-			if ev.Outcome == ValidationPassed {
+			if ev.Outcome == wire.ValidationPassed {
 				t.Errorf("%s was recorded as a pass", tc.name)
 			}
 			if authorized, _ := ev.Authorizes(); authorized {

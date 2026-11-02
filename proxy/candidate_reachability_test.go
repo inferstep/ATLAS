@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // A mutation the producer never saw has to say so.
@@ -123,7 +125,7 @@ func TestANewFileBelowTheTierFloorSaysWhyItWasSkipped(t *testing.T) {
 	w := newBypassWorld(t)
 	const body = "def route(p):\n    if p == \"/\":\n        return home\n    return miss\n"
 	args, _ := json.Marshal(map[string]string{"path": "router.py", "content": body})
-	var res *ToolResult
+	var res *wire.ToolResult
 	recs := captureShadow(t, func() {
 		res = executeToolCall("write_file", args, w.ctx)
 	})
@@ -503,7 +505,7 @@ func newBudgetWorld(t *testing.T) *budgetWorld {
 	ctx.PermissionMode = PermissionYolo
 	ctx.Ctx = context.Background()
 	ctx.V3URL, ctx.SandboxURL = srv.URL, srv.URL
-	ctx.Messages = []AgentMessage{{Role: "user", Content: "write the module"}}
+	ctx.Messages = []wire.AgentMessage{{Role: "user", Content: "write the module"}}
 	w.ctx = ctx
 	return w
 }
@@ -524,7 +526,7 @@ def perimeter(radius):
     return 2 * math.pi * radius
 `
 
-func (w *budgetWorld) write(t *testing.T, rel, content string) *ToolResult {
+func (w *budgetWorld) write(t *testing.T, rel, content string) *wire.ToolResult {
 	t.Helper()
 	if tier := classifyFileTier(rel, content); tier < Tier2Medium {
 		t.Fatalf("fixture must be Tier 2+, got %v", tier)

@@ -1,6 +1,10 @@
 package main
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
+)
 
 // Whether the exact candidate V3 selected may land automatically.
 //
@@ -74,7 +78,7 @@ type automaticEligibilityInput struct {
 	// computed on this side from the bytes themselves.
 	CandidateHash string
 	// Identity is the proxy-built binding for those bytes.
-	Identity V3EvidenceProvenance
+	Identity wire.V3EvidenceProvenance
 	// Scope is the structured intent of the tool call that produced them.
 	Scope mutationScope
 	// TargetGrounded says the target has a grounding: the client declared it

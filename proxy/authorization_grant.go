@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // Turning an authorized decision into something that can be spent exactly once.
@@ -355,7 +357,7 @@ func groundGrantTarget(ctx *AgentContext, in authorizationInput,
 func serviceRecordUsable(in authorizationInput) (bool, string) {
 	// Modern, non-legacy record only.
 	if in.Envelope != nil {
-		if availability, _ := in.Envelope.Validate(); availability != EvidenceAvailable {
+		if availability, _ := in.Envelope.Validate(); availability != wire.EvidenceAvailable {
 			return false, "the service record is not usable"
 		}
 		// An adapter that cannot measure this artifact class cannot

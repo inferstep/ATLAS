@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/wire"
 	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
@@ -133,7 +134,7 @@ func TestHeldReferenceFollowsNothing(t *testing.T) {
 //
 // One driver for every case: inspect and ask, let the case disturb the disk
 // while the prompt is up, answer, run the real tool, and read the disk.
-func driveApprovedDeletion(t *testing.T, dir, rel, sess string, churn func()) (gone bool, res *ToolResult) {
+func driveApprovedDeletion(t *testing.T, dir, rel, sess string, churn func()) (gone bool, res *wire.ToolResult) {
 	t.Helper()
 	ctx, cancel := deletePermCtx(t, sess, dir)
 	defer cancel()

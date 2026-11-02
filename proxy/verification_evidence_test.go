@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // A command the client required, run exactly, against these exact bytes.
@@ -117,11 +119,11 @@ func TestAnExactDeclaredCommandAgainstExactCandidateBytesAuthorizes(t *testing.T
 	if !ok {
 		t.Fatal("an exact declared command against exact bytes produced nothing")
 	}
-	if ev.Outcome != ValidationPassed {
+	if ev.Outcome != wire.ValidationPassed {
 		t.Errorf("outcome %q, want passed", ev.Outcome)
 	}
 	p := ev.Provenance
-	if p.Source != ProvenanceClientDeclaredVerification {
+	if p.Source != wire.ProvenanceClientDeclaredVerification {
 		t.Errorf("source %q, want client_declared_verification", p.Source)
 	}
 	// The fixture declares the command without a type, so what it demands and
@@ -337,7 +339,7 @@ func TestOnlyACleanForegroundSuccessAuthorizes(t *testing.T) {
 			if !ok {
 				return // declining outright is also a correct answer
 			}
-			if ev.Outcome == ValidationPassed {
+			if ev.Outcome == wire.ValidationPassed {
 				t.Error("recorded as a pass")
 			}
 			if authorized, _ := ev.Authorizes(); authorized {

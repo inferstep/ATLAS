@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // Bounds, pinned.
@@ -99,14 +101,14 @@ func TestCancellationStopsThePolicy(t *testing.T) {
 	cancel()
 	ctx.Ctx = cancelled
 	out := decideCandidatePolicy(ctx, advisoryInput{
-		Observed:         checkOutcome{Status: ValidationPassed},
+		Observed:         checkOutcome{Status: wire.ValidationPassed},
 		TargetDeclared:   true,
 		TargetAuthorized: true,
 		ScopeAdmits:      true,
 		Cancelled:        ctx.Ctx.Err() != nil,
 		Evidence: []proxyEvidence{{
-			Provenance: V3EvidenceProvenance{Source: ProvenanceClientDeclaredVerification},
-			Outcome:    ValidationPassed,
+			Provenance: wire.V3EvidenceProvenance{Source: wire.ProvenanceClientDeclaredVerification},
+			Outcome:    wire.ValidationPassed,
 		}},
 	}, false)
 	if out.Decision != PolicyCandidateRejectedHardVeto {

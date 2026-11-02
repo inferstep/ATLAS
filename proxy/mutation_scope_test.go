@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // The structured intent boundary.
@@ -119,7 +121,7 @@ func TestScopeFailsClosedOnStaleIdentity(t *testing.T) {
 	if err := os.WriteFile(path, []byte("x = 1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	observeDeliverable(ctx, path, []byte("x = 1\n"), ValidationKindSyntax, ValidationPassed, "")
+	observeDeliverable(ctx, path, []byte("x = 1\n"), wire.ValidationKindSyntax, wire.ValidationPassed, "")
 	s, ok := deriveMutationScope(ctx, scopeEntry(t, ctx), "write_file", path, "x = 1\n", "x = 2\n")
 	if !ok {
 		t.Fatal("no scope")
@@ -128,7 +130,7 @@ func TestScopeFailsClosedOnStaleIdentity(t *testing.T) {
 		t.Fatalf("a fresh scope refused its own candidate: %s", why)
 	}
 	// The target moves underneath it.
-	observeDeliverable(ctx, path, []byte("x = 3\n"), ValidationKindSyntax, ValidationPassed, "")
+	observeDeliverable(ctx, path, []byte("x = 3\n"), wire.ValidationKindSyntax, wire.ValidationPassed, "")
 	if admits, why := scopeAdmitsCandidate(ctx, s, "x = 2\n"); admits ||
 		(why != scopeRefusedTargetMoved && why != scopeRefusedWorkspaceMoved) {
 		t.Errorf("a moved target still admitted a candidate (%v/%q)", admits, why)

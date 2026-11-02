@@ -14,6 +14,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // --- An executed write is identified by the bytes it proposes (C4) ----------
@@ -235,7 +237,7 @@ func (r *c4Run) disk(t *testing.T) string {
 func (r *c4Run) log(t *testing.T, name string) {
 	t.Helper()
 	d := r.ctx.Ledger[ledgerKey(r.ctx, "solve.py")]
-	kind, status := ValidationKindUnknown, ValidationUnknown
+	kind, status := wire.ValidationKindUnknown, wire.ValidationUnknown
 	hashOK := false
 	if d != nil {
 		kind, status = d.CurrentValidation()
@@ -462,7 +464,7 @@ func TestAnInvalidThenValidProposalStillCompletes(t *testing.T) {
 		return map[string]interface{}{"type": "done", "summary": "solve.py prints 7"}
 	})
 	r.log(t, "C")
-	if r.terminal["status"] != string(TerminalCompleted) {
+	if r.terminal["status"] != string(wire.TerminalCompleted) {
 		t.Errorf("terminal %q/%q, want completed",
 			r.terminal["status"], r.terminal["reason"])
 	}
@@ -532,7 +534,7 @@ func TestRefusedReplacementRecovery(t *testing.T) {
 				t.Errorf("the recovery does not carry the diagnostic for the "+
 					"proposal that triggered it (want %q):\n%.400s", last, r.recoveries[0])
 			}
-			if r.terminal["status"] != string(TerminalCompleted) ||
+			if r.terminal["status"] != string(wire.TerminalCompleted) ||
 				r.terminal["reason"] != "deliverables_demonstrated" {
 				t.Fatalf("terminal %q/%q, want completed/deliverables_demonstrated",
 					r.terminal["status"], r.terminal["reason"])
@@ -556,8 +558,8 @@ func TestRefusedReplacementCorrectionLandsValidated(t *testing.T) {
 			if d == nil || d.CurrentHash != hashBytes([]byte(r.disk(t))) {
 				t.Fatal("the ledger does not describe the bytes on disk")
 			}
-			if kind, status := d.CurrentValidation(); status != ValidationPassed ||
-				kind != ValidationKindSyntax {
+			if kind, status := d.CurrentValidation(); status != wire.ValidationPassed ||
+				kind != wire.ValidationKindSyntax {
 				t.Errorf("validation on the current hash is %s/%s, want syntax/passed", kind, status)
 			}
 		})
@@ -621,7 +623,7 @@ func c4State(t *testing.T, mutate func(*AgentContext, *DeliverableState, string)
 	h := hashBytes([]byte(c4Valid))
 	d := &DeliverableState{
 		Path: "solve.py", CurrentHash: h, CurrentSize: len(c4Valid), Generation: 1,
-		ValidationKind: ValidationKindSyntax, ValidationStatus: ValidationPassed,
+		ValidationKind: wire.ValidationKindSyntax, ValidationStatus: wire.ValidationPassed,
 		ValidatedHash: h,
 	}
 	ctx.Ledger[ledgerKey(ctx, "solve.py")] = d
@@ -631,12 +633,12 @@ func c4State(t *testing.T, mutate func(*AgentContext, *DeliverableState, string)
 	return ctx, &runState{}, hashBytes([]byte(c4BadA))
 }
 
-func c4Refusal(args string) (json.RawMessage, *ToolResult) {
-	return json.RawMessage(args), &ToolResult{
+func c4Refusal(args string) (json.RawMessage, *wire.ToolResult) {
+	return json.RawMessage(args), &wire.ToolResult{
 		Success:          false,
-		MutationStatus:   MutationRefused,
-		ValidationKind:   ValidationKindSyntax,
-		ValidationStatus: ValidationFailed,
+		MutationStatus:   wire.MutationRefused,
+		ValidationKind:   wire.ValidationKindSyntax,
+		ValidationStatus: wire.ValidationFailed,
 		ValidationDetail: "invalid syntax (line 3)",
 	}
 }
@@ -648,19 +650,19 @@ func TestRefusedReplacementEligibility(t *testing.T) {
 	for _, c := range []struct {
 		name   string
 		mutate func(*AgentContext, *DeliverableState, string)
-		result func(*ToolResult)
+		result func(*wire.ToolResult)
 	}{
 		{"surviving validation unknown", func(_ *AgentContext, d *DeliverableState, _ string) {
-			d.ValidationStatus, d.ValidationKind = ValidationUnknown, ValidationKindUnknown
+			d.ValidationStatus, d.ValidationKind = wire.ValidationUnknown, wire.ValidationKindUnknown
 		}, nil},
 		{"surviving validation not_run", func(_ *AgentContext, d *DeliverableState, _ string) {
-			d.ValidationStatus = ValidationNotRun
+			d.ValidationStatus = wire.ValidationNotRun
 		}, nil},
 		{"surviving validation not_applicable", func(_ *AgentContext, d *DeliverableState, _ string) {
-			d.ValidationStatus = ValidationNotApplicable
+			d.ValidationStatus = wire.ValidationNotApplicable
 		}, nil},
 		{"surviving validation failed", func(_ *AgentContext, d *DeliverableState, _ string) {
-			d.ValidationStatus = ValidationFailed
+			d.ValidationStatus = wire.ValidationFailed
 		}, nil},
 		{"surviving verdict describes older bytes", func(_ *AgentContext, d *DeliverableState, _ string) {
 			d.ValidatedHash = hashBytes([]byte("other"))
@@ -674,11 +676,11 @@ func TestRefusedReplacementEligibility(t *testing.T) {
 		{"no known-good baseline was ever kept", func(ctx *AgentContext, _ *DeliverableState, _ string) {
 			delete(ctx.Ledger, ledgerKey(ctx, "solve.py"))
 		}, nil},
-		{"the write was not refused", nil, func(r *ToolResult) { r.MutationStatus = MutationApplied }},
-		{"the failure was not a syntax failure", nil, func(r *ToolResult) {
-			r.ValidationKind = ValidationKindUnknown
+		{"the write was not refused", nil, func(r *wire.ToolResult) { r.MutationStatus = wire.MutationApplied }},
+		{"the failure was not a syntax failure", nil, func(r *wire.ToolResult) {
+			r.ValidationKind = wire.ValidationKindUnknown
 		}},
-		{"no diagnostic for those bytes", nil, func(r *ToolResult) { r.ValidationDetail = "" }},
+		{"no diagnostic for those bytes", nil, func(r *wire.ToolResult) { r.ValidationDetail = "" }},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			ctx, st, _ := c4State(t, c.mutate)
@@ -801,7 +803,7 @@ func TestRefusedReplacementSeparatePathsAreIndependent(t *testing.T) {
 	h := hashBytes([]byte(c4Valid))
 	ctx.Ledger[ledgerKey(ctx, "helper.py")] = &DeliverableState{
 		Path: "helper.py", CurrentHash: h, Generation: 1,
-		ValidationKind: ValidationKindSyntax, ValidationStatus: ValidationPassed,
+		ValidationKind: wire.ValidationKindSyntax, ValidationStatus: wire.ValidationPassed,
 		ValidatedHash: h,
 	}
 	a, ra := c4Refusal(c4BadAArgs)
@@ -913,7 +915,7 @@ func TestRefusedReplacementCeilingFailsClosed(t *testing.T) {
 		h := hashBytes([]byte(c4Valid))
 		ctx.Ledger[ledgerKey(ctx, name)] = &DeliverableState{
 			Path: name, CurrentHash: h, Generation: 1,
-			ValidationKind: ValidationKindSyntax, ValidationStatus: ValidationPassed,
+			ValidationKind: wire.ValidationKindSyntax, ValidationStatus: wire.ValidationPassed,
 			ValidatedHash: h,
 		}
 		args, res := c4Refusal(`{"path":"` + name + `","content":` + c4JSON(c4BadA) + `}`)

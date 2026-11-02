@@ -5,6 +5,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // The policy foundation, exercised through the real write path.
@@ -131,20 +133,20 @@ func TestTheOneDeliveryRule(t *testing.T) {
 		// selected: the V3 selection path named the candidate.
 		selected bool
 		// observed: the proxy's own syntax check on the candidate.
-		observed ValidationStatus
+		observed wire.ValidationStatus
 		// verified: a declared verification passed against the candidate.
 		verified bool
 		want     candidatePolicyDecision
 		delivers bool
 	}{
-		{"no basis", false, ValidationPassed, false, PolicyBaselineRetained, false},
-		{"selected and safe", true, ValidationPassed, false, PolicyCandidateAutomaticV3, true},
-		{"declared verification passed", true, ValidationPassed, true, PolicyCandidateAuthorizedStrict, true},
-		{"a veto outranks selection and verification", true, ValidationFailed, true, PolicyCandidateRejectedHardVeto, false},
-		{"a veto outranks verification alone", false, ValidationFailed, true, PolicyCandidateRejectedHardVeto, false},
+		{"no basis", false, wire.ValidationPassed, false, PolicyBaselineRetained, false},
+		{"selected and safe", true, wire.ValidationPassed, false, PolicyCandidateAutomaticV3, true},
+		{"declared verification passed", true, wire.ValidationPassed, true, PolicyCandidateAuthorizedStrict, true},
+		{"a veto outranks selection and verification", true, wire.ValidationFailed, true, PolicyCandidateRejectedHardVeto, false},
+		{"a veto outranks verification alone", false, wire.ValidationFailed, true, PolicyCandidateRejectedHardVeto, false},
 		// A class with no syntax check: nothing could run, so nothing is
 		// vetoed on that ground.
-		{"a class with no syntax check", true, ValidationNotApplicable, false, PolicyCandidateAutomaticV3, true},
+		{"a class with no syntax check", true, wire.ValidationNotApplicable, false, PolicyCandidateAutomaticV3, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			in := advisoryInput{
@@ -169,7 +171,7 @@ func TestTheOneDeliveryRule(t *testing.T) {
 // no basis lifts it.
 func TestEveryHardVetoIsReachable(t *testing.T) {
 	ctx := policyContext(t)
-	base := advisoryInput{Observed: checkOutcome{Status: ValidationPassed},
+	base := advisoryInput{Observed: checkOutcome{Status: wire.ValidationPassed},
 		TargetDeclared: true, TargetAuthorized: true, ScopeAdmits: true}
 	for _, tc := range []struct {
 		name   string
@@ -177,7 +179,7 @@ func TestEveryHardVetoIsReachable(t *testing.T) {
 		want   string
 	}{
 		{"syntax or structural", func(in *advisoryInput) {
-			in.Observed = checkOutcome{Status: ValidationFailed}
+			in.Observed = checkOutcome{Status: wire.ValidationFailed}
 		}, VetoSyntaxOrStructural},
 		{"language or target", func(in *advisoryInput) {
 			in.LanguageOrBoundaryViolation = true
@@ -193,8 +195,8 @@ func TestEveryHardVetoIsReachable(t *testing.T) {
 			in.DestructiveImplied = true
 			in.AutomaticEligible = true
 			in.Evidence = []proxyEvidence{{
-				Provenance: V3EvidenceProvenance{Source: ProvenanceClientDeclaredVerification},
-				Outcome:    ValidationPassed,
+				Provenance: wire.V3EvidenceProvenance{Source: wire.ProvenanceClientDeclaredVerification},
+				Outcome:    wire.ValidationPassed,
 			}}
 		}, VetoDestructiveWithoutPermission},
 		{"mutated protected assets", func(in *advisoryInput) {
@@ -208,8 +210,8 @@ func TestEveryHardVetoIsReachable(t *testing.T) {
 		{"declared verification failed beside a trusted pass", func(in *advisoryInput) {
 			in.Unmet = map[string]AuthorizationReason{"cmd": ReasonEvidenceExecutionFailed}
 			in.Evidence = []proxyEvidence{{
-				Provenance: V3EvidenceProvenance{Source: ProvenanceProxyOwnedValidation},
-				Outcome:    ValidationPassed,
+				Provenance: wire.V3EvidenceProvenance{Source: wire.ProvenanceProxyOwnedValidation},
+				Outcome:    wire.ValidationPassed,
 			}}
 		}, VetoDeclaredVerificationFailed},
 		{"execution unavailable", func(in *advisoryInput) {
@@ -218,11 +220,11 @@ func TestEveryHardVetoIsReachable(t *testing.T) {
 		// A check that never ran is not evidence either way, and the
 		// selection basis cannot stand on it.
 		{"syntax check not run, though selected", func(in *advisoryInput) {
-			in.Observed = checkOutcome{Status: ValidationNotRun}
+			in.Observed = checkOutcome{Status: wire.ValidationNotRun}
 			in.AutomaticEligible = true
 		}, VetoExecutionUnavailable},
 		{"syntax check unknown, though selected", func(in *advisoryInput) {
-			in.Observed = checkOutcome{Status: ValidationUnknown}
+			in.Observed = checkOutcome{Status: wire.ValidationUnknown}
 			in.AutomaticEligible = true
 		}, VetoExecutionUnavailable},
 		{"timed out", func(in *advisoryInput) {
@@ -310,12 +312,6 @@ func TestHiddenEvaluatorCannotInfluenceThePolicy(t *testing.T) {
 			}
 		}
 	}
-	// And no provenance source exists that a hidden grader could claim.
-	for source := range provenanceSources {
-		if strings.Contains(source, "evaluator") || strings.Contains(source, "benchmark") {
-			t.Errorf("provenance source %q exists", source)
-		}
-	}
 }
 
 // Nothing selects the rule. A contract that carries candidate_policy, with any
@@ -336,7 +332,7 @@ func TestNothingSelectsTheRule(t *testing.T) {
 		}
 	}
 	t.Setenv("ATLAS_CANDIDATE_POLICY", "strict")
-	in := advisoryInput{Observed: checkOutcome{Status: ValidationPassed},
+	in := advisoryInput{Observed: checkOutcome{Status: wire.ValidationPassed},
 		TargetDeclared: true, TargetAuthorized: true, ScopeAdmits: true, AutomaticEligible: true}
 	out := decideCandidatePolicy(policyContext(t), in, false)
 	if out.Decision != PolicyCandidateAutomaticV3 || out.Mode != CandidatePolicyAutomaticV3 ||
@@ -384,7 +380,7 @@ func TestDeliveryProvenanceNamesTheOrigin(t *testing.T) {
 // The provenance is a server-side fact for the user, not something the model
 // reads and argues with.
 func TestDeliveryProvenanceIsNotModelFacing(t *testing.T) {
-	r := &ToolResult{Success: true, DeliveryProvenance: DeliveryFromStrictCandidate}
+	r := &wire.ToolResult{Success: true, DeliveryProvenance: DeliveryFromStrictCandidate}
 	blob, err := json.Marshal(r.ModelFacing())
 	if err != nil {
 		t.Fatal(err)
@@ -398,14 +394,14 @@ func TestDeliveryProvenanceIsNotModelFacing(t *testing.T) {
 // No advisory value is presented as a probability of correctness.
 func TestNoAdvisoryValueClaimsCorrectness(t *testing.T) {
 	in := advisoryInput{
-		Observed:         checkOutcome{Status: ValidationPassed},
+		Observed:         checkOutcome{Status: wire.ValidationPassed},
 		TargetDeclared:   true,
 		TargetAuthorized: true,
 		ScopeAdmits:      true,
 		Evidence: []proxyEvidence{{
-			Provenance: V3EvidenceProvenance{
-				Source: ProvenanceClientDeclaredVerification, ObservedStrength: "behavioral"},
-			Outcome: ValidationPassed,
+			Provenance: wire.V3EvidenceProvenance{
+				Source: wire.ProvenanceClientDeclaredVerification, ObservedStrength: "behavioral"},
+			Outcome: wire.ValidationPassed,
 		}},
 	}
 	signals := advisorySignals(in)
@@ -420,7 +416,7 @@ func TestNoAdvisoryValueClaimsCorrectness(t *testing.T) {
 		}
 	}
 	// The service's numbers are labelled as the service's wherever they appear.
-	in.Envelope = &V3EvidenceEnvelope{}
+	in.Envelope = &wire.V3EvidenceEnvelope{}
 	for key := range advisorySignals(in) {
 		if strings.Contains(key, "closure") || strings.Contains(key, "selection") {
 			if !strings.HasPrefix(key, "service_") {

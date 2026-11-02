@@ -7,6 +7,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // Repair in progress.
@@ -68,13 +70,13 @@ var repairEditTools = map[string]bool{
 
 // landedUnparseable reports whether a call landed bytes that fail the syntax
 // check.
-func landedUnparseable(r *ToolResult) bool {
-	return r != nil && r.MutationStatus == MutationApplied &&
-		r.ValidationKind == ValidationKindSyntax && r.ValidationStatus == ValidationFailed
+func landedUnparseable(r *wire.ToolResult) bool {
+	return r != nil && r.MutationStatus == wire.MutationApplied &&
+		r.ValidationKind == wire.ValidationKindSyntax && r.ValidationStatus == wire.ValidationFailed
 }
 
 // observeRepair updates the repairs after one tool call.
-func (s *runState) observeRepair(ctx *AgentContext, turn int, name string, args json.RawMessage, result *ToolResult) {
+func (s *runState) observeRepair(ctx *AgentContext, turn int, name string, args json.RawMessage, result *wire.ToolResult) {
 	if ctx == nil || result == nil {
 		return
 	}
@@ -98,10 +100,10 @@ func (s *runState) observeRepair(ctx *AgentContext, turn int, name string, args 
 				r = s.openRepair(ctx, key, target.Rel, turn, name)
 			}
 			s.recordRepairAttempt(ctx, r, turn, name, true, result.ValidationDetail)
-		case result.MutationStatus == MutationApplied:
+		case result.MutationStatus == wire.MutationApplied:
 			if open {
 				how := "parses"
-				if result.ValidationStatus != ValidationPassed {
+				if result.ValidationStatus != wire.ValidationPassed {
 					how = "not checked"
 				}
 				s.closeRepair(ctx, r, turn, name, how)
@@ -133,12 +135,12 @@ func (s *runState) refreshRepairs(ctx *AgentContext, turn int, tool string) {
 			continue
 		}
 		o := fallbackSyntaxOutcomeFor(ctx, r.Rel, string(data)).aggregate()
-		if o.Status == ValidationFailed {
+		if o.Status == wire.ValidationFailed {
 			s.recordRepairAttempt(ctx, r, turn, tool, true, o.Detail)
 			continue
 		}
 		how := "parses"
-		if o.Status != ValidationPassed {
+		if o.Status != wire.ValidationPassed {
 			how = "not checked"
 		}
 		s.closeRepair(ctx, r, turn, tool, how)

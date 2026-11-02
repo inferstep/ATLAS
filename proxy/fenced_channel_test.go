@@ -16,6 +16,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // Code inside a JSON string must escape every quote and newline, and dense
@@ -64,10 +66,10 @@ func TestFenceTagFollowsExtension(t *testing.T) {
 }
 
 func TestRawResponseForFenceRoundTrips(t *testing.T) {
-	parsed := ModelResponse{Type: "tool_call", Name: "write_file",
+	parsed := wire.ModelResponse{Type: "tool_call", Name: "write_file",
 		Args: json.RawMessage(`{"path":"solve.py","content":"@fenced"}`)}
 	raw := rawResponseForFence(parsed)
-	var back ModelResponse
+	var back wire.ModelResponse
 	if json.Unmarshal([]byte(raw), &back) != nil || back.Name != "write_file" {
 		t.Fatalf("round trip failed: %s", raw)
 	}
@@ -442,7 +444,7 @@ func TestNoPersistentStateOrWireFieldWasAdded(t *testing.T) {
 	if !strings.Contains(string(types), "FencedFailures map[string]int") {
 		t.Fatal("the allowance is not session state")
 	}
-	for _, f := range append([]string{"types.go", "tool_io.go"}, agentFiles...) {
+	for _, f := range append(wireFiles(t), agentFiles...) {
 		src := readSourceForTest(t, f)
 		for _, leak := range []string{`json:"fenced_failures`, "os.WriteFile(fencedState"} {
 			if strings.Contains(src, leak) {
@@ -800,7 +802,7 @@ func TestAGrammarConstrainedFencedAttemptIsWatched(t *testing.T) {
 	ctx.InferenceURL = srv.URL
 	ctx.Ctx = context.Background()
 	start := time.Now()
-	out, _, err := callLLMOnceWithGrammar(ctx, []AgentMessage{{Role: "user", Content: "x"}},
+	out, _, err := callLLMOnceWithGrammar(ctx, []wire.AgentMessage{{Role: "user", Content: "x"}},
 		0.2, fenceBlockGrammar("python"))
 	if el := time.Since(start); el > 10*time.Second {
 		t.Fatalf("the grammar-constrained attempt was not watched: %v", el)
@@ -1115,7 +1117,7 @@ func TestWorkDeadlineEmitsExactlyOneTimedOutTerminal(t *testing.T) {
 				t.Fatalf("agent loop error: %v", err)
 			}
 
-			if terminal["status"] != string(TerminalTimedOut) {
+			if terminal["status"] != string(wire.TerminalTimedOut) {
 				t.Errorf("status = %q, want timed_out (summary=%q)",
 					terminal["status"], terminal["summary"])
 			}
@@ -1231,7 +1233,7 @@ func TestTimeoutRestorationObeysTheSameEligibilityRules(t *testing.T) {
 			if string(got) != c.wantBytes {
 				t.Errorf("disk = %q, want %q", got, c.wantBytes)
 			}
-			if terminal["status"] != string(TerminalTimedOut) {
+			if terminal["status"] != string(wire.TerminalTimedOut) {
 				t.Errorf("status = %q, want timed_out", terminal["status"])
 			}
 		})
@@ -1351,7 +1353,7 @@ func TestClientDisconnectIsNotATimeout(t *testing.T) {
 	if err == nil {
 		t.Error("a disconnect should surface as the context error")
 	}
-	if terminal["status"] == string(TerminalTimedOut) {
+	if terminal["status"] == string(wire.TerminalTimedOut) {
 		t.Error("a disconnect was reported as a server timeout")
 	}
 	if census["done"] != 0 {

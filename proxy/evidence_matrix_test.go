@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // The evidence matrix: eight shapes a real request can take, each run through
@@ -370,7 +372,7 @@ func TestEvidenceMatrixExistingValidatedBaseline(t *testing.T) {
 	}
 	w.ctx.Ledger[w.path] = &DeliverableState{
 		Path: w.path, CurrentHash: w.hash, Generation: 1,
-		ValidationKind: ValidationKindSyntax, ValidationStatus: ValidationPassed,
+		ValidationKind: wire.ValidationKindSyntax, ValidationStatus: wire.ValidationPassed,
 		ValidatedHash: w.hash,
 	}
 	var base taskObligation

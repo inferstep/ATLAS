@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // The acquisition control, proved through the real production route.
@@ -284,7 +286,7 @@ func TestNoTaskContractOrToolResultCarriesTheCaptureControl(t *testing.T) {
 		t.Error("the stored contract carries an acquisition control")
 	}
 
-	r := &ToolResult{Success: true}
+	r := &wire.ToolResult{Success: true}
 	facing, err := json.Marshal(r.ModelFacing())
 	if err != nil {
 		t.Fatal(err)
@@ -383,7 +385,7 @@ func TestCaptureOnlyWeakensNothingElse(t *testing.T) {
 	}
 	// And a vetoed candidate is still vetoed.
 	out := decideCandidatePolicy(ctx, advisoryInput{
-		Observed: checkOutcome{Status: ValidationFailed}, TargetDeclared: true,
+		Observed: checkOutcome{Status: wire.ValidationFailed}, TargetDeclared: true,
 		TargetAuthorized: true, ScopeAdmits: true, CaptureOnlySuppressed: true,
 	}, true)
 	if out.Decision != PolicyCandidateRejectedHardVeto || out.Delivers {

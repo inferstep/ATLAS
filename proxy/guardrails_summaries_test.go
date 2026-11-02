@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // A run that did not finish cleanly says what happened and what is on disk,
@@ -66,25 +68,25 @@ func TestACompletedRunThatChangedNothingSaysSo(t *testing.T) {
 		st         *runState
 		ledger     map[string]*DeliverableState // nil: nothing recorded
 		unobserved bool
-		status     TerminalStatus
+		status     wire.TerminalStatus
 		summary    string
 		want       string
 	}{
-		{name: "it changed nothing", st: &runState{inspectedWorkspace: true}, status: TerminalCompleted,
+		{name: "it changed nothing", st: &runState{inspectedWorkspace: true}, status: wire.TerminalCompleted,
 			summary: "Updated calc.py.", want: "Updated calc.py.\n\n" + noChangeNote},
-		{name: "it changed nothing and said nothing", st: &runState{inspectedWorkspace: true}, status: TerminalCompleted,
+		{name: "it changed nothing and said nothing", st: &runState{inspectedWorkspace: true}, status: wire.TerminalCompleted,
 			summary: "", want: noChangeNote},
-		{name: "it never looked at the project", st: &runState{}, status: TerminalCompleted,
+		{name: "it never looked at the project", st: &runState{}, status: wire.TerminalCompleted,
 			summary: "Done.", want: "Done."},
-		{name: "a tool wrote a file", st: &runState{inspectedWorkspace: true, madeProductiveChange: true}, status: TerminalCompleted,
+		{name: "a tool wrote a file", st: &runState{inspectedWorkspace: true, madeProductiveChange: true}, status: wire.TerminalCompleted,
 			summary: "Done.", want: "Done."},
-		{name: "the shell wrote a file", st: &runState{inspectedWorkspace: true}, status: TerminalCompleted,
+		{name: "the shell wrote a file", st: &runState{inspectedWorkspace: true}, status: wire.TerminalCompleted,
 			ledger: map[string]*DeliverableState{"out.txt": {Generation: 1}}, summary: "Done.", want: "Done."},
-		{name: "the shell removed a file", st: &runState{inspectedWorkspace: true}, status: TerminalCompleted,
+		{name: "the shell removed a file", st: &runState{inspectedWorkspace: true}, status: wire.TerminalCompleted,
 			ledger: map[string]*DeliverableState{"old.txt": {Tombstoned: true}}, summary: "Done.", want: "Done."},
-		{name: "shell effects went unobserved", st: &runState{inspectedWorkspace: true}, status: TerminalCompleted,
+		{name: "shell effects went unobserved", st: &runState{inspectedWorkspace: true}, status: wire.TerminalCompleted,
 			unobserved: true, summary: "Done.", want: "Done."},
-		{name: "the run did not complete", st: &runState{inspectedWorkspace: true}, status: TerminalIncomplete,
+		{name: "the run did not complete", st: &runState{inspectedWorkspace: true}, status: wire.TerminalIncomplete,
 			summary: "Done.", want: "Done."},
 	} {
 		t.Run(c.name, func(t *testing.T) {

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/wire"
 	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
@@ -46,12 +47,12 @@ func shouldGeneratePlan(ctx *AgentContext, message string) bool {
 // `v3_plan` events. Returns the winning Plan or nil if the planner
 // errored — callers should treat nil as "no plan, proceed without
 // adherence gating".
-func generatePlan(ctx *AgentContext, userMessage string) *Plan {
+func generatePlan(ctx *AgentContext, userMessage string) *wire.Plan {
 	if ctx.V3URL == "" {
 		return nil
 	}
 	pctx := samplePlanContext(ctx.WorkingDir, 6, 2000)
-	req := V3PlanRequest{
+	req := wire.V3PlanRequest{
 		UserMessage:    userMessage,
 		WorkingDir:     ctx.WorkingDir,
 		ProjectContext: pctx,
@@ -60,7 +61,7 @@ func generatePlan(ctx *AgentContext, userMessage string) *Plan {
 	}
 
 	planStart := time.Now()
-	Emit(NewEnvelope(EvtStageStart, planStage, map[string]interface{}{
+	Emit(wire.NewEnvelope(wire.EvtStageStart, planStage, map[string]interface{}{
 		"detail":     fmt.Sprintf("planning: %s", truncateStr(userMessage, 60)),
 		"context_n":  len(pctx),
 		"candidates": req.NCandidates,
@@ -83,16 +84,16 @@ func generatePlan(ctx *AgentContext, userMessage string) *Plan {
 		ctx.Stream("v3_plan", payload)
 		// Mirror to the typed broker so non-TUI consumers (logs, audit)
 		// see the same stream.
-		Emit(NewEnvelope(EvtMetric, "v3:plan:"+stage, payload))
+		Emit(wire.NewEnvelope(wire.EvtMetric, "v3:plan:"+stage, payload))
 	})
 	dur := time.Since(planStart).Milliseconds()
 
 	if err != nil {
 		log.Printf("[agent] plan generation failed: %v", err)
-		Emit(Envelope{
-			EventID:    NewEventID(),
+		Emit(wire.Envelope{
+			EventID:    wire.NewEventID(),
 			Timestamp:  float64(time.Now().UnixNano()) / 1e9,
-			Type:       EvtStageEnd,
+			Type:       wire.EvtStageEnd,
 			Stage:      planStage,
 			DurationMS: dur,
 			Payload:    map[string]interface{}{"success": false, "error": err.Error()},
@@ -100,10 +101,10 @@ func generatePlan(ctx *AgentContext, userMessage string) *Plan {
 		return nil
 	}
 
-	Emit(Envelope{
-		EventID:    NewEventID(),
+	Emit(wire.Envelope{
+		EventID:    wire.NewEventID(),
 		Timestamp:  float64(time.Now().UnixNano()) / 1e9,
-		Type:       EvtStageEnd,
+		Type:       wire.EvtStageEnd,
 		Stage:      planStage,
 		DurationMS: dur,
 		Payload: map[string]interface{}{
@@ -128,7 +129,7 @@ func generatePlan(ctx *AgentContext, userMessage string) *Plan {
 		"revision":      0,
 	}
 	ctx.Stream("plan_loaded", planPayload)
-	Emit(NewEnvelope(EvtMetric, "v3:plan:loaded", planPayload))
+	Emit(wire.NewEnvelope(wire.EvtMetric, "v3:plan:loaded", planPayload))
 
 	return plan
 }

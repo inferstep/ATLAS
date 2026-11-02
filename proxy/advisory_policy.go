@@ -2,6 +2,8 @@ package main
 
 import (
 	"sort"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // What the delivery rule may look at, and what disqualifies a candidate
@@ -110,7 +112,7 @@ type advisoryInput struct {
 	Evidence []proxyEvidence
 	// Envelope is the service's own record. Advisory only: it is read for
 	// ranking signals and never for authority.
-	Envelope *V3EvidenceEnvelope
+	Envelope *wire.V3EvidenceEnvelope
 	// Cancelled is whether the request itself is over.
 	Cancelled bool
 	// DestructivePermitted is the permission owner's answer when the route
@@ -155,10 +157,10 @@ type advisoryInput struct {
 func advisoryVetoes(in advisoryInput) []string {
 	fired := map[string]bool{}
 
-	if in.Observed.Status == ValidationFailed {
+	if in.Observed.Status == wire.ValidationFailed {
 		fired[VetoSyntaxOrStructural] = true
 	}
-	if in.Observed.Status == ValidationNotRun || in.Observed.Status == ValidationUnknown {
+	if in.Observed.Status == wire.ValidationNotRun || in.Observed.Status == wire.ValidationUnknown {
 		// A check that applies to these bytes did not run -- the sandbox was
 		// down or stopped the checker -- or answered nothing readable. Nothing
 		// spoke for the candidate, and replacing what the model wrote needs
@@ -250,7 +252,7 @@ func advisorySignals(in advisoryInput) map[string]interface{} {
 	}
 	strongest := ""
 	for _, ev := range in.Evidence {
-		if strengthRank(ev.Provenance.ObservedStrength) > strengthRank(strongest) {
+		if wire.StrengthRank(ev.Provenance.ObservedStrength) > wire.StrengthRank(strongest) {
 			strongest = ev.Provenance.ObservedStrength
 		}
 	}

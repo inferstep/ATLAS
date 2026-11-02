@@ -49,6 +49,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // isCatastrophicDeleteTarget reports whether a recursive-rm target is a root /
@@ -1374,11 +1376,11 @@ func readOnlyRequestRefusal(tool *ToolDef, ctx *AgentContext) string {
 	if tool == nil || !mutationForbidden(ctx) {
 		return ""
 	}
-	if tool.Effect == ToolEffectReadOnly {
+	if tool.Effect == wire.ToolEffectReadOnly {
 		return ""
 	}
 	what := "change the workspace"
-	if tool.Effect == ToolEffectCommandUnobserved {
+	if tool.Effect == wire.ToolEffectCommandUnobserved {
 		what = "run a command that could change the workspace"
 	}
 	return fmt.Sprintf(

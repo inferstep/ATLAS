@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // Repair in progress: a file this session left unparseable stays open
@@ -66,11 +68,11 @@ func repairArgs(path string) json.RawMessage {
 
 // landedResult is a call that changed the file: with a parse error when
 // synErr is set, parsing otherwise.
-func landedResult(synErr string) *ToolResult {
-	r := &ToolResult{Success: true, MutationStatus: MutationApplied,
-		ValidationKind: ValidationKindSyntax, ValidationStatus: ValidationPassed}
+func landedResult(synErr string) *wire.ToolResult {
+	r := &wire.ToolResult{Success: true, MutationStatus: wire.MutationApplied,
+		ValidationKind: wire.ValidationKindSyntax, ValidationStatus: wire.ValidationPassed}
 	if synErr != "" {
-		r.ValidationStatus, r.ValidationDetail = ValidationFailed, synErr
+		r.ValidationStatus, r.ValidationDetail = wire.ValidationFailed, synErr
 	}
 	return r
 }
@@ -106,8 +108,8 @@ func TestARepairOpensOnAnUnparseableWriteAndClosesWhenItParses(t *testing.T) {
 	}
 
 	st.observeRepair(ctx, 2, "edit_file", repairArgs("mod.py"),
-		&ToolResult{Error: "old_str not found in mod.py", MutationStatus: MutationRefused})
-	st.observeRepair(ctx, 3, "read_file", repairArgs("mod.py"), &ToolResult{Success: true})
+		&wire.ToolResult{Error: "old_str not found in mod.py", MutationStatus: wire.MutationRefused})
+	st.observeRepair(ctx, 3, "read_file", repairArgs("mod.py"), &wire.ToolResult{Success: true})
 
 	writeRepairFile(t, dir, repairFixed)
 	st.observeRepair(ctx, 4, "edit_file", repairArgs("mod.py"), landedResult(""))
@@ -141,10 +143,10 @@ func TestACommandThatChangesTheFileIsSeen(t *testing.T) {
 	st.observeRepair(ctx, 1, "write_file", repairArgs("mod.py"), landedResult(repairSynErr))
 	// Still broken, different bytes: an attempt made by the command.
 	writeRepairFile(t, dir, repairBroken2)
-	st.observeRepair(ctx, 2, "run_command", cmd, &ToolResult{Success: true})
+	st.observeRepair(ctx, 2, "run_command", cmd, &wire.ToolResult{Success: true})
 	// Fixed by a command.
 	writeRepairFile(t, dir, repairFixed)
-	st.observeRepair(ctx, 3, "run_command", cmd, &ToolResult{Success: true})
+	st.observeRepair(ctx, 3, "run_command", cmd, &wire.ToolResult{Success: true})
 
 	if got := strings.Join(repairEventsNamed(*events), ","); got != "opened,attempt,closed" {
 		t.Fatalf("repair events = %s, want opened,attempt,closed", got)
@@ -164,7 +166,7 @@ func TestADeletedFileClosesItsRepair(t *testing.T) {
 	st.observeRepair(ctx, 1, "write_file", repairArgs("mod.py"), landedResult(repairSynErr))
 	os.Remove(filepath.Join(dir, "mod.py"))
 	st.observeRepair(ctx, 2, "delete_file", repairArgs("mod.py"),
-		&ToolResult{Success: true, MutationStatus: MutationApplied})
+		&wire.ToolResult{Success: true, MutationStatus: wire.MutationApplied})
 	if len(st.openRepairs()) != 0 {
 		t.Fatal("a deleted file is still an open repair")
 	}
@@ -182,7 +184,7 @@ func openRepairState(t *testing.T) (*AgentContext, *runState, *[]repairEvent) {
 	writeRepairFile(t, dir, repairBroken)
 	st.observeRepair(ctx, 0, "write_file", repairArgs("mod.py"), landedResult(repairSynErr))
 	st.observeRepair(ctx, 1, "edit_file", repairArgs("mod.py"),
-		&ToolResult{Error: "old_str not found in mod.py", MutationStatus: MutationRefused})
+		&wire.ToolResult{Error: "old_str not found in mod.py", MutationStatus: wire.MutationRefused})
 	return ctx, st, events
 }
 
@@ -213,7 +215,7 @@ func TestTheHandOffListsWhatWasTriedAndAsksTheUserToLook(t *testing.T) {
 
 func TestEveryEndingWithAnOpenRepairHandsItOff(t *testing.T) {
 	ctx, st, _ := openRepairState(t)
-	got := honestTerminalSummary(ctx, st, TerminalTimedOut, "work_deadline",
+	got := honestTerminalSummary(ctx, st, wire.TerminalTimedOut, "work_deadline",
 		"Stopped: the session ran out of time before the work finished.")
 	for _, want := range []string{
 		"Stopped: the session ran out of time before the work finished.",
@@ -228,7 +230,7 @@ func TestEveryEndingWithAnOpenRepairHandsItOff(t *testing.T) {
 
 func TestAnOpenRepairIsNeverReportedCompleted(t *testing.T) {
 	ctx, st, events := openRepairState(t)
-	emitTerminal(ctx, st, TerminalCompleted, "deliverables_demonstrated", "All done.")
+	emitTerminal(ctx, st, wire.TerminalCompleted, "deliverables_demonstrated", "All done.")
 	var done map[string]interface{}
 	var handoffs int
 	for _, e := range *events {

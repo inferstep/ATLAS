@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // Once an exit gate's bounces are spent, the next exit is judged: it must not
@@ -57,7 +59,7 @@ func TestASpentEvidenceGateEndsIncomplete(t *testing.T) {
 	exitUntilSpent(t, st, ctx, prompt, claim, "evidence_gate")
 
 	status, reason := finalizeCompletion(ctx, st, prompt, "text_reply")
-	if status != TerminalIncomplete || reason != "unread_citation" {
+	if status != wire.TerminalIncomplete || reason != "unread_citation" {
 		t.Fatalf("terminal = %s/%s, want incomplete/unread_citation", status, reason)
 	}
 	done := doneEvent(ctx)
@@ -78,7 +80,7 @@ func TestASpentClaimCheckEndsIncomplete(t *testing.T) {
 	exitUntilSpent(t, st, ctx, prompt, claim, "claim_check")
 
 	status, reason := finalizeCompletion(ctx, st, prompt, "")
-	if status != TerminalIncomplete || reason != "claim_check_unresolved" {
+	if status != wire.TerminalIncomplete || reason != "claim_check_unresolved" {
 		t.Fatalf("terminal = %s/%s, want incomplete/claim_check_unresolved", status, reason)
 	}
 	summary := honestTerminalSummary(ctx, st, status, reason, "")
@@ -103,7 +105,7 @@ func TestASpentRedirectGateCompletesWithACaveat(t *testing.T) {
 	exitUntilSpent(t, st, ctx, prompt, claim, "contract_gate")
 
 	status, reason := finalizeCompletion(ctx, st, prompt, "")
-	if status != TerminalCompleted {
+	if status != wire.TerminalCompleted {
 		t.Fatalf("terminal = %s/%s, want completed with a caveat", status, reason)
 	}
 	done := doneEvent(ctx)
@@ -154,7 +156,7 @@ func TestASpentOrphanGateCompletesWithACaveat(t *testing.T) {
 		t.Fatalf("exit %d: gate %q after orphan_gate was spent", maxGateBounces+1, gate)
 	}
 	status, reason := finalizeCompletion(ctx, st, prompt, "")
-	if status != TerminalCompleted {
+	if status != wire.TerminalCompleted {
 		t.Fatalf("terminal = %s/%s, want completed with a caveat", status, reason)
 	}
 	if s := honestTerminalSummary(ctx, st, status, reason, "Finished."); !strings.Contains(s, "code this run added is never called: ") {
@@ -183,7 +185,7 @@ func TestASpentArtifactGateLeavesTheRunUnverified(t *testing.T) {
 		}
 	}
 	status, reason := finalizeCompletion(ctx, st, prompt, "")
-	if status != TerminalCompleted {
+	if status != wire.TerminalCompleted {
 		t.Fatalf("not demanded: terminal = %s/%s, want completed with a caveat", status, reason)
 	}
 	if s := honestTerminalSummary(ctx, st, status, reason, "Finished."); !strings.Contains(s, "app.py changed after the run that verified it") {
@@ -210,7 +212,7 @@ func TestASpentArtifactGateEndsADemandedVerificationIncomplete(t *testing.T) {
 		}
 	}
 	status, reason := finalizeCompletion(ctx, st, prompt, "")
-	if status != TerminalIncomplete || reason != "verification_demanded_unmet" {
+	if status != wire.TerminalIncomplete || reason != "verification_demanded_unmet" {
 		t.Fatalf("demanded: terminal = %s/%s, want incomplete/verification_demanded_unmet", status, reason)
 	}
 }
@@ -228,7 +230,7 @@ func TestACleanExitReportsNothingUnresolved(t *testing.T) {
 	status, reason := finalizeCompletion(ctx, st, "Write app.py.", "")
 	done := doneEvent(ctx)
 	emitTerminal(ctx, st, status, reason, "Finished.")
-	if status != TerminalCompleted || (*done)["summary"] != "Finished." {
+	if status != wire.TerminalCompleted || (*done)["summary"] != "Finished." {
 		t.Fatalf("terminal = %s/%s summary %q", status, reason, (*done)["summary"])
 	}
 	if _, ok := (*done)["unresolved"]; ok {
@@ -264,7 +266,7 @@ func TestAParseOnlyCompletionSaysSo(t *testing.T) {
 			withSyntaxSandbox(t, ctx)
 			st := &runState{madeProductiveChange: true, productiveChanges: 1, toolsRun: 1}
 			status, reason := finalizeCompletion(ctx, st, "Write "+c.file+".", "")
-			if status != TerminalCompleted || reason != "deliverables_parse_only" {
+			if status != wire.TerminalCompleted || reason != "deliverables_parse_only" {
 				t.Fatalf("terminal = %s/%s, want completed/deliverables_parse_only", status, reason)
 			}
 			summary := honestTerminalSummary(ctx, st, status, reason, c.prose)
@@ -284,7 +286,7 @@ func TestADemonstratedCompletionKeepsItsAccount(t *testing.T) {
 	st := &runState{madeProductiveChange: true, productiveChanges: 1, toolsRun: 1}
 	st.observeVerification(ctx, "", 1, "python3 solve.py", ranClean("1\n"))
 	status, reason := finalizeCompletion(ctx, st, "Write solve.py.", "")
-	if status != TerminalCompleted || reason != "deliverables_demonstrated" {
+	if status != wire.TerminalCompleted || reason != "deliverables_demonstrated" {
 		t.Fatalf("terminal = %s/%s, want completed/deliverables_demonstrated", status, reason)
 	}
 	prose := "All tests pass and everything works."
@@ -302,10 +304,10 @@ func TestAFileWithNoCheckIsNamed(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "style.css"), []byte("body { color: red; }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	observeDeliverable(ctx, "style.css", []byte("body { color: red; }\n"), ValidationKindNone, ValidationNotApplicable, "")
+	observeDeliverable(ctx, "style.css", []byte("body { color: red; }\n"), wire.ValidationKindNone, wire.ValidationNotApplicable, "")
 	st := &runState{madeProductiveChange: true}
 	status, reason := finalizeCompletion(ctx, st, "Build the page.", "")
-	if status != TerminalIncomplete || reason != "deliverables_not_demonstrated" {
+	if status != wire.TerminalIncomplete || reason != "deliverables_not_demonstrated" {
 		t.Fatalf("terminal = %s/%s", status, reason)
 	}
 	summary := honestTerminalSummary(ctx, st, status, reason, "")

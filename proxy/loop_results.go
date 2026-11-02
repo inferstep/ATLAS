@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/itigges22/atlas-proxy/internal/logsafe"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // maxTotalFailures bounds a whole run's failed tool calls, independent of the
@@ -24,7 +25,7 @@ const maxTotalFailures = 12
 // and the correctives queued for the next turn. The outcome says whether the
 // turn goes on, ends, or ends the run; the error is then what runAgentLoop
 // returns.
-func (loop *agentLoop) runToolCall(turn int, parsed ModelResponse, intentArgs json.RawMessage) (*ToolResult, turnCorrectives, turnOutcome, error) {
+func (loop *agentLoop) runToolCall(turn int, parsed wire.ModelResponse, intentArgs json.RawMessage) (*wire.ToolResult, turnCorrectives, turnOutcome, error) {
 	ctx, st := loop.ctx, loop.st
 	var steers turnCorrectives
 	runawayWrite, outcome := loop.refuseBeforeDispatch(turn, parsed, intentArgs)
@@ -58,7 +59,7 @@ func (loop *agentLoop) runToolCall(turn int, parsed ModelResponse, intentArgs js
 	// The lens stopped scoring inside this call (V3 reported it):
 	// the run ends here, saying why (lens_required.go).
 	if why := ctx.lensDownReason(); why != "" {
-		emitTerminal(ctx, st, TerminalFailed, "lens_unavailable",
+		emitTerminal(ctx, st, wire.TerminalFailed, "lens_unavailable",
 			lensUnavailableSummary(why, st.madeProductiveChange)+liveBackgroundJobNote(ctx))
 		return nil, steers, runEnds, nil
 	}
@@ -87,7 +88,7 @@ type turnCorrectives struct {
 // call to read_file or run_command). Fires before tool
 // execution so the corrective lands in the same iteration
 // as the lens corrective if both trigger.
-func (loop *agentLoop) detectRepetition(turn int, parsed ModelResponse, intentArgs json.RawMessage, runawayWrite bool) (string, turnOutcome) {
+func (loop *agentLoop) detectRepetition(turn int, parsed wire.ModelResponse, intentArgs json.RawMessage, runawayWrite bool) (string, turnOutcome) {
 	ctx, st := loop.ctx, loop.st
 	pendingRepeatCorrective := ""
 	if msg, _, repeating := recordToolCall(ctx, parsed.Name, intentArgs); repeating || runawayWrite {
@@ -134,7 +135,7 @@ func (loop *agentLoop) detectRepetition(turn int, parsed ModelResponse, intentAr
 				// a system action: no progress hint is set, no tool
 				// event is emitted, and the terminal stays stopped.
 				recovered := restoreSaferDeliverables(ctx)
-				loop.endStream(TerminalStopped, "repeat_detector",
+				loop.endStream(wire.TerminalStopped, "repeat_detector",
 					repeatTerminalSummary(ctx, st.expectedOutputs,
 						st.madeProductiveChange, recovered))
 				return "", runEnds
@@ -182,7 +183,7 @@ func detectReasoningRepetition(ctx *AgentContext, turn int) string {
 // assistant(tool_call) → tool(result) → user([system note]: lens warning). This
 // catches a model that keeps retrying the same stub while the stub gate keeps
 // rejecting it.
-func (loop *agentLoop) scoreWithLens(turn int, parsed ModelResponse) (string, turnOutcome, error) {
+func (loop *agentLoop) scoreWithLens(turn int, parsed wire.ModelResponse) (string, turnOutcome, error) {
 	ctx, st := loop.ctx, loop.st
 	pendingLensCorrective := ""
 	if scorable, ok := extractScorableContent(parsed.Name, parsed.Args); ok {
@@ -227,7 +228,7 @@ func (loop *agentLoop) scoreWithLens(turn int, parsed ModelResponse) (string, tu
 // dispatchToolCall runs the tool call, unless a re-read can be answered from
 // context or a re-run is held back until an edit lands. A deadline that lands
 // during the call ends the run; the error is then what runAgentLoop returns.
-func (loop *agentLoop) dispatchToolCall(turn int, parsed ModelResponse) (*ToolResult, turnOutcome, error) {
+func (loop *agentLoop) dispatchToolCall(turn int, parsed wire.ModelResponse) (*wire.ToolResult, turnOutcome, error) {
 	ctx, st := loop.ctx, loop.st
 	result := redundantReadShortCircuit(parsed.Name, parsed.Args, ctx)
 	if result != nil {
@@ -259,7 +260,7 @@ func (loop *agentLoop) dispatchToolCall(turn int, parsed ModelResponse) (*ToolRe
 //
 // On failure, log the error so it shows up in `docker compose
 // logs atlas-proxy` without having to attach a debugger.
-func (loop *agentLoop) recordCallResult(turn int, parsed ModelResponse, intentArgs json.RawMessage, result *ToolResult) {
+func (loop *agentLoop) recordCallResult(turn int, parsed wire.ModelResponse, intentArgs json.RawMessage, result *wire.ToolResult) {
 	ctx, st := loop.ctx, loop.st
 	if !result.Success {
 		log.Printf("[agent] turn=%d tool=%q FAIL: %q", turn,
@@ -290,7 +291,7 @@ func (loop *agentLoop) recordCallResult(turn int, parsed ModelResponse, intentAr
 }
 
 // streamToolResult answers the tool call on both event streams.
-func streamToolResult(ctx *AgentContext, st *runState, parsed ModelResponse, result *ToolResult, elapsed time.Duration) {
+func streamToolResult(ctx *AgentContext, st *runState, parsed wire.ModelResponse, result *wire.ToolResult, elapsed time.Duration) {
 	st.pendingToolCall = ""
 	ctx.Stream("tool_result", map[string]interface{}{
 		"tool":    parsed.Name,
@@ -299,10 +300,10 @@ func streamToolResult(ctx *AgentContext, st *runState, parsed ModelResponse, res
 		"error":   result.Error,
 		"elapsed": elapsed.String(),
 	})
-	Emit(Envelope{
-		EventID:    NewEventID(),
+	Emit(wire.Envelope{
+		EventID:    wire.NewEventID(),
 		Timestamp:  float64(time.Now().UnixNano()) / 1e9,
-		Type:       EvtToolResult,
+		Type:       wire.EvtToolResult,
 		Stage:      "tool",
 		DurationMS: elapsed.Milliseconds(),
 		Payload: map[string]interface{}{
@@ -318,12 +319,12 @@ func streamToolResult(ctx *AgentContext, st *runState, parsed ModelResponse, res
 //
 // A landed write whose result carries a parse warning is pending
 // execution; a landed clean write clears its own pending mark.
-func (loop *agentLoop) markWarnedWrite(parsed ModelResponse, result *ToolResult) {
+func (loop *agentLoop) markWarnedWrite(parsed wire.ModelResponse, result *wire.ToolResult) {
 	ctx, st := loop.ctx, loop.st
 	if result.Success && parsed.Name == "write_file" {
-		var wf WriteFileInput
+		var wf wire.WriteFileInput
 		if json.Unmarshal(parsed.Args, &wf) == nil {
-			var out WriteFileOutput
+			var out wire.WriteFileOutput
 			warned := json.Unmarshal(result.Data, &out) == nil && out.Warning != ""
 			st.markWarnedRun(ctx, wf.Path, warned)
 		}
@@ -333,7 +334,7 @@ func (loop *agentLoop) markWarnedWrite(parsed ModelResponse, result *ToolResult)
 // dischargeWarnedRuns clears the warned marks of the files a run_command or
 // run_background attempted to execute, and settles the content debt that a
 // clean execution demonstrates.
-func (loop *agentLoop) dischargeWarnedRuns(parsed ModelResponse, result *ToolResult) {
+func (loop *agentLoop) dischargeWarnedRuns(parsed wire.ModelResponse, result *wire.ToolResult) {
 	ctx, st := loop.ctx, loop.st
 	if (parsed.Name == "run_command" || parsed.Name == "run_background") && result != nil {
 		// Discharge only the marks this command actually attempted to
@@ -371,11 +372,11 @@ func (loop *agentLoop) dischargeWarnedRuns(parsed ModelResponse, result *ToolRes
 // reportLiteralRepair reports the repair of spacing inside lines of a literal
 // the user stated: in the log and the event stream, in the result the model
 // is about to read, and to the ledger, which follows the repaired bytes.
-func reportLiteralRepair(ctx *AgentContext, result *ToolResult, path, lp, fixed string, repairedLits []string) {
+func reportLiteralRepair(ctx *AgentContext, result *wire.ToolResult, path, lp, fixed string, repairedLits []string) {
 	for _, l := range repairedLits {
 		log.Printf("[agent] literal contract repaired in %s: %q now byte-exact", path, truncateStr(l, 60))
 	}
-	Emit(NewEnvelope(EvtMetric, "tool", map[string]interface{}{
+	Emit(wire.NewEnvelope(wire.EvtMetric, "tool", map[string]interface{}{
 		"name": "literal_repair", "value": path,
 	}))
 	// Stated in the result the model is about to read
@@ -395,7 +396,7 @@ func reportLiteralRepair(ctx *AgentContext, result *ToolResult, path, lp, fixed 
 // productive change, which takes back an earlier verification; what a
 // run_command demonstrated; the repairs in progress; and the plan's
 // adherence, which may ask for a revised plan.
-func (loop *agentLoop) recordCallEffects(turn int, parsed ModelResponse, result *ToolResult) {
+func (loop *agentLoop) recordCallEffects(turn int, parsed wire.ModelResponse, result *wire.ToolResult) {
 	ctx, st, userMessage := loop.ctx, loop.st, loop.userMessage
 	// Track productive state changes — write/edit/delete/move that landed. Used
 	// below to soften the error-loop exit when work was completed AND by the
@@ -425,7 +426,7 @@ func (loop *agentLoop) recordCallEffects(turn int, parsed ModelResponse, result 
 
 	// What this command demonstrated about the artifact.
 	if parsed.Name == "run_command" {
-		var rc RunCommandInput
+		var rc wire.RunCommandInput
 		if json.Unmarshal(parsed.Args, &rc) == nil {
 			st.observeVerification(ctx, userMessage, turn, rc.Command, result)
 		}
@@ -476,7 +477,7 @@ func editMissSteer(mp, source string) string {
 // TTY for curses, missing toolchain, etc.), a different exit
 // message is appropriate so the user isn't told "the file may
 // be too large to modify" when their file is, in fact, on disk.
-func (loop *agentLoop) breakErrorLoop(turn int, parsed ModelResponse, result *ToolResult) bool {
+func (loop *agentLoop) breakErrorLoop(turn int, parsed wire.ModelResponse, result *wire.ToolResult) bool {
 	ctx := loop.ctx
 	if !result.Success {
 		return loop.countFailure(turn, parsed, result)
@@ -491,7 +492,7 @@ func (loop *agentLoop) breakErrorLoop(turn int, parsed ModelResponse, result *To
 // countFailure counts a failed call against the streak and against the run's
 // ceiling, and reports whether the run must stop. A failure of a new kind
 // starts a new streak.
-func (loop *agentLoop) countFailure(turn int, parsed ModelResponse, result *ToolResult) bool {
+func (loop *agentLoop) countFailure(turn int, parsed wire.ModelResponse, result *wire.ToolResult) bool {
 	ctx, st := loop.ctx, loop.st
 	// A failure that differs in KIND from the last one means the
 	// model acted on the previous rejection. Reset the streak:
@@ -516,10 +517,10 @@ func (loop *agentLoop) countFailure(turn int, parsed ModelResponse, result *Tool
 		log.Printf("[agent] breaking: %d failed tool calls this run (ceiling %d) at turn %d (productive=%v)",
 			loop.totalFailures, maxTotalFailures, turn, st.madeProductiveChange)
 		if st.madeProductiveChange {
-			emitTerminal(ctx, st, TerminalStopped, "failure_ceiling",
+			emitTerminal(ctx, st, wire.TerminalStopped, "failure_ceiling",
 				unverifiedSummary(true, "The run hit its failed-call ceiling before finishing."))
 		} else {
-			emitTerminal(ctx, st, TerminalStopped, "failure_ceiling", fmt.Sprintf(
+			emitTerminal(ctx, st, wire.TerminalStopped, "failure_ceiling", fmt.Sprintf(
 				"Stopped after %d failed tool calls with nothing landing on disk. The per-turn errors above say what was refused each time; the last one is the one to act on.", loop.totalFailures))
 		}
 		return true
@@ -559,16 +560,16 @@ func (loop *agentLoop) breakSamePathLoop(turn int) bool {
 		loop.outputRescueUsed = true
 		loop.consecutiveErrors = 0
 		ctx.RecentFailurePaths = nil
-		ctx.Messages = append(ctx.Messages, AgentMessage{Role: "user", Content: expectedOutputMissingMessage(missing)})
+		ctx.Messages = append(ctx.Messages, wire.AgentMessage{Role: "user", Content: expectedOutputMissingMessage(missing)})
 		log.Printf("[agent] error loop at turn %d but named deliverable(s) %v not on disk — output-rescue steer instead of stopping", turn, logPaths(missing))
 	} else {
 		log.Printf("[agent] breaking error loop: %d consecutive failures on the same path %q at turn %d (productive=%v)",
 			loop.consecutiveErrors, ctx.RecentFailurePaths[0], turn, st.madeProductiveChange)
 		if st.madeProductiveChange {
-			emitTerminal(ctx, st, TerminalStopped, "same_target_failures",
+			emitTerminal(ctx, st, wire.TerminalStopped, "same_target_failures",
 				"Wrote your changes to disk; couldn't verify them automatically (the verification commands failed). Run them yourself to confirm — they're on disk.")
 		} else {
-			emitTerminal(ctx, st, TerminalStopped, "same_target_failures",
+			emitTerminal(ctx, st, wire.TerminalStopped, "same_target_failures",
 				"Stopped after 3 tool failures on the same target with no successful changes. Common causes: the file you referenced isn't in the workspace, an empty path argument was passed, or a regex was malformed. Check the per-turn errors above, then try a more specific request (e.g. \"fix snake_game.py at line 95 — the curses bounds are wrong\").")
 		}
 		return true
@@ -580,16 +581,16 @@ func (loop *agentLoop) breakSamePathLoop(turn int) bool {
 // notes the next turn needs: the handoff of delivered content, the queued
 // correctives, the steers after a failed run, the cross-file notes, the
 // nudge after a V3 delivery and the exploration budget.
-func (loop *agentLoop) answerToolCall(turn int, response string, parsed ModelResponse, result *ToolResult, steers turnCorrectives) {
+func (loop *agentLoop) answerToolCall(turn int, response string, parsed wire.ModelResponse, result *wire.ToolResult, steers turnCorrectives) {
 	ctx, st := loop.ctx, loop.st
 	loop.trackReadOnlyCalls(parsed, result)
 
 	// Add assistant message (the tool call) and tool result to conversation
-	ctx.Messages = append(ctx.Messages, AgentMessage{
+	ctx.Messages = append(ctx.Messages, wire.AgentMessage{
 		Role:    "assistant",
 		Content: response,
 	})
-	ctx.Messages = append(ctx.Messages, AgentMessage{
+	ctx.Messages = append(ctx.Messages, wire.AgentMessage{
 		Role:       "tool",
 		Content:    result.MarshalText(),
 		ToolCallID: fmt.Sprintf("call_%d", turn),
@@ -616,7 +617,7 @@ func (loop *agentLoop) answerToolCall(turn int, response string, parsed ModelRes
 	// the model about what it just did.
 	superseded, wasSuperseded := deliveredDiffersFromSubmitted(ctx, parsed.Name, parsed.Args, result)
 	if wasSuperseded {
-		ctx.Messages = append(ctx.Messages, AgentMessage{
+		ctx.Messages = append(ctx.Messages, wire.AgentMessage{
 			Role:    "user",
 			Content: adoptDeliveredContent(ctx, superseded),
 		})
@@ -648,7 +649,7 @@ func (loop *agentLoop) answerToolCall(turn int, response string, parsed ModelRes
 	// Exploration budget: after a run of read-only calls, steer the next
 	// turn toward a write, or toward the answer (explorationNudge).
 	if note := explorationNudge(&loop.consecutiveReads, turn, !answerOnlyRequest(ctx)); note != "" {
-		ctx.Messages = append(ctx.Messages, AgentMessage{Role: "user", Content: note})
+		ctx.Messages = append(ctx.Messages, wire.AgentMessage{Role: "user", Content: note})
 	}
 }
 
@@ -659,7 +660,7 @@ func (loop *agentLoop) answerToolCall(turn int, response string, parsed ModelRes
 // interleaved outline resets the counter and the model goes
 // read→outline→read→outline forever without the breaker firing.
 // Every navigation-only tool counts.
-func (loop *agentLoop) trackReadOnlyCalls(parsed ModelResponse, result *ToolResult) {
+func (loop *agentLoop) trackReadOnlyCalls(parsed wire.ModelResponse, result *wire.ToolResult) {
 	st := loop.st
 	isReadOnly := parsed.Name == "read_file" ||
 		parsed.Name == "outline_file" ||
@@ -692,7 +693,7 @@ func (loop *agentLoop) trackReadOnlyCalls(parsed ModelResponse, result *ToolResu
 // a weak model fails by hallucinating symbols / editing the wrong
 // function. The stack frame IS the localization; no LLM reasoning
 // needed to read it.
-func steerAfterFailedRun(ctx *AgentContext, parsed ModelResponse, result *ToolResult) {
+func steerAfterFailedRun(ctx *AgentContext, parsed wire.ModelResponse, result *wire.ToolResult) {
 	if !result.Success && (parsed.Name == "run_command" || parsed.Name == "run_background") {
 		// Scan the RAW stdout/stderr, not result.MarshalText() — the
 		// marshaled JSON escapes the quotes in `File "..."` frames, so
@@ -718,30 +719,30 @@ func steerAfterFailedRun(ctx *AgentContext, parsed ModelResponse, result *ToolRe
 			// model's own inline `-c` test, not the solution. Steer it
 			// to move the test into a file instead of re-running the
 			// unparseable one-liner into the repetition breaker.
-			ctx.Messages = append(ctx.Messages, AgentMessage{Role: "user", Content: steer})
+			ctx.Messages = append(ctx.Messages, wire.AgentMessage{Role: "user", Content: steer})
 			log.Printf("[agent] broken-inline-script steer: verify command won't parse, directed to a test file")
 		} else if steer := tracebackSteer(ctx, scan); steer != "" {
-			ctx.Messages = append(ctx.Messages, AgentMessage{Role: "user", Content: steer})
+			ctx.Messages = append(ctx.Messages, wire.AgentMessage{Role: "user", Content: steer})
 			log.Printf("[agent] traceback localization: steered to fix site")
 		} else if steer := missingModuleSteer(ctx, scan); steer != "" {
 			// Uninstalled-dependency recovery: the run failed with "No
 			// module named X". Tell the model to pip install it instead
 			// of re-running the identical failing command into the
 			// repetition breaker.
-			ctx.Messages = append(ctx.Messages, AgentMessage{Role: "user", Content: steer})
+			ctx.Messages = append(ctx.Messages, wire.AgentMessage{Role: "user", Content: steer})
 			log.Printf("[agent] missing-module steer: directed to install dependency")
 		} else if steer := missingCommandSteer(scan); steer != "" {
 			// Missing-binary recovery: the sandbox image lacks the
 			// command and can't apt-install it (non-root, read-only).
 			// Say so and point at the escape hatches, instead of the
 			// model re-running into the breaker or giving up.
-			ctx.Messages = append(ctx.Messages, AgentMessage{Role: "user", Content: steer})
+			ctx.Messages = append(ctx.Messages, wire.AgentMessage{Role: "user", Content: steer})
 			log.Printf("[agent] missing-command steer: named the unavailable binary")
 		} else if steer := missingFileSteer(ctx, scan); steer != "" {
 			// Case-typo recovery: command referenced a file whose name
 			// differs only in case from a real workspace file. Name the
 			// correct file so the model stops re-running the wrong name.
-			ctx.Messages = append(ctx.Messages, AgentMessage{Role: "user", Content: steer})
+			ctx.Messages = append(ctx.Messages, wire.AgentMessage{Role: "user", Content: steer})
 			log.Printf("[agent] missing-file localization: steered to correct case")
 		}
 	}
@@ -755,7 +756,7 @@ func steerAfterFailedRun(ctx *AgentContext, parsed ModelResponse, result *ToolRe
 // ones instead of re-creating them) and the asset-graph lint
 // (orphaned templates/static files, dangling refs). Both are
 // advisory [system note]s — never blockers.
-func noteCrossFileCoherence(ctx *AgentContext, turn int, parsed ModelResponse, result *ToolResult) {
+func noteCrossFileCoherence(ctx *AgentContext, turn int, parsed wire.ModelResponse, result *wire.ToolResult) {
 	if result.Success &&
 		(parsed.Name == "write_file" || parsed.Name == "edit_file" ||
 			parsed.Name == "structural_edit" || parsed.Name == "move_file" ||
@@ -792,7 +793,7 @@ func noteCrossFileCoherence(ctx *AgentContext, turn int, parsed ModelResponse, r
 // model its code was build-checked when no candidate had passed
 // anything, and push it to stop working on a file that failed
 // verification.
-func nudgeAfterV3Delivery(ctx *AgentContext, parsed ModelResponse, result *ToolResult, superseded supersededWrite, wasSuperseded bool) {
+func nudgeAfterV3Delivery(ctx *AgentContext, parsed wire.ModelResponse, result *wire.ToolResult, superseded wire.SupersededWrite, wasSuperseded bool) {
 	if result.Success && result.V3Used && verifiedPhase(result.PhaseSolved) &&
 		(parsed.Name == "write_file" || parsed.Name == "edit_file") {
 		// Two shapes, because there are two situations. When the
@@ -810,7 +811,7 @@ func nudgeAfterV3Delivery(ctx *AgentContext, parsed ModelResponse, result *ToolR
 		}
 		nudge, shown := v3DeliveryNudge(ctx, result.PhaseSolved, result.CandidatesTested,
 			result.WinningScore, landed.Path, supersededRel)
-		ctx.Messages = append(ctx.Messages, AgentMessage{
+		ctx.Messages = append(ctx.Messages, wire.AgentMessage{
 			Role:    "user",
 			Content: nudge,
 		})
@@ -829,9 +830,9 @@ func nudgeAfterV3Delivery(ctx *AgentContext, parsed ModelResponse, result *ToolR
 
 // askForAKnownResponseType answers a reply of an unknown type with the types
 // the model may use.
-func askForAKnownResponseType(ctx *AgentContext, parsed ModelResponse) {
+func askForAKnownResponseType(ctx *AgentContext, parsed wire.ModelResponse) {
 	// Unknown type — grammar should prevent this
-	ctx.Messages = append(ctx.Messages, AgentMessage{
+	ctx.Messages = append(ctx.Messages, wire.AgentMessage{
 		Role:    "user",
 		Content: fmt.Sprintf("Unknown response type '%s'. Use tool_call, text, or done.", parsed.Type),
 	})
@@ -846,6 +847,6 @@ func askForAKnownResponseType(ctx *AgentContext, parsed ModelResponse) {
 func (loop *agentLoop) endOutOfTurns() {
 	ctx, st := loop.ctx, loop.st
 	log.Printf("[agent] max turns (%d) exceeded for %s — returning what the run found", ctx.MaxTurns, ctx.Tier)
-	emitTerminal(ctx, st, TerminalIncomplete, "turn_budget_exhausted",
+	emitTerminal(ctx, st, wire.TerminalIncomplete, "turn_budget_exhausted",
 		outOfTurnsSummary(ctx, st.madeProductiveChange)+liveBackgroundJobNote(ctx))
 }

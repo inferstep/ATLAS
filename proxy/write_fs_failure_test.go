@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // Two filesystem failures through the real write_file dispatch, one test each.
@@ -54,7 +56,7 @@ func TestWriteFileTempWriteFailure(t *testing.T) {
 			t.Errorf("temporary artifact survived: %s", n)
 		}
 	}
-	assertFailedMutation(t, res, ValidationKindSyntax, ValidationNotRun)
+	assertFailedMutation(t, res, wire.ValidationKindSyntax, wire.ValidationNotRun)
 }
 
 // The rename fails when the destination is a non-empty directory: the
@@ -93,12 +95,12 @@ func TestWriteFileRenameFailure(t *testing.T) {
 			t.Errorf("temporary artifact survived a failed rename: %s", n)
 		}
 	}
-	assertFailedMutation(t, res, ValidationKindSyntax, ValidationNotRun)
+	assertFailedMutation(t, res, wire.ValidationKindSyntax, wire.ValidationNotRun)
 }
 
-func assertFailedMutation(t *testing.T, res *ToolResult, kind ValidationKind, status ValidationStatus) {
+func assertFailedMutation(t *testing.T, res *wire.ToolResult, kind wire.ValidationKind, status wire.ValidationStatus) {
 	t.Helper()
-	if res.MutationStatus != MutationFailed {
+	if res.MutationStatus != wire.MutationFailed {
 		t.Errorf("MutationStatus = %q, want failed", res.MutationStatus)
 	}
 	if res.MutationStatus.Applied() {
@@ -135,7 +137,7 @@ func TestParentDirPathIsRefusedPreDispatch(t *testing.T) {
 	if res.Success {
 		t.Fatal("expected a pre-dispatch refusal")
 	}
-	if res.MutationStatus != MutationNone {
+	if res.MutationStatus != wire.MutationNone {
 		t.Errorf("MutationStatus = %q, want none (no handler ran)", res.MutationStatus)
 	}
 	if res.MutationStatus.Applied() {
@@ -176,10 +178,10 @@ func TestWriteFileDirectParentDirFailureCarriesClassification(t *testing.T) {
 	if !errors.As(err, &ce) {
 		t.Fatalf("error does not carry classification: %v", err)
 	}
-	if ce.mutationStatus != MutationFailed {
+	if ce.mutationStatus != wire.MutationFailed {
 		t.Errorf("mutationStatus = %q, want failed", ce.mutationStatus)
 	}
-	if ce.validationKind != ValidationKindSyntax || ce.validationStatus != ValidationNotRun {
+	if ce.validationKind != wire.ValidationKindSyntax || ce.validationStatus != wire.ValidationNotRun {
 		t.Errorf("validation = %q/%q, want syntax/not_run",
 			ce.validationKind, ce.validationStatus)
 	}
@@ -200,7 +202,7 @@ func TestUntypedErrorDoesNotBecomeFailedMutation(t *testing.T) {
 	ctx.StreamFn = func(string, interface{}) {}
 	args, _ := json.Marshal(map[string]string{"path": "nope.txt"})
 	res := executeToolCall("read_file", args, ctx)
-	if res.MutationStatus != MutationNone {
+	if res.MutationStatus != wire.MutationNone {
 		t.Errorf("MutationStatus = %q, want none (effect-derived)", res.MutationStatus)
 	}
 }
