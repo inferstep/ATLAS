@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -203,6 +204,26 @@ func TestHereDocumentsAreNotSplit(t *testing.T) {
 	}
 	if !executionAttempt(strings.Join(ev.Honest, " && "), "store.py") {
 		t.Fatal("an import inside a here-document is not an execution attempt")
+	}
+}
+
+// An escaped operator, a backtick substitution and a here-string stay inside
+// their segment; `|&` is a pipe.
+func TestSplitTopLevelShell(t *testing.T) {
+	for _, c := range []struct {
+		cmd  string
+		segs []string
+		ops  []string
+	}{
+		{`echo a\;b; pytest`, []string{`echo a\;b`, " pytest"}, []string{";"}},
+		{"echo `a; b` && pytest", []string{"echo `a; b` ", " pytest"}, []string{"&&"}},
+		{`python3 app.py <<< "1 2" && pytest`, []string{`python3 app.py <<< "1 2" `, " pytest"}, []string{"&&"}},
+		{"pytest |& tail", []string{"pytest ", " tail"}, []string{"|"}},
+	} {
+		segs, ops, _ := splitTopLevelShell(c.cmd)
+		if !slices.Equal(segs, c.segs) || !slices.Equal(ops, c.ops) {
+			t.Errorf("splitTopLevelShell(%q) = %q, %q; want %q, %q", c.cmd, segs, ops, c.segs, c.ops)
+		}
 	}
 }
 
