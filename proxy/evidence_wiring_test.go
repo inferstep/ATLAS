@@ -457,12 +457,12 @@ func TestEveryProductionConsumerOfProvenanceIsEnumerated(t *testing.T) {
 // that decide what lands. The set is exactly what it was at dc9172c.
 func TestTheDeliveryGraphGainedNoCaller(t *testing.T) {
 	allowed := map[string]bool{
-		"v3_bridge.go:v3DeliveryAuthorized":          true,
-		"v3_bridge.go:EvidenceSupportsProvenanceFor": true,
-		"tool_write_v3.go:proposedV3Candidate":       true,
-		"tool_write_v3.go:proposeWriteCandidate":     true,
-		"tool_write_v3.go:emitV3WriteStageEnd":       true,
-		"tool_write_v3.go:improveContentWithV3":      true,
+		"contract_gate.go:v3DeliveryAuthorized":          true,
+		"contract_gate.go:EvidenceSupportsProvenanceFor": true,
+		"tool_write_v3.go:proposedV3Candidate":           true,
+		"tool_write_v3.go:proposeWriteCandidate":         true,
+		"tool_write_v3.go:emitV3WriteStageEnd":           true,
+		"tool_write_v3.go:improveContentWithV3":          true,
 	}
 	for _, fn := range deliveryDecisions {
 		for site := range callSites(proxyFiles(t), fn) {

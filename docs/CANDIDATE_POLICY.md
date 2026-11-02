@@ -511,7 +511,8 @@ use.
 | `v3-service/adapters.py` | Adapter knowledge: which criteria an adapter can observe, what its grading means in contract terms, and the live-record → contract-record bridge | Decide closure, ranking or selection |
 | `v3-service/main.py` | Transport: calls `adapters.evidence_envelope`, writes its output | Hold any policy — pinned by `test_main_serialises_but_decides_nothing` |
 | `proxy/internal/wire/v3.go` | The one Go wire representation, beside `V3GenerateResponse` | — |
-| `proxy/v3_bridge.go` | The response boundary: decode plus strict validation and availability | Re-derive domain policy, or infer strength from `passed`/`phase_solved`/`winning_score`/`verification_evidence` |
+| `proxy/v3_bridge.go` | The response boundary: decode | Re-derive domain policy |
+| `proxy/contract_gate.go` | Strict validation and availability: `EvidenceSupportsProvenanceFor` and `v3DeliveryAuthorized` | Re-derive domain policy, or infer strength from `passed`/`phase_solved`/`winning_score`/`verification_evidence` |
 
 No separate evidence module exists on either side, and no compatibility module
 stands in for one (`test_the_retiring_prototype_is_gone`). One contract, one

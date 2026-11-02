@@ -619,7 +619,7 @@ func TestEmptyCandidateIsNeverAuthorized(t *testing.T) {
 // Source-level proof that the legacy boolean cannot authorize anything: the
 // authorization path never reads it.
 func TestPassedNoLongerAuthorizesDelivery(t *testing.T) {
-	src, err := os.ReadFile("v3_bridge.go")
+	src, err := os.ReadFile("contract_gate.go")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -690,7 +690,7 @@ func TestEveryPhaseIsDeliverableOnTheSameTerms(t *testing.T) {
 // promote the service's evidence into a verified winner: the authorization
 // predicate takes a response and bytes, and calls no local checker.
 func TestLocalValidationCannotUpgradeServiceEvidence(t *testing.T) {
-	src, err := os.ReadFile("v3_bridge.go")
+	src, err := os.ReadFile("contract_gate.go")
 	if err != nil {
 		t.Fatal(err)
 	}

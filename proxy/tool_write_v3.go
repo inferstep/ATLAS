@@ -295,6 +295,25 @@ func emitV3WriteStageEnd(v3Start time.Time, v3Result *wire.V3GenerateResponse, e
 	})
 }
 
+// evidenceTelemetry renders the envelope for the telemetry envelope payload.
+// Returned as the decoded structure rather than a summary so nothing is lost
+// on the way to a subscriber; callers must not put it on a ToolResult, which
+// is projected to the model.
+func evidenceTelemetry(e *wire.V3EvidenceEnvelope, unavailableReason string) map[string]interface{} {
+	availability, reason := e.Validate()
+	if reason == "" {
+		reason = unavailableReason
+	}
+	out := map[string]interface{}{"availability": string(availability)}
+	if reason != "" {
+		out["reason"] = reason
+	}
+	if e != nil {
+		out["envelope"] = e
+	}
+	return out
+}
+
 // writeAfterV3Failure ends a write whose V3 call failed.
 func writeAfterV3Failure(ctx *AgentContext, lifecycle *routeLifecycle, path, baselineContent string,
 	err error) (*wire.ToolResult, error) {
