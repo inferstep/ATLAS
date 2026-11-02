@@ -12,7 +12,7 @@
 # file again with the same Python version and the same options when it moves
 # a pin, so the tool and its version here are the ones Dependabot runs.
 set -euo pipefail
-cd "$(dirname "$0")/../.github/requirements"
+cd "$(dirname "$0")/../../.github/requirements"
 # click is held at 8.2.1: with click 8.5 this pip-tools writes an option into
 # the header that was not given (`--no-index`), and the header must say the
 # command as it was run. `--no-build`: uv takes pip-tools and what it needs as

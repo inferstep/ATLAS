@@ -1,5 +1,5 @@
 # What the CI jobs install, locked with hashes in ci.txt (Scorecard
-# Pinned-Dependencies). Make ci.txt again with scripts/ci-lock.sh.
+# Pinned-Dependencies). Make ci.txt again with scripts/ci/ci-lock.sh.
 # ruff and mypy match sandbox/requirements-verify.txt (a contract test checks).
 pytest
 # Coverage output for the pytest jobs (ATLAS_COVERAGE_DIR in

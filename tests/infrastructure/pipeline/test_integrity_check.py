@@ -508,13 +508,13 @@ def test_a_size_baseline_that_cannot_be_read_needs_approval(ic):
     ("tests/replay/recordings/normal_edit.json", CONFIGURES),
     ("tests/infrastructure/gradle_wrapper_jar_sums.txt", CONFIGURES),
     (".github/canary.json", CONFIGURES),
-    ("scripts/verify.py", CONFIGURES),
+    ("scripts/ci/verify.py", CONFIGURES),
     ("scripts/change_base.py", CONFIGURES),
-    ("scripts/queue_run.py", CONFIGURES),
-    ("scripts/go_test_build.py", CONFIGURES),
+    ("scripts/ci/queue_run.py", CONFIGURES),
+    ("scripts/ci/go_test_build.py", CONFIGURES),
     (".github/actions/upload-coverage/action.yml", CONFIGURES),
     ("scripts/fix_tests.py", CONFIGURES),
-    ("scripts/dockerfile_lint.py", CONFIGURES),
+    ("scripts/ci/dockerfile_lint.py", CONFIGURES),
     ("scripts/setup/rulesets.sh", CONFIGURES),
     (".hadolint.yaml", CONFIGURES),
     (".github/codeql/config.yml", CONFIGURES),
@@ -578,7 +578,7 @@ def scripts_a_workflow_names(text):
 
 
 @pytest.mark.parametrize("job, named", [
-    ({"steps": [{"run": "python scripts/verify.py"}]}, "scripts/verify.py"),
+    ({"steps": [{"run": "python scripts/ci/verify.py"}]}, "scripts/ci/verify.py"),
     ({"steps": [{"working-directory": "extensions/jetbrains", "run": "bash scripts/check-distribution.sh"}]},
      "extensions/jetbrains/scripts/check-distribution.sh"),
     ({"defaults": {"run": {"working-directory": "extensions/jetbrains"}},

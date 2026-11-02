@@ -39,7 +39,7 @@ runs:
           echo "::error::This step writes the settings file of the Docker service and no other file, and DOCKER_SETTINGS_FILE names another one. Nothing was written. Fix: take DOCKER_SETTINGS_FILE out of the environment of this job; only the tests of the step set it, to a file in the folder for temporary files."
           exit 1
         fi
-        script="$GITHUB_ACTION_PATH/../../../scripts/docker_hub_mirror.py"
+        script="$GITHUB_ACTION_PATH/../../../scripts/ci/docker_hub_mirror.py"
         show() {
           # What a file or a tool says is data: it is printed in a block of
           # its own.
@@ -55,7 +55,7 @@ runs:
         fi
         new="$(mktemp)"
         if ! printf '%s' "$old" | python3 "$script" > "$new"; then
-          echo "::error::The settings file of the Docker service could not get the mirror of Docker Hub (the line above says why), so this job stops before its first docker command. Fix: read the file below; scripts/docker_hub_mirror.py expects one JSON object in it."
+          echo "::error::The settings file of the Docker service could not get the mirror of Docker Hub (the line above says why), so this job stops before its first docker command. Fix: read the file below; scripts/ci/docker_hub_mirror.py expects one JSON object in it."
           printf '%s\n' "$old" | show || true
           exit 1
         fi
@@ -64,7 +64,7 @@ runs:
         rm -f -- "${new:?}"
         echo "The settings file of the Docker service names the mirror; every other setting is as it was."
         if ! sudo systemctl restart docker; then
-          echo "::error::The Docker service did not start again with the mirror in its settings, so no later step can use Docker. Fix: read the lines of the service below. When the settings are at fault, the change belongs in scripts/docker_hub_mirror.py."
+          echo "::error::The Docker service did not start again with the mirror in its settings, so no later step can use Docker. Fix: read the lines of the service below. When the settings are at fault, the change belongs in scripts/ci/docker_hub_mirror.py."
           sudo journalctl --unit docker --no-pager --lines 40 2>&1 | show || true
           exit 1
         fi
@@ -100,7 +100,7 @@ runs:
         IMAGES: ${{ inputs.images }}
       run: |
         set -euo pipefail
-        script="$GITHUB_ACTION_PATH/../../../scripts/docker_hub_mirror.py"
+        script="$GITHUB_ACTION_PATH/../../../scripts/ci/docker_hub_mirror.py"
         for image in $IMAGES; do
           if ! there="$(python3 "$script" --at-the-mirror "$image")"; then
             echo "::error::The step was given an image that it cannot ask the mirror for (the line above says why), so the job would pull it from Docker Hub alone. Fix: give the step the name that the job runs, with its tag."

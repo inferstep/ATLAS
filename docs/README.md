@@ -90,7 +90,7 @@ Task-oriented index for everything under `docs/`. The
 - [CONTRIBUTING.md § Development workflow](../.github/CONTRIBUTING.md#development-workflow) — dev mode, targeted rebuilds,
   running the proxy on the host against the compose stack.
 - [CODE_STYLE.md](CODE_STYLE.md) — how ATLAS code should read; what
-  `scripts/code_health.py` enforces on new code and refactors.
+  `scripts/ci/code_health.py` enforces on new code and refactors.
 - [scripts/eval/README.md](../scripts/eval/README.md) — the held-out evaluation
   contract between the evaluation side and the development side.
 - [quality/gates.md](quality/gates.md) — the checks on a pull request,
