@@ -14,12 +14,9 @@ import (
 // to nowhere else: no SSE event, no ToolResult, no model-visible text, and no
 // input to any delivery, completion or generation decision.
 
-// evidenceProducerAvailability says, for each trusted source, whether a live
-// production path can actually produce it on this build.
-//
-// The distinction matters because "no caller" has two very different causes. A
-// producer with a wiring bug and a producer with nothing to observe look the
-// same to a structural guard, and only one of them is acceptable to ship.
+// evidenceProducerAvailability says, for each trusted source, that a live
+// production path produces it on this build. A producer with no caller fails
+// the structural guard.
 type evidenceProducerAvailability string
 
 const (

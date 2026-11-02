@@ -611,9 +611,7 @@ func TestATypedRefusalNeverFallsBackToACandidate(t *testing.T) {
 // TestEachProducerHasExactlyOneEnumeratedCallPath is the wiring invariant.
 //
 // A producer with two callers has two places its rules can drift apart. A
-// producer with none is either a wiring bug or a mechanism that does not
-// exist, and those are not the same thing -- so the second case must be
-// declared unavailable rather than silently absent.
+// producer with none is not wired, and fails here.
 func TestEachProducerHasExactlyOneEnumeratedCallPath(t *testing.T) {
 	files := proxyFiles(t)
 	for _, c := range []struct {
