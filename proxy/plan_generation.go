@@ -209,10 +209,7 @@ func (s planSample) readPriorityFiles(subdir string, priority []string) {
 		if len(s.out) >= s.maxFiles {
 			return
 		}
-		path := filepath.Join(subdir, rel)
-		if body, ok := s.dir.ReadUpTo(path, s.maxBytes*4); ok {
-			s.out[path] = contextEntry(body, s.maxBytes)
-		}
+		s.add(filepath.Join(subdir, rel))
 	}
 }
 
@@ -226,9 +223,15 @@ func (s planSample) readSourceFiles(entries []fs.DirEntry) {
 		if e.IsDir() || !isSourceExtension(strings.ToLower(filepath.Ext(name))) {
 			continue
 		}
-		if body, ok := s.dir.ReadUpTo(name, s.maxBytes*4); ok {
-			s.out[name] = contextEntry(body, s.maxBytes)
-		}
+		s.add(name)
+	}
+}
+
+// add puts one file into the sample, cut to the bytes a request carries for it.
+// A file over four times that is skipped.
+func (s planSample) add(rel string) {
+	if body, ok := s.dir.ReadUpTo(rel, s.maxBytes*4); ok {
+		s.out[rel] = contextEntry(body, s.maxBytes)
 	}
 }
 

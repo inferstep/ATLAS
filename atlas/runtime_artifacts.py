@@ -4,10 +4,24 @@ from __future__ import annotations
 
 import os
 import stat
-from typing import Iterable, Optional
+from typing import Iterable, Iterator, Optional
 
 
 _GO_METADATA = frozenset({"go.mod", "go.sum"})
+
+
+def _go_source_mtimes(source_dir: str, names: frozenset) -> Iterator[int]:
+    """Yield the mtime of each regular source file, sub-folders included."""
+    for folder, _, files in os.walk(source_dir):
+        for name in files:
+            if not (name.endswith(".go") or name in names):
+                continue
+            try:
+                info = os.lstat(os.path.join(folder, name))
+            except OSError:
+                continue
+            if stat.S_ISREG(info.st_mode):
+                yield info.st_mtime_ns
 
 
 def newest_go_source_mtime_ns(
@@ -18,18 +32,7 @@ def newest_go_source_mtime_ns(
     if not source_dir or not os.path.isdir(source_dir):
         return None
     names = _GO_METADATA | frozenset(extra_names)
-    newest: Optional[int] = None
-    for folder, _, files in os.walk(source_dir):
-        for name in files:
-            if not (name.endswith(".go") or name in names):
-                continue
-            try:
-                info = os.lstat(os.path.join(folder, name))
-            except OSError:
-                continue
-            if stat.S_ISREG(info.st_mode):
-                newest = info.st_mtime_ns if newest is None else max(newest, info.st_mtime_ns)
-    return newest
+    return max(_go_source_mtimes(source_dir, names), default=None)
 
 
 def go_binary_is_current(
