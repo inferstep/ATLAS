@@ -5,7 +5,7 @@ set -euo pipefail
 # Removes ATLAS services (optionally K3s and models)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/lib/config.sh"
+source "$SCRIPT_DIR/../lib/config.sh"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -119,8 +119,10 @@ check_settings() {
 }
 
 parse_args() {
+    local option
     while [[ $# -gt 0 ]]; do
-        case $1 in
+        option=$1
+        case $option in
             --all)
                 REMOVE_K3S=true
                 REMOVE_MODELS=true
@@ -140,7 +142,7 @@ parse_args() {
                 exit 0
                 ;;
             *)
-                log_warn "Unknown option: $1"
+                log_warn "Unknown option: $option"
                 ;;
         esac
         shift

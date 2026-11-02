@@ -12,9 +12,9 @@
 # walkthrough.
 #
 # Usage:
-#   ./scripts/atlas-setup-macos.sh                # default install
-#   ./scripts/atlas-setup-macos.sh --rebuild      # force rebuild llama-server
-#   ./scripts/atlas-setup-macos.sh --prefix DIR   # install root override
+#   ./scripts/install/atlas-setup-macos.sh                # default install
+#   ./scripts/install/atlas-setup-macos.sh --rebuild      # force rebuild llama-server
+#   ./scripts/install/atlas-setup-macos.sh --prefix DIR   # install root override
 #
 # Idempotent — re-running is cheap, only rebuilds when --rebuild is
 # passed or when LLAMA_CPP_REV in the Dockerfiles has changed since
@@ -31,7 +31,7 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ATLAS_ROOT="$(dirname "$SCRIPT_DIR")"
+ATLAS_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 DEFAULT_PREFIX="$HOME/.atlas/macos"
 PREFIX="$DEFAULT_PREFIX"
 REBUILD=0
@@ -65,9 +65,10 @@ red()    { printf '\033[31m%s\033[0m\n' "$*" >&2; }
 step()   { printf '\n\033[1m[%s]\033[0m %s\n' "$1" "$2"; }
 
 require_cmd() {
-  if ! command -v "$1" >/dev/null 2>&1; then
-    red "required command not found: $1"
-    red "  $2"
+  local name=$1 hint=$2
+  if ! command -v "$name" >/dev/null 2>&1; then
+    red "required command not found: $name"
+    red "  $hint"
     exit 1
   fi
 }
@@ -344,7 +345,7 @@ elif command -v uv >/dev/null 2>&1; then
   # uv tool install is uv's pipx equivalent — also creates an
   # isolated venv. Use --system as a last resort, dodges PEP 668 by
   # uv's own override but pollutes the brew Python environment.
-  (cd "$ATLAS_ROOT" && uv tool install --editable .)
+  (cd "$ATLAS_ROOT" && uv tool install --editable --no-build .)
   green "  Installed via uv tool install."
 else
   red "neither pipx nor uv found. PEP 668 blocks plain pip on Homebrew Python."
@@ -402,7 +403,7 @@ Install prefix:      $PREFIX
 
 Next steps:
   1. atlas init                                       # wizard writes .env (picks Metal hybrid)
-  2. ATLAS_MACOS_PREFIX="$PREFIX" ./scripts/atlas-llama-macos.sh  # start native llama-server
+  2. ATLAS_MACOS_PREFIX="$PREFIX" ./scripts/install/atlas-llama-macos.sh  # start native llama-server
   3. docker compose -f docker-compose.yml \\
                     -f compose/docker-compose.macos.yml up -d # start proxy + v3 + lens + sandbox
   4. atlas doctor                                     # verify install health

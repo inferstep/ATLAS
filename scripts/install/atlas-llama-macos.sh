@@ -2,7 +2,7 @@
 # ATLAS macOS native llama-server launcher (#32 hybrid path).
 #
 # Starts the Metal-accelerated llama-server built by
-# scripts/atlas-setup-macos.sh, using the same flags as the docker
+# scripts/install/atlas-setup-macos.sh, using the same flags as the docker
 # entrypoint (inference/entrypoint-v3.1.sh) so behavior is
 # identical to the linux + cuda/rocm path. Reads config from .env in
 # the ATLAS root.
@@ -12,15 +12,15 @@
 # until you re-launch.
 #
 # Usage:
-#   ./scripts/atlas-llama-macos.sh
-#   ./scripts/atlas-llama-macos.sh --port 8081       # override port
-#   ./scripts/atlas-llama-macos.sh --prefix DIR      # custom native install
-#   ./scripts/atlas-llama-macos.sh --rebuild         # re-run setup first
+#   ./scripts/install/atlas-llama-macos.sh
+#   ./scripts/install/atlas-llama-macos.sh --port 8081       # override port
+#   ./scripts/install/atlas-llama-macos.sh --prefix DIR      # custom native install
+#   ./scripts/install/atlas-llama-macos.sh --rebuild         # re-run setup first
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ATLAS_ROOT="$(dirname "$SCRIPT_DIR")"
+ATLAS_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 DEFAULT_PREFIX="$HOME/.atlas/macos"
 
 # Flag parsing — just the user-facing ones, everything else comes from .env
@@ -89,7 +89,7 @@ fi
 
 if [[ ! -x "$LLAMA_SERVER" ]]; then
   echo "native llama-server not found at $LLAMA_SERVER" >&2
-  echo "  Run ./scripts/atlas-setup-macos.sh --prefix '$PREFIX' first." >&2
+  echo "  Run ./scripts/install/atlas-setup-macos.sh --prefix '$PREFIX' first." >&2
   exit 1
 fi
 
@@ -118,6 +118,7 @@ case "$BATCH_SIZE:$UBATCH_SIZE" in
     echo "ATLAS_BATCH and ATLAS_UBATCH must be positive integers" >&2
     exit 1
     ;;
+  *) ;;
 esac
 if [[ "$BATCH_SIZE" -eq 0 || "$UBATCH_SIZE" -eq 0 ]]; then
   echo "ATLAS_BATCH and ATLAS_UBATCH must be positive integers" >&2
@@ -248,7 +249,7 @@ fi
 # Internal service auth: native path reads the checkout's token file
 # directly (no container mount). llama-server exempts /health.
 TOKEN_FILE="${ATLAS_SERVICE_TOKEN_FILE:-$ATLAS_ROOT/secrets/service-token}"
-if [ -s "$TOKEN_FILE" ]; then
+if [[ -s "$TOKEN_FILE" ]]; then
   SERVER_ARGS+=(--api-key-file "$TOKEN_FILE")
   echo "Internal auth: enabled (api-key-file)"
 fi

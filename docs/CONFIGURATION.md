@@ -72,7 +72,7 @@ and falls through. The CLI applies this order
 | `ATLAS_PROXY_PORT` | `8090` | atlas-proxy host port (TUI and OpenAI-compat clients connect here) |
 | `ATLAS_BACKEND` | `cuda` | Inference backend. `cuda` (NVIDIA, V3.1.0+), `rocm` (AMD, V3.1.1, x86_64 only), `vulkan` (universal fallback), `metal` (Apple Silicon hybrid: native llama-server + Docker for the rest — see [SETUP_MACOS.md](SETUP_MACOS.md)), `sycl` (Intel Arc, roadmap). Set by `atlas init`; the entrypoint scripts read this to pick per-vendor env vars. ROCm + Vulkan + Metal also require bringing up the stack with `-f compose/docker-compose.rocm.yml`, `-f compose/docker-compose.vulkan.yml`, or `-f compose/docker-compose.macos.yml` respectively (the wizard prints the right command). On aarch64 hosts (DGX Spark, Snapdragon X Elite, Jetson, Pi 5) `atlas init` filters out `rocm` since AMD has no arm64 release — see [SETUP.md § arm64](SETUP.md#arm64). |
 | `ATLAS_MACOS_PREFIX` | `~/.atlas/macos` | macOS Metal only. Native llama.cpp install root shared by setup, launcher, and doctor. Set this when setup used `--prefix`. |
-| `ATLAS_LLAMA_HOST` | `127.0.0.1` | macOS Metal only. Bind address for the native llama-server launched by `scripts/atlas-llama-macos.sh`. Loopback by default; override only when access from another host is intentionally required. |
+| `ATLAS_LLAMA_HOST` | `127.0.0.1` | macOS Metal only. Bind address for the native llama-server launched by `scripts/install/atlas-llama-macos.sh`. Loopback by default; override only when access from another host is intentionally required. |
 | `ATLAS_GPU_INDEX` | (unset — all GPUs visible; the ROCm/Vulkan overlay files default it to `0`) | Vendor-local index of the GPU ATLAS should use on multi-GPU hosts. Compose passes it into the llama-server container; the entrypoint maps it to `CUDA_VISIBLE_DEVICES` (NVIDIA) or the HIP/Vulkan equivalent, and skips the export when empty. `compose/docker-compose.rocm.yml` and `compose/docker-compose.vulkan.yml` pin it to `0` when unset. |
 | `ATLAS_GFX_TARGET` | `gfx1100;gfx1101;gfx1102;gfx1030;gfx90a` | **ROCm only.** AMD compute target(s), semicolon-separated. Forwarded to `Dockerfile.rocm` as `AMDGPU_TARGETS` at build time. Trim to your GPU for a smaller image — see [SETUP.md § AMD GPU Targets](SETUP.md#amd-gpu-targets-dockerfilerocm). |
 | `ATLAS_ROCM_TAG` | `6.2-complete` | **ROCm only.** Base image tag for `rocm/dev-ubuntu-22.04`. Bump when you want to test a newer ROCm release. |
@@ -99,7 +99,7 @@ canonical `ATLAS_*` names take precedence and are what `atlas init` and
 | `cuda` (default) | `docker compose up -d` |
 | `rocm` | `docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml up -d` |
 | `vulkan` | `docker compose -f docker-compose.yml -f compose/docker-compose.vulkan.yml up -d` |
-| `metal` (hybrid) | `./scripts/atlas-llama-macos.sh` + `docker compose -f docker-compose.yml -f compose/docker-compose.macos.yml up -d` |
+| `metal` (hybrid) | `./scripts/install/atlas-llama-macos.sh` + `docker compose -f docker-compose.yml -f compose/docker-compose.macos.yml up -d` |
 | `sycl` | Not yet packaged — Intel Arc users should use `vulkan` for now |
 
 `atlas init` prints the right invocation as part of its "Next steps" summary. CLI-managed Compose operations also resolve the overlay from `ATLAS_BACKEND`; `atlas-bootstrap.sh` picks the Linux override automatically from its hardware probe.
@@ -654,14 +654,14 @@ For K3s deployment only. Copy `atlas.conf.example` to `atlas.conf` and edit. The
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ATLAS_ENABLE_SPECULATIVE` | `false` | **Speculative decoding is off, and the knob is not wired.** No entrypoint passes llama.cpp's draft flags (`-md` / `--model-draft`); `scripts/verify-install.sh` only checks that the draft file exists. |
+| `ATLAS_ENABLE_SPECULATIVE` | `false` | **Speculative decoding is off, and the knob is not wired.** No entrypoint passes llama.cpp's draft flags (`-md` / `--model-draft`); `scripts/install/verify-install.sh` only checks that the draft file exists. |
 
 ### 8.6 Timeouts (seconds)
 
 | Variable | Default | Used by |
 |----------|---------|---------|
-| `ATLAS_LLM_TIMEOUT` | `120` | `scripts/verify-install.sh` for the smoke-test `curl` against llama-server |
-| `ATLAS_HEALTH_CHECK_TIMEOUT` | `10` | `scripts/verify-install.sh` `--max-time` for `curl` against each `/health` endpoint during post-install verification. (The healthchecks defined inside the K3s templates use hardcoded timeouts, not this var.) |
+| `ATLAS_LLM_TIMEOUT` | `120` | `scripts/install/verify-install.sh` for the smoke-test `curl` against llama-server |
+| `ATLAS_HEALTH_CHECK_TIMEOUT` | `10` | `scripts/install/verify-install.sh` `--max-time` for `curl` against each `/health` endpoint during post-install verification. (The healthchecks defined inside the K3s templates use hardcoded timeouts, not this var.) |
 
 ### 8.7 V3 ablation knobs (benchmark-only)
 
@@ -676,7 +676,7 @@ Consumed by `atlas/bench/v3_runner.py:_load_v3_config` for ablation studies. The
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ATLAS_GHCR_OWNER` | `inferstep` | GHCR namespace for service images. Read by the K3s manifests **and** `scripts/build-containers.sh`, which tags local builds exactly as the manifests reference them (`ghcr.io/${ATLAS_GHCR_OWNER}/atlas-*`) so side-loaded images are picked up without editing manifests. |
+| `ATLAS_GHCR_OWNER` | `inferstep` | GHCR namespace for service images. Read by the K3s manifests **and** `scripts/install/build-containers.sh`, which tags local builds exactly as the manifests reference them (`ghcr.io/${ATLAS_GHCR_OWNER}/atlas-*`) so side-loaded images are picked up without editing manifests. |
 | `ATLAS_IMAGE_TAG` | `latest` | Image tag for both the local-build path and the GHCR pull path |
 
 The install scripts also honor three runtime-only env vars (not in `atlas.conf` itself):
@@ -685,7 +685,7 @@ The install scripts also honor three runtime-only env vars (not in `atlas.conf` 
 |----------|---------|-------------|
 | `ATLAS_CONFIG_FILE` | (auto) | Path override for `atlas.conf` itself. `scripts/lib/config.sh` looks at this before falling back to `$K8S_DIR/atlas.conf`. |
 | `ATLAS_AUTO_CONFIRM` | `false` | Set to `true` in the environment to skip the interactive install prompts in `scripts/install.sh` |
-| `ATLAS_MODEL_URL` | (unset) | Direct GGUF URL for an unregistered model. `scripts/download-models.sh` passes it to `atlas model install --url`, bypassing the registry lookup. |
+| `ATLAS_MODEL_URL` | (unset) | Direct GGUF URL for an unregistered model. `scripts/install/download-models.sh` passes it to `atlas model install --url`, bypassing the registry lookup. |
 
 ### 8.9 Removed variables
 

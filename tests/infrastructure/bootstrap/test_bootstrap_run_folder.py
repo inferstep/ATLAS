@@ -190,7 +190,7 @@ def test_a_message_that_names_a_file_of_the_folder_keeps_the_folder_though_the_i
                  "build_atlas_tui || die 'atlas-tui build failed.'", "atlas-tui-build.log", id="tui-build"),
     pytest.param("python3", 'case "$*" in *"-e ."*) echo "error: invalid command bdist_wheel" >&2; exit 1 ;; esac\nexit 0\n',
                  "install_atlas_cli || die 'ATLAS CLI installation failed.'", "atlas-pip.log", id="cli-install"),
-    pytest.param("scripts/download-models.sh", 'echo "curl: (28) Operation timed out"\nexit 28\n',
+    pytest.param("scripts/install/download-models.sh", 'echo "curl: (28) Operation timed out"\nexit 28\n',
                  "download_models", "atlas-models.log", id="model-download"),
     pytest.param("docker", 'case "$*" in *" pull"*) echo "Error response from daemon: denied" >&2; exit 1 ;; esac\nexit 0\n',
                  "start_compose", "atlas-compose-pull.log", id="image-pull"),
@@ -198,12 +198,12 @@ def test_a_message_that_names_a_file_of_the_folder_keeps_the_folder_though_the_i
                  "start_compose", "atlas-compose.log", id="start-of-the-containers"),
 ])
 def test_the_path_that_a_failed_step_gives_is_a_file_that_is_there_after_the_run(tmp_path, stand_in, stand_in_text, call, log):
-    for folder in ("tui", "home", "scripts"):
-        (tmp_path / folder).mkdir()
+    for folder in ("tui", "home", "scripts/install"):
+        (tmp_path / folder).mkdir(parents=True)
     (tmp_path / stand_in).write_text("#!/bin/bash\n" + stand_in_text, encoding="utf-8")
     (tmp_path / stand_in).chmod(0o755)
     # The run stops before the step when the command that the step looks up on the path is not the stand-in.
-    # The step runs scripts/download-models.sh by its path, so that stand-in needs no such check.
+    # The step runs scripts/install/download-models.sh by its path, so that stand-in needs no such check.
     guard = "" if "/" in stand_in else (f'[[ "$(command -v {stand_in})" == "{tmp_path}/{stand_in}" ]] || '
                                         f'{{ echo "the stand-in for {stand_in} is not the first on the path"; exit 99; }}\n')
     stubs = ('run_as_target() { "$@"; }\n' + f'target_home_dir() {{ echo "{tmp_path}/home"; }}\n' + f'ATLAS_INSTALL_DIR="{tmp_path}"\n'

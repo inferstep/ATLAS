@@ -26,7 +26,7 @@ docker compose logs --tail 50
 |---|---|
 | NVIDIA CUDA | `nvidia-smi` |
 | AMD ROCm | 运行 `rocm-smi` 并确认 `/dev/kfd` 存在。 |
-| Apple Silicon / Metal | 运行 `atlas doctor`；如果原生服务器未监听，请按照 [SETUP_MACOS.md](../../SETUP_MACOS.md#troubleshooting) 中的说明启动 `./scripts/atlas-llama-macos.sh`，并检查其前台启动器输出。 |
+| Apple Silicon / Metal | 运行 `atlas doctor`；如果原生服务器未监听，请按照 [SETUP_MACOS.md](../../SETUP_MACOS.md#troubleshooting) 中的说明启动 `./scripts/install/atlas-llama-macos.sh`，并检查其前台启动器输出。 |
 | Vulkan | 确认 `/dev/dri` 存在，然后运行 `docker compose -f docker-compose.yml -f compose/docker-compose.vulkan.yml exec llama-server vulkaninfo --summary`。 |
 | 纯 CPU | 确认 `compose/docker-compose.vulkan.yml` 和 `compose/docker-compose.cpu.yml` 覆盖层已启用。`atlas doctor` 不应仅因没有 GPU 而失败，而应发出警告并成功退出。 |
 
@@ -396,7 +396,7 @@ echo "ATLAS_PROXY_GID=$(id -g)" >> .env
 docker compose up -d --no-deps --force-recreate atlas-proxy
 ```
 
-验证：`docker exec atlas-atlas-proxy-1 touch /workspace/.write_test` 应当成功（验证后请删除该文件）。K3s 部署会通过 `scripts/generate-manifests.sh` 把相同的 id 渲染进代理 Pod 的 `securityContext`。
+验证：`docker exec atlas-atlas-proxy-1 touch /workspace/.write_test` 应当成功（验证后请删除该文件）。K3s 部署会通过 `scripts/install/generate-manifests.sh` 把相同的 id 渲染进代理 Pod 的 `securityContext`。
 
 ### Agent 说文件不存在，但它就在那里（工作区挂载分裂）
 

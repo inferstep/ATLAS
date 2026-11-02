@@ -100,6 +100,13 @@ def test_api_keys_file_holds_one_new_sk_atlas_key(atlas_root):
     assert value == {"user": "local", "created_by": "atlas init"}
 
 
+def test_the_backend_help_names_the_setup_script_by_its_path(monkeypatch, capsys):
+    monkeypatch.setenv("COLUMNS", "1000")  # argparse wraps at a hyphen, and the path has three
+    with pytest.raises(SystemExit):
+        init.main(["--help"])
+    assert "./scripts/install/atlas-setup-macos.sh" in capsys.readouterr().out
+
+
 def test_skip_download_does_not_create_models_dir(atlas_root, capsys):
     rc = init.main(["--yes", "--skip-download", "--no-color"])
     assert rc == 0
@@ -335,12 +342,12 @@ def test_apple_silicon_gets_the_hybrid_metal_env(
     out = capsys.readouterr().out
     assert ("Apple Silicon detected" in out) is banner_shown
     # The setup-script prerequisite and its docs are pointed to.
-    assert "atlas-setup-macos.sh" in out
+    assert "scripts/install/atlas-setup-macos.sh" in out
     assert "SETUP_MACOS.md" in out
     body = (atlas_root / ".env").read_text()
     assert "ATLAS_BACKEND=metal" in body
     # The .env header explains the two-step start: native launcher, then Docker.
-    assert "atlas-llama-macos.sh" in body
+    assert "scripts/install/atlas-llama-macos.sh" in body
     assert "compose/docker-compose.macos.yml" in body
 
 

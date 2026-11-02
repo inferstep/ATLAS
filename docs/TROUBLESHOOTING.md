@@ -25,7 +25,7 @@ inference backend:
 |---|---|
 | NVIDIA CUDA | `nvidia-smi` |
 | AMD ROCm | Run `rocm-smi` and verify `/dev/kfd` exists. |
-| Apple Silicon / Metal | Run `atlas doctor`; if the native server is not listening, start `./scripts/atlas-llama-macos.sh` and inspect its foreground launcher output as described in [SETUP_MACOS.md](SETUP_MACOS.md#troubleshooting). |
+| Apple Silicon / Metal | Run `atlas doctor`; if the native server is not listening, start `./scripts/install/atlas-llama-macos.sh` and inspect its foreground launcher output as described in [SETUP_MACOS.md](SETUP_MACOS.md#troubleshooting). |
 | Vulkan | Verify `/dev/dri` exists, then run `docker compose -f docker-compose.yml -f compose/docker-compose.vulkan.yml exec llama-server vulkaninfo --summary`. |
 | CPU-only | Confirm the `compose/docker-compose.vulkan.yml` and `compose/docker-compose.cpu.yml` overlays are active. `atlas doctor` should warn and exit successfully rather than fail solely because no GPU exists. |
 
@@ -397,7 +397,7 @@ echo "ATLAS_PROXY_GID=$(id -g)" >> .env
 docker compose up -d --no-deps --force-recreate atlas-proxy
 ```
 
-Verify: `docker exec atlas-atlas-proxy-1 touch /workspace/.write_test` succeeds (then remove the file). K3s deployments render the same ids into the proxy Pod's `securityContext` via `scripts/generate-manifests.sh`.
+Verify: `docker exec atlas-atlas-proxy-1 touch /workspace/.write_test` succeeds (then remove the file). K3s deployments render the same ids into the proxy Pod's `securityContext` via `scripts/install/generate-manifests.sh`.
 
 ### Agent Says Files Don't Exist That Are Right There (workspace mount split)
 

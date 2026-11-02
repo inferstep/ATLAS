@@ -683,7 +683,7 @@ graph LR
     style AP fill:#1a3a5c,color:#fff
 ```
 
-`llama-server` 和 `sandbox` 独立启动。`geometric-lens` 等待 `llama-server` 变为健康；`v3-service` 等待 `llama-server` 和 `geometric-lens`；`atlas-proxy` 等待 `llama-server`、`geometric-lens`、`v3-service` 和 `sandbox`。同一个 `inference/entrypoint-v3.1.sh` 驱动 Docker Compose、裸机和 K3s，因此上下文大小、KV 缓存量化、flash attention 和 mlock 都由环境变量控制，行为在这些模式之间完全一致；macOS 混合路径通过 `scripts/atlas-llama-macos.sh` 启动原生 llama-server，该脚本复刻了入口点的各项标志。
+`llama-server` 和 `sandbox` 独立启动。`geometric-lens` 等待 `llama-server` 变为健康；`v3-service` 等待 `llama-server` 和 `geometric-lens`；`atlas-proxy` 等待 `llama-server`、`geometric-lens`、`v3-service` 和 `sandbox`。同一个 `inference/entrypoint-v3.1.sh` 驱动 Docker Compose、裸机和 K3s，因此上下文大小、KV 缓存量化、flash attention 和 mlock 都由环境变量控制，行为在这些模式之间完全一致；macOS 混合路径通过 `scripts/install/atlas-llama-macos.sh` 启动原生 llama-server，该脚本复刻了入口点的各项标志。
 
 安装及各模式的拉起步骤（NVIDIA / ROCm override、裸机、macOS 混合 Metal、K3s 清单）见 [SETUP.md](../../SETUP.md)；macOS 原生路径见 [SETUP_MACOS.md](../../SETUP_MACOS.md)。
 

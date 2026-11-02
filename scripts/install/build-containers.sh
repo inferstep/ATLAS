@@ -6,8 +6,8 @@ set -euo pipefail
 # Note: Importing to K3s requires sudo (will prompt if not root)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-source "$SCRIPT_DIR/lib/config.sh"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+source "$SCRIPT_DIR/../lib/config.sh"
 
 # Images are tagged exactly as the K3s manifests reference them
 # (templates/*-deployment.yaml.tmpl pull ghcr.io/${ATLAS_GHCR_OWNER}/...),
@@ -22,7 +22,7 @@ NC='\033[0m'
 
 log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1" >&2; }
 
 # Detect container runtime
 detect_runtime() {

@@ -133,7 +133,7 @@ bin/
 
 # ----- K3s render output -----
 # manifests/ is generated from templates/*.yaml.tmpl by
-# scripts/generate-manifests.sh (or install.sh's process_templates step) at
+# scripts/install/generate-manifests.sh (or install.sh's process_templates step) at
 # install time. Source of truth is templates/, not manifests/.
 manifests/
 

@@ -208,7 +208,7 @@ def test_check_metal_native_fail_when_binary_missing(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     result = doctor._check_metal_native()
     assert result.status == "fail"
-    assert "atlas-setup-macos.sh" in result.message
+    assert "scripts/install/atlas-setup-macos.sh" in result.message
     # The detail should include the expected path so the user knows
     # WHERE the check looked.
     assert "/.atlas/macos/bin/llama-server-metal" in result.detail
@@ -262,7 +262,7 @@ def test_check_metal_native_warn_when_port_not_listening(monkeypatch, tmp_path):
     result = doctor._check_metal_native()
     assert result.status == "warn"
     assert "nothing listening on :8080" in result.message
-    assert "atlas-llama-macos.sh" in result.message
+    assert "scripts/install/atlas-llama-macos.sh" in result.message
 
 
 def test_check_metal_native_pass_when_everything_healthy(monkeypatch, tmp_path):

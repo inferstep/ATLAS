@@ -18,8 +18,8 @@ set -euo pipefail
 #   3. .env.example (the shipped defaults)
 #
 # Usage:
-#   ./scripts/download-models.sh          # model + compatible artifacts
-#   ./scripts/download-models.sh --lens   # artifacts only
+#   ./scripts/install/download-models.sh          # model + compatible artifacts
+#   ./scripts/install/download-models.sh --lens   # artifacts only
 #
 # We deliberately do NOT source scripts/lib/config.sh here. That library
 # is K3s-oriented (requires atlas.conf, validates NodePorts) and explodes
@@ -27,7 +27,7 @@ set -euo pipefail
 # root. PC-051.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -36,7 +36,7 @@ NC='\033[0m'
 
 log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1" >&2; }
 
 # Run the CLI out of this checkout even when it isn't pip-installed yet.
 atlas_cli() {
@@ -78,6 +78,7 @@ models_dir() {
 
 registry_model_file() {
     # On-disk filename for a registry name, or empty if unknown.
+    local registry_name=$1
     atlas_cli model list --json --no-color | python3 -c '
 import json, sys
 name = sys.argv[1]
@@ -85,7 +86,7 @@ for m in json.load(sys.stdin)["models"]:
     if m["name"] == name:
         print(m["model_file"])
         break
-' "$1"
+' "$registry_name"
 }
 
 download_lens_weights() {
@@ -121,24 +122,24 @@ main() {
         exit 1
     fi
 
-    local MODELS_DIR MODEL_FILE
-    MODELS_DIR="$(models_dir)"
-    MODEL_FILE="${ATLAS_MODEL_FILE:-}"
-    echo "Models directory: $MODELS_DIR"
-    echo "Model:            ${ATLAS_MODEL_NAME:-$MODEL_FILE}"
+    local models_path model_file
+    models_path="$(models_dir)"
+    model_file="${ATLAS_MODEL_FILE:-}"
+    echo "Models directory: $models_path"
+    echo "Model:            ${ATLAS_MODEL_NAME:-$model_file}"
     echo ""
 
-    if [[ -n "$MODEL_FILE" && -f "$MODELS_DIR/$MODEL_FILE" ]]; then
+    if [[ -n "$model_file" && -f "$models_path/$model_file" ]]; then
         # Idempotent re-runs: bootstrap calls this on every install.
-        log_info "$MODEL_FILE already present, skipping download"
+        log_info "$model_file already present, skipping download"
     elif [[ -n "${ATLAS_MODEL_URL:-}" ]]; then
         # Explicit URL wins — an unregistered / BYO model.
         log_info "Installing from ATLAS_MODEL_URL (unregistered model)"
         local url_args=(--url "$ATLAS_MODEL_URL")
-        [[ -n "$MODEL_FILE" ]] && url_args+=(--file "$MODEL_FILE")
+        [[ -n "$model_file" ]] && url_args+=(--file "$model_file")
         atlas_cli model install "${url_args[@]}" --yes --no-color || return 1
     else
-        local selected="${ATLAS_MODEL_NAME:-${MODEL_FILE%.gguf}}"
+        local selected="${ATLAS_MODEL_NAME:-${model_file%.gguf}}"
         log_info "Installing registry model $selected"
         # --no-lens: the artifact bundle is fetched by the --lens pass the
         # installer runs next, so a model without one must not block the
@@ -149,27 +150,27 @@ main() {
             log_error "Options:"
             log_error "  1. Pick a registered model:  atlas model list"
             log_error "  2. Set ATLAS_MODEL_URL=<url> for your own GGUF and re-run"
-            log_error "  3. Place the file manually in $MODELS_DIR"
+            log_error "  3. Place the file manually in $models_path"
             return 1
         fi
     fi
 
     # Resolve the on-disk filename when only a registry name was configured.
-    if [[ -z "$MODEL_FILE" ]]; then
-        MODEL_FILE="$(registry_model_file "$ATLAS_MODEL_NAME")"
+    if [[ -z "$model_file" ]]; then
+        model_file="$(registry_model_file "$ATLAS_MODEL_NAME")"
     fi
 
-    if [[ -z "$MODEL_FILE" || ! -f "$MODELS_DIR/$MODEL_FILE" ]]; then
-        log_error "Model file not present after install: $MODELS_DIR/${MODEL_FILE:-?}"
+    if [[ -z "$model_file" || ! -f "$models_path/$model_file" ]]; then
+        log_error "Model file not present after install: $models_path/${model_file:-?}"
         exit 1
     fi
-    log_info "Model verified: $MODEL_FILE"
+    log_info "Model verified: $model_file"
 
-    # Default-model symlink. Relative target (both live in MODELS_DIR) so the
+    # Default-model symlink. Relative target (both live in models_path) so the
     # link survives the directory being reached via a different path — e.g. a
     # container mount at /models, or a relative ATLAS_MODELS_DIR resolved from
     # another CWD.
-    ln -sf "$MODEL_FILE" "$MODELS_DIR/default.gguf"
+    ln -sf "$model_file" "$models_path/default.gguf"
 
     echo ""
     echo "=========================================="
@@ -177,7 +178,7 @@ main() {
     echo "=========================================="
     echo ""
     echo "Models available:"
-    ls -lh "$MODELS_DIR"/*.gguf 2>/dev/null || echo "  No .gguf files found"
+    ls -lh "$models_path"/*.gguf 2>/dev/null || echo "  No .gguf files found"
     echo ""
 }
 

@@ -354,7 +354,7 @@ def _print_apple_silicon_setup(color: bool) -> None:
                 f"for the supporting services.{RESET if color else ''}")
     _safe_print("")
     _safe_print(f"  {BOLD if color else ''}Before you continue:{RESET if color else ''} "
-                f"run ./scripts/atlas-setup-macos.sh if you haven't. "
+                f"run ./scripts/install/atlas-setup-macos.sh if you haven't. "
                 f"It installs the build tools and compiles llama.cpp "
                 f"with Metal. Full instructions in docs/SETUP_MACOS.md.")
     _safe_print("")
@@ -670,13 +670,13 @@ def _append_backend_note(lines: List[str], backend_id: str) -> None:
         lines.append(
             "# Bring the stack up in TWO steps:")
         lines.append(
-            "#   1. ./scripts/atlas-llama-macos.sh        # native llama-server "
+            "#   1. ./scripts/install/atlas-llama-macos.sh        # native llama-server "
             "(uses Metal, 5-10x faster than MoltenVK)")
         lines.append(
             "#   2. docker compose -f docker-compose.yml "
             "-f compose/docker-compose.macos.yml up -d   # proxy + v3 + lens + sandbox")
         lines.append(
-            "# Run ./scripts/atlas-setup-macos.sh first if you haven't already "
+            "# Run ./scripts/install/atlas-setup-macos.sh first if you haven't already "
             "(installs brew deps + builds llama.cpp with Metal). See "
             "docs/SETUP_MACOS.md.")
         lines.append("")
@@ -987,8 +987,9 @@ def _parse_args(argv: Optional[List[str]]) -> argparse.Namespace:
              "fallback (PC-114, #114) — works on basically any GPU + "
              "CPU lavapipe, ~30%% slower than the native backends. "
              "`metal` is the macOS hybrid path (#32) — native llama-server "
-             "+ Docker for the rest. Requires running ./scripts/"
-             "atlas-setup-macos.sh first. See docs/SETUP_MACOS.md.")
+             "+ Docker for the rest. Requires running "
+             "./scripts/install/atlas-setup-macos.sh first. See "
+             "docs/SETUP_MACOS.md.")
     parser.add_argument("--no-color", action="store_true")
     args = parser.parse_args(argv)
     return args
@@ -1014,10 +1015,10 @@ def _print_next_steps(backend_id: str, color: bool) -> None:
         # #32 hybrid path — four steps because llama-server runs
         # natively on macOS while the rest stay in Docker. Setup
         # script is idempotent so re-runs are cheap.
-        _safe_print("  1. ./scripts/atlas-setup-macos.sh    "
+        _safe_print("  1. ./scripts/install/atlas-setup-macos.sh    "
                     "# one-time: brew + build llama.cpp with Metal "
                     "(skip if already done)")
-        _safe_print("  2. ./scripts/atlas-llama-macos.sh    "
+        _safe_print("  2. ./scripts/install/atlas-llama-macos.sh    "
                     "# starts native llama-server (run in its own terminal)")
         _safe_print("  3. docker compose -f docker-compose.yml "
                     "-f compose/docker-compose.macos.yml up -d   "

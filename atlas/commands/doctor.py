@@ -360,7 +360,7 @@ def _check_metal_native(atlas_root: Optional[str] = None) -> CheckResult:
             "not on macOS — metal hybrid path doesn't apply", "")
 
     # Expected setup-script output location. Keep aligned with
-    # scripts/atlas-setup-macos.sh DEFAULT_PREFIX.
+    # scripts/install/atlas-setup-macos.sh DEFAULT_PREFIX.
     values = compose_config.read_env_file(atlas_root) if atlas_root else _ENV
     prefix = (os.environ.get("ATLAS_MACOS_PREFIX")
               or values.get("ATLAS_MACOS_PREFIX")
@@ -370,13 +370,13 @@ def _check_metal_native(atlas_root: Optional[str] = None) -> CheckResult:
 
     if not os.path.isfile(binary):
         return CheckResult("metal-native", "fail",
-            "native llama-server not found — run scripts/atlas-setup-macos.sh",
+            "native llama-server not found — run scripts/install/atlas-setup-macos.sh",
             f"expected at {binary}. See docs/SETUP_MACOS.md.")
 
     if not os.access(binary, os.X_OK):
         return CheckResult("metal-native", "fail",
             "native llama-server is not executable — re-run "
-            "scripts/atlas-setup-macos.sh --rebuild",
+            "scripts/install/atlas-setup-macos.sh --rebuild",
             f"{binary} exists but lacks +x. Likely a botched copy or "
             f"transferred over a filesystem that strips perms (smb/nfs).")
 
@@ -405,7 +405,7 @@ def _check_metal_native(atlas_root: Optional[str] = None) -> CheckResult:
     if not _port_listening("127.0.0.1", LLAMA_PORT, timeout=2):
         return CheckResult("metal-native", "warn",
             f"native llama-server installed at {binary} but nothing "
-            f"listening on :{LLAMA_PORT} — start it with scripts/atlas-llama-macos.sh",
+            f"listening on :{LLAMA_PORT} — start it with scripts/install/atlas-llama-macos.sh",
             "Open a separate terminal and run the launcher; this check "
             "will turn green once the server is up and serving.")
 

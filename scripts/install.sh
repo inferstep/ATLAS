@@ -50,7 +50,7 @@ validate_paths() {
     if [[ -n "$ATLAS_MAIN_MODEL" ]]; then
         if [[ ! -f "$ATLAS_MODELS_DIR/$ATLAS_MAIN_MODEL" ]] && [[ ! -f "$ATLAS_MODELS_DIR/default.gguf" ]]; then
             log_error "Main model not found: $ATLAS_MODELS_DIR/$ATLAS_MAIN_MODEL"
-            log_error "  Download with: ./scripts/download-models.sh"
+            log_error "  Download with: ./scripts/install/download-models.sh"
             log_error "  Or update ATLAS_MAIN_MODEL in atlas.conf"
             errors=$((errors + 1))
         fi
@@ -410,7 +410,7 @@ build_images() {
 
     log_info "Building container images..."
 
-    "$SCRIPT_DIR/build-containers.sh"
+    "$SCRIPT_DIR/install/build-containers.sh"
 
     log_info "Container images built"
 }
@@ -570,8 +570,8 @@ main() {
     echo "=========================================="
     echo ""
     echo "Next steps:"
-    echo "  1. Download models: ./scripts/download-models.sh"
-    echo "  2. Verify installation: ./scripts/verify-install.sh"
+    echo "  1. Download models: ./scripts/install/download-models.sh"
+    echo "  2. Verify installation: ./scripts/install/verify-install.sh"
     echo ""
     echo "Service endpoints:"
     echo "  atlas-proxy:    http://${ATLAS_NODE_IP}:${ATLAS_PROXY_NODEPORT}"

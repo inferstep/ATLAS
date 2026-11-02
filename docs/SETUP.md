@@ -545,7 +545,7 @@ rm -rf ~/.cache/atlas-tui          # TUI session history
 # disk (models are the multi-GB part).
 ```
 
-K3s installs use `scripts/uninstall.sh` instead, which tears down the
+K3s installs use `scripts/install/uninstall.sh` instead, which tears down the
 manifests and (optionally) the K3s node itself. With `--data` it also
 removes the data folder and the projects folder, where your own projects
 are; with `--models`, the model files. Before it asks, it lists each folder
@@ -703,16 +703,16 @@ cp atlas.conf.example atlas.conf
 # Edit atlas.conf
 
 # 2. Build and import images
-scripts/build-containers.sh
+scripts/install/build-containers.sh
 
 # 3. Generate manifests from atlas.conf
-scripts/generate-manifests.sh
+scripts/install/generate-manifests.sh
 
 # 4. Deploy
 kubectl apply -n atlas -f manifests/
 
 # 5. Verify
-scripts/verify-install.sh
+scripts/install/verify-install.sh
 ```
 
 ### K3s-Specific Configuration
@@ -743,10 +743,10 @@ kubectl get pods -n atlas
 kubectl describe nodes | grep nvidia.com/gpu
 
 # Run verification suite
-scripts/verify-install.sh
+scripts/install/verify-install.sh
 ```
 
-> **Note:** Docker Compose is the most heavily-exercised deployment method (CI runs against it; every release is smoke-tested under Compose). K3s manifests are generated from `templates/*.yaml.tmpl` at deploy time via `scripts/generate-manifests.sh` (or `install.sh`'s `process_templates` step). Templates consume the model selected in `atlas.conf`; benchmark numbers in CHANGELOG record their own frozen model/configuration.
+> **Note:** Docker Compose is the most heavily-exercised deployment method (CI runs against it; every release is smoke-tested under Compose). K3s manifests are generated from `templates/*.yaml.tmpl` at deploy time via `scripts/install/generate-manifests.sh` (or `install.sh`'s `process_templates` step). Templates consume the model selected in `atlas.conf`; benchmark numbers in CHANGELOG record their own frozen model/configuration.
 
 ---
 
@@ -810,7 +810,7 @@ Any GPU with 8 GB+ VRAM and a llama.cpp-supported backend:
 | NVIDIA (Blackwell — RTX 50xx, GB10) | CUDA | Supported (published image) | `inference/Dockerfile.v31` | RTX 5060 Ti 16GB (primary dev) |
 | NVIDIA (pre-Blackwell — RTX 20xx–40xx, GTX 10xx, V100/A100/H100/T4/L4) | CUDA | Preview — one-time [local rebuild required](#cuda-compute-capability-dockerfilev31) | `inference/Dockerfile.v31` + `--build-arg CUDA_ARCH=<cc>` | — (upstream llama.cpp supports these; no maintainer validation on ATLAS) |
 | AMD | ROCm / HIP | Community-tested | `inference/Dockerfile.rocm` | RX 7900 XTX (community smoke-test, [GH #26](https://github.com/inferstep/ATLAS/issues/26)) |
-| Apple Silicon | Metal | Supported (macOS hybrid: native llama-server + Docker, [#32](https://github.com/inferstep/ATLAS/issues/32)) | `scripts/atlas-setup-macos.sh` + `compose/docker-compose.macos.yml` | M2 Pro 32GB (verified); M3/M4 (target) |
+| Apple Silicon | Metal | Supported (macOS hybrid: native llama-server + Docker, [#32](https://github.com/inferstep/ATLAS/issues/32)) | `scripts/install/atlas-setup-macos.sh` + `compose/docker-compose.macos.yml` | M2 Pro 32GB (verified); M3/M4 (target) |
 | Any (cross-vendor fallback) | Vulkan | Preview | `inference/Dockerfile.vulkan` | lavapipe (CPU ICD) smoke-tested; no real-GPU validation yet |
 | Intel Arc | SYCL | Roadmap — Intel Arc uses Vulkan today | TBD | Arc A770 16GB (target) |
 

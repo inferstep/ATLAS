@@ -116,10 +116,10 @@ ATLAS_ENABLE_SPECULATIVE=false
 #-------------------------------------------
 # Timeouts (seconds)
 #-------------------------------------------
-# Smoke-test curl against llama-server (scripts/verify-install.sh)
+# Smoke-test curl against llama-server (scripts/install/verify-install.sh)
 ATLAS_LLM_TIMEOUT=120
 
-# Per-service /health curl timeout (scripts/verify-install.sh)
+# Per-service /health curl timeout (scripts/install/verify-install.sh)
 ATLAS_HEALTH_CHECK_TIMEOUT=10
 
 #-------------------------------------------
@@ -139,7 +139,7 @@ ATLAS_V3_PLAN_SEARCH_NUM_PLANS=3
 #-------------------------------------------
 # Advanced (usually don't change)
 #-------------------------------------------
-# Image tag for both the local-build path (scripts/build-containers.sh —
+# Image tag for both the local-build path (scripts/install/build-containers.sh —
 # tags exactly as the K3s manifests reference, ghcr.io/${ATLAS_GHCR_OWNER}/...)
 # and the GHCR pull path.
 ATLAS_IMAGE_TAG="latest"

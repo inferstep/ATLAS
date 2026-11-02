@@ -1,4 +1,4 @@
-"""scripts/uninstall.sh names every folder it removes, and refuses an empty setting before it removes anything.
+"""scripts/install/uninstall.sh names every folder it removes, and refuses an empty setting before it removes anything.
 
 No test here runs the script file, and none reads a real configuration. Each
 test runs the script's own functions in bash with every setting pointed at a
@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "uninstall.sh"
+SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "install" / "uninstall.sh"
 TEXT = SCRIPT.read_text(encoding="utf-8")
 OWN = ("usage", "print_removals", "not_removable", "check_settings", "parse_args", "confirm", "remove_models", "remove_data", "main")
 STAND_INS = ("remove_atlas_services", "remove_container_images", "remove_gpu_operator", "remove_k3s")
@@ -43,7 +43,7 @@ pytestmark = pytest.mark.skipif(shutil.which("bash") is None, reason="the uninst
 
 def function(name):
     found = re.search(rf"^{name}\(\) \{{\n.*?^\}}\n", TEXT, re.M | re.S)
-    assert found, f"{name}() is not in scripts/uninstall.sh"
+    assert found, f"{name}() is not in scripts/install/uninstall.sh"
     return found.group(0)
 
 
@@ -301,7 +301,7 @@ def test_every_removal_in_the_script_fails_on_an_empty_value():
     wrong = [f"line {number}: {line.strip()}" for number, line in lines
              if not re.fullmatch(r'\s*rm -r?f "\$\{ATLAS_\w+:\?\}[^$"]*"[^$\s]*', line)]
     assert not wrong, (
-        "scripts/uninstall.sh removes a path that can be empty:\n  " + "\n  ".join(wrong) + "\nWith an empty setting "
+        "scripts/install/uninstall.sh removes a path that can be empty:\n  " + "\n  ".join(wrong) + "\nWith an empty setting "
         'such a line removes another folder than the one meant. Fix: write the setting as "${NAME:?}", which stops '
         "the script when it is empty.")
 
