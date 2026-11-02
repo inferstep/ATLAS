@@ -843,17 +843,29 @@ func TestTaskContractRoundTrip(t *testing.T) {
 	}
 }
 
-// One definition, one validator, and only the files listed below may take the
-// contract from the request context (a .TaskContract read).
-func TestTaskContractHasNoDecisionConsumer(t *testing.T) {
+func TestTaskContractHasOneDefinition(t *testing.T) {
 	defs := astSites(t, func(n ast.Node) bool {
 		v, ok := n.(*ast.TypeSpec)
 		return ok && v.Name != nil && v.Name.Name == "TaskContract"
 	})
+	if len(defs) != 1 {
+		t.Errorf("%d TaskContract definitions, want exactly one: %v", len(defs), defs)
+	}
+}
+
+func TestTaskContractHasOneValidator(t *testing.T) {
 	validators := astSites(t, func(n ast.Node) bool {
 		v, ok := n.(*ast.FuncDecl)
 		return ok && v.Name != nil && v.Name.Name == "validateTaskContract"
 	})
+	if len(validators) != 1 {
+		t.Errorf("%d validators, want exactly one: %v", len(validators), validators)
+	}
+}
+
+// Only the files listed below may take the contract from the request context
+// (a .TaskContract read).
+func TestTaskContractHasNoDecisionConsumer(t *testing.T) {
 	readers := astSites(t, func(n ast.Node) bool {
 		v, ok := n.(*ast.SelectorExpr)
 		if !ok || v.Sel == nil || v.Sel.Name != "TaskContract" {
@@ -863,13 +875,7 @@ func TestTaskContractHasNoDecisionConsumer(t *testing.T) {
 		pkg, ok := v.X.(*ast.Ident)
 		return !ok || pkg.Name != "taskcontract"
 	})
-	t.Logf("definitions=%v validators=%v reads=%v", defs, validators, readers)
-	if len(defs) != 1 {
-		t.Errorf("%d TaskContract definitions, want exactly one: %v", len(defs), defs)
-	}
-	if len(validators) != 1 {
-		t.Errorf("%d validators, want exactly one: %v", len(validators), validators)
-	}
+	t.Logf("reads=%v", readers)
 	// obligations.go joins the list because this slice moved the decision
 	// there: it is THE obligation-source owner, and it reads only the contract
 	// the request boundary already validated. Nothing else may read the
