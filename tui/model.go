@@ -1012,7 +1012,7 @@ func extractPaneSelection(paneName string, startY, endY, startX, endX int) strin
 	if startLine > endLine {
 		return ""
 	}
-	out := make([]string, 0, endLine-startLine+1)
+	var out []string
 	for i := startLine; i <= endLine; i++ {
 		raw := termtext.StripANSI(pane.lines[i])
 		if i == startLine && i == endLine {
