@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/itigges22/atlas-proxy/internal/shadowcapture"
 	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 )
 
@@ -222,12 +223,12 @@ func normalizeKnowledge(field string, stated taskcontract.ObligationKnowledge,
 // Gate v1 was legacy-observation only: it recorded what the heuristic said and
 // nothing about what governed. Gate v2 adds the live action demand and the
 // authority that produced it, so it is a different closed contract and carries
-// a different number. The request snapshot and the footer did not change, so
-// they stay at 1 rather than being bumped for tidiness.
+// a different number. The request snapshot did not change, so it stays at 1
+// rather than being bumped for tidiness. The footer's version is the sink's own,
+// in internal/shadowcapture.
 const (
 	shadowSchemaVersionRequest = 1
 	shadowSchemaVersionGate    = 2
-	shadowSchemaVersionFooter  = 1
 	// One candidate evidence observation, written by the wired producer.
 	shadowSchemaVersionEvidence = 1
 	// One observe-only authorization decision.
@@ -316,15 +317,15 @@ type shadowGateSeq struct{ n int }
 // validated request. Every heuristic below is the existing function, called for
 // the answer it already gives; no word list, regex or path rule is duplicated.
 func emitShadowRequestSnapshot(ctx *AgentContext, userMessage string) {
-	sink := activeShadowSink.Load()
-	if !sink.enabled() {
+	sink := shadowcapture.Active()
+	if !sink.Enabled() {
 		return // disabled: no hashing, no resolution, no heuristic calls
 	}
 	requestID := ""
 	if ctx.Ctx != nil {
 		requestID = requestIDFromContext(ctx.Ctx)
 	}
-	sink.noteRequest(requestID)
+	sink.NoteRequest(requestID)
 
 	tc := ctx.TaskContract
 	rec := map[string]interface{}{
@@ -384,7 +385,7 @@ func emitShadowRequestSnapshot(ctx *AgentContext, userMessage string) {
 		rec["verification_count"] = 0
 		rec["verification_comparison"] = shadowNotDeclared
 	}
-	sink.submit(rec)
+	sink.Submit(rec)
 }
 
 func contractOutputs(tc *taskcontract.TaskContract) []string {
@@ -469,8 +470,8 @@ func answerOnlyRequest(ctx *AgentContext) bool {
 // observer and its sink, not whether the contract is authoritative.
 func observeActionDemand(ctx *AgentContext, st *runState, site shadowGateSite,
 	d actionDemand) bool {
-	sink := activeShadowSink.Load()
-	if !sink.enabled() {
+	sink := shadowcapture.Active()
+	if !sink.Enabled() {
 		return d.Required
 	}
 	st.shadowGate.n++
@@ -493,7 +494,7 @@ func observeActionDemand(ctx *AgentContext, st *runState, site shadowGateSite,
 			comparison = shadowContractQuestionLegacyWork
 		}
 	}
-	sink.submit(map[string]interface{}{
+	sink.Submit(map[string]interface{}{
 		"schema_version":            shadowSchemaVersionGate,
 		"record_kind":               "task_contract_shadow_gate",
 		"request_id":                requestID,

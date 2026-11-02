@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/shadowcapture"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -461,20 +462,20 @@ func TestEventsStreamIsUnchangedByShadowCapture(t *testing.T) {
 	}
 
 	// Capture off.
-	activeShadowSink.Store(nil)
+	shadowcapture.SetActive(nil)
 	off := collect()
 
 	// Capture on: a live sink writing to a private file.
 	t.Setenv("ATLAS_DIAGNOSTIC_DIR", t.TempDir())
 	t.Setenv("ATLAS_SHADOW_CAPTURE", "events.jsonl")
-	sink, err := openShadowSink()
+	sink, err := openShadowCapture()
 	if err != nil {
 		t.Fatalf("sink: %v", err)
 	}
-	activeShadowSink.Store(sink)
+	shadowcapture.SetActive(sink)
 	defer func() {
-		sink.close(context.Background(), 5*time.Second)
-		activeShadowSink.Store(nil)
+		sink.Close(context.Background(), 5*time.Second)
+		shadowcapture.SetActive(nil)
 	}()
 	on := collect()
 

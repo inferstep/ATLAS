@@ -269,12 +269,10 @@ func TestTheObligationOwnerReadsNoShadowSymbol(t *testing.T) {
 		if !strings.HasPrefix(name, "resolve") || !strings.Contains(name, "Obligation") {
 			continue
 		}
+		// Every identifier, not only a called one: the capture's package name
+		// is the left side of a selector such as shadowcapture.Active.
 		ast.Inspect(f.decl.Body, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			id, ok := call.Fun.(*ast.Ident)
+			id, ok := n.(*ast.Ident)
 			if ok && shadowProductionSymbols[id.Name] {
 				t.Errorf("%s:%s reads shadow state %q", f.file, name, id.Name)
 			}

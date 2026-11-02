@@ -1,6 +1,10 @@
 package main
 
-import "time"
+import (
+	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/shadowcapture"
+)
 
 // Why the candidate producer was not consulted for a mutation the model
 // actually made.
@@ -176,11 +180,11 @@ func recordCandidateGenerationBypass(ctx *AgentContext, tool string,
 	if !knownCandidateBypassReason(reason) {
 		reason = bypassUnclassified
 	}
-	sink := activeShadowSink.Load()
-	if !sink.enabled() {
+	sink := shadowcapture.Active()
+	if !sink.Enabled() {
 		return
 	}
-	sink.submit(map[string]interface{}{
+	sink.Submit(map[string]interface{}{
 		"schema_version": shadowSchemaVersionGenerationBypass,
 		"record_kind":    "candidate_generation_bypass",
 		"request_id":     requestIDOf(ctx),

@@ -214,8 +214,8 @@ func TestCaptureDisabledIsInert(t *testing.T) {
 		body := string(src)
 		f := body[strings.Index(body, "func "+writer.fn+"("):]
 		f = f[:strings.Index(f, "\n}")]
-		guard := strings.Index(f, "if !sink.enabled() {")
-		submit := strings.Index(f, "sink.submit(")
+		guard := strings.Index(f, "if !sink.Enabled() {")
+		submit := strings.Index(f, "sink.Submit(")
 		if guard < 0 || submit < 0 || guard > submit {
 			t.Errorf("%s builds its record before checking the sink", writer.fn)
 		}

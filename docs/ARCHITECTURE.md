@@ -109,6 +109,7 @@ Every non-test Go file of `proxy/`, sub-folders included, with its area of owner
 | `lens_required.go` | Enforces that the geometric Lens is available, tracks Lens failures, and stops runs when scoring is unavailable |
 | `internal/logsafe/logsafe.go` | Builds privacy-safe tool argument summaries for logs, allowing only approved fields and redacting sensitive content |
 | `internal/logsafe/filter.go` | The writer every log line passes through: masks credential-shaped values, then prints control characters as text |
+| `internal/shadowcapture/sink.go` | The private shadow capture: records comparing what a request declared with what ATLAS read from its text, written to a file by one goroutine and read by no decision. Off unless `ATLAS_SHADOW_CAPTURE` names a file |
 | `memory_envelope.go` | Validates declared deployment memory budgets against the operator-stated host capacity and reports unenforced budget overruns |
 | `internal/workspacefs/object_handle_linux.go` | Holds Linux filesystem objects open during deletion approval so the approved object cannot be replaced before removal |
 | `internal/workspacefs/object_handle_other.go` | Refuses deletion approval on non-Linux platforms because a filesystem object cannot be safely pinned and verified |

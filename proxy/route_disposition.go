@@ -1,6 +1,10 @@
 package main
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/itigges22/atlas-proxy/internal/shadowcapture"
+)
 
 // How one entry of the candidate-generation route ended, and — separately —
 // what became of any licence it minted.
@@ -120,8 +124,8 @@ func (l *routeLifecycle) finish(ctx *AgentContext, d routingDisposition,
 			d = routingUnclassified
 		}
 		l.ended, l.reason = d, reason
-		sink := activeShadowSink.Load()
-		if !sink.enabled() {
+		sink := shadowcapture.Active()
+		if !sink.Enabled() {
 			return
 		}
 		rec := map[string]interface{}{
@@ -141,7 +145,7 @@ func (l *routeLifecycle) finish(ctx *AgentContext, d routingDisposition,
 		if reason != "" {
 			rec["authorization_reason"] = string(reason)
 		}
-		sink.submit(rec)
+		sink.Submit(rec)
 	})
 }
 
@@ -191,11 +195,11 @@ func recordDeliveryDisposition(ctx *AgentContext, g *authorizationGrant,
 	if !knownDeliveryDisposition(d) {
 		d = deliveryUnclassified
 	}
-	sink := activeShadowSink.Load()
-	if !sink.enabled() {
+	sink := shadowcapture.Active()
+	if !sink.Enabled() {
 		return
 	}
-	sink.submit(map[string]interface{}{
+	sink.Submit(map[string]interface{}{
 		"schema_version":           shadowSchemaVersionDeliveryDisposition,
 		"record_kind":              "shadow_delivery_disposition",
 		"request_id":               g.RequestID,

@@ -1,5 +1,7 @@
 package main
 
+import "github.com/itigges22/atlas-proxy/internal/shadowcapture"
+
 // The one rule a candidate answers before it replaces what the model wrote.
 //
 // ATLAS is an interactive coding agent, not a formal verifier. For an ordinary
@@ -100,8 +102,8 @@ func (o candidatePolicyOutcome) mayDeliverUnderPolicy() bool { return o.Delivers
 // happened rather than from what a threshold would have predicted.
 func recordCandidatePolicyDecision(ctx *AgentContext, entry routeEntry,
 	candidateHash string, out candidatePolicyOutcome) {
-	sink := activeShadowSink.Load()
-	if !sink.enabled() {
+	sink := shadowcapture.Active()
+	if !sink.Enabled() {
 		return
 	}
 	decision := out.Decision
@@ -116,7 +118,7 @@ func recordCandidatePolicyDecision(ctx *AgentContext, entry routeEntry,
 			vetoes = append(vetoes, v)
 		}
 	}
-	sink.submit(map[string]interface{}{
+	sink.Submit(map[string]interface{}{
 		"schema_version":           shadowSchemaVersionCandidatePolicy,
 		"record_kind":              "candidate_policy_decision",
 		"request_id":               requestIDOf(ctx),
