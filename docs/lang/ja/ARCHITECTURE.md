@@ -461,7 +461,7 @@ API の契約は [API.md § POST /v3/plan](../../API.md#post-v3plan) に記載�
 
 ##### tui: レンダリング (Go)
 
-`tui/state.go` は `planView`（モデル上の状態）と、`tui/events.go` のチャットディスパッチャーに接続された 3 つの `applyPlan*` ハンドラーを定義します:
+`tui/internal/pipelinestate/plan.go` は `PlanView`（モデル上の状態）を定義し、`tui/state.go` は `tui/events.go` のチャットディスパッチャーに接続された 3 つの `applyPlan*` ハンドラーを定義します:
 
 | イベント | ハンドラー | UI への効果 |
 |---|---|---|
@@ -511,7 +511,7 @@ API の契約は [API.md § POST /v3/plan](../../API.md#post-v3plan) に記載�
 | プロキシのブリッジ | `proxy/v3_bridge_test.go` | SSE の解析、結果が欠けたときのエラー、ステージのルーティング |
 | プロキシのフック | `proxy/agent_test.go` | 優先ファイルの取得、切り詰めのしきい値、フォールバックの走査、ティアと長さの判定 |
 | プロキシの遵守 | `proxy/gates_plan_test.go`。システムプロンプトは `proxy/gates_test.go` | 一致ロジック（ツール名 + パス末尾）、失敗したコールの除外、修正回数の上限、システムプロンプトのレンダリング |
-| TUI のレンダリング | `tui/plan_test.go` | `planView` の状態遷移、修正時の plan_loaded による置き換え、プラン外での無言 |
+| TUI のレンダリング | `tui/internal/pipelinestate/plan_test.go`。ハンドラーは `tui/plan_test.go` | `PlanView` の状態遷移、修正時の plan_loaded による置き換え、プラン外での無言 |
 
 ### 安全制限
 

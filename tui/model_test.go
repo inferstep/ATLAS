@@ -190,7 +190,7 @@ func TestEnvelopeMsgUpdatesPipelineState(t *testing.T) {
 		Timestamp: 1.0, Payload: map[string]interface{}{},
 	}})
 	m = updated.(tuiModel)
-	stages := m.state.stages()
+	stages := m.state.Stages()
 	if len(stages) != 1 || stages[0].Name != "phase2" {
 		t.Fatalf("envelope didn't reach state: stages = %v", stages)
 	}

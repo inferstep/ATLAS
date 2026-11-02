@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/charmbracelet/glamour"
+	"github.com/itigges22/atlas-tui/internal/pipelinestate"
 	"github.com/itigges22/atlas-tui/internal/proxyclient"
 	"github.com/itigges22/atlas-tui/internal/sessionstore"
 	"github.com/itigges22/atlas-tui/internal/termtext"
@@ -30,8 +31,8 @@ func TestTextFromTheProxyReachesTheTerminalWithItsControlsMarked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pipeline := newPipelineState()
-	pipeline.apply(proxyclient.Envelope{Type: proxyclient.EvtStageStart, Stage: "plan" + windowTitle})
+	pipeline := pipelinestate.New()
+	pipeline.Apply(proxyclient.Envelope{Type: proxyclient.EvtStageStart, Stage: "plan" + windowTitle})
 	for _, c := range []struct {
 		name   string
 		render func() string
@@ -61,9 +62,9 @@ func TestTextFromTheProxyReachesTheTerminalWithItsControlsMarked(t *testing.T) {
 		{"direction marks in the approval prompt's message", func() string {
 			return strings.Join(permPromptLines(&permPrompt{toolName: "write_file", message: "\u202eword\u202c \u200fword"}, 60, 20), "\n")
 		}, mark + "word" + mark + " " + mark + "word"},
-		{"a stage of the pipeline", func() string { return renderPipelineRow(pipeline.activeStage(), 80) }, mark},
+		{"a stage of the pipeline", func() string { return renderPipelineRow(pipeline.ActiveStage(), 80) }, mark},
 		{"a stage name cut after a letter of two bytes", func() string {
-			return renderPipelineRow(&stageStatus{Name: "abcdefghijklmn\xc3\xa9xyz"}, 80)
+			return renderPipelineRow(&pipelinestate.Stage{Name: "abcdefghijklmn\xc3\xa9xyz"}, 80)
 		}, "abcdefghijklmn\xc3\xa9"},
 		{"the stats line", func() string { return renderStatsPane(&pipeline, 120, 0, 0, 0) }, mark},
 		{"a line of the events pane", func() string {

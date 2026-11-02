@@ -21,6 +21,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/itigges22/atlas-tui/internal/pipelinestate"
 	"github.com/itigges22/atlas-tui/internal/proxyclient"
 	"github.com/itigges22/atlas-tui/internal/sessionstore"
 	"github.com/itigges22/atlas-tui/internal/termtext"
@@ -105,8 +106,8 @@ var (
 // bottom (0 = follow latest stage). Returns (rendered, allLines,
 // viewStart) so the caller can snapshot the full content for the
 // highlight-to-copy / mouse-wheel routing.
-func renderPipelinePane(p *pipelineState, height, width, scroll int) (string, []string, int) {
-	stages := p.stages()
+func renderPipelinePane(p *pipelinestate.Pipeline, height, width, scroll int) (string, []string, int) {
+	stages := p.Stages()
 	if len(stages) == 0 {
 		empty := dimStyle.Render("waiting for events…")
 		return empty, []string{empty}, 0
@@ -118,7 +119,7 @@ func renderPipelinePane(p *pipelineState, height, width, scroll int) (string, []
 	return windowLines(all, height, scroll)
 }
 
-func renderPipelineRow(s *stageStatus, width int) string {
+func renderPipelineRow(s *pipelinestate.Stage, width int) string {
 	icon, style := stageIcon(s)
 	name := lipgloss.NewStyle().Width(16).Render(termtext.Truncate(termtext.VisibleControls(s.Name), 16))
 	status := style.Width(8).Render(stageStatusLabel(s))
@@ -129,7 +130,7 @@ func renderPipelineRow(s *stageStatus, width int) string {
 	return fmt.Sprintf("%s  %s %s %s %s", icon, name, status, dur, detail)
 }
 
-func stageIcon(s *stageStatus) (string, lipgloss.Style) {
+func stageIcon(s *pipelinestate.Stage) (string, lipgloss.Style) {
 	if s.Running() {
 		return runStyle.Render("⚙"), runStyle
 	}
@@ -139,7 +140,7 @@ func stageIcon(s *stageStatus) (string, lipgloss.Style) {
 	return failStyle.Render("✗"), failStyle
 }
 
-func stageStatusLabel(s *stageStatus) string {
+func stageStatusLabel(s *pipelinestate.Stage) string {
 	if s.Running() {
 		return "RUN"
 	}
@@ -512,14 +513,14 @@ func prependPrefix(header string, body []string) []string {
 
 // renderStatsPane is a one-line summary of pipeline counters + active
 // stage. Plain text — no border (rendered between chat and input).
-func renderStatsPane(p *pipelineState, width int,
+func renderStatsPane(p *pipelinestate.Pipeline, width int,
 	lastTurnTokens, totalTokens, maxTokens int) string {
 	parts := []string{}
-	if active := p.activeStage(); active != nil {
+	if active := p.ActiveStage(); active != nil {
 		parts = append(parts, runStyle.Render(fmt.Sprintf("● %s", termtext.VisibleControls(active.Name))))
 	}
-	if p.currentTurn > 0 {
-		parts = append(parts, fmt.Sprintf("turn:%d", p.currentTurn))
+	if p.CurrentTurn > 0 {
+		parts = append(parts, fmt.Sprintf("turn:%d", p.CurrentTurn))
 	}
 	// Token usage / context-window pressure. lastTurnTokens reflects the
 	// most recent llm_call_end's total (llama-server reports prompt+completion
@@ -543,17 +544,17 @@ func renderStatsPane(p *pipelineState, width int,
 			formatTokens(totalTokens)))
 	}
 	parts = append(parts,
-		fmt.Sprintf("tools:%d✓/%d✗", p.toolSuccesses, p.toolFailures),
-		fmt.Sprintf("events:%d", p.totalEvents))
-	if p.errors > 0 {
-		parts = append(parts, failStyle.Render(fmt.Sprintf("errors:%d", p.errors)))
+		fmt.Sprintf("tools:%d✓/%d✗", p.ToolSuccesses, p.ToolFailures),
+		fmt.Sprintf("events:%d", p.TotalEvents))
+	if p.Errors > 0 {
+		parts = append(parts, failStyle.Render(fmt.Sprintf("errors:%d", p.Errors)))
 	}
-	if p.done {
+	if p.Done {
 		mark := okStyle.Render("✓ done")
-		if !p.doneSuccess {
+		if !p.DoneSuccess {
 			mark = failStyle.Render("✗ done")
 		}
-		parts = append(parts, mark, fmt.Sprintf("total:%dms", p.totalMS))
+		parts = append(parts, mark, fmt.Sprintf("total:%dms", p.TotalMS))
 	}
 	line := dimStyle.Render(strings.Join(parts, "  "))
 	if lipgloss.Width(line) > width {
@@ -793,7 +794,7 @@ type fullScreenLayout struct {
 // fullScreenView is everything one full-screen render draws from, read off the
 // model by View.
 type fullScreenView struct {
-	pipeline *pipelineState
+	pipeline *pipelinestate.Pipeline
 	events   []proxyclient.Envelope
 	chat     []sessionstore.ChatMessage
 	renderer *glamour.TermRenderer
@@ -917,7 +918,7 @@ func layoutColumnWidths(width int, hideFiles bool) (int, int) {
 // column's boxes. It returns the rows of the events box and of the pipeline
 // box, the most rows the permission modal may take, and the rows of the chat
 // box, which gets what the others leave.
-func layoutPaneHeights(p *pipelineState, perm *permPrompt, hidePipeline, hideEvents bool,
+func layoutPaneHeights(p *pipelinestate.Pipeline, perm *permPrompt, hidePipeline, hideEvents bool,
 	innerW, inputH, height int) (int, int, int, int) {
 	eventsH := 5 // title + 2 rows + 2 border
 	if hideEvents {
@@ -925,7 +926,7 @@ func layoutPaneHeights(p *pipelineState, perm *permPrompt, hidePipeline, hideEve
 	}
 	pipelineH := 0
 	if !hidePipeline {
-		pipelineRows := len(p.stages())
+		pipelineRows := len(p.Stages())
 		if pipelineRows < 1 {
 			pipelineRows = 1
 		}
@@ -965,7 +966,7 @@ func layoutPaneHeights(p *pipelineState, perm *permPrompt, hidePipeline, hideEve
 // renderPipelineBox renders the pipeline pane in its box, with the
 // calibration badge after the title. It also returns the pane's lines and the
 // first line shown, for the pane's snapshot. A hidden pipeline renders as "".
-func renderPipelineBox(layout fullScreenLayout, p *pipelineState, pipelineScroll int, sel selectionState,
+func renderPipelineBox(layout fullScreenLayout, p *pipelinestate.Pipeline, pipelineScroll int, sel selectionState,
 	calibrationBadge string) (string, []string, int) {
 	hidePipeline, pipelineH, innerW := layout.hidePipeline, layout.pipelineH, layout.innerW
 	pipelineBox := ""

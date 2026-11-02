@@ -4,94 +4,9 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-tui/internal/pipelinestate"
 )
-
-func TestPlanViewSummaryShapes(t *testing.T) {
-	cases := []struct {
-		name string
-		view *planView
-		want string
-	}{
-		{
-			"initial: shows step count + verify + score",
-			&planView{
-				Steps:        []planStep{{ID: "s1"}, {ID: "s2"}, {ID: "s3"}},
-				VerifyStepID: "s3",
-				WinningScore: 1.0,
-			},
-			"Plan: 3 steps · verify=s3 · score 1.00",
-		},
-		{
-			"partial progress: shows N/M satisfied",
-			&planView{
-				Steps:        []planStep{{ID: "s1", Satisfied: true}, {ID: "s2"}},
-				VerifyStepID: "s2",
-				WinningScore: 0.8,
-			},
-			"Plan: 1/2 satisfied · verify=s2",
-		},
-		{
-			"revising state",
-			&planView{Revising: true, Revision: 1},
-			"Plan revising (rev 1)…",
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := tc.view.summary(); got != tc.want {
-				t.Errorf("summary() = %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
-func TestPlanViewMarkSatisfied(t *testing.T) {
-	view := &planView{
-		Steps: []planStep{
-			{ID: "s1", Action: "read_file"},
-			{ID: "s2", Action: "edit_file"},
-		},
-	}
-	if !view.markSatisfied("s1") {
-		t.Error("markSatisfied(s1) returned false on first call")
-	}
-	if !view.Steps[0].Satisfied {
-		t.Error("step s1 not actually marked satisfied")
-	}
-	if view.markSatisfied("s1") {
-		t.Error("markSatisfied(s1) should be no-op on second call")
-	}
-	if view.markSatisfied("nonexistent") {
-		t.Error("markSatisfied for unknown id should return false")
-	}
-}
-
-func TestPlanViewStepLines(t *testing.T) {
-	view := &planView{
-		Steps: []planStep{
-			{ID: "s1", Action: "read_file", Target: "app.py", Satisfied: true},
-			{ID: "s2", Action: "edit_file", Target: "app.py"},
-			{ID: "s3", Action: "run_command", Target: "curl http://localhost:5000/"},
-		},
-		VerifyStepID: "s3",
-	}
-	lines := view.stepLines()
-	if len(lines) != 3 {
-		t.Fatalf("got %d lines, want 3", len(lines))
-	}
-	// Satisfied step uses ✓
-	if !strings.Contains(lines[0], "✓") || !strings.Contains(lines[0], "read_file") {
-		t.Errorf("satisfied line wrong: %q", lines[0])
-	}
-	// Plain unsatisfied step uses ☐
-	if !strings.Contains(lines[1], "☐") {
-		t.Errorf("unsatisfied line wrong: %q", lines[1])
-	}
-	// Verify step (unsatisfied) uses ⚐ + (verify) marker
-	if !strings.Contains(lines[2], "⚐") || !strings.Contains(lines[2], "(verify)") {
-		t.Errorf("verify line wrong: %q", lines[2])
-	}
-}
 
 func TestApplyPlanLoadedReplacesPriorState(t *testing.T) {
 	m := &tuiModel{}
@@ -110,7 +25,7 @@ func TestApplyPlanLoadedReplacesPriorState(t *testing.T) {
 	}
 
 	// Mark s1 satisfied, then load a revision — Satisfied should reset.
-	m.plan.markSatisfied("s1")
+	m.plan.MarkSatisfied("s1")
 	msg, ok = applyPlanLoaded(m, json.RawMessage(`{"verify_step": "s2", "winning_score": 1.0, "revision": 1,
 		"steps": [{"id": "s1", "action": "edit_file", "target": "app.py", "why": "fix"},
 		          {"id": "s2", "action": "run_command", "target": "pytest", "why": "verify"}]}`))
@@ -138,7 +53,7 @@ func TestApplyPlanLoadedRejectsEmpty(t *testing.T) {
 // A tool call off the plan changes nothing and shows nothing; one that
 // matches a step marks it satisfied and shows a row naming the step.
 func TestApplyPlanAdherence(t *testing.T) {
-	m := &tuiModel{plan: &planView{Steps: []planStep{{ID: "s1"}, {ID: "s2"}}}}
+	m := &tuiModel{plan: &pipelinestate.PlanView{Steps: []pipelinestate.PlanStep{{ID: "s1"}, {ID: "s2"}}}}
 	body := applyPlanAdherence(m, json.RawMessage(`{"matched": false, "tool": "list_directory", "off_streak": 2}`))
 	if body != "" {
 		t.Errorf("unmatched adherence should be silent, got %q", body)
@@ -157,7 +72,7 @@ func TestApplyPlanAdherence(t *testing.T) {
 }
 
 func TestApplyPlanReviseSetsRevisingFlag(t *testing.T) {
-	m := &tuiModel{plan: &planView{Steps: []planStep{{ID: "s1"}}}}
+	m := &tuiModel{plan: &pipelinestate.PlanView{Steps: []pipelinestate.PlanStep{{ID: "s1"}}}}
 	body := applyPlanRevise(m, json.RawMessage(`{"reason": "off-plan x3", "revision": 1}`))
 	if body == "" || !strings.Contains(body, "rev 1") {
 		t.Errorf("revise body wrong: %q", body)
