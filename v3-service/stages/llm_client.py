@@ -398,9 +398,6 @@ def chatml_to_messages(prompt: str) -> List[Dict[str, str]]:
         # Drop a trailing empty `assistant` turn (the generation cue).
         if role == "assistant" and not content:
             continue
-        # Scrub any lingering `/nothink` directive from migrated system prompts.
-        if role == "system":
-            content = content.replace("/nothink", "").strip()
         messages.append({"role": role, "content": content})
     return messages or [{"role": "user", "content": (prompt or "").strip()}]
 

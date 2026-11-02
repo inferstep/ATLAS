@@ -611,9 +611,7 @@ func TestATypedRefusalNeverFallsBackToACandidate(t *testing.T) {
 // TestEachProducerHasExactlyOneEnumeratedCallPath is the wiring invariant.
 //
 // A producer with two callers has two places its rules can drift apart. A
-// producer with none is either a wiring bug or a mechanism that does not
-// exist, and those are not the same thing -- so the second case must be
-// declared unavailable rather than silently absent.
+// producer with none is not wired, and fails here.
 func TestEachProducerHasExactlyOneEnumeratedCallPath(t *testing.T) {
 	files := proxyFiles(t)
 	for _, c := range []struct {
@@ -634,10 +632,6 @@ func TestEachProducerHasExactlyOneEnumeratedCallPath(t *testing.T) {
 			}
 			if _, ok := sites[c.site]; !ok {
 				t.Errorf("%s is called from %v, want %s", c.fn, sites, c.site)
-			}
-		case evidenceProducerUnavailable:
-			if len(sites) != 0 {
-				t.Errorf("%s is declared unavailable but is called from %v", c.fn, sites)
 			}
 		default:
 			t.Errorf("%s has no availability declaration", c.source)
