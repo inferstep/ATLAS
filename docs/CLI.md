@@ -19,6 +19,9 @@ atlas --resume     # pick a past session from a list
 atlas --resume <id># resume a specific session by id
 ```
 
+`atlas tui` only needs `atlas-proxy` reachable; the proxy fans out to the
+other services internally ([ARCHITECTURE.md § Services](ARCHITECTURE.md#2-services)).
+
 Sessions are saved automatically (one JSON file per session under the user
 cache dir: `~/.cache/atlas-tui/sessions/` on Linux,
 `~/Library/Caches/atlas-tui/sessions/` on macOS; written each turn). `--continue` reopens
@@ -445,24 +448,6 @@ affects the proxy and inference stack is in [CONFIGURATION.md](CONFIGURATION.md)
 
 ---
 
-## Stack overview
-
-The TUI is one of several services. See [ARCHITECTURE.md](ARCHITECTURE.md)
-for the full picture; the short version:
-
-| Service | Port | Role |
-|---|---|---|
-| llama-server | 8080 | Local GGUF inference through llama.cpp |
-| atlas-proxy | 8090 | Agent loop, tool execution, V3 routing, SSE event broker |
-| v3-service | 8070 | V3 pipeline (PlanSearch, DivSampling, build verification, repair) |
-| geometric-lens | 8099 | C(x)/G(x) energy scoring |
-| sandbox | 30820 | Isolated code execution for V3 verification |
-
-`atlas tui` only needs `atlas-proxy` reachable; the proxy fans out to
-the other services internally.
-
----
-
 ## atlas model
 
 Registry-aware model management.
@@ -842,15 +827,6 @@ go build -o ~/.local/bin/atlas-tui .
 tmux intercepts mouse events. Either enable mouse passthrough in tmux
 (`set -g mouse on`) or use `PgUp`/`PgDn` instead.
 
-### V3 doesn't fire on small files
-
-By design: V3 only activates for files that look like meaningful code (≥10
-lines plus logic indicators or a recognized code/markup extension; config,
-data, prose, and shell files stay direct-write). The tier rule is the
-`classifyFileTier` config surface in
-[CONFIGURATION.md § 2](CONFIGURATION.md#2-atlas-proxy); for the concept see
-[ARCHITECTURE.md](ARCHITECTURE.md).
-
 ### "encoding prompt…" lingers for >30 s
 
 Llama.cpp doesn't flush HTTP response headers until the first decoded
@@ -859,11 +835,3 @@ histories (8K+ tokens) can take a long time in prompt eval before the first
 token arrives. The proxy sets no `ResponseHeaderTimeout`, so long V3 chains
 complete instead of being killed mid-flight. If "encoding prompt…" sits for
 many minutes, the prompt is genuinely too big — `/compact` to summarize.
-
----
-
-## Building a non-TUI client
-
-`atlas-proxy`'s `/v1/agent`, `/events`, and `/cancel` endpoints are the
-public client contract. Anything that speaks SSE can be a chat client.
-See [API.md § Building a non-TUI client](API.md#building-a-non-tui-client) for the protocol and a minimal Python example.
