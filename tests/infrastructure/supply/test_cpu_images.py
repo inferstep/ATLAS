@@ -100,7 +100,7 @@ def test_dockerfile_copy_sources_all_exist():
     v3-service (wavelet/, rpg.py) hit this during the retrieval/RPG removals;
     the second reached CI green on tests with only the image job failing.
     """
-    proc = _run_gate("check_dockerfile_sources.py")
+    proc = _run_gate("ci/check_dockerfile_sources.py")
     assert proc.returncode == 0, (
         f"dockerfile-sources gate failed:\n{proc.stdout}\n{proc.stderr}")
 
@@ -111,7 +111,7 @@ def test_dockerfile_gate_keeps_the_dot_of_a_hidden_context(tmp_path, monkeypatch
     `ci/Dockerfile` and its declared context was never found."""
     import importlib.util
     spec = importlib.util.spec_from_file_location(
-        "check_dockerfile_sources", ROOT / "scripts" / "check_dockerfile_sources.py")
+        "check_dockerfile_sources", ROOT / "scripts" / "ci" / "check_dockerfile_sources.py")
     gate = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(gate)
     compose = tmp_path / "docker-compose.yml"
@@ -139,7 +139,7 @@ def test_dockerfile_gate_detects_a_missing_source(tmp_path, monkeypatch):
     df.write_text(original + "\nCOPY v3-service/definitely_not_here.py /app/x.py\n")
     try:
         proc = subprocess.run(
-            [sys.executable, str(root / "scripts" / "check_dockerfile_sources.py")],
+            [sys.executable, str(root / "scripts" / "ci" / "check_dockerfile_sources.py")],
             capture_output=True, text=True, cwd=str(root))
         assert proc.returncode == 1, (
             f"gate passed despite a missing COPY source:\n{proc.stdout}\n{proc.stderr}")

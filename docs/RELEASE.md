@@ -67,7 +67,7 @@ require containers, a model, or specific hardware.
 Run the default gate from the repository root:
 
 ```bash
-python scripts/production-readiness.py
+python scripts/ci/production-readiness.py
 ```
 
 The required checks cover test integrity, Python compilation and unit tests,
@@ -92,9 +92,9 @@ before/after workspace observation are properties of the running executor, and
 a stub can only assert the contract was honoured rather than that it is:
 
 ```bash
-python scripts/production-readiness.py --only staging-executor
-python scripts/staging-integration.py          # the same thing, directly
-python scripts/staging-integration.py --keep   # leave the executor running
+python scripts/ci/production-readiness.py --only staging-executor
+python scripts/ci/staging-integration.py          # the same thing, directly
+python scripts/ci/staging-integration.py --keep   # leave the executor running
 ```
 
 The runner starts `sandbox/executor_server.py` on a free port against a
@@ -108,8 +108,8 @@ reported as `unavailable`, not as successful checks. A missing tool becomes a
 failure when its gate is selected explicitly:
 
 ```bash
-python scripts/production-readiness.py --only ruff
-python scripts/production-readiness.py --only compose
+python scripts/ci/production-readiness.py --only ruff
+python scripts/ci/production-readiness.py --only compose
 ```
 
 Use `--list` to see the available gates and `--json` for machine-readable

@@ -242,7 +242,7 @@ def test_the_cache_job_builds_only_when_no_cache_was_found():
 
 @pytest.mark.parametrize("module", ["proxy", "tui"])
 def test_the_build_for_the_cache_is_the_test_gates_own_command_with_no_test_to_run(tmp_path, module):
-    build, gates = load("ci/go_test_build.py"), load("production-readiness.py")
+    build, gates = load("ci/go_test_build.py"), load("ci/production-readiness.py")
     command, folder, env = build.build_command(module, str(tmp_path))
     gate = gates._gates(())[f"go-{module}-test"]
     assert command[:2] == ["go", "test"]

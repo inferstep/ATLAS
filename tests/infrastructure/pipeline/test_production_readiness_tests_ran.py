@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "production-readiness.py"
+SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "ci" / "production-readiness.py"
 PYTEST = (sys.executable, "-m", "pytest", "tests/cli", "--no-header", "-q")
 GO_TEST = ("go", "test", "-race", "./...")
 

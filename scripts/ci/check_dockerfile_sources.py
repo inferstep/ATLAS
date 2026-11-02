@@ -28,7 +28,7 @@ import re
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 COMPOSE = ROOT / "docker-compose.yml"
 
 # Fallback when a Dockerfile is not referenced by docker-compose.yml: assume

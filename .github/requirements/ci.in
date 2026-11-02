@@ -3,10 +3,10 @@
 # ruff and mypy match sandbox/requirements-verify.txt (a contract test checks).
 pytest
 # Coverage output for the pytest jobs (ATLAS_COVERAGE_DIR in
-# scripts/production-readiness.py).
+# scripts/ci/production-readiness.py).
 pytest-cov
 # Several worker processes for one pytest run (--pytest-workers in
-# scripts/production-readiness.py). The job `pytest (tests/infrastructure)`
+# scripts/ci/production-readiness.py). The job `pytest (tests/infrastructure)`
 # uses four.
 pytest-xdist
 pyyaml

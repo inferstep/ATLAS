@@ -766,7 +766,7 @@ def test_the_compose_plant_is_in_an_overlay_file_that_no_job_starts_a_service_fr
         "file is then red for this plant and not for its own. Fix: plant it in an overlay file, which the compose "
         "check validates too.")
     assert (ROOT / plant["path"]).is_file()
-    assert f'"{plant["path"]}"' in (ROOT / "scripts" / "production-readiness.py").read_text(encoding="utf-8")
+    assert f'"{plant["path"]}"' in (ROOT / "scripts" / "ci" / "production-readiness.py").read_text(encoding="utf-8")
     for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
         for job in yaml.safe_load(path.read_text(encoding="utf-8"))["jobs"].values():
             for step in job.get("steps", []):

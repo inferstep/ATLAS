@@ -378,7 +378,7 @@ def test_when_the_tests_fail_with_the_pieces_together_none_of_the_module_is_offe
 def test_the_tests_of_a_module_run_with_the_flags_of_the_go_test_jobs(made, monkeypatch):
     run = made().make()
     assert [["go", *call["args"]] for call in run.calls("test")] == [cleanup.GO_TEST, cleanup.GO_TEST]
-    spec = importlib.util.spec_from_file_location("production_readiness", ROOT / "scripts" / "production-readiness.py")
+    spec = importlib.util.spec_from_file_location("production_readiness", ROOT / "scripts" / "ci" / "production-readiness.py")
     gates = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, spec.name, gates)  # the dataclasses resolve their annotations through it
     spec.loader.exec_module(gates)

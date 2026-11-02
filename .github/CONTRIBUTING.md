@@ -68,7 +68,7 @@ git checkout -b dev upstream/dev
 python3.12 -m venv .venv && . .venv/bin/activate
 pip install --require-hashes -r .github/requirements/ci.txt
 pip install --no-deps -e .
-python scripts/production-readiness.py
+python scripts/ci/production-readiness.py
 ```
 
 **With a GPU.** Install the full stack with [SETUP.md](../docs/SETUP.md). Then
@@ -89,9 +89,9 @@ push, install the hook in `.pre-commit-config.yaml` with
 [prek](https://github.com/j178/prek) or pre-commit. The whole gate is:
 
 ```bash
-python scripts/production-readiness.py            # everything
-python scripts/production-readiness.py --list     # the gates
-python scripts/production-readiness.py --only ruff
+python scripts/ci/production-readiness.py            # everything
+python scripts/ci/production-readiness.py --list     # the gates
+python scripts/ci/production-readiness.py --only ruff
 ```
 
 CI runs the same gates, so a green run here usually means a green pull
@@ -104,7 +104,7 @@ To measure test coverage as CI does, name a directory for the reports
 (the pytest gates need `pytest-cov`):
 
 ```bash
-ATLAS_COVERAGE_DIR=coverage python scripts/production-readiness.py --only python-tests
+ATLAS_COVERAGE_DIR=coverage python scripts/ci/production-readiness.py --only python-tests
 ```
 
 CI sends its coverage reports to [Codecov](https://app.codecov.io/gh/inferstep/ATLAS).
@@ -387,7 +387,7 @@ container, meaningful names and labels.
 # tests/v3-service, tests/cli, tests/infrastructure, tests/concurrency,
 # tests/perf, tests/contracts and tests/e2e; geometric-lens/tests runs in
 # its own process (CPU torch is enough).
-python scripts/production-readiness.py
+python scripts/ci/production-readiness.py
 
 # One file
 pytest tests/v3/stages/test_plan_search.py -v

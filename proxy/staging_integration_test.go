@@ -30,8 +30,8 @@ import (
 //	ATLAS_STAGING_SANDBOX_BASE       its WORKSPACE_BASE, so snapshot teardown
 //	                                 can be inspected from outside (optional)
 //
-// `scripts/staging-integration.py` starts one, runs this, and tears it down;
-// `python scripts/production-readiness.py --only staging-executor` is the
+// `scripts/ci/staging-integration.py` starts one, runs this, and tears it down;
+// `python scripts/ci/production-readiness.py --only staging-executor` is the
 // enumerated way to run it, and reports `unavailable` rather than passing when
 // the dependencies are missing.
 
@@ -49,7 +49,7 @@ func stagingIntegrationEnv(t *testing.T) (url, workspace string) {
 	if url == "" || workspace == "" {
 		t.Skip("integration environment absent: set ATLAS_STAGING_SANDBOX_URL and " +
 			"ATLAS_STAGING_SANDBOX_WORKSPACE to a running sandbox executor and the " +
-			"workspace it serves, or run `python scripts/staging-integration.py`, " +
+			"workspace it serves, or run `python scripts/ci/staging-integration.py`, " +
 			"which starts one")
 	}
 	return url, workspace

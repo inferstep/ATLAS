@@ -88,7 +88,7 @@ jobs:
         env:
           # Makes the test gate write a cover profile and the test results there.
           ATLAS_COVERAGE_DIR: ${{ runner.temp }}/coverage
-        run: python scripts/production-readiness.py --only go-${{ matrix.module }}-test
+        run: python scripts/ci/production-readiness.py --only go-${{ matrix.module }}-test
 
       - name: coverage total
         if: ${{ !cancelled() }}
@@ -111,10 +111,10 @@ jobs:
           retention-days: 14
 
       - name: go vet
-        run: python scripts/production-readiness.py --only go-${{ matrix.module }}-vet
+        run: python scripts/ci/production-readiness.py --only go-${{ matrix.module }}-vet
 
       - name: staticcheck
-        run: python scripts/production-readiness.py --only go-${{ matrix.module }}-staticcheck
+        run: python scripts/ci/production-readiness.py --only go-${{ matrix.module }}-staticcheck
 
   python-tests:
     name: pytest (${{ matrix.subset }})
@@ -198,7 +198,7 @@ jobs:
         # runs once, and the result file holds every test. The other subsets
         # take seconds and stay in one process.
         run: >-
-          python scripts/production-readiness.py --only python-tests --pytest-path "${{ matrix.subset }}"
+          python scripts/ci/production-readiness.py --only python-tests --pytest-path "${{ matrix.subset }}"
           --pytest-workers "${{ matrix.subset == 'tests/infrastructure' && 4 || 1 }}"
 
       - name: coverage total
@@ -266,7 +266,7 @@ jobs:
         # otherwise fails only in the image-build job. All are static — no
         # dependencies beyond the stdlib.
         run: |
-          python scripts/production-readiness.py \
+          python scripts/ci/production-readiness.py \
             --only test-integrity \
             --only python-compile \
             --only min-python \
@@ -278,12 +278,12 @@ jobs:
         # markers that no finding uses. The gate lints scripts/ as well.
         run: |
           pip install --require-hashes -r .github/requirements/ci.txt
-          python scripts/production-readiness.py --only ruff
+          python scripts/ci/production-readiness.py --only ruff
 
       - name: mypy (typed modules)
         run: |
           pip install --require-hashes -r .github/requirements/ci.txt
-          python scripts/production-readiness.py --only mypy-typed
+          python scripts/ci/production-readiness.py --only mypy-typed
 
   shellcheck:
     name: shellcheck
@@ -300,7 +300,7 @@ jobs:
         # Every tracked .sh file, at warning level: the install and
         # bootstrap scripts run with high privileges on a user's machine,
         # so their warnings are worth reading. Style and info notes stay off.
-        run: python scripts/production-readiness.py --only shellcheck
+        run: python scripts/ci/production-readiness.py --only shellcheck
 
   compose-validate:
     name: docker compose config
@@ -316,7 +316,7 @@ jobs:
         # real installs run (ROCm, Vulkan, Vulkan+CPU, macOS) without
         # pulling images. Dummy env is supplied by the gate itself.
         run: |
-          python scripts/production-readiness.py \
+          python scripts/ci/production-readiness.py \
             --only compose \
             --only compose-rocm \
             --only compose-vulkan \
@@ -334,7 +334,7 @@ jobs:
       - name: yamllint
         run: |
           pip install --require-hashes -r .github/requirements/ci.txt
-          python scripts/production-readiness.py --only workflow-yaml
+          python scripts/ci/production-readiness.py --only workflow-yaml
 
   code-health:
     name: code health (size)
