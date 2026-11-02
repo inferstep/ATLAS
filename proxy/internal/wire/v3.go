@@ -184,7 +184,12 @@ type V3EvidenceEnvelope struct {
 	Provenance *V3EvidenceProvenance `json:"provenance,omitempty"`
 }
 
-var EvidenceStrengthOrder = []string{"syntax", "runtime", "behavioral", "oracle"}
+var evidenceStrengthOrder = []string{"syntax", "runtime", "behavioral", "oracle"}
+
+// StrongestStrength is the top of the evidence strength order.
+func StrongestStrength() string {
+	return evidenceStrengthOrder[len(evidenceStrengthOrder)-1]
+}
 
 // V3EvidenceProvenance is where a piece of evidence came from and what it is
 // about. It carries hashes and identities; candidate bytes stay where they
@@ -232,7 +237,7 @@ func (p *V3EvidenceProvenance) MayAuthorize() (bool, string) {
 	if !provenanceSources[p.Source] {
 		return false, "unknown evidence source " + p.Source
 	}
-	ceiling, ok := ProvenanceCeiling[p.Source]
+	ceiling, ok := provenanceCeiling[p.Source]
 	if !ok {
 		return false, p.Source + " evidence never authorizes an obligation"
 	}
@@ -340,50 +345,77 @@ func (e *V3EvidenceEnvelope) Validate() (EvidenceAvailability, string) {
 	if e == nil {
 		return EvidenceAbsent, "no evidence envelope"
 	}
+	if why := e.versionProblem(); why != "" {
+		return EvidenceUnavailable, why
+	}
+	if why := e.identityProblem(); why != "" {
+		return EvidenceUnavailable, why
+	}
+	if why := e.vocabularyProblem(); why != "" {
+		return EvidenceUnavailable, why
+	}
+	if why := e.contradiction(); why != "" {
+		return EvidenceUnavailable, why
+	}
+	return EvidenceAvailable, ""
+}
+
+func (e *V3EvidenceEnvelope) versionProblem() string {
 	if e.WireVersion == "" {
-		return EvidenceUnavailable, "envelope carries no wire version"
+		return "envelope carries no wire version"
 	}
-	if major := strings.SplitN(e.WireVersion, ".", 2)[0]; major != evidenceWireMajor {
-		return EvidenceUnavailable, "unsupported wire version " + e.WireVersion
+	if strings.SplitN(e.WireVersion, ".", 2)[0] != evidenceWireMajor {
+		return "unsupported wire version " + e.WireVersion
 	}
-	// Identity must be COMPLETE, matching the producer's own rule: a partial
-	// identity is how unrelated measurements compare equal through blanks.
+	return ""
+}
+
+// identityProblem holds the producer's own rule: a partial identity is how
+// unrelated measurements compare equal through blanks.
+func (e *V3EvidenceEnvelope) identityProblem() string {
 	id := e.Identity
 	if id.ContractID == "" || id.ContractVersion == "" || id.ArtifactScope == "" ||
 		id.EvaluationContextHash == "" {
-		return EvidenceUnavailable, "identity incomplete"
+		return "identity incomplete"
 	}
 	if id.CalibrationID == "" && (id.AdapterID == "" || id.AdapterVersion == "") {
-		return EvidenceUnavailable, "identity incomplete: no calibration or adapter"
+		return "identity incomplete: no calibration or adapter"
 	}
+	return ""
+}
+
+func (e *V3EvidenceEnvelope) vocabularyProblem() string {
 	if !evidenceStrengths[e.Evaluation.EvidenceStrength] {
-		return EvidenceUnavailable, "unknown evidence strength " + e.Evaluation.EvidenceStrength
+		return "unknown evidence strength " + e.Evaluation.EvidenceStrength
 	}
 	if !evidenceExecutionStatuses[e.Evaluation.ExecutionStatus] {
-		return EvidenceUnavailable, "unknown execution status " + e.Evaluation.ExecutionStatus
+		return "unknown execution status " + e.Evaluation.ExecutionStatus
 	}
 	if !evidenceSelectionStatuses[e.Selection.Status] {
-		return EvidenceUnavailable, "unknown selection status " + e.Selection.Status
+		return "unknown selection status " + e.Selection.Status
 	}
-	// Internal contradictions. A producer that claims closure over a run that
-	// did not complete, or over unmet requirements, is a producer whose other
-	// fields cannot be relied on either.
+	return ""
+}
+
+// contradiction finds a claim the envelope's own fields deny. A producer that
+// claims closure over a run that did not complete, or over unmet requirements,
+// is a producer whose other fields cannot be relied on either.
+func (e *V3EvidenceEnvelope) contradiction() string {
 	if e.Evaluation.ClosureEligible {
 		if e.Evaluation.ExecutionStatus != "ok" {
-			return EvidenceUnavailable, "closure claimed over execution status " +
-				e.Evaluation.ExecutionStatus
+			return "closure claimed over execution status " + e.Evaluation.ExecutionStatus
 		}
 		if !e.Evaluation.RequirementsComplete {
-			return EvidenceUnavailable, "closure claimed with incomplete requirements"
+			return "closure claimed with incomplete requirements"
 		}
 		if !e.Evaluation.Supported {
-			return EvidenceUnavailable, "closure claimed for an unsupported artifact"
+			return "closure claimed for an unsupported artifact"
 		}
 	}
 	if e.Selection.Status == "verified_winner" && !e.Evaluation.ClosureEligible {
-		return EvidenceUnavailable, "verified winner without closure eligibility"
+		return "verified winner without closure eligibility"
 	}
-	return EvidenceAvailable, ""
+	return ""
 }
 
 // Available is the single predicate a caller may use before reading fields.

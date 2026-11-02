@@ -448,7 +448,8 @@ API の契約は [API.md § POST /v3/plan](../../API.md#post-v3plan) に記載�
 | ファイル | 役割 |
 |---|---|
 | `proxy/v3_bridge.go` | `callV3PlanStreaming(reqCtx, v3URL, req, onProgress)` — SSE ストリームを開き、進捗イベントをコールバックに転送し、`event: result` フレームから最終的な `Plan` を返します。`reqCtx` がエージェントのリクエストコンテキストを結び付けるので、`/cancel` は実行中のプランを中止します。V3 パイプライン実行用の `callV3GenerateStreaming` と同じ形です。 |
-| `proxy/internal/wire/` | `V3PlanRequest`、`Plan`、`PlanStep` 型。`AgentContext` に `Plan`、`PlanStepsSatisfied[]`、`PlanOffStreak`、`PlanRevisions` が加わります。 |
+| `proxy/internal/wire/` | `V3PlanRequest`（`v3.go`）、`Plan` と `PlanStep`（`messages.go`）の型。 |
+| `proxy/types.go` | `AgentContext` に `Plan`、`PlanStepsSatisfied[]`、`PlanOffStreak`、`PlanRevisions` が加わります。 |
 | `proxy/plan_generation.go` | `samplePlanContext()` はプランナーのために優先ファイル（app.py、templates/index.html、package.json など）をたどります。`shouldGeneratePlan()` はティア、メッセージ長、読み取り専用のリクエストかどうかで判定します。`generatePlan()` はブリッジを実行し、トークンごとのノイズを捨て、全ステップのリストを付けて `plan_loaded` を発行します。 |
 | `proxy/gates_plan.go` | `matchPlanStep()`（ツール名とパス末尾の緩い一致）、`recordPlanAdherence()`（ツールコールごとの集計。どのステップにも一致しない偵察コール — `read_file`/`list_directory`/`find_file`/`search_files` — は中立で、`off_streak` を延ばしません）、`revisePlan()`（`FilesRead` を追加コンテキストとして引き継いで再生成）。 |
 

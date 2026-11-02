@@ -326,7 +326,7 @@ func authorizationFloor(obs []taskObligation) string {
 			continue
 		}
 		if obligationUnsatisfiableKinds[o.Kind] {
-			return wire.EvidenceStrengthOrder[len(wire.EvidenceStrengthOrder)-1]
+			return wire.StrongestStrength()
 		}
 		if floor == "" || wire.StrengthRank(o.RequiredStrength) > wire.StrengthRank(floor) {
 			floor = o.RequiredStrength

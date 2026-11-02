@@ -85,32 +85,37 @@ func (s *runState) observeRepair(ctx *AgentContext, turn int, name string, args 
 		return
 	}
 	for _, target := range mutationIntentTargets(ctx, name, args) {
-		key := ledgerKey(ctx, target.Rel)
-		r := s.repairs[key]
-		open := r != nil && r.Open
-		switch {
-		case name == "delete_file" || name == "move_file":
-			if open && result.Success {
-				s.closeRepair(ctx, r, turn, name, "removed")
-			} else if open {
-				s.recordRepairAttempt(ctx, r, turn, name, false, result.Error)
-			}
-		case landedUnparseable(result):
-			if !open {
-				r = s.openRepair(ctx, key, target.Rel, turn, name)
-			}
-			s.recordRepairAttempt(ctx, r, turn, name, true, result.ValidationDetail)
-		case result.MutationStatus == wire.MutationApplied:
-			if open {
-				how := "parses"
-				if result.ValidationStatus != wire.ValidationPassed {
-					how = "not checked"
-				}
-				s.closeRepair(ctx, r, turn, name, how)
-			}
-		case open:
+		s.observeRepairAt(ctx, turn, name, target.Rel, result)
+	}
+}
+
+// observeRepairAt updates the repair of one path the call meant to change.
+func (s *runState) observeRepairAt(ctx *AgentContext, turn int, name, rel string, result *wire.ToolResult) {
+	key := ledgerKey(ctx, rel)
+	r := s.repairs[key]
+	open := r != nil && r.Open
+	switch {
+	case name == "delete_file" || name == "move_file":
+		if open && result.Success {
+			s.closeRepair(ctx, r, turn, name, "removed")
+		} else if open {
 			s.recordRepairAttempt(ctx, r, turn, name, false, result.Error)
 		}
+	case landedUnparseable(result):
+		if !open {
+			r = s.openRepair(ctx, key, rel, turn, name)
+		}
+		s.recordRepairAttempt(ctx, r, turn, name, true, result.ValidationDetail)
+	case result.MutationStatus == wire.MutationApplied:
+		if open {
+			how := "parses"
+			if result.ValidationStatus != wire.ValidationPassed {
+				how = "not checked"
+			}
+			s.closeRepair(ctx, r, turn, name, how)
+		}
+	case open:
+		s.recordRepairAttempt(ctx, r, turn, name, false, result.Error)
 	}
 }
 

@@ -517,7 +517,7 @@ func explainMissingPrerequisites(d *AuthorizationDecision, in authorizationInput
 func evidenceRefusalFor(ev proxyEvidence, asked wire.V3EvidenceProvenance,
 	wantCommand string) AuthorizationReason {
 	p := ev.Provenance
-	if _, ok := wire.ProvenanceCeiling[p.Source]; !ok {
+	if _, ok := wire.CeilingFor(p.Source); !ok {
 		return ReasonProvenanceUntrusted
 	}
 	if p.RequestID != asked.RequestID || p.InvocationID != asked.InvocationID {
@@ -547,7 +547,7 @@ func evidenceRefusalFor(ev proxyEvidence, asked wire.V3EvidenceProvenance,
 	if ok, _ := p.MayAuthorize(); !ok {
 		// Source and strength alone. Distinguish "this source may never close
 		// this" from "it could, but did not reach the floor".
-		ceiling := wire.ProvenanceCeiling[p.Source]
+		ceiling, _ := wire.CeilingFor(p.Source)
 		if wire.StrengthRank(ceiling) < wire.StrengthRank(p.RequiredStrength) {
 			return ReasonProvenanceUntrusted
 		}

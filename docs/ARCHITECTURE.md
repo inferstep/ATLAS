@@ -618,7 +618,8 @@ API contract documented in [API.md § POST /v3/plan](API.md#post-v3plan).
 | File | Role |
 |---|---|
 | `proxy/v3_bridge.go` | `callV3PlanStreaming(reqCtx, v3URL, req, onProgress)` — opens the SSE stream, forwards progress events to the callback, returns the final `Plan` from the `event: result` frame. `reqCtx` binds the agent's request context so `/cancel` aborts an in-flight plan. Mirrors `callV3GenerateStreaming` for V3-pipeline runs. |
-| `proxy/internal/wire/` | `V3PlanRequest`, `Plan`, `PlanStep` types. `AgentContext` gains `Plan`, `PlanStepsSatisfied[]`, `PlanOffStreak`, `PlanRevisions`. |
+| `proxy/internal/wire/` | `V3PlanRequest` (in `v3.go`), `Plan` and `PlanStep` (in `messages.go`) types. |
+| `proxy/types.go` | `AgentContext` gains `Plan`, `PlanStepsSatisfied[]`, `PlanOffStreak`, `PlanRevisions`. |
 | `proxy/plan_generation.go` | `samplePlanContext()` walks priority files (app.py, templates/index.html, package.json, …) for the planner. `shouldGeneratePlan()` gates on tier, message length and read-only requests. `generatePlan()` runs the bridge, drops per-token noise, emits `plan_loaded` with the full step list. |
 | `proxy/gates_plan.go` | `matchPlanStep()` (loose tool-name + path-suffix match), `recordPlanAdherence()` (per-tool-call accounting; a recon call — `read_file`/`list_directory`/`find_file`/`search_files` — that matches no step is neutral: it never extends `off_streak`), `revisePlan()` (regenerate with `FilesRead` carried forward as extra context). |
 

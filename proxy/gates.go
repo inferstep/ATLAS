@@ -502,6 +502,9 @@ func workspaceRelativeName(ctx *AgentContext, path string) (string, bool) {
 // service availability question, so a missing sandbox cannot mask genuinely
 // non-applicable content. That changes the structured evidence only -- the
 // allow/refuse decision is identical either way.
+// requestNotBuilt is the detail of a check that could not build its request.
+const requestNotBuilt = "request could not be built"
+
 func sandboxSyntaxOutcome(ctx *AgentContext, path, content string) checkOutcome {
 	meta, gated := syntaxGateLanguages[strings.ToLower(filepath.Ext(path))]
 	if !gated {
@@ -530,12 +533,12 @@ func sandboxSyntaxOutcome(ctx *AgentContext, path, content string) checkOutcome 
 	// pre-existing behaviour, which only forgoes path-scoped checks).
 	body, err := json.Marshal(sandboxSyntaxRequest(ctx, path, lang, content))
 	if err != nil {
-		return checkOutcome{Status: wire.ValidationNotRun, Detail: "request could not be built"}
+		return checkOutcome{Status: wire.ValidationNotRun, Detail: requestNotBuilt}
 	}
 	client := &http.Client{Timeout: 15 * time.Second}
 	req, err := http.NewRequest("POST", ctx.SandboxURL+"/syntax-check", bytes.NewReader(body))
 	if err != nil {
-		return checkOutcome{Status: wire.ValidationNotRun, Detail: "request could not be built"}
+		return checkOutcome{Status: wire.ValidationNotRun, Detail: requestNotBuilt}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if serviceToken != "" {
@@ -662,7 +665,7 @@ func embeddedScriptOutcome(ctx *AgentContext, path, content, previous string) ch
 	body, err := json.Marshal(map[string]string{
 		"path": path, "source": content, "previous": previous})
 	if err != nil {
-		return checkOutcome{Status: wire.ValidationNotRun, Detail: "request could not be built"}
+		return checkOutcome{Status: wire.ValidationNotRun, Detail: requestNotBuilt}
 	}
 	base := ctx.Ctx
 	if base == nil {
@@ -673,7 +676,7 @@ func embeddedScriptOutcome(ctx *AgentContext, path, content, previous string) ch
 	req, err := http.NewRequestWithContext(reqCtx, "POST",
 		ctx.V3URL+"/internal/embedded_script_check", bytes.NewReader(body))
 	if err != nil {
-		return checkOutcome{Status: wire.ValidationNotRun, Detail: "request could not be built"}
+		return checkOutcome{Status: wire.ValidationNotRun, Detail: requestNotBuilt}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if serviceToken != "" {
@@ -1233,54 +1236,10 @@ func recordLedgerEffect(name string, args json.RawMessage, ctx *AgentContext, re
 		}
 
 	case "delete_file":
-		p := ledgerArgPath(args, "path")
-		if p == "" {
-			return
-		}
-		// A refused or failed delete leaves the file in place. Tombstone on
-		// the file being GONE, never on the call having been made.
-		if _, err := os.Stat(ledgerKey(ctx, p)); err == nil {
-			observePathFromDisk(ctx, p, wire.ValidationKindUnknown, wire.ValidationUnknown,
-				"delete_file did not remove the file")
-			return
-		}
-		// A path the ledger never observed and that the tool did not report
-		// removing is not this session's deliverable; inventing a tombstone
-		// for it would fabricate history from a failed call.
-		if ledgerTracks(ctx, p) || result.MutationStatus.Applied() {
-			tombstoneDeliverable(ctx, p, "deleted")
-			// The one place that both confirms the absence and writes the
-			// tombstone is the only place that can promote an approved
-			// attempt into a fulfilled deletion. It re-checks every fact.
-			promoteFulfilledDeletion(ctx, ledgerKey(ctx, p))
-		}
+		recordLedgerDeletion(ctx, args, result)
 
 	case "move_file":
-		src := ledgerArgPath(args, "source")
-		dst := ledgerArgPath(args, "destination")
-		// move_file accepts a directory as the destination, so take the path
-		// the tool actually resolved when it reported one.
-		var out wire.MoveFileOutput
-		if len(result.Data) > 0 && json.Unmarshal(result.Data, &out) == nil && out.Destination != "" {
-			dst = out.Destination
-		}
-		if dst != "" {
-			// Fresh observation, unknown verdict: a syntax pass earned under
-			// the old name says nothing about this path, and inheriting it
-			// would let a rename manufacture evidence.
-			observePathFromDisk(ctx, dst, wire.ValidationKindUnknown, wire.ValidationUnknown, "move_file destination")
-		}
-		if src == "" {
-			return
-		}
-		if _, err := os.Stat(ledgerKey(ctx, src)); err == nil {
-			observePathFromDisk(ctx, src, wire.ValidationKindUnknown, wire.ValidationUnknown,
-				"move_file left the source in place")
-			return
-		}
-		if ledgerTracks(ctx, src) || result.MutationStatus.Applied() {
-			tombstoneDeliverable(ctx, src, "moved:"+ledgerKey(ctx, dst))
-		}
+		recordLedgerMove(ctx, args, result)
 
 	// Shell effects. An arbitrary command may have rewritten anything, so
 	// every tracked verdict is re-proved by rehash or dropped.
@@ -1292,6 +1251,60 @@ func recordLedgerEffect(name string, args json.RawMessage, ctx *AgentContext, re
 
 	case "stop_background":
 		recordBackgroundStop(ctx, result)
+	}
+}
+
+// recordLedgerDeletion records what a delete_file call left behind.
+func recordLedgerDeletion(ctx *AgentContext, args json.RawMessage, result *wire.ToolResult) {
+	p := ledgerArgPath(args, "path")
+	if p == "" {
+		return
+	}
+	// A refused or failed delete leaves the file in place. Tombstone on
+	// the file being GONE, never on the call having been made.
+	if _, err := os.Stat(ledgerKey(ctx, p)); err == nil {
+		observePathFromDisk(ctx, p, wire.ValidationKindUnknown, wire.ValidationUnknown,
+			"delete_file did not remove the file")
+		return
+	}
+	// A path the ledger never observed and that the tool did not report
+	// removing is not this session's deliverable; inventing a tombstone
+	// for it would fabricate history from a failed call.
+	if ledgerTracks(ctx, p) || result.MutationStatus.Applied() {
+		tombstoneDeliverable(ctx, p, "deleted")
+		// The one place that both confirms the absence and writes the
+		// tombstone is the only place that can promote an approved
+		// attempt into a fulfilled deletion. It re-checks every fact.
+		promoteFulfilledDeletion(ctx, ledgerKey(ctx, p))
+	}
+}
+
+// recordLedgerMove records what a move_file call left at both of its paths.
+func recordLedgerMove(ctx *AgentContext, args json.RawMessage, result *wire.ToolResult) {
+	src := ledgerArgPath(args, "source")
+	dst := ledgerArgPath(args, "destination")
+	// move_file accepts a directory as the destination, so take the path
+	// the tool actually resolved when it reported one.
+	var out wire.MoveFileOutput
+	if len(result.Data) > 0 && json.Unmarshal(result.Data, &out) == nil && out.Destination != "" {
+		dst = out.Destination
+	}
+	if dst != "" {
+		// Fresh observation, unknown verdict: a syntax pass earned under
+		// the old name says nothing about this path, and inheriting it
+		// would let a rename manufacture evidence.
+		observePathFromDisk(ctx, dst, wire.ValidationKindUnknown, wire.ValidationUnknown, "move_file destination")
+	}
+	if src == "" {
+		return
+	}
+	if _, err := os.Stat(ledgerKey(ctx, src)); err == nil {
+		observePathFromDisk(ctx, src, wire.ValidationKindUnknown, wire.ValidationUnknown,
+			"move_file left the source in place")
+		return
+	}
+	if ledgerTracks(ctx, src) || result.MutationStatus.Applied() {
+		tombstoneDeliverable(ctx, src, "moved:"+ledgerKey(ctx, dst))
 	}
 }
 

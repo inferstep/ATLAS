@@ -232,20 +232,27 @@ var provenanceSources = map[string]bool{
 	ProvenanceModelGenerated: true, ProvenanceLegacy: true, ProvenanceUnknown: true,
 }
 
-// ProvenanceCeiling is the strongest obligation each source may ever close.
+// provenanceCeiling is the strongest obligation each source may ever close.
 // A source absent from this map may close nothing -- model_generated, legacy
 // and unknown are absent rather than mapped low, because "weak authority" and
 // "no authority" are different and only one of them can be raised later by a
 // stronger observation.
-var ProvenanceCeiling = map[string]string{
+var provenanceCeiling = map[string]string{
 	ProvenanceRepoOwnedCheck:             "oracle",
 	ProvenanceClientDeclaredExample:      "oracle",
 	ProvenanceClientDeclaredVerification: "oracle",
 	ProvenanceProxyOwnedValidation:       "syntax",
 }
 
+// CeilingFor is the strongest obligation evidence from source may close, and
+// whether that source can close any.
+func CeilingFor(source string) (string, bool) {
+	ceiling, ok := provenanceCeiling[source]
+	return ceiling, ok
+}
+
 func StrengthRank(s string) int {
-	for i, v := range EvidenceStrengthOrder {
+	for i, v := range evidenceStrengthOrder {
 		if v == s {
 			return i
 		}
