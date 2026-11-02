@@ -378,73 +378,85 @@ func renderChatMessage(m sessionstore.ChatMessage, renderer *glamour.TermRendere
 		return prependPrefix(header, body)
 
 	case sessionstore.RoleTool:
-		// Meta convention from appendChatEvent:
-		//   "→ <tool>" — pending call, no mark
-		//   "← <tool>" — returned, render ✓ or ✗ based on m.Success
-		var header string
-		if strings.HasPrefix(m.Meta, "→") {
-			header = chatToolStyle.Render("tool · " + m.Meta)
-		} else {
-			mark := okStyle.Render("✓")
-			if !m.Success {
-				mark = failStyle.Render("✗")
-			}
-			header = chatToolStyle.Render(fmt.Sprintf("%s tool · %s", mark, m.Meta))
-		}
-		body := wrapPlain(m.Body, width-2)
-		return prependPrefix(header, body)
+		return renderToolMessage(m, width)
 
 	case sessionstore.RoleSystem:
-		tag := m.Meta
-		if tag == "" {
-			tag = "system"
-		}
-		// Per-tag styling so the user can scan the chat at a glance:
-		// turn separators in purple, LLM call markers in cyan italic,
-		// V3 progress in violet, everything else in dim grey italic.
-		var header string
-		switch m.Meta {
-		case "turn":
-			header = chatTurnStyle.Render(fmt.Sprintf("── %s ──", m.Body))
-			return []string{header}
-		case "llm", "v3-llm":
-			// Multi-line streaming bodies get a header line + indented
-			// dim body. Single-line stats fit on one row. v3-llm uses
-			// the same layout but inherits the V3 violet tint via the
-			// switch below — pick the style first.
-			lineStyle := chatLLMStyle
-			if m.Meta == "v3-llm" {
-				lineStyle = chatV3Style.Italic(true)
-				tag = "v3"
-			}
-			if !strings.Contains(m.Body, "\n") {
-				return []string{lineStyle.Render(fmt.Sprintf("· %s · %s", tag, m.Body))}
-			}
-			parts := strings.SplitN(m.Body, "\n", 2)
-			out := []string{lineStyle.Render(fmt.Sprintf("· %s · %s", tag, parts[0]))}
-			for _, ln := range wrapPlain(parts[1], width-4) {
-				out = append(out, lineStyle.Render("  "+ln))
-			}
-			return out
-		case "V3":
-			header = chatV3Style.Render(fmt.Sprintf("· %s · %s", tag, m.Body))
-			return []string{header}
-		case "done":
-			head := "· done · " + doneStatusLabel(m.Status)
-			if m.Reason != "" {
-				head += " · " + m.Reason
-			}
-			header = doneStatusStyle(m.Status).Render(head)
-			if m.Body == "" {
-				return []string{header}
-			}
-			return prependPrefix(header, wrapPlain(m.Body, width-2))
-		}
-		header = chatSystemStyle.Render(fmt.Sprintf("· %s", tag))
-		body := wrapPlain(m.Body, width-2)
-		return prependPrefix(header, body)
+		return renderSystemMessage(m, width)
 	}
 	return []string{m.Body}
+}
+
+// renderToolMessage formats a tool call or its result. renderChatMessage has
+// already passed m's text through visibleControls.
+func renderToolMessage(m sessionstore.ChatMessage, width int) []string {
+	// Meta convention from appendChatEvent:
+	//   "→ <tool>" — pending call, no mark
+	//   "← <tool>" — returned, render ✓ or ✗ based on m.Success
+	var header string
+	if strings.HasPrefix(m.Meta, "→") {
+		header = chatToolStyle.Render("tool · " + m.Meta)
+	} else {
+		mark := okStyle.Render("✓")
+		if !m.Success {
+			mark = failStyle.Render("✗")
+		}
+		header = chatToolStyle.Render(fmt.Sprintf("%s tool · %s", mark, m.Meta))
+	}
+	body := wrapPlain(m.Body, width-2)
+	return prependPrefix(header, body)
+}
+
+// renderSystemMessage formats a system row by its tag. renderChatMessage has
+// already passed m's text through visibleControls.
+func renderSystemMessage(m sessionstore.ChatMessage, width int) []string {
+	tag := m.Meta
+	if tag == "" {
+		tag = "system"
+	}
+	// Per-tag styling so the user can scan the chat at a glance:
+	// turn separators in purple, LLM call markers in cyan italic,
+	// V3 progress in violet, everything else in dim grey italic.
+	var header string
+	switch m.Meta {
+	case "turn":
+		header = chatTurnStyle.Render(fmt.Sprintf("── %s ──", m.Body))
+		return []string{header}
+	case "llm", "v3-llm":
+		// Multi-line streaming bodies get a header line + indented
+		// dim body. Single-line stats fit on one row. v3-llm uses
+		// the same layout but inherits the V3 violet tint via the
+		// switch below — pick the style first.
+		lineStyle := chatLLMStyle
+		if m.Meta == "v3-llm" {
+			lineStyle = chatV3Style.Italic(true)
+			tag = "v3"
+		}
+		if !strings.Contains(m.Body, "\n") {
+			return []string{lineStyle.Render(fmt.Sprintf("· %s · %s", tag, m.Body))}
+		}
+		parts := strings.SplitN(m.Body, "\n", 2)
+		out := []string{lineStyle.Render(fmt.Sprintf("· %s · %s", tag, parts[0]))}
+		for _, ln := range wrapPlain(parts[1], width-4) {
+			out = append(out, lineStyle.Render("  "+ln))
+		}
+		return out
+	case "V3":
+		header = chatV3Style.Render(fmt.Sprintf("· %s · %s", tag, m.Body))
+		return []string{header}
+	case "done":
+		head := "· done · " + doneStatusLabel(m.Status)
+		if m.Reason != "" {
+			head += " · " + m.Reason
+		}
+		header = doneStatusStyle(m.Status).Render(head)
+		if m.Body == "" {
+			return []string{header}
+		}
+		return prependPrefix(header, wrapPlain(m.Body, width-2))
+	}
+	header = chatSystemStyle.Render(fmt.Sprintf("· %s", tag))
+	body := wrapPlain(m.Body, width-2)
+	return prependPrefix(header, body)
 }
 
 func renderMarkdown(body string, r *glamour.TermRenderer) []string {

@@ -443,6 +443,23 @@ func TestChatBoxShowsTheTurnInFlightAndTheScroll(t *testing.T) {
 	}
 }
 
+// A tool row's header marks its result, and a V3 model call is tagged v3.
+func TestChatRowHeaders(t *testing.T) {
+	for _, tc := range []struct {
+		row  sessionstore.ChatMessage
+		want string
+	}{
+		{sessionstore.ChatMessage{Role: sessionstore.RoleTool, Meta: "← read_file", Success: true}, "✓ tool · ← read_file"},
+		{sessionstore.ChatMessage{Role: sessionstore.RoleTool, Meta: "← read_file"}, "✗ tool · ← read_file"},
+		{sessionstore.ChatMessage{Role: sessionstore.RoleSystem, Meta: "v3-llm", Body: "call 2"}, "· v3 · call 2"},
+	} {
+		got := ansi.Strip(renderChatMessage(tc.row, nil, 80)[0])
+		if !strings.Contains(got, tc.want) {
+			t.Errorf("role %d %q renders as %q, want %q", tc.row.Role, tc.row.Meta, got, tc.want)
+		}
+	}
+}
+
 func TestRenderHelpHintRespectsMaxLines(t *testing.T) {
 	out := renderHelpHint(80, 9)
 	if got := len(strings.Split(out, "\n")); got != 9 {
