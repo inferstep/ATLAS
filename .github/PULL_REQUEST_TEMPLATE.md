@@ -24,7 +24,7 @@ Closes #<!-- the issue this delivers; small fixes under ~50 lines may skip this 
 
 - [ ] Targets `dev` (changes flow dev → staging → main)
 - [ ] Title is a conventional commit with the component as scope, e.g. `fix(proxy): …` or `docs(setup): …`
-- [ ] `python scripts/production-readiness.py` passes
+- [ ] `python scripts/ci/production-readiness.py` passes
 - [ ] Matching `docs/*.md` updated for any behavior change
 - [ ] New behavior covered by a test, or a note on why not
 - [ ] Works model-agnostically (no model-name/dimension/token assumptions outside Lens/ASA artifacts)

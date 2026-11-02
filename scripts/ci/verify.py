@@ -3,7 +3,7 @@
 
 `make verify` runs this before a push. It compares HEAD and the working tree
 with the merge base of the base branch, picks the quality gates that cover
-the changed files, and runs them through scripts/production-readiness.py, so
+the changed files, and runs them through scripts/ci/production-readiness.py, so
 a check here is the check CI runs. `--full` adds the slow suites.
 
 Exit status: 0 when every check that ran passed, 1 when one failed, 2 when
@@ -25,7 +25,7 @@ COMPOSE_GATES = ("compose", "compose-rocm", "compose-vulkan", "compose-cpu", "co
 PROXY = "proxy/"
 INFRASTRUCTURE_SUITE = "tests/infrastructure"
 
-# Which gates of scripts/production-readiness.py cover which changed files.
+# Which gates of scripts/ci/production-readiness.py cover which changed files.
 # The two under "always" take a fraction of a second and guard the tree as a whole.
 GATES_BY_PATH = (
     (lambda p: True, ("test-integrity", "dockerfile-sources")),
@@ -79,7 +79,7 @@ FAILING_LINE = re.compile(r"FAIL|[Ee]rror|panic:|\.(?:go|py|sh|yml|ts):\d+|^E {2
 
 
 def load_gates_module():
-    spec = importlib.util.spec_from_file_location("production_readiness", ROOT / "scripts" / "production-readiness.py")
+    spec = importlib.util.spec_from_file_location("production_readiness", ROOT / "scripts" / "ci" / "production-readiness.py")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module  # its dataclasses resolve annotations through it
     spec.loader.exec_module(module)

@@ -4,7 +4,7 @@
 A pull request job reads the Go build cache that a run on `dev` saved. On a
 push to `dev` the tests do not run again, so a job fills the cache by
 building them. The command is the test gate's own, read from
-scripts/production-readiness.py, with a pattern added that fits no test. So
+scripts/ci/production-readiness.py, with a pattern added that fits no test. So
 the build flags here cannot differ from the gate's, and what is cached is
 what a pull request job looks for.
 
@@ -25,8 +25,8 @@ NO_TEST = "^$"
 
 
 def gate_script():
-    """scripts/production-readiness.py as a module."""
-    spec = importlib.util.spec_from_file_location("atlas_production_readiness", ROOT / "scripts" / "production-readiness.py")
+    """scripts/ci/production-readiness.py as a module."""
+    spec = importlib.util.spec_from_file_location("atlas_production_readiness", ROOT / "scripts" / "ci" / "production-readiness.py")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -63,7 +63,7 @@ def main(argv: list[str]) -> int:
             done = subprocess.run(command, cwd=folder, env={**os.environ, **env}, check=False)
     except (KeyError, ValueError, OSError) as error:
         print(f"go test build: the test gate's command could not be read: {error!r}. Fix: bring this script in line "
-              "with the gate go-<module>-test of scripts/production-readiness.py.", file=sys.stderr)
+              "with the gate go-<module>-test of scripts/ci/production-readiness.py.", file=sys.stderr)
         return 2
     if done.returncode != 0:
         print(f"go test build: the tests of {argv[0]} did not build (status {done.returncode}), so the cache is not "

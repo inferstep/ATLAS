@@ -125,5 +125,5 @@ def test_a_dockerfile_change_shows_the_findings_of_its_own_files(verify, monkeyp
 
 
 def test_a_change_with_no_dockerfile_does_not_run_hadolint(verify):
-    assert verify.hadolint_notes(["proxy/agent.go", "scripts/check_dockerfile_sources.py"]) == []
+    assert verify.hadolint_notes(["proxy/agent.go", "scripts/ci/check_dockerfile_sources.py"]) == []
 

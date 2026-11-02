@@ -30,7 +30,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 EXECUTOR = ROOT / "sandbox" / "executor_server.py"
 PROXY = ROOT / "proxy"
 TESTS = (

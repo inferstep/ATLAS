@@ -86,7 +86,7 @@ Task-oriented index for everything under `docs/`. The
 
 - [../.github/CONTRIBUTING.md](../.github/CONTRIBUTING.md) — from finding an issue and
   `/claim` to review and release; style, tests, and the developer quality
-  gate (`scripts/production-readiness.py`).
+  gate (`scripts/ci/production-readiness.py`).
 - [CONTRIBUTING.md § Development workflow](../.github/CONTRIBUTING.md#development-workflow) — dev mode, targeted rebuilds,
   running the proxy on the host against the compose stack.
 - [CODE_STYLE.md](CODE_STYLE.md) — how ATLAS code should read; what

@@ -55,7 +55,7 @@ def finding(file: str, code: str = "DL3003", level: str = "warning", message: st
 def repo(tmp_path):
     """A repository with two Dockerfiles in its first commit and a change to one of them in its second."""
     root = tmp_path / "repo"
-    for path in ("proxy/Dockerfile", "inference/Dockerfile.vulkan", "scripts/check_dockerfile_sources.py"):
+    for path in ("proxy/Dockerfile", "inference/Dockerfile.vulkan", "scripts/ci/check_dockerfile_sources.py"):
         (root / path).parent.mkdir(parents=True, exist_ok=True)
         (root / path).write_text("FROM debian:12\n", encoding="utf-8")
     git(root, "init", "-q")

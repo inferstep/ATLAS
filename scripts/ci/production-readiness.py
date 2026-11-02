@@ -19,7 +19,7 @@ from typing import Callable, Dict, Optional, Sequence
 from xml.etree import ElementTree
 
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_FILE = "docker-compose.yml"
 ALL_GO_PACKAGES = "./..."
 NO_GO = "Go is not installed"
@@ -239,7 +239,7 @@ def _tree_gates(python: str) -> dict[str, Gate]:
         # imports, tests, and lint all stay green, so nothing else sees it.
         "dockerfile-sources": Gate(
             "dockerfile-sources",
-            (python, "scripts/check_dockerfile_sources.py"),
+            (python, "scripts/ci/check_dockerfile_sources.py"),
         ),
     }
 
@@ -272,7 +272,7 @@ def _python_test_gates(python: str, pytest_paths: Sequence[str], go_env: dict[st
         # pass. `--only staging-executor` makes a missing dependency a failure.
         "staging-executor": Gate(
             "staging-executor",
-            (python, "scripts/staging-integration.py"),
+            (python, "scripts/ci/staging-integration.py"),
             required=False,
             available=lambda: (_command_available("go")
                                and _module_available("uvicorn")

@@ -12,7 +12,7 @@ from xml.etree import ElementTree
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "production-readiness.py"
+SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "ci" / "production-readiness.py"
 TEST_GATES = ("go-proxy-test", "go-tui-test", "python-tests", "python-tests-lens")
 
 
