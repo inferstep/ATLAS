@@ -6,6 +6,22 @@ from atlas import runtime, runtime_artifacts
 from atlas.commands import tui
 
 
+def test_a_go_binary_is_stale_after_a_change_in_a_sub_folder(tmp_path):
+    source = tmp_path / "proxy"
+    package = source / "internal" / "wire"
+    package.mkdir(parents=True)
+    (source / "main.go").write_text("package main\n")
+    (package / "wire.go").write_text("package wire\n")
+    binary = tmp_path / "atlas-proxy"
+    binary.write_text("binary")
+    binary.chmod(0o755)
+    os.utime(binary, ns=(200, 200))
+    os.utime(source / "main.go", ns=(100, 100))
+    os.utime(package / "wire.go", ns=(300, 300))
+
+    assert not runtime_artifacts.go_binary_is_current(str(binary), str(source))
+
+
 @pytest.mark.parametrize(
     "main_go_mtime, prompts_mtime, expected",
     [

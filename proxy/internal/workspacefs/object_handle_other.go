@@ -14,17 +14,11 @@ import (
 // covers have not been shown to offer one. Linux is implemented in
 // object_handle_linux.go.
 
-var ErrObjectIdentityUnavailable = errors.New("the object could not be held for approval on this platform")
-
-// ObjectHoldSupported says whether this system can hold an object for a
-// deletion approval. Tests that go through the approval read it.
-const ObjectHoldSupported = false
+var errObjectIdentityUnavailable = errors.New("the object could not be held for approval on this platform")
 
 type ObjectHandle struct{}
 
-var PinObjectFn = PinObject
-
-func PinObject(string) (*ObjectHandle, error)             { return nil, ErrObjectIdentityUnavailable }
+func PinObject(string) (*ObjectHandle, error)             { return nil, errObjectIdentityUnavailable }
 func (h *ObjectHandle) StillTheObjectAt(os.FileInfo) bool { return false }
 func (h *ObjectHandle) Release() {
 	// Nothing is held on this platform.

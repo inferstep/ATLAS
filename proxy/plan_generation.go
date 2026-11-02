@@ -210,7 +210,7 @@ func (s planSample) readPriorityFiles(subdir string, priority []string) {
 			return
 		}
 		path := filepath.Join(subdir, rel)
-		if body, ok := s.dir.ReadCapped(path, s.maxBytes); ok {
+		if body, ok := s.dir.ReadUpTo(path, s.maxBytes*4); ok {
 			s.out[path] = contextEntry(body, s.maxBytes)
 		}
 	}
@@ -226,7 +226,7 @@ func (s planSample) readSourceFiles(entries []fs.DirEntry) {
 		if e.IsDir() || !isSourceExtension(strings.ToLower(filepath.Ext(name))) {
 			continue
 		}
-		if body, ok := s.dir.ReadCapped(name, s.maxBytes); ok {
+		if body, ok := s.dir.ReadUpTo(name, s.maxBytes*4); ok {
 			s.out[name] = contextEntry(body, s.maxBytes)
 		}
 	}

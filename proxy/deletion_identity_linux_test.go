@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -278,9 +279,11 @@ func TestHardLinkedNamesStaySeparatedByCanonicalPath(t *testing.T) {
 func TestIdentityUnavailableFailsClosedBeforeAsking(t *testing.T) {
 	dir := t.TempDir()
 	mkFile(dir)
-	saved := workspacefs.PinObjectFn
-	workspacefs.PinObjectFn = func(string) (*workspacefs.ObjectHandle, error) { return nil, workspacefs.ErrObjectIdentityUnavailable }
-	defer func() { workspacefs.PinObjectFn = saved }()
+	saved := pinObjectFn
+	pinObjectFn = func(string) (*workspacefs.ObjectHandle, error) {
+		return nil, errors.New("the object could not be held")
+	}
+	defer func() { pinObjectFn = saved }()
 
 	ctx, cancel := deletePermCtx(t, "sess-noid", dir)
 	defer cancel()

@@ -85,10 +85,10 @@ func (c ConfinedDir) Walk(fn func(rel string, entry fs.DirEntry, err error) erro
 	})
 }
 
-// WriteNewFile creates rel, a path relative to the folder, and writes data to
+// writeNewFile creates rel, a path relative to the folder, and writes data to
 // it. A name that is already taken is an error, whatever holds it, so nothing
 // that exists is written over and no link is written through.
-func (c ConfinedDir) WriteNewFile(rel string, data []byte, perm os.FileMode) error {
+func (c ConfinedDir) writeNewFile(rel string, data []byte, perm os.FileMode) error {
 	if c.root == nil {
 		return errConfinedDirClosed
 	}
@@ -103,21 +103,21 @@ func (c ConfinedDir) WriteNewFile(rel string, data []byte, perm os.FileMode) err
 	return writeErr
 }
 
-// Remove deletes the name rel itself. For a link that is the link, never the
+// remove deletes the name rel itself. For a link that is the link, never the
 // file it points at.
-func (c ConfinedDir) Remove(rel string) error {
+func (c ConfinedDir) remove(rel string) error {
 	if c.root == nil {
 		return errConfinedDirClosed
 	}
 	return c.root.Remove(rel)
 }
 
-// ReadCapped returns the text of rel, for the caller to cut to maxBytes. It
-// reports false for a folder, for anything else that is not a regular file,
-// for a file over four times maxBytes, and for anything that cannot be read.
-func (c ConfinedDir) ReadCapped(rel string, maxBytes int) (string, bool) {
+// ReadUpTo returns the text of rel. It reports false for a folder, for anything
+// else that is not a regular file, for a file over limit bytes, and for anything
+// that cannot be read.
+func (c ConfinedDir) ReadUpTo(rel string, limit int) (string, bool) {
 	info, err := c.Stat(rel)
-	if err != nil || !info.Mode().IsRegular() || info.Size() > int64(maxBytes)*4 {
+	if err != nil || !info.Mode().IsRegular() || info.Size() > int64(limit) {
 		return "", false
 	}
 	data, err := c.ReadFile(rel)
@@ -144,13 +144,13 @@ const MountProbeName = ".atlas-mount-probe"
 // with that name is removed and never written through.
 func WriteMountProbe(dir, token string) (func(), error) {
 	folder := OpenConfinedDir(dir)
-	_ = folder.Remove(MountProbeName)
-	if err := folder.WriteNewFile(MountProbeName, []byte(token), 0o644); err != nil {
+	_ = folder.remove(MountProbeName)
+	if err := folder.writeNewFile(MountProbeName, []byte(token), 0o644); err != nil {
 		folder.Close()
 		return nil, err
 	}
 	return func() {
-		_ = folder.Remove(MountProbeName)
+		_ = folder.remove(MountProbeName)
 		folder.Close()
 	}, nil
 }

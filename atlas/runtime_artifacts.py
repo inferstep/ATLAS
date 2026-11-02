@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import stat
 from typing import Iterable, Optional
 
 
@@ -18,21 +19,16 @@ def newest_go_source_mtime_ns(
         return None
     names = _GO_METADATA | frozenset(extra_names)
     newest: Optional[int] = None
-    try:
-        entries = os.scandir(source_dir)
-    except OSError:
-        return None
-    with entries:
-        for entry in entries:
-            if not entry.is_file(follow_symlinks=False):
-                continue
-            if not (entry.name.endswith(".go") or entry.name in names):
+    for folder, _, files in os.walk(source_dir):
+        for name in files:
+            if not (name.endswith(".go") or name in names):
                 continue
             try:
-                mtime = entry.stat(follow_symlinks=False).st_mtime_ns
+                info = os.lstat(os.path.join(folder, name))
             except OSError:
                 continue
-            newest = mtime if newest is None else max(newest, mtime)
+            if stat.S_ISREG(info.st_mode):
+                newest = info.st_mtime_ns if newest is None else max(newest, info.st_mtime_ns)
     return newest
 
 

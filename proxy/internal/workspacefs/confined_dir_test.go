@@ -39,15 +39,6 @@ func writeInWorkspace(t *testing.T, workspace, name, content string) {
 	}
 }
 
-func assertNoOutsideContent(t *testing.T, where string, texts map[string]string) {
-	t.Helper()
-	for name, text := range texts {
-		if strings.Contains(text, outsideMarker) {
-			t.Errorf("%s returned the content of a file outside the workspace under %q", where, name)
-		}
-	}
-}
-
 func TestConfinedDirReadsInsideAndRefusesOutside(t *testing.T) {
 	workspace := t.TempDir()
 	writeInWorkspace(t, workspace, "inside.txt", "inside")
@@ -81,8 +72,8 @@ func TestConfinedDirReadsInsideAndRefusesOutside(t *testing.T) {
 	if _, err := dir.Stat("link.txt"); err == nil {
 		t.Error("Stat of a link that leaves the workspace succeeded, want an error")
 	}
-	if text, ok := dir.ReadCapped("link.txt", 100); ok {
-		t.Errorf("ReadCapped of a link that leaves the workspace returned %q", text)
+	if text, ok := dir.ReadUpTo("link.txt", 100); ok {
+		t.Errorf("ReadUpTo of a link that leaves the workspace returned %q", text)
 	}
 	if data, err := ReadConfined(workspace, "link.txt"); err == nil {
 		t.Errorf("ReadConfined of a link that leaves the workspace returned %q, want an error", data)
@@ -113,5 +104,41 @@ func TestConfinedDirOfAMissingFolderReadsNothing(t *testing.T) {
 			t.Errorf("Walk of %q succeeded, want an error", folder)
 		}
 		dir.Close()
+	}
+}
+
+func TestConfinedDirWritesOnlyANewNameAndRemovesOnlyTheNameItself(t *testing.T) {
+	workspace := t.TempDir()
+	writeInWorkspace(t, workspace, "taken.txt", "inside")
+	linkOutOfWorkspace(t, workspace, "link.txt", outsideMarker)
+	outside, err := os.Readlink(filepath.Join(workspace, "link.txt"))
+	if err != nil {
+		t.Fatalf("read the link: %v", err)
+	}
+	dir := OpenConfinedDir(workspace)
+	defer dir.Close()
+
+	if err := dir.writeNewFile("new.txt", []byte("new"), 0o600); err != nil {
+		t.Errorf("writeNewFile of a free name: %v", err)
+	}
+	if data, _ := os.ReadFile(filepath.Join(workspace, "new.txt")); string(data) != "new" {
+		t.Errorf("the new file holds %q, want the content", data)
+	}
+	for _, name := range []string{"taken.txt", "link.txt"} {
+		if err := dir.writeNewFile(name, []byte("changed"), 0o600); err == nil {
+			t.Errorf("writeNewFile(%s) wrote over a name that was taken, want an error", name)
+		}
+	}
+	if data, _ := os.ReadFile(filepath.Join(workspace, "taken.txt")); string(data) != "inside" {
+		t.Errorf("the taken file now holds %q, want it unchanged", data)
+	}
+	if err := dir.remove("link.txt"); err != nil {
+		t.Errorf("remove of a link: %v", err)
+	}
+	if data, err := os.ReadFile(outside); err != nil || string(data) != outsideMarker {
+		t.Errorf("the file outside the workspace now holds %q (%v), want it unchanged", data, err)
+	}
+	if err := OpenConfinedDir("").writeNewFile("a.txt", nil, 0o600); err == nil {
+		t.Error("writeNewFile in a folder that is not open succeeded, want an error")
 	}
 }

@@ -29,11 +29,11 @@ import (
 //     at once with no writer instead of waiting for one; the kind check then
 //     refuses it, which is what turns a hung session into a refusal.
 
-// ErrNotRegularFile marks a read refused for the kind of file it found. A
+// errNotRegularFile marks a read refused for the kind of file it found. A
 // caller that treats every read failure alike need not look at it; a caller
 // that must tell an absent file from an unreadable one still sees the original
 // open error untouched, so os.IsNotExist keeps answering about the file.
-var ErrNotRegularFile = errors.New("not a regular file")
+var errNotRegularFile = errors.New("not a regular file")
 
 // fileKindName is what a path holds, in the words the refusal uses.
 func fileKindName(mode os.FileMode) string {
@@ -61,7 +61,7 @@ func fileKindName(mode os.FileMode) string {
 // notRegularError is the refusal for a path that holds kind. It names the kind
 // so the model can act on the answer rather than retrying the same call.
 func notRegularError(kind string) error {
-	return fmt.Errorf("%w — it is %s, so nothing was read", ErrNotRegularFile, kind)
+	return fmt.Errorf("%w — it is %s, so nothing was read", errNotRegularFile, kind)
 }
 
 // regularFileHandle returns f when the handle's own kind is a regular file,
@@ -83,16 +83,16 @@ func regularFileHandle(f *os.File, err error) (*os.File, error) {
 	return f, nil
 }
 
-// OpenRegularFile opens path non-blockingly and returns the handle only when it
+// openRegularFile opens path non-blockingly and returns the handle only when it
 // holds a regular file.
-func OpenRegularFile(path string) (*os.File, error) {
+func openRegularFile(path string) (*os.File, error) {
 	return regularFileHandle(os.OpenFile(path, os.O_RDONLY|openNonBlock, 0))
 }
 
 // ReadRegularFile returns the content of the regular file at path. Any other
 // kind of file, and any failure to open or read it, is an error and no content.
 func ReadRegularFile(path string) ([]byte, error) {
-	f, err := OpenRegularFile(path)
+	f, err := openRegularFile(path)
 	if err != nil {
 		return nil, err
 	}

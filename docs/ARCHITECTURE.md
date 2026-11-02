@@ -85,7 +85,7 @@ The K3s deployment path (`scripts/install.sh`, manifests in `templates/`) is CUD
 
 The proxy is the entry point for chat front-ends. It accepts user messages on `/v1/agent` (typed event stream — what the TUI uses) and runs an internal agent loop that calls llama-server, parses tool calls, executes them, and streams events back. The `/v1/chat/completions` endpoint is a transparent passthrough to llama-server; it is kept for SDK compatibility and does not run the agent loop. See [API.md](API.md) for the full event-type catalogue.
 
-Every non-test Go file directly under `proxy/`, with its area of ownership:
+Every non-test Go file of `proxy/`, sub-folders included, with its area of ownership:
 
 | File | Owns |
 |---|---|

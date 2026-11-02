@@ -1,9 +1,8 @@
 package main
 
 import (
+	"runtime"
 	"testing"
-
-	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
 // objectHoldSkipReason is what a skipped test prints. One reason for all of
@@ -16,7 +15,7 @@ const objectHoldSkipReason = "this test goes through the deletion approval, whic
 // hold exists it does nothing, so the test runs.
 func needsObjectHold(t *testing.T) {
 	t.Helper()
-	if !workspacefs.ObjectHoldSupported {
+	if runtime.GOOS != "linux" {
 		t.Skip(objectHoldSkipReason)
 	}
 }

@@ -335,6 +335,10 @@ type notAllowedKey struct {
 // denied, the reason that the call reads next.
 var notAllowedReasons sync.Map
 
+// pinObjectFn is the one seam: tests substitute a failing pin to exercise the
+// fail-closed path on a platform where the real one succeeds.
+var pinObjectFn = workspacefs.PinObject
+
 // noteNotAllowed records why a call was not allowed when no user denied it:
 // the proxy refused before it asked, nobody could be asked, the request
 // ended, or nobody answered. Such a call must not read as a denial.
@@ -600,7 +604,7 @@ func inspectDeleteTarget(ctx *AgentContext, args json.RawMessage) (deleteTarget,
 	// is described is what is held. A platform that cannot hold it gets no
 	// prompt and no deletion: an approval that could bind to nothing is worse
 	// than no approval.
-	handle, perr := workspacefs.PinObjectFn(canonical)
+	handle, perr := pinObjectFn(canonical)
 	if perr != nil {
 		return deleteTarget{}, "delete_file: " + perr.Error()
 	}

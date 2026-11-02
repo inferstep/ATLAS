@@ -31,11 +31,7 @@ import (
 // asm-generic (010000000) and the same on every Linux architecture.
 const oPath = 0x200000
 
-var ErrObjectIdentityUnavailable = errors.New("the object could not be held for approval")
-
-// ObjectHoldSupported says whether this system can hold an object for a
-// deletion approval. Tests that go through the approval read it.
-const ObjectHoldSupported = true
+var errObjectIdentityUnavailable = errors.New("the object could not be held for approval")
 
 // ObjectHandle is the held reference. It is created by inspection, carried by
 // the approval, and released exactly once by whoever ends the approval's life:
@@ -48,20 +44,16 @@ type ObjectHandle struct {
 	released bool
 }
 
-// PinObjectFn is the one seam: tests substitute a failing pin to exercise the
-// fail-closed path on a platform where the real one succeeds.
-var PinObjectFn = PinObject
-
 // PinObject takes the reference for the object AT path, following nothing.
 func PinObject(path string) (*ObjectHandle, error) {
 	fd, err := syscall.Open(path, oPath|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
 	if err != nil {
-		return nil, ErrObjectIdentityUnavailable
+		return nil, errObjectIdentityUnavailable
 	}
 	var st syscall.Stat_t
 	if err := syscall.Fstat(fd, &st); err != nil {
 		syscall.Close(fd)
-		return nil, ErrObjectIdentityUnavailable
+		return nil, errObjectIdentityUnavailable
 	}
 	return &ObjectHandle{fd: fd, dev: uint64(st.Dev), ino: uint64(st.Ino)}, nil
 }

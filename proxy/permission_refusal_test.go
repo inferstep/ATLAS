@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -11,13 +13,15 @@ import (
 	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
+var errHoldRefused = errors.New("the object could not be held")
+
 // holdRefused makes the object hold fail for one test, as it does on a system
 // that has none.
 func holdRefused(t *testing.T) {
 	t.Helper()
-	previous := workspacefs.PinObjectFn
-	workspacefs.PinObjectFn = func(string) (*workspacefs.ObjectHandle, error) { return nil, workspacefs.ErrObjectIdentityUnavailable }
-	t.Cleanup(func() { workspacefs.PinObjectFn = previous })
+	previous := pinObjectFn
+	pinObjectFn = func(string) (*workspacefs.ObjectHandle, error) { return nil, errHoldRefused }
+	t.Cleanup(func() { pinObjectFn = previous })
 }
 
 // eventsOf returns the data of each stream event of one kind.
@@ -57,7 +61,7 @@ func TestARefusedDeletionReachesTheUserAndTheModelAsItsReason(t *testing.T) {
 	if asked := r.census["permission_request"]; asked != 0 {
 		t.Errorf("%d prompt(s) were shown for a deletion the proxy refuses before asking", asked)
 	}
-	reason := workspacefs.ErrObjectIdentityUnavailable.Error()
+	reason := errHoldRefused.Error()
 	for where, texts := range map[string][]string{
 		"the permission_denied event": r.eventsOf("permission_denied"),
 		"the tool_result event":       r.eventsOf("tool_result"),
@@ -143,12 +147,12 @@ func TestADeletionTheUserDeniedReadsAsItDidBefore(t *testing.T) {
 // system that has none. Where the hold exists the real one is used.
 func holdStandIn(t *testing.T) {
 	t.Helper()
-	if workspacefs.ObjectHoldSupported {
+	if runtime.GOOS == "linux" {
 		return
 	}
-	previous := workspacefs.PinObjectFn
-	workspacefs.PinObjectFn = func(string) (*workspacefs.ObjectHandle, error) { return &workspacefs.ObjectHandle{}, nil }
-	t.Cleanup(func() { workspacefs.PinObjectFn = previous })
+	previous := pinObjectFn
+	pinObjectFn = func(string) (*workspacefs.ObjectHandle, error) { return &workspacefs.ObjectHandle{}, nil }
+	t.Cleanup(func() { pinObjectFn = previous })
 }
 
 // notAllowed runs the approval for one call and returns what the call then
