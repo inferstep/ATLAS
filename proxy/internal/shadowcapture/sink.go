@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,7 +53,7 @@ const schemaVersionFooter = 1
 type Sink struct {
 	queue chan []byte
 	done  chan struct{}
-	f     *os.File
+	f     File
 
 	accepted  atomic.Int64
 	written   atomic.Int64
@@ -123,8 +124,16 @@ func Open(root, name string) (*Sink, error) {
 	return Start(f), nil
 }
 
+// File is what a sink writes its records and footer to: in the proxy, the
+// file Open creates.
+type File interface {
+	io.Writer
+	Sync() error
+	Close() error
+}
+
 // Start builds a sink that writes to f and starts its writer.
-func Start(f *os.File) *Sink {
+func Start(f File) *Sink {
 	s := newSink(f)
 	go s.run()
 	return s
@@ -132,7 +141,7 @@ func Start(f *os.File) *Sink {
 
 // newSink builds a sink whose writer has not started, so nothing drains
 // the queue until run() is called.
-func newSink(f *os.File) *Sink {
+func newSink(f File) *Sink {
 	return &Sink{
 		queue: make(chan []byte, QueueDepth),
 		done:  make(chan struct{}),

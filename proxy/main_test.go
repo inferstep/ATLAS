@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1088,17 +1089,7 @@ func TestTheObligationOwnerReadsOnlyTheValidatedContract(t *testing.T) {
 			if !ok {
 				return true
 			}
-			name := ""
-			switch fn := call.Fun.(type) {
-			case *ast.Ident:
-				name = fn.Name
-			case *ast.SelectorExpr:
-				name = fn.Sel.Name
-				// A call into the capture's package is a call to the capture.
-				if pkg, ok := fn.X.(*ast.Ident); ok && shadowProductionSymbols[pkg.Name] {
-					name = pkg.Name
-				}
-			}
+			name := callTargetName(call)
 			if banned[name] || shadowProductionSymbols[name] {
 				t.Errorf("the obligation owner calls %s instead of reading the "+
 					"validated request-bound contract", name)
@@ -1106,6 +1097,22 @@ func TestTheObligationOwnerReadsOnlyTheValidatedContract(t *testing.T) {
 			return true
 		})
 	}
+}
+
+// callTargetName is the name a call is made by: the function's own name, or, for
+// a call into the capture's package, the package's name, since every name in
+// it is the capture's.
+func callTargetName(call *ast.CallExpr) string {
+	switch fn := call.Fun.(type) {
+	case *ast.Ident:
+		return fn.Name
+	case *ast.SelectorExpr:
+		if pkg, ok := fn.X.(*ast.Ident); ok && shadowProductionSymbols[pkg.Name] {
+			return pkg.Name
+		}
+		return fn.Sel.Name
+	}
+	return ""
 }
 
 // A contract changes only the classes it DECLARES.
@@ -2586,6 +2593,21 @@ func recordGrantEvent() {
 
 // --- Coverage the first pass left open ---------------------------------------
 
+// failingCapture is a capture file on which every write fails. It counts the
+// writes of records, apart from the footer's, so a test can show the run's
+// records reached it.
+type failingCapture struct{ recordWrites atomic.Int64 }
+
+func (f *failingCapture) Write(p []byte) (int, error) {
+	if !bytes.Contains(p, []byte(`"task_contract_shadow_footer"`)) {
+		f.recordWrites.Add(1)
+	}
+	return 0, errors.New("the capture's disk failed")
+}
+
+func (f *failingCapture) Sync() error  { return nil }
+func (f *failingCapture) Close() error { return nil }
+
 // A writer that fails on every record changes nothing a user can see. The run
 // keeps its stream, its prompts, its bytes on disk and its terminal; only the
 // capture is defective, and it says so in its own counters.
@@ -2595,23 +2617,19 @@ func TestShadowWriterErrorLeavesTheRunUnchanged(t *testing.T) {
 	_, evOff, diskOff, termOff, promptOff := shadowLoopDrive(t, "req-writer-err",
 		contract, "Create app.py.", shadowWorkPlan)
 
-	// A sink whose descriptor is already closed: every write fails at the
-	// syscall, which is the failure the run must survive.
-	f, err := os.Create(filepath.Join(t.TempDir(), "broken.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.Close()
-	sink := shadowcapture.Start(f)
+	// A sink whose every write fails, which is the failure the run must survive.
+	failing := &failingCapture{}
+	sink := shadowcapture.Start(failing)
 	shadowcapture.SetActive(sink)
 	defer shadowcapture.SetActive(nil)
 
 	_, evOn, diskOn, termOn, promptOn := shadowLoopDrive(t, "req-writer-err",
 		contract, "Create app.py.", shadowWorkPlan)
-	// The sink's own counts of a failing writer are checked in its package; here
-	// the failed close shows the fixture really made the writer fail.
 	if err := sink.Close(context.Background(), 5*time.Second); err == nil {
 		t.Fatal("the fixture did not actually make the writer fail")
+	}
+	if failing.recordWrites.Load() == 0 {
+		t.Fatal("no record of the run reached the failing writer")
 	}
 	if termOff != termOn {
 		t.Errorf("terminal differs: %q vs %q", termOff, termOn)
