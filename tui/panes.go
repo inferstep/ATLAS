@@ -519,8 +519,7 @@ func doneStatusLabel(status string) string {
 }
 
 func prependPrefix(header string, body []string) []string {
-	out := make([]string, 0, len(body)+1)
-	out = append(out, header)
+	out := []string{header}
 	for _, line := range body {
 		out = append(out, "  "+line)
 	}
