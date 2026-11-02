@@ -140,9 +140,10 @@ func safeDiagnosticSummary(detail string) string {
 		head, len(detail)-len(head), hashBytes([]byte(detail))[:12])
 }
 
-// escapeControls prints every control character but tab as text, so no logged
-// value can start a line of its own or reach a terminal as a control code. A
-// byte that is not UTF-8 becomes the replacement character.
+// escapeControls prints every control character but tab, and the Unicode line
+// and paragraph separators, as text, so no logged value can start a line of its
+// own or reach a terminal as a control code. A byte that is not UTF-8 becomes
+// the replacement character.
 func escapeControls(s string) string {
 	var out strings.Builder
 	for _, r := range s {
@@ -153,6 +154,8 @@ func escapeControls(s string) string {
 			out.WriteString(`\r`)
 		case r != '\t' && unicode.IsControl(r):
 			fmt.Fprintf(&out, `\x%02x`, r)
+		case unicode.In(r, unicode.Zl, unicode.Zp):
+			fmt.Fprintf(&out, `\u%04x`, r)
 		default:
 			out.WriteRune(r)
 		}

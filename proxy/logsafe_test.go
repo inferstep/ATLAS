@@ -194,9 +194,9 @@ func TestCredentialFilteringStillApplies(t *testing.T) {
 	}
 }
 
-// A logged value keeps no control character but tab, so it cannot pass for a
-// record or act on a terminal. Sites that already call logPath escape the same
-// text twice, which must change nothing.
+// A logged value keeps no control character but tab and no Unicode line break,
+// so it cannot pass for a record or act on a terminal. Sites that already call
+// logPath escape the same text twice, which must change nothing.
 func TestALoggedValueStaysInsideItsRecord(t *testing.T) {
 	for _, c := range []struct{ name, value, want string }{
 		{"line feed", "a\nb", `a\nb`},
@@ -208,6 +208,7 @@ func TestALoggedValueStaysInsideItsRecord(t *testing.T) {
 		{"null", "a\x00b", `a\x00b`},
 		{"delete", "a\x7fb", `a\x7fb`},
 		{"control character above ASCII", "a\xc2\x85b", `a\x85b`},
+		{"line and paragraph separators", "a\xe2\x80\xa8b\xe2\x80\xa9c", `a\u2028b\u2029c`},
 		{"letter above ASCII", "a\xc3\xa9b", "a\xc3\xa9b"},
 		{"byte that is not UTF-8", "a\xffb", "a\xef\xbf\xbdb"},
 		{"stack trace", "main.f()\n\tmain.go:1\nmain.main()",
