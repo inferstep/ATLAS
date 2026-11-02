@@ -132,13 +132,15 @@ func TestToolCallCountersIncrement(t *testing.T) {
 	p.Apply(envOf(proxyclient.EvtToolResult, "agent",
 		map[string]interface{}{"name": "edit_file", "success": true}, 1.5))
 	p.Apply(envOf(proxyclient.EvtToolResult, "agent",
+		map[string]interface{}{"name": "read_file", "success": true}, 1.7))
+	p.Apply(envOf(proxyclient.EvtToolResult, "agent",
 		map[string]interface{}{"name": "run_command", "success": false}, 2.0))
 
 	if p.toolCalls != 1 {
 		t.Errorf("toolCalls = %d, want 1", p.toolCalls)
 	}
-	if p.ToolSuccesses != 1 {
-		t.Errorf("ToolSuccesses = %d, want 1", p.ToolSuccesses)
+	if p.ToolSuccesses != 2 {
+		t.Errorf("ToolSuccesses = %d, want 2", p.ToolSuccesses)
 	}
 	if p.ToolFailures != 1 {
 		t.Errorf("ToolFailures = %d, want 1", p.ToolFailures)
