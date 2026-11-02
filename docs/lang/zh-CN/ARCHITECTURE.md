@@ -197,26 +197,7 @@ run-first 门本身引用一条指令，`runFirstInstruction`：运行该扩展�
 
 ### 工具
 
-`proxy/tools.go` 中注册了 16 个工具：
-
-| 工具 | 用途 | 只读 |
-|------|---------|-----------|
-| `read_file` | 读取文件内容（可选 offset/limit） | 是 |
-| `outline_file` | 列出文件的顶层函数/类及其行号范围，不含函数体（`.py` 使用 tree-sitter，其余为尽力而为的扫描）。外科式读取的入口点：先 outline，再用带 offset/limit 的 `read_file` | 是 |
-| `write_file` | 创建一个新文件（对超过 5 行的已有文件会被拒绝 —— 见安全限制） | 否 |
-| `edit_file` | 针对 ≤10 行改动的外科式内联字符串替换（old_str/new_str） | 否 |
-| `insert_after` | 在给定行号（`read_file` 打印的行号）之后插入新行。适用于**新增**代码（分支、函数、import）且不改动任何已有内容的场景：没有需要复现的 `old_str`，而这正是长跨度下失败的那一步 | 否 |
-| `replace_lines` | 用新内容替换一个行范围（`start_line`..`end_line`，即 `read_file` 打印的行号）。适用于**修改**代码而无需复现它：锚点是断言的两行（范围的首行与末行，忽略空白），而不是整个跨度，因此逐字复现的负担是 2 行而非 N 行。每次调用上限 60 行 | 否 |
-| `structural_edit` | 通过 tree-sitter 选择器（`function:NAME`、`class:NAME`、`<tag>`）对整个函数/类/HTML 元素进行重写；对整节点替换而言，必须优先于 edit_file 使用。支持 Python、HTML、Go、JavaScript 和 TypeScript | 否 |
-| `delete_file` | 删除文件或空目录 | 否 |
-| `move_file` | 在工作区内移动或重命名文件（例如 `index.html` → `templates/`）。纯粹的重定位 —— 绕过 V3/外科式编辑门控，拒绝覆盖已存在的目标。由于 shell `mv`/`cp` 会被拒绝，这是"重新组织文件"的受支持路径 | 否 |
-| `find_file` | 按文件**名**/路径做正则搜索（廉价的存在性检查 + 定位）。区别于在文件内容中 grep 的 `search_files`。 | 是 |
-| `search_files` | 跨文件内容做正则搜索（最多 200 个匹配，跳过 .git/node_modules） | 是 |
-| `list_directory` | 列出目录内容及其类型和大小 | 是 |
-| `run_command` | 通过 sandbox 容器执行 shell 命令；5 分钟超时上限 | 否 |
-| `run_background` | 在 sandbox 中启动一个长时间运行的进程（例如 `python app.py`）；立即返回一个 `job_id` | 否 |
-| `tail_background` | 通过 `job_id` 获取某个后台任务新增的 stdout/stderr | 是 |
-| `stop_background` | 通过 `job_id` 对某个后台任务发送 SIGTERM/SIGKILL | 否 |
+`proxy/tools.go` 中注册了 16 个工具。各工具的说明、限制及是否只读请参见 [API.md § Tools available to the agent loop](../../API.md#tools-available-to-the-agent-loop)。
 
 ### 交付物账本（观测性）
 
