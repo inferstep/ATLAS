@@ -382,9 +382,125 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 
 ### プランモード（ターンごとの事前準備）
 
-プランモードは、エージェントの各ターンで最初のツールコールより前に1回実行される事前プランニングステップです: プランナーが候補プランをサンプリングし、ヒューリスティックにスコア化し、勝者をシステムプロンプトにレンダリングします。そこでは、モデルがプランから逸脱して空回りすると遵守ゲートが自動修正します。探索の空回りを減らし、プランの検証ステップを守ることで証拠のない `done` をブロックします。
+プランモードは、モデルがツールを呼び出し始める前に、エージェントの各ターンで1回実行される事前プランニングステップです。プランナーは異なる温度で LLM から 3 つの候補プランをサンプリングし、それぞれをヒューリスティックにスコア化して最良のものを選びます。勝者のプランはシステムプロンプトに入り、モデルがプランから逸脱して空回りすると自動修正する遵守ゲートの起点になります。
 
-完全なフロー、コンポーネント、調整可能な値、スキップ条件、コスト、テストマトリクスは [PLAN_MODE.md](../../PLAN_MODE.md) を参照してください。
+次の 2 つの失敗モードに対処するために設計されています:
+
+1. **探索の空回り。** プランがないと、モデルの最初の 2〜4 回のツールコールは `read_file → list_directory → search_files → read_file → ...` のように、行動ではなく探索になりがちです。プランがあれば、システムプロンプトが「これを読み、あれを編集し、curl で検証する」と明示します。
+2. **証拠のない「done」。** プランの `verify_step` は修正の証拠として扱われます。検証ゲートは、そのステップが成功するまで `done` を拒否します。
+
+#### エンドツーエンドのフロー
+
+```mermaid
+flowchart TD
+    User["User msg"] --> Tier{T0?}
+    Tier -->|Yes| Skip["Skip planning"] --> Loop["Agent loop"]
+    Tier -->|No| Sample["samplePlanContext\n(read priority files)"]
+    Sample --> Plan["POST /v3/plan\n(3 candidates × different T)"]
+    Plan --> Score["Heuristic score\n(verify? steps in [2,6]? rationale?)"]
+    Score --> Best["Pick winner"]
+    Best --> System["Render plan in\nsystem prompt"]
+    System --> Loop
+    Loop --> Tool["Tool call"]
+    Tool --> Adhere{"matches\nunsatisfied step?"}
+    Adhere -->|Yes| Tick["satisfied[i]=true\nreset off_streak"] --> Loop
+    Adhere -->|No| Recon{"recon tool?\n(read/list/find/search)"}
+    Recon -->|"Yes — neutral"| Loop
+    Recon -->|No| Streak["off_streak++"]
+    Streak --> Cap{streak ≥ 5?}
+    Cap -->|No| Loop
+    Cap -->|Yes| Revise["revisePlan()\n(carry forward FilesRead\nas extra context)"] --> Loop
+
+    style Plan fill:#2d5016,color:#fff
+    style Revise fill:#5c3a1a,color:#fff
+```
+
+#### コンポーネント
+
+##### v3-service: `/v3/plan` (Python)
+
+`v3-service/planning.py` で定義され、`v3-service/main.py` がルートを提供します。ハンドラーの処理:
+
+1. ユーザーメッセージ、作業ディレクトリ、切り詰めたプロジェクトファイルで `PLAN_PROMPT_TEMPLATE` をレンダリングします。
+2. シードオフセットと温度 `[0.3, 0.5, 0.7]` で LLM を 3 回呼び出します。デフォルトではオプションの `chat_template_kwargs: {enable_thinking: false}` 制御を送り、プラン JSON 用に 2,048 出力トークンを確保します。対応するテンプレートは推論チャンネルを無効にし、それ以外のテンプレートはこのフラグを無視します。`ATLAS_PLAN_THINKING=1` は推論を要求し、予算を 8,192 に引き上げます。モデルファミリー固有のプロンプト指示は注入しません。
+3. 各生レスポンスを、Markdown フェンスに寛容で波括弧の深さを認識する抽出器（`_parse_plan_json`）で解析します。
+4. 解析した各プランを `_score_plan` でスコア化します（上限 1.0）:
+   - `verify_step` がある: **+0.3**
+   - `len(steps) ∈ [2, 6]`: **+0.2**。それ以外で 1 ステップ以上: **+0.05**。ステップのないプランのスコアは 0
+   - 検証ステップがプログラムやそのテストを実行する、またはページを取得する（`pytest`、`python3 app.py`、`curl`、`go test` など）: **+0.2**。ビルド、解析、リントだけのステップ（`py_compile`、`tsc`、`ruff`、`go build`）には加点しません。エージェントループもそれを検証として数えません
+   - 検証ステップがサーバーを起動するだけ: **−0.3**。これで +0.3 が打ち消されます
+   - 既に存在するファイルを作成するステップがある: **−0.5**
+   - ユーザーが名前を挙げたファイルを対象とするステップごとに **+0.1**（上限 +0.2）
+   - `rationale` が空でない: **+0.1**
+5. 最高スコアのプランを選びます。同点の場合はステップ数の少ないプランを優先します。勝者の検証ステップがサーバーを起動するだけなら、そのステップを取り除き、ループ自身の検証ゲートに委ねます。
+6. すべての候補の解析に失敗した場合は、1 ステップのフォールバック（`{action: "investigate the request and act"}`）を返すため、プランナーの失敗でエージェントループが止まることはありません。
+
+API の契約は [API.md § POST /v3/plan](../../API.md#post-v3plan) に記載されています。
+
+##### proxy: ブリッジ、フック、ゲート (Go)
+
+| ファイル | 役割 |
+|---|---|
+| `proxy/v3_bridge.go` | `callV3PlanStreaming(reqCtx, v3URL, req, onProgress)` — SSE ストリームを開き、進捗イベントをコールバックに転送し、`event: result` フレームから最終的な `Plan` を返します。`reqCtx` がエージェントのリクエストコンテキストを結び付けるので、`/cancel` は実行中のプランを中止します。V3 パイプライン実行用の `callV3GenerateStreaming` と同じ形です。 |
+| `proxy/types.go` | `V3PlanRequest`、`Plan`、`PlanStep` 型。`AgentContext` に `Plan`、`PlanStepsSatisfied[]`、`PlanOffStreak`、`PlanRevisions` が加わります。 |
+| `proxy/plan_generation.go` | `samplePlanContext()` はプランナーのために優先ファイル（app.py、templates/index.html、package.json など）をたどります。`shouldGeneratePlan()` はティア、メッセージ長、読み取り専用のリクエストかどうかで判定します。`generatePlan()` はブリッジを実行し、トークンごとのノイズを捨て、全ステップのリストを付けて `plan_loaded` を発行します。 |
+| `proxy/gates_plan.go` | `matchPlanStep()`（ツール名とパス末尾の緩い一致）、`recordPlanAdherence()`（ツールコールごとの集計。偵察ツール — `read_file`/`list_directory`/`find_file`/`search_files` — は中立で、ステップを満たしませんが `off_streak` も延ばしません）、`revisePlan()`（`FilesRead` を追加コンテキストとして引き継いで再生成）。 |
+
+システムプロンプトのレンダリングは `buildSystemPrompt` で行われます。プランのステップは番号付きリストとしてレンダリングされ、`✓` マーカーは検証ステップにのみ付きます。検証ステップは、検証ゲートが `done` に対して守る「修正の証拠」のステップとして明示されます。（ステップごとの ☐/✓/⚐ グリフは TUI のレンダリングのものです。下記を参照してください。）
+
+##### tui: レンダリング (Go)
+
+`tui/state.go` は `planView`（モデル上の状態）と、`tui/model.go` のチャットディスパッチャーに接続された 3 つの `applyPlan*` ハンドラーを定義します:
+
+| イベント | ハンドラー | UI への効果 |
+|---|---|---|
+| `plan_loaded` | `applyPlanLoaded` | `m.plan` を新しいプランに置き換え、全ステップを状態グリフ付きで示す複数行のチャット行を追加します。修正版は `m.plan` を上書きし、Satisfied フラグをリセットします。 |
+| `plan_adherence`（一致） | `applyPlanAdherence` | 一致したステップの `Satisfied` フラグを切り替え、1 行の `✓ s2 satisfied · edit_file (1/3)` を追加します。 |
+| `plan_adherence`（不一致） | `applyPlanAdherence` | **無言** — プラン外のコールは内部状態を更新するだけです。このフィルターがないと、プラン外のコールごとにチャット行が増え、実際の進捗が埋もれてしまいます。 |
+| `plan_revise` | `applyPlanRevise` | 現在のプランに `Revising=true` を設定し、`Plan revising (rev 1): <reason>` を追加します。次の `plan_loaded`（`revision>0`）がそれを置き換えます。 |
+| `v3_plan` | `formatV3StageEvent` | プランナー自身の進捗（`candidate 1/3 score=0.80`、`plan 1 won`）を `plan` チャット行のメタタグの下にレンダリングします。 |
+
+#### 調整可能な値
+
+`proxy/gates_plan.go` で定義:
+
+| 定数 | デフォルト | 理由 |
+|---|---|---|
+| `planAutoReviseThreshold` | 5 | 自動修正が発動するまでの、偵察以外のプラン外ツールコールの数（偵察ツールは連続回数を延ばさないので、自然な探索は数えられません）。誤ったプランを早く捕まえられる程度に厳しく、はぐれたコールが少しあった程度では空回りと判定しない程度に緩い値です。 |
+| `planMaxRevisions` | 2 | ループごとの自動修正の上限。これを超えると、ループは残りをプランなしで実行します。異常な入力で `/v3/plan` が永遠に繰り返されるのを防ぎます。 |
+
+`v3-service/planning.py` の定数:
+
+| 定数 | デフォルト | 理由 |
+|---|---|---|
+| `n_candidates` | 3 | 温度 `[0.3, 0.5, 0.7]` での多様なサンプリング。候補が増えるほど所要時間が延びます（リファレンスモデルで候補あたり約 5〜30 秒）。 |
+| `max_tokens`（候補ごと） | 2048 | 経験上、根拠付きの 6 ステップのプランに足ります。初期のテストでは 1024 だと JSON の途中で切れました。 |
+
+#### プランモードがスキップされるとき
+
+`shouldGeneratePlan` の 3 つの条件:
+
+1. **`ctx.Tier == Tier0Conversational`** — 些細なチャット（"hi"、"thanks"）ではプランしません。
+2. **`len(message) < 12`** — 前のターンのプランに依存する短い応答（"yes do it"、"looks good"）では再度プランしません。
+3. **`isReadOnlyRequest(message)`** — 見るだけのリクエスト（"list the files"）にプランは不要で、誤ったプランはモデルを編集へ誘導してしまいます。
+
+それ以外のターンはすべてプランします。失敗（`/v3/plan` の 5xx、ネットワークエラー、フォールバックでも救えないほどすべての候補を解析できない場合）は静かに縮退します。ループは `ctx.Plan` なしで動き、エージェントループはプランモードがオフのときと同じように振る舞います。
+
+#### コスト
+
+所要時間: リファレンスモデルで**候補あたり約 5〜30 秒**（3 候補のスイープ）。トークンコスト: 予算は `3 × 2048 max_tokens` で、実際は候補あたり約 1500 トークン × 3 = 約 4500 トークンです。
+
+どちらもエージェントの最初のツールコールの前に支払います。この投資は、モデルが無駄な探索のラウンドを省いた時点で回収されます（ツールコールは 1 回ごとに約 5〜10 秒の LLM 往復とツール実行がかかります）。
+
+#### テスト
+
+| レイヤー | ファイル | カバー範囲 |
+|---|---|---|
+| v3-service のプランエンドポイント | `tests/v3-service/pipeline/test_plan_scoring.py`（スコアラー）。パーサーは `curl /v3/plan` でスモークテスト | スコアラーは、プログラムやそのテスト、プローブを実行する検証ステップに加点し、静的チェック（ビルド、解析、リンター）にも偵察コールにも加点しません。パーサーの許容範囲（フェンス、散文の前置き、波括弧のネスト）は 3 候補のサンプラーで確かめます |
+| プロキシのブリッジ | `proxy/v3_bridge_test.go` | SSE の解析、結果が欠けたときのエラー、ステージのルーティング |
+| プロキシのフック | `proxy/agent_test.go` | 優先ファイルの取得、切り詰めのしきい値、フォールバックの走査、ティアと長さの判定 |
+| プロキシの遵守 | `proxy/gates_plan_test.go`。システムプロンプトは `proxy/gates_test.go` | 一致ロジック（ツール名 + パス末尾）、失敗したコールの除外、修正回数の上限、システムプロンプトのレンダリング |
+| TUI のレンダリング | `tui/plan_test.go` | `planView` の状態遷移、修正時の plan_loaded による置き換え、プラン外での無言 |
 
 ### 安全制限
 

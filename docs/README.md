@@ -72,7 +72,7 @@ Task-oriented index for everything under `docs/`. The
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — the two-layer design: outer agent
   loop, inner V3 pipeline, Geometric Lens, sandbox.
-- [PLAN_MODE.md](PLAN_MODE.md) — per-turn pre-flight planning.
+- [ARCHITECTURE.md § Plan Mode](ARCHITECTURE.md#plan-mode-per-turn-pre-flight) — per-turn pre-flight planning.
 - [SOURCES.md](SOURCES.md) — the research papers behind each component.
 - [reports/ablation/README.md](reports/ablation/README.md) — the raw
   per-task traces behind the V3.0 ablation study (LiveCodeBench, 599 tasks),
@@ -168,7 +168,7 @@ In order, each building on the last:
 5. [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — failure modes and diagnosis
 6. [CONFIGURATION.md](CONFIGURATION.md) — every knob, per service
 7. [ARCHITECTURE.md](ARCHITECTURE.md) — how the pieces fit
-8. [PLAN_MODE.md](PLAN_MODE.md) — pre-flight planning
+8. [ARCHITECTURE.md § Plan Mode](ARCHITECTURE.md#plan-mode-per-turn-pre-flight) — pre-flight planning
 9. [API.md](API.md) — the full HTTP surface
 10. [SOURCES.md](SOURCES.md) — the research it stands on
 11. [adr/](adr/README.md) — decisions 0001 through 0011, in order (0007 retired)

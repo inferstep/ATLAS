@@ -369,9 +369,125 @@ tier 上限为 0（无上限）；由循环内部的检测器栈决定何时中�
 
 ### Plan 模式（按轮次预检）
 
-Plan 模式是一个预检式的规划步骤，在每个 agent 轮次、第一次工具调用之前运行一次：规划器采样候选计划，用启发式打分，并把获胜者渲染进系统提示；当模型偏离计划胡乱折腾时，一个遵循门控会自动修订计划。它减少了探索折腾，并通过守住计划的验证步骤来阻止无证据的 `done`。
+Plan 模式是一个预检式的规划步骤，在每个 agent 轮次、模型开始调用工具之前运行一次。规划器以不同的温度从 LLM 采样 3 个候选计划，用启发式给每个打分，并选出最好的一个。获胜的计划进入系统提示，并成为遵循门控的依据：当模型偏离计划胡乱折腾时，门控会自动修订计划。
 
-完整的流程、组件、可调项、跳过条件、成本和测试矩阵见 [PLAN_MODE.md](../../PLAN_MODE.md)。
+它针对两种失败模式而设计：
+
+1. **探索折腾。** 没有计划时，模型最初的 2–4 次工具调用往往是 `read_file → list_directory → search_files → read_file → ...`，在探索而不是行动。有了计划，系统提示会明确告诉它：读这个，改那个，用 curl 验证。
+2. **无证据的 "done"。** 计划的 `verify_step` 被视为修复的证明。在该步骤成功运行之前，验证门控会拒绝 `done`。
+
+#### 端到端流程
+
+```mermaid
+flowchart TD
+    User["User msg"] --> Tier{T0?}
+    Tier -->|Yes| Skip["Skip planning"] --> Loop["Agent loop"]
+    Tier -->|No| Sample["samplePlanContext\n(read priority files)"]
+    Sample --> Plan["POST /v3/plan\n(3 candidates × different T)"]
+    Plan --> Score["Heuristic score\n(verify? steps in [2,6]? rationale?)"]
+    Score --> Best["Pick winner"]
+    Best --> System["Render plan in\nsystem prompt"]
+    System --> Loop
+    Loop --> Tool["Tool call"]
+    Tool --> Adhere{"matches\nunsatisfied step?"}
+    Adhere -->|Yes| Tick["satisfied[i]=true\nreset off_streak"] --> Loop
+    Adhere -->|No| Recon{"recon tool?\n(read/list/find/search)"}
+    Recon -->|"Yes — neutral"| Loop
+    Recon -->|No| Streak["off_streak++"]
+    Streak --> Cap{streak ≥ 5?}
+    Cap -->|No| Loop
+    Cap -->|Yes| Revise["revisePlan()\n(carry forward FilesRead\nas extra context)"] --> Loop
+
+    style Plan fill:#2d5016,color:#fff
+    style Revise fill:#5c3a1a,color:#fff
+```
+
+#### 组件
+
+##### v3-service：`/v3/plan`（Python）
+
+定义在 `v3-service/planning.py`，由 `v3-service/main.py` 提供路由。处理程序：
+
+1. 用用户消息、工作目录和截断后的项目文件渲染 `PLAN_PROMPT_TEMPLATE`。
+2. 以种子偏移和温度 `[0.3, 0.5, 0.7]` 调用 LLM 3 次。默认发送可选的 `chat_template_kwargs: {enable_thinking: false}` 控制项，并为计划 JSON 预留 2,048 个输出 token。支持的模板会关闭其推理通道，其他模板忽略该标志。`ATLAS_PLAN_THINKING=1` 请求推理，并把预算提高到 8,192。不注入任何针对模型系列的提示指令。
+3. 用一个容忍 Markdown 围栏、能识别花括号深度的提取器（`_parse_plan_json`）解析每个原始响应。
+4. 用 `_score_plan` 给每个解析出的计划打分（上限 1.0）：
+   - 有 `verify_step`：**+0.3**
+   - `len(steps) ∈ [2, 6]`：**+0.2**；其他情况下只要有步骤：**+0.05**。没有步骤的计划得 0 分
+   - 验证步骤运行程序或其测试，或抓取页面（`pytest`、`python3 app.py`、`curl`、`go test` 等）：**+0.2**。只做构建、解析或 lint 的步骤（`py_compile`、`tsc`、`ruff`、`go build`）不得分：agent 循环也不把它算作验证
+   - 验证步骤只启动服务器：**−0.3**，抵消它的 +0.3
+   - 某个步骤要创建已存在的文件：**−0.5**
+   - 每个以用户点名的文件为目标的步骤 **+0.1**（上限 +0.2）
+   - `rationale` 非空：**+0.1**
+5. 选出得分最高的计划；平局时步骤较少者优先。如果获胜计划的验证步骤只启动服务器，就去掉该步骤，交由循环自身的验证门控把关。
+6. 如果所有候选都解析失败，返回一个单步回退（`{action: "investigate the request and act"}`），这样 agent 循环绝不会因规划器失败而阻塞。
+
+API 契约见 [API.md § POST /v3/plan](../../API.md#post-v3plan)。
+
+##### proxy：桥接、钩子、门控（Go）
+
+| 文件 | 作用 |
+|---|---|
+| `proxy/v3_bridge.go` | `callV3PlanStreaming(reqCtx, v3URL, req, onProgress)` — 打开 SSE 流，把进度事件转发给回调，并从 `event: result` 帧返回最终的 `Plan`。`reqCtx` 绑定 agent 的请求上下文，因此 `/cancel` 会中止进行中的计划。与 V3 流水线运行所用的 `callV3GenerateStreaming` 结构相同。 |
+| `proxy/types.go` | `V3PlanRequest`、`Plan`、`PlanStep` 类型。`AgentContext` 增加 `Plan`、`PlanStepsSatisfied[]`、`PlanOffStreak`、`PlanRevisions`。 |
+| `proxy/plan_generation.go` | `samplePlanContext()` 为规划器遍历优先文件（app.py、templates/index.html、package.json 等）。`shouldGeneratePlan()` 依据层级、消息长度以及是否为只读请求来判断。`generatePlan()` 运行桥接，丢弃逐 token 的噪声，并携带完整步骤列表发出 `plan_loaded`。 |
+| `proxy/gates_plan.go` | `matchPlanStep()`（工具名加路径后缀的宽松匹配）、`recordPlanAdherence()`（按工具调用记账；侦察工具 — `read_file`/`list_directory`/`find_file`/`search_files` — 是中性的：不满足任何步骤，也绝不延长 `off_streak`）、`revisePlan()`（把 `FilesRead` 作为额外上下文带入并重新生成）。 |
+
+系统提示的渲染在 `buildSystemPrompt` 中完成。计划步骤渲染为编号列表，`✓` 标记只出现在验证步骤上，并把验证步骤标明为验证门控针对 `done` 所守护的“修复证据”步骤。（逐步骤的 ☐/✓/⚐ 字形属于 TUI 渲染，见下文。）
+
+##### tui：渲染（Go）
+
+`tui/state.go` 定义了 `planView`（模型上的状态），以及接入 `tui/model.go` 聊天分发器的三个 `applyPlan*` 处理程序：
+
+| 事件 | 处理程序 | UI 效果 |
+|---|---|---|
+| `plan_loaded` | `applyPlanLoaded` | 用新计划替换 `m.plan`；追加一个多行聊天行，用状态字形显示所有步骤。修订版会覆盖 `m.plan` 并重置 Satisfied 标志。 |
+| `plan_adherence`（匹配） | `applyPlanAdherence` | 翻转所匹配步骤的 `Satisfied` 标志；追加一行 `✓ s2 satisfied · edit_file (1/3)`。 |
+| `plan_adherence`（未匹配） | `applyPlanAdherence` | **静默** — 偏离计划的调用只更新内部状态。没有这个过滤，每次偏离计划的调用都会产生一个聊天行，淹没真正的进展。 |
+| `plan_revise` | `applyPlanRevise` | 在当前计划上设置 `Revising=true`；追加 `Plan revising (rev 1): <reason>`。下一个 `plan_loaded`（`revision>0`）会替换它。 |
+| `v3_plan` | `formatV3StageEvent` | 在 `plan` 聊天行元标签下渲染规划器自身的进度（`candidate 1/3 score=0.80`、`plan 1 won`）。 |
+
+#### 可调项
+
+定义在 `proxy/gates_plan.go`：
+
+| 常量 | 默认值 | 理由 |
+|---|---|---|
+| `planAutoReviseThreshold` | 5 | 触发自动修订前，非侦察的偏离计划工具调用次数（侦察工具绝不延长连续计数，因此自然的探索不算在内）。足够严格，能及早发现错误的计划；又足够宽松，几次零星的偏离调用不会被判为折腾。 |
+| `planMaxRevisions` | 2 | 每个循环的自动修订上限。超过之后，循环在剩余部分不再使用计划。防止异常输入让 `/v3/plan` 无休止地循环。 |
+
+`v3-service/planning.py` 常量：
+
+| 常量 | 默认值 | 理由 |
+|---|---|---|
+| `n_candidates` | 3 | 在温度 `[0.3, 0.5, 0.7]` 下做多样化采样。候选越多，耗时越长（参考模型上每个候选约 5–30 秒）。 |
+| `max_tokens`（每个候选） | 2048 | 经验上足以容纳带理由的 6 步计划。早期测试中 1024 会在 JSON 中途被截断。 |
+
+#### 何时跳过 Plan 模式
+
+`shouldGeneratePlan` 中的三个条件：
+
+1. **`ctx.Tier == Tier0Conversational`** — 琐碎的聊天（"hi"、"thanks"）绝不规划。
+2. **`len(message) < 12`** — 依赖上一轮计划的简短回应（"yes do it"、"looks good"）不再重新规划。
+3. **`isReadOnlyRequest(message)`** — 只是查看的请求（"list the files"）不需要计划，而错误的计划会把模型引向编辑。
+
+除此之外，每一轮都会规划。失败（`/v3/plan` 5xx、网络错误、连回退也救不了的所有候选都无法解析）会静默降级：循环在没有 `ctx.Plan` 的情况下运行，agent 循环的行为与关闭 Plan 模式时相同。
+
+#### 成本
+
+耗时：参考模型上**每个候选约 5–30 秒**（3 个候选的扫描）。token 成本：预算为 `3 × 2048 max_tokens`，实际约每个候选 1500 token × 3 = 约 4500 token。
+
+两者都在 agent 第一次工具调用之前支付。一旦模型省去一轮无用的探索，这笔投入就收回了（每次工具调用本身就是约 5–10 秒的 LLM 往返再加工具执行）。
+
+#### 测试
+
+| 层 | 文件 | 覆盖内容 |
+|---|---|---|
+| v3-service 计划端点 | `tests/v3-service/pipeline/test_plan_scoring.py`（打分器）；解析器通过 `curl /v3/plan` 做冒烟测试 | 打分器为运行程序、其测试或探针的验证步骤加分，对静态检查（构建、解析、linter）和侦察调用都不加分；解析器的容错（围栏、前置说明文字、花括号嵌套）由 3 候选采样器验证 |
+| 代理桥接 | `proxy/v3_bridge_test.go` | SSE 解析、缺少结果时的错误、阶段路由 |
+| 代理钩子 | `proxy/agent_test.go` | 优先文件选取、截断阈值、回退遍历、层级与长度判断 |
+| 代理遵循 | `proxy/gates_plan_test.go`；系统提示见 `proxy/gates_test.go` | 匹配逻辑（工具名 + 路径后缀）、排除失败的调用、修订上限、系统提示渲染 |
+| TUI 渲染 | `tui/plan_test.go` | `planView` 状态转换、修订时由 plan_loaded 替换、偏离计划时静默 |
 
 ### 安全限制
 
