@@ -22,6 +22,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/itigges22/atlas-tui/internal/debuglog"
 	"github.com/itigges22/atlas-tui/internal/proxyclient"
+	"github.com/itigges22/atlas-tui/internal/sessionstore"
 )
 
 const (
@@ -76,8 +77,8 @@ func main() {
 	// etc.) inside the TUI. Without this the warning prints to stderr
 	// and is immediately covered by alt-screen.
 	if note := os.Getenv("ATLAS_TUI_STARTUP_NOTE"); note != "" {
-		model.chat = append(model.chat, chatMessage{
-			Role: roleSystem, Meta: "startup", Body: note,
+		model.chat = append(model.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: "startup", Body: note,
 		})
 	}
 
@@ -159,7 +160,7 @@ func envOr(key, fallback string) string {
 // fresh rather than failing.
 func applyContinue(model *tuiModel) {
 	cwd, _ := os.Getwd()
-	sess, err := mostRecentForCwd(cwd)
+	sess, err := sessionstore.MostRecentForCwd(cwd)
 	if err != nil || sess == nil {
 		fmt.Fprintln(os.Stderr,
 			"atlas-tui: no saved session for this directory — starting fresh")
@@ -172,9 +173,9 @@ func applyContinue(model *tuiModel) {
 // unknown id or an invalid/blank selection starts fresh with a note.
 func applyResume(model *tuiModel, id string) {
 	cwd, _ := os.Getwd()
-	var sess *Session
+	var sess *sessionstore.Session
 	if id != "" {
-		s, err := loadSession(id)
+		s, err := sessionstore.Load(id)
 		if err != nil {
 			fmt.Fprintf(os.Stderr,
 				"atlas-tui: session %q not found — starting fresh\n", id)
@@ -194,7 +195,7 @@ func applyResume(model *tuiModel, id string) {
 // and created stamp and scrolling to the latest message. The CURRENT working
 // directory is kept; if the session was saved elsewhere a system row warns
 // that writes land in the current workspace, not the old path.
-func loadSessionInto(model *tuiModel, sess *Session, cwd string) {
+func loadSessionInto(model *tuiModel, sess *sessionstore.Session, cwd string) {
 	model.chat = sess.Messages
 	model.sessionUID = sess.ID
 	if sess.CreatedAt != "" {
@@ -205,8 +206,8 @@ func loadSessionInto(model *tuiModel, sess *Session, cwd string) {
 	}
 	model.chatScroll = 0 // follow the latest message
 	if sess.Cwd != "" && sess.Cwd != cwd {
-		model.chat = append(model.chat, chatMessage{
-			Role: roleSystem, Meta: "startup",
+		model.chat = append(model.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: "startup",
 			Body: fmt.Sprintf(
 				"resumed session was saved in %s — current workspace is %s; writes go to the current workspace.",
 				sess.Cwd, cwd),
@@ -217,8 +218,8 @@ func loadSessionInto(model *tuiModel, sess *Session, cwd string) {
 // pickSession prints an indexed, newest-first list of saved sessions and reads
 // a selection from stdin. Returns the chosen session, or nil (with a note) on
 // no sessions, a blank line, or an invalid selection.
-func pickSession() *Session {
-	all, err := listSessions()
+func pickSession() *sessionstore.Session {
+	all, err := sessionstore.List()
 	if err != nil || len(all) == 0 {
 		fmt.Fprintln(os.Stderr, "atlas-tui: no saved sessions — starting fresh")
 		return nil

@@ -15,6 +15,7 @@ var testHome string
 // and the session folder hangs off os.UserCacheDir, which reads
 // $XDG_CACHE_HOME on Linux and $HOME on macOS. Both point at one temporary
 // folder for the run; isolateSessions gives a single test a fresh one.
+// internal/sessionstore has the same guard for its own tests.
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "atlas-tui-test-")
 	if err != nil {
@@ -29,41 +30,14 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-func TestSessionsOfTheRunStayInItsOwnFolder(t *testing.T) {
-	dir, err := sessionsDir()
+// The store keeps sessions under os.UserCacheDir (its own tests check that),
+// so the model's saves stay in the folder of the run when that folder does.
+func TestTheCacheFolderOfTheRunIsItsOwn(t *testing.T) {
+	dir, err := os.UserCacheDir()
 	if err != nil {
-		t.Fatalf("sessionsDir: %v", err)
+		t.Fatalf("UserCacheDir: %v", err)
 	}
 	if !strings.HasPrefix(dir, testHome) {
-		t.Fatalf("sessions folder %q is outside the folder of the test run %q", dir, testHome)
-	}
-}
-
-func TestIsolateSessionsGivesATestItsOwnFolder(t *testing.T) {
-	isolateSessions(t)
-	first, err := sessionsDir()
-	if err != nil {
-		t.Fatalf("sessionsDir: %v", err)
-	}
-	if strings.HasPrefix(first, testHome) {
-		t.Fatalf("sessions folder %q is still the shared folder of the run", first)
-	}
-	if err := saveSession(Session{ID: "only-here", Messages: []chatMessage{{Role: roleUser, Body: "x"}}}); err != nil {
-		t.Fatalf("saveSession: %v", err)
-	}
-	isolateSessions(t)
-	second, err := sessionsDir()
-	if err != nil {
-		t.Fatalf("sessionsDir: %v", err)
-	}
-	if second == first {
-		t.Fatalf("a second call kept the folder %q", first)
-	}
-	sessions, err := listSessions()
-	if err != nil {
-		t.Fatalf("listSessions: %v", err)
-	}
-	if len(sessions) != 0 {
-		t.Fatalf("a fresh folder lists %d session(s), want 0", len(sessions))
+		t.Fatalf("cache folder %q is outside the folder of the test run %q", dir, testHome)
 	}
 }

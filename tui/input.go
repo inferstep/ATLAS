@@ -13,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/itigges22/atlas-tui/internal/debuglog"
 	"github.com/itigges22/atlas-tui/internal/proxyclient"
+	"github.com/itigges22/atlas-tui/internal/sessionstore"
 )
 
 // handlePermKey answers the permission modal. y=allow once, a=allow for the
@@ -33,8 +34,8 @@ func (m tuiModel) handlePermKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key {
 	case "y":
 		m.pendingPerm = nil
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "permission",
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: "permission",
 			Body: "allowed " + pp.toolName, Echo: true,
 		})
 		debuglog.Log("permission", "allow_once", map[string]interface{}{"tool": pp.toolName})
@@ -45,8 +46,8 @@ func (m tuiModel) handlePermKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.sessionAllowedTools[pp.toolName] = true
 		m.pendingPerm = nil
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "permission",
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: "permission",
 			Body: "allowed " + pp.toolName + " for session", Echo: true,
 		})
 		debuglog.Log("permission", "allow_session", map[string]interface{}{"tool": pp.toolName})
@@ -108,8 +109,8 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "ctrl+r":
 		if !m.turnActive && m.lastUserMsg != "" {
-			m.chat = append(m.chat, chatMessage{
-				Role: roleUser, Body: m.lastUserMsg,
+			m.chat = append(m.chat, sessionstore.ChatMessage{
+				Role: sessionstore.RoleUser, Body: m.lastUserMsg,
 			})
 			return m, m.sendChatCmd(m.lastUserMsg + m.contextSuffix())
 		}
@@ -151,8 +152,8 @@ func (m tuiModel) cancelTurnOrQuit() (tea.Model, tea.Cmd) {
 		// never cleared.
 		m.promptEvalStart = time.Time{}
 		m.streamingLLM = false
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "cancelled",
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: "cancelled",
 			Body: "turn cancelled",
 		})
 		return m, func() tea.Msg {
@@ -176,8 +177,8 @@ func (m tuiModel) cycleMode() (tea.Model, tea.Cmd) {
 	default:
 		m.mode = "default"
 	}
-	m.chat = append(m.chat, chatMessage{
-		Role: roleSystem, Meta: "mode",
+	m.chat = append(m.chat, sessionstore.ChatMessage{
+		Role: sessionstore.RoleSystem, Meta: "mode",
 		Body: fmt.Sprintf("mode → %s", m.mode),
 	})
 	return m, nil
@@ -208,14 +209,14 @@ func (m tuiModel) submitInput() (tea.Model, tea.Cmd) {
 	if strings.HasPrefix(text, "!") {
 		cmdStr := strings.TrimSpace(text[1:])
 		if cmdStr == "" {
-			m.chat = append(m.chat, chatMessage{
-				Role: roleSystem, Meta: "error",
+			m.chat = append(m.chat, sessionstore.ChatMessage{
+				Role: sessionstore.RoleSystem, Meta: "error",
 				Body: "Bash mode: type ! followed by a command.",
 			})
 			return m, nil
 		}
-		m.chat = append(m.chat, chatMessage{
-			Role: roleUser, Body: "! " + cmdStr, Echo: true,
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleUser, Body: "! " + cmdStr, Echo: true,
 		})
 		return m, runShellCmd(m.workingDir, "!"+cmdStr,
 			[]string{"bash", "-lc", cmdStr})
@@ -241,8 +242,8 @@ func (m tuiModel) submitInput() (tea.Model, tea.Cmd) {
 	}
 	// Plain message → send to agent. Append context-files
 	// hint so the agent knows the user's chosen scope.
-	m.chat = append(m.chat, chatMessage{
-		Role: roleUser, Body: text,
+	m.chat = append(m.chat, sessionstore.ChatMessage{
+		Role: sessionstore.RoleUser, Body: text,
 	})
 	m.lastUserMsg = text
 	debuglog.Log("turn", "started", map[string]interface{}{

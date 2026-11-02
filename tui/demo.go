@@ -34,6 +34,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/itigges22/atlas-tui/internal/proxyclient"
+	"github.com/itigges22/atlas-tui/internal/sessionstore"
 )
 
 //go:embed demo_prompts_fallback.json
@@ -682,8 +683,8 @@ func (m *demoModel) applyStreamEvent(s demoStreamMsg) {
 				Content string `json:"content"`
 			}
 			if json.Unmarshal(s.evt.Data, &payload) == nil && payload.Content != "" {
-				m.rawChild.chat = append(m.rawChild.chat, chatMessage{
-					Role: roleAssistant, Meta: "raw model", Body: payload.Content,
+				m.rawChild.chat = append(m.rawChild.chat, sessionstore.ChatMessage{
+					Role: sessionstore.RoleAssistant, Meta: "raw model", Body: payload.Content,
 				})
 			}
 		} else {

@@ -22,6 +22,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/itigges22/atlas-tui/internal/proxyclient"
+	"github.com/itigges22/atlas-tui/internal/sessionstore"
 )
 
 // thinkingVerbs cycles through quirky phrases while the model is
@@ -290,7 +291,7 @@ func windowLines(all []string, height, scroll int) (string, []string, int) {
 // Returns (rendered, atTop, atBottom, totalLines, viewStart, allLines)
 // so the caller can show a scroll indicator in the chat title and
 // build a paneSnapshot for highlight-to-copy.
-func renderChatPane(chat []chatMessage, renderer *glamour.TermRenderer,
+func renderChatPane(chat []sessionstore.ChatMessage, renderer *glamour.TermRenderer,
 	height, width, scroll int) (string, bool, bool, int, int, []string) {
 	if height <= 0 {
 		return "", true, true, 0, 0, nil
@@ -357,17 +358,17 @@ func renderChatPane(chat []chatMessage, renderer *glamour.TermRenderer,
 }
 
 // renderChatMessage formats one chat row into a list of display lines.
-func renderChatMessage(m chatMessage, renderer *glamour.TermRenderer,
+func renderChatMessage(m sessionstore.ChatMessage, renderer *glamour.TermRenderer,
 	width int) []string {
 	m.Body, m.Meta = visibleControls(m.Body), visibleControls(m.Meta)
 	m.Status, m.Reason = visibleControls(m.Status), visibleControls(m.Reason)
 	switch m.Role {
-	case roleUser:
+	case sessionstore.RoleUser:
 		header := chatUserStyle.Render("you")
 		body := wrapPlain(m.Body, width-2)
 		return prependPrefix(header, body)
 
-	case roleAssistant:
+	case sessionstore.RoleAssistant:
 		label := m.Meta
 		if label == "" {
 			label = "agent"
@@ -376,7 +377,7 @@ func renderChatMessage(m chatMessage, renderer *glamour.TermRenderer,
 		body := renderMarkdown(m.Body, renderer)
 		return prependPrefix(header, body)
 
-	case roleTool:
+	case sessionstore.RoleTool:
 		// Meta convention from appendChatEvent:
 		//   "→ <tool>" — pending call, no mark
 		//   "← <tool>" — returned, render ✓ or ✗ based on m.Success
@@ -393,7 +394,7 @@ func renderChatMessage(m chatMessage, renderer *glamour.TermRenderer,
 		body := wrapPlain(m.Body, width-2)
 		return prependPrefix(header, body)
 
-	case roleSystem:
+	case sessionstore.RoleSystem:
 		tag := m.Meta
 		if tag == "" {
 			tag = "system"
@@ -811,7 +812,7 @@ type fullScreenLayout struct {
 type fullScreenView struct {
 	pipeline *pipelineState
 	events   []proxyclient.Envelope
-	chat     []chatMessage
+	chat     []sessionstore.ChatMessage
 	renderer *glamour.TermRenderer
 	header   string
 
@@ -1017,7 +1018,7 @@ func renderPipelineBox(layout fullScreenLayout, p *pipelineState, pipelineScroll
 // the chat pane's snapshot it also returns the screen row of the first
 // content row, the number of content rows, the history's line count, the
 // first line shown and every line.
-func renderChatBox(layout fullScreenLayout, chat []chatMessage, renderer *glamour.TermRenderer,
+func renderChatBox(layout fullScreenLayout, chat []sessionstore.ChatMessage, renderer *glamour.TermRenderer,
 	chatScroll int, turnActive bool, spinnerFrame int, sel selectionState) (string, int, int, int, int, []string) {
 	chatH, innerW := layout.chatH, layout.innerW
 	hidePipeline, pipelineH := layout.hidePipeline, layout.pipelineH

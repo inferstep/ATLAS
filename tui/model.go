@@ -28,6 +28,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/itigges22/atlas-tui/internal/debuglog"
 	"github.com/itigges22/atlas-tui/internal/proxyclient"
+	"github.com/itigges22/atlas-tui/internal/sessionstore"
 )
 
 type envelopeMsg struct {
@@ -40,33 +41,6 @@ type tickMsg time.Time
 // chatStreamMsg is one event from a /v1/agent SSE turn.
 type chatStreamMsg struct {
 	ev proxyclient.ChatEvent
-}
-
-type chatRole int
-
-const (
-	roleUser chatRole = iota
-	roleAssistant
-	roleTool
-	roleSystem
-)
-
-// chatMessage is one row in the chat history.
-type chatMessage struct {
-	Role chatRole
-	Body string
-	// Meta — for tool: the tool name; for system: severity tag.
-	Meta string
-	// Success — only meaningful for tool rows. Drives the icon color.
-	Success bool
-	// Status and Reason — for a done row: the run's terminal status and
-	// why (#236). Empty on every other row.
-	Status string
-	Reason string
-	// Echo — the row mirrors raw slash/bash input for display only.
-	// buildChatHistory skips echo rows so they never reach /v1/agent
-	// as fake user turns.
-	Echo bool
 }
 
 type tuiModel struct {
@@ -88,7 +62,7 @@ type tuiModel struct {
 
 	// Chat
 	input         textarea.Model
-	chat          []chatMessage
+	chat          []sessionstore.ChatMessage
 	chatEvents    chan proxyclient.ChatEvent
 	turnActive    bool
 	turnCancel    context.CancelFunc
@@ -311,13 +285,13 @@ func (m *tuiModel) scrollChat(delta int) {
 // stream instead of spawning a fresh chat row per token.
 func (m *tuiModel) replaceV3LLMRow(body string) {
 	for i := len(m.chat) - 1; i >= 0; i-- {
-		if m.chat[i].Role == roleSystem && m.chat[i].Meta == "v3-llm" {
+		if m.chat[i].Role == sessionstore.RoleSystem && m.chat[i].Meta == "v3-llm" {
 			m.chat[i].Body = body
 			return
 		}
 	}
-	m.chat = append(m.chat, chatMessage{
-		Role: roleSystem, Meta: "v3-llm", Body: body,
+	m.chat = append(m.chat, sessionstore.ChatMessage{
+		Role: sessionstore.RoleSystem, Meta: "v3-llm", Body: body,
 	})
 }
 
@@ -328,13 +302,13 @@ func (m *tuiModel) replaceV3LLMRow(body string) {
 // a new chat row per token.
 func (m *tuiModel) replaceLLMRow(body string) {
 	for i := len(m.chat) - 1; i >= 0; i-- {
-		if m.chat[i].Role == roleSystem && m.chat[i].Meta == "llm" {
+		if m.chat[i].Role == sessionstore.RoleSystem && m.chat[i].Meta == "llm" {
 			m.chat[i].Body = body
 			return
 		}
 	}
-	m.chat = append(m.chat, chatMessage{
-		Role: roleSystem, Meta: "llm", Body: body,
+	m.chat = append(m.chat, sessionstore.ChatMessage{
+		Role: sessionstore.RoleSystem, Meta: "llm", Body: body,
 	})
 }
 
@@ -503,7 +477,7 @@ func tickEvery(d time.Duration) tea.Cmd {
 
 // buildChatHistory packs prior user/assistant text rows from m.chat
 // into the wire shape /v1/agent expects. Excludes:
-//   - the most recent roleUser entry (that's the message being sent
+//   - the most recent sessionstore.RoleUser entry (that's the message being sent
 //     this turn — handleAgent pairs it with PriorHistory, so sending
 //     it twice would duplicate)
 //   - tool / system rows (within-turn machinery, not conversation)
@@ -519,7 +493,7 @@ func (m *tuiModel) buildChatHistory() []proxyclient.HistoryMessage {
 	// Locate the last user row — that's the just-appended new message.
 	lastUserIdx := -1
 	for i := len(m.chat) - 1; i >= 0; i-- {
-		if m.chat[i].Role == roleUser {
+		if m.chat[i].Role == sessionstore.RoleUser {
 			lastUserIdx = i
 			break
 		}
@@ -538,10 +512,10 @@ func (m *tuiModel) buildChatHistory() []proxyclient.HistoryMessage {
 		}
 		var role, content string
 		switch row.Role {
-		case roleUser:
+		case sessionstore.RoleUser:
 			role = "user"
 			content = row.Body
-		case roleAssistant:
+		case sessionstore.RoleAssistant:
 			role = "assistant"
 			// CRITICAL: wrap the assistant's prior text in the JSON
 			// envelope shape the model is supposed to emit. m.chat
@@ -807,8 +781,8 @@ func (m tuiModel) handleChatStream(msg chatStreamMsg) (tea.Model, tea.Cmd) {
 		}
 		_ = json.Unmarshal(msg.ev.Data, &p)
 		if p.Err != "" && !m.userCancelled && !looksCancelled(p.Err) {
-			m.chat = append(m.chat, chatMessage{
-				Role: roleSystem, Meta: "error",
+			m.chat = append(m.chat, sessionstore.ChatMessage{
+				Role: sessionstore.RoleSystem, Meta: "error",
 				Body: p.Err,
 			})
 		}
@@ -844,11 +818,11 @@ func (m tuiModel) handleSlashResult(msg slashResultMsg) (tea.Model, tea.Cmd) {
 	if body == "" {
 		body = "(no output)"
 	}
-	role := roleSystem
+	role := sessionstore.RoleSystem
 	if msg.err != nil {
-		role = roleSystem
+		role = sessionstore.RoleSystem
 	}
-	m.chat = append(m.chat, chatMessage{
+	m.chat = append(m.chat, sessionstore.ChatMessage{
 		Role: role, Meta: msg.command, Body: body,
 		Success: msg.err == nil,
 	})

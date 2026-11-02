@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/itigges22/atlas-tui/internal/proxyclient"
+	"github.com/itigges22/atlas-tui/internal/sessionstore"
 )
 
 // Input that starts with "/" is a command: it is consumed (never sent to the
@@ -168,16 +169,16 @@ func TestEveryOwnedSenderDeclaresATaskMode(t *testing.T) {
 // transcript when N is larger than it, and nothing when N is not positive or
 // there are no messages.
 func TestCollectLastMessagesTakesTheLastN(t *testing.T) {
-	five := []chatMessage{
-		{Role: roleUser, Body: "one"},
-		{Role: roleAssistant, Body: "two"},
-		{Role: roleUser, Body: "three"},
-		{Role: roleAssistant, Body: "four"},
-		{Role: roleUser, Body: "five"},
+	five := []sessionstore.ChatMessage{
+		{Role: sessionstore.RoleUser, Body: "one"},
+		{Role: sessionstore.RoleAssistant, Body: "two"},
+		{Role: sessionstore.RoleUser, Body: "three"},
+		{Role: sessionstore.RoleAssistant, Body: "four"},
+		{Role: sessionstore.RoleUser, Body: "five"},
 	}
 	cases := []struct {
 		name string
-		chat []chatMessage
+		chat []sessionstore.ChatMessage
 		n    int
 		want string
 	}{

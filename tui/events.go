@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/itigges22/atlas-tui/internal/proxyclient"
+	"github.com/itigges22/atlas-tui/internal/sessionstore"
 )
 
 // thinkingPrefix opens a streaming row of the model's reasoning.
@@ -124,8 +125,8 @@ func (m *tuiModel) onTurnStart(ev proxyclient.ChatEvent) {
 	if p.Trimmed {
 		body += "  (trimmed)"
 	}
-	m.chat = append(m.chat, chatMessage{
-		Role: roleSystem, Meta: "turn", Body: body,
+	m.chat = append(m.chat, sessionstore.ChatMessage{
+		Role: sessionstore.RoleSystem, Meta: "turn", Body: body,
 	})
 }
 
@@ -139,8 +140,8 @@ func (m *tuiModel) onLLMCallStart(ev proxyclient.ChatEvent) {
 		PromptTokens int `json:"prompt_tokens"`
 	}
 	_ = json.Unmarshal(ev.Data, &p)
-	m.chat = append(m.chat, chatMessage{
-		Role: roleSystem, Meta: "llm",
+	m.chat = append(m.chat, sessionstore.ChatMessage{
+		Role: sessionstore.RoleSystem, Meta: "llm",
 		Body: "encoding prompt…",
 	})
 	m.streamingLLM = true
@@ -309,8 +310,8 @@ func (m *tuiModel) onText(ev proxyclient.ChatEvent) {
 		Content string `json:"content"`
 	}
 	if json.Unmarshal(ev.Data, &p) == nil && p.Content != "" {
-		m.chat = append(m.chat, chatMessage{
-			Role: roleAssistant, Body: p.Content,
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleAssistant, Body: p.Content,
 		})
 		// Persist after an assistant text row so a resumed transcript
 		// reconstructs the full exchange even if the turn's done marker
@@ -327,8 +328,8 @@ func (m *tuiModel) onToolCall(ev proxyclient.ChatEvent) {
 		Turn int             `json:"turn"`
 	}
 	if json.Unmarshal(ev.Data, &p) == nil {
-		m.chat = append(m.chat, chatMessage{
-			Role: roleTool, Meta: "→ " + p.Name,
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleTool, Meta: "→ " + p.Name,
 			Body: summarizeToolArgs(p.Name, p.Args),
 		})
 		// Highlight files touched by write/edit/delete in the
@@ -388,8 +389,8 @@ func (m *tuiModel) onToolResult(ev proxyclient.ChatEvent) {
 				body = fmt.Sprintf("%s  ·  %s", body, p.Elapsed)
 			}
 		}
-		m.chat = append(m.chat, chatMessage{
-			Role: roleTool, Meta: "← " + p.Tool,
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleTool, Meta: "← " + p.Tool,
 			Success: p.Success, Body: body,
 		})
 	}
@@ -407,8 +408,8 @@ func (m *tuiModel) onGate(ev proxyclient.ChatEvent) {
 		Reason string `json:"reason"`
 	}
 	if json.Unmarshal(ev.Data, &p) == nil {
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: p.Gate,
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: p.Gate,
 			Body: p.Reason, Echo: true,
 		})
 	}
@@ -440,8 +441,8 @@ func (m *tuiModel) onFencedFetch(ev proxyclient.ChatEvent) {
 	if p.ReasoningChars > 0 {
 		body += fmt.Sprintf(", %d reasoning chars", p.ReasoningChars)
 	}
-	m.chat = append(m.chat, chatMessage{
-		Role: roleSystem, Meta: "fenced", Body: body, Echo: true,
+	m.chat = append(m.chat, sessionstore.ChatMessage{
+		Role: sessionstore.RoleSystem, Meta: "fenced", Body: body, Echo: true,
 	})
 }
 
@@ -483,8 +484,8 @@ func (m *tuiModel) onRepair(ev proxyclient.ChatEvent) {
 		body = fmt.Sprintf("%s still does not parse after %s: handed back to you", p.Path, attempts)
 	}
 	if body != "" {
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "repair", Body: body, Echo: true,
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: "repair", Body: body, Echo: true,
 		})
 	}
 }
@@ -514,8 +515,8 @@ func (m *tuiModel) onPermissionRequest(ev proxyclient.ChatEvent) {
 		sid := m.turnSessionID
 		cid := p.ToolCallID
 		go func() { _ = proxyclient.PostPermissionDecision(proxyURL, sid, cid, "allow", "once") }()
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "permission",
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: "permission",
 			Body: "auto-allowed " + p.ToolName + " (session)", Echo: true,
 		})
 		return
@@ -545,8 +546,8 @@ func (m *tuiModel) onPermissionDenied(ev proxyclient.ChatEvent) {
 	if m.pendingPerm != nil && m.pendingPerm.toolName == p.Tool {
 		m.pendingPerm = nil
 	}
-	m.chat = append(m.chat, chatMessage{
-		Role: roleSystem, Meta: "denied", Body: deniedRow(p.Tool, p.Reason),
+	m.chat = append(m.chat, sessionstore.ChatMessage{
+		Role: sessionstore.RoleSystem, Meta: "denied", Body: deniedRow(p.Tool, p.Reason),
 	})
 }
 
@@ -562,8 +563,8 @@ func (m *tuiModel) onError(ev proxyclient.ChatEvent) {
 	if m.userCancelled || looksCancelled(p.Error) {
 		return
 	}
-	m.chat = append(m.chat, chatMessage{
-		Role: roleSystem, Meta: "error", Body: p.Error,
+	m.chat = append(m.chat, sessionstore.ChatMessage{
+		Role: sessionstore.RoleSystem, Meta: "error", Body: p.Error,
 	})
 }
 
@@ -581,8 +582,8 @@ func (m *tuiModel) onDone(ev proxyclient.ChatEvent) {
 	if p.Status == "" {
 		p.Status = "incomplete"
 	}
-	m.chat = append(m.chat, chatMessage{
-		Role: roleSystem, Meta: "done", Body: p.Summary,
+	m.chat = append(m.chat, sessionstore.ChatMessage{
+		Role: sessionstore.RoleSystem, Meta: "done", Body: p.Summary,
 		Status: p.Status, Reason: p.Reason,
 	})
 }
@@ -601,8 +602,8 @@ func (m *tuiModel) onV3LLMStart(ev proxyclient.ChatEvent) {
 	if p.Detail != "" {
 		body = p.Detail + " · calling model…"
 	}
-	m.chat = append(m.chat, chatMessage{
-		Role: roleSystem, Meta: "v3-llm", Body: body,
+	m.chat = append(m.chat, sessionstore.ChatMessage{
+		Role: sessionstore.RoleSystem, Meta: "v3-llm", Body: body,
 	})
 	m.streamingV3 = true
 	m.streamingV3Text = ""
@@ -679,8 +680,8 @@ func (m *tuiModel) onV3Progress(ev proxyclient.ChatEvent) {
 		// legacy pretty-print; the TUI styles its own rows.
 		msg := strings.TrimLeft(p.Message, " │└├")
 		msg = strings.TrimSpace(msg)
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "V3", Body: msg,
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: "V3", Body: msg,
 		})
 	}
 }
@@ -696,8 +697,8 @@ func (m *tuiModel) onV3Progress(ev proxyclient.ChatEvent) {
 func (m *tuiModel) onV3Stage(ev proxyclient.ChatEvent) {
 	body := formatV3StageEvent(ev.Type, ev.Data)
 	if body != "" {
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "V3", Body: body,
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: "V3", Body: body,
 		})
 	}
 }
@@ -712,8 +713,8 @@ func (m *tuiModel) onV3Stage(ev proxyclient.ChatEvent) {
 func (m *tuiModel) onV3LensPerStep(ev proxyclient.ChatEvent) {
 	body := formatLensPerStep(ev.Data)
 	if body != "" {
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "lens", Body: body,
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: "lens", Body: body,
 		})
 	}
 }
@@ -728,8 +729,8 @@ func (m *tuiModel) onV3LensPerStep(ev proxyclient.ChatEvent) {
 func (m *tuiModel) onV3LensVeto(ev proxyclient.ChatEvent) {
 	body := formatLensVeto(ev.Data)
 	if body != "" {
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "veto!", Body: body,
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: "veto!", Body: body,
 		})
 	}
 }
@@ -745,8 +746,8 @@ func (m *tuiModel) onV3LensVeto(ev proxyclient.ChatEvent) {
 func (m *tuiModel) onV3StructuralVeto(ev proxyclient.ChatEvent) {
 	body := formatStructuralVeto(ev.Data)
 	if body != "" {
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "veto!", Body: body,
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: "veto!", Body: body,
 		})
 	}
 }
@@ -760,8 +761,8 @@ func (m *tuiModel) onV3StructuralVeto(ev proxyclient.ChatEvent) {
 func (m *tuiModel) onV3CallChainContext(ev proxyclient.ChatEvent) {
 	body := formatCallChainContext(ev.Data)
 	if body != "" {
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "phase3", Body: body,
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: "phase3", Body: body,
 		})
 	}
 }
@@ -775,8 +776,8 @@ func (m *tuiModel) onV3CallChainContext(ev proxyclient.ChatEvent) {
 func (m *tuiModel) onAgentLensScore(ev proxyclient.ChatEvent) {
 	body := formatAgentLensScore(ev.Data)
 	if body != "" {
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "lens", Body: body,
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: "lens", Body: body,
 		})
 	}
 }
@@ -791,8 +792,8 @@ func (m *tuiModel) onAgentLensScore(ev proxyclient.ChatEvent) {
 func (m *tuiModel) onAgentLensIntervention(ev proxyclient.ChatEvent) {
 	body := formatAgentLensIntervention(ev.Data)
 	if body != "" {
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "lens!", Body: body,
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: "lens!", Body: body,
 		})
 	}
 }
@@ -808,8 +809,8 @@ func (m *tuiModel) onAgentLensIntervention(ev proxyclient.ChatEvent) {
 func (m *tuiModel) onAgentRepeatIntervention(ev proxyclient.ChatEvent) {
 	body := formatAgentRepeatIntervention(ev.Data)
 	if body != "" {
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "repeat!", Body: body,
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: "repeat!", Body: body,
 		})
 	}
 }
@@ -824,8 +825,8 @@ func (m *tuiModel) onAssetLint(ev proxyclient.ChatEvent) {
 		Detail string `json:"detail"`
 	}
 	if json.Unmarshal(ev.Data, &d) == nil && d.Detail != "" {
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "assets", Body: d.Detail,
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: "assets", Body: d.Detail,
 		})
 	}
 }
@@ -841,8 +842,8 @@ func (m *tuiModel) onAssetLint(ev proxyclient.ChatEvent) {
 func (m *tuiModel) onAgentReasoningIntervention(ev proxyclient.ChatEvent) {
 	body := formatAgentReasoningIntervention(ev.Data)
 	if body != "" {
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "repeat!", Body: body,
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: "repeat!", Body: body,
 		})
 	}
 }
@@ -857,8 +858,8 @@ func (m *tuiModel) onContentLoopCut(ev proxyclient.ChatEvent) {
 		Chars int `json:"chars"`
 	}
 	_ = json.Unmarshal(ev.Data, &p)
-	m.chat = append(m.chat, chatMessage{
-		Role: roleSystem, Meta: "cut",
+	m.chat = append(m.chat, sessionstore.ChatMessage{
+		Role: sessionstore.RoleSystem, Meta: "cut",
 		Body: fmt.Sprintf("content loop detected — stream cut after %d chars", p.Chars),
 	})
 }
@@ -874,8 +875,8 @@ func (m *tuiModel) onOldStrCut(ev proxyclient.ChatEvent) {
 		MatchedLines int    `json:"matched_lines"`
 	}
 	_ = json.Unmarshal(ev.Data, &p)
-	m.chat = append(m.chat, chatMessage{
-		Role: roleSystem, Meta: "cut",
+	m.chat = append(m.chat, sessionstore.ChatMessage{
+		Role: sessionstore.RoleSystem, Meta: "cut",
 		Body: fmt.Sprintf("edit_file old_str stopped matching %s after %d line(s) — stream cut",
 			p.Path, p.MatchedLines),
 	})
@@ -900,8 +901,8 @@ func (m *tuiModel) onAgentLoopRecovery(ev proxyclient.ChatEvent) {
 	if body == "" {
 		body = "the model began repeating itself; the stream was cut and it was told why"
 	}
-	m.chat = append(m.chat, chatMessage{
-		Role: roleSystem, Meta: "recovered",
+	m.chat = append(m.chat, sessionstore.ChatMessage{
+		Role: sessionstore.RoleSystem, Meta: "recovered",
 		Body: fmt.Sprintf("%s — retrying (attempt %d)", body, p.Attempt),
 	})
 }
@@ -915,8 +916,8 @@ func (m *tuiModel) onReasoningBudgetCut(ev proxyclient.ChatEvent) {
 		ReasoningChars int `json:"reasoning_chars"`
 	}
 	_ = json.Unmarshal(ev.Data, &p)
-	m.chat = append(m.chat, chatMessage{
-		Role: roleSystem, Meta: "cut",
+	m.chat = append(m.chat, sessionstore.ChatMessage{
+		Role: sessionstore.RoleSystem, Meta: "cut",
 		Body: fmt.Sprintf("reasoning budget exceeded (%d chars, no content) — stream cut, re-prompting", p.ReasoningChars),
 	})
 }
@@ -928,8 +929,8 @@ func (m *tuiModel) onReasoningBudgetCut(ev proxyclient.ChatEvent) {
 func (m *tuiModel) onSymbolIndexInjected(ev proxyclient.ChatEvent) {
 	body := formatSymbolIndexInjected(ev.Data)
 	if body != "" {
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "symbols", Body: body,
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: "symbols", Body: body,
 		})
 	}
 }
@@ -944,8 +945,8 @@ func (m *tuiModel) onSymbolIndexInjected(ev proxyclient.ChatEvent) {
 func (m *tuiModel) onV3Plan(ev proxyclient.ChatEvent) {
 	body := formatV3StageEvent(ev.Type, ev.Data)
 	if body != "" {
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "plan", Body: body,
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: "plan", Body: body,
 		})
 	}
 }
@@ -969,8 +970,8 @@ func (m *tuiModel) onPlanLoaded(ev proxyclient.ChatEvent) {
 // triggers a revision flows through plan_revise below.
 func (m *tuiModel) onPlanAdherence(ev proxyclient.ChatEvent) {
 	if body := applyPlanAdherence(m, ev.Data); body != "" {
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "plan", Body: body,
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: "plan", Body: body,
 		})
 	}
 }
@@ -982,8 +983,8 @@ func (m *tuiModel) onPlanAdherence(ev proxyclient.ChatEvent) {
 // re-planning is in flight.
 func (m *tuiModel) onPlanRevise(ev proxyclient.ChatEvent) {
 	if body := applyPlanRevise(m, ev.Data); body != "" {
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "plan", Body: body,
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleSystem, Meta: "plan", Body: body,
 		})
 	}
 }
