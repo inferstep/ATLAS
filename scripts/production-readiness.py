@@ -446,7 +446,7 @@ def _go_test_events(stream: str) -> tuple[list, dict, dict]:
 def _junit_xml(by_test: dict, ended: dict) -> str:
     """The ended tests as JUnit XML, a suite for each package."""
     suites = ElementTree.Element("testsuites")
-    for package in sorted({package for package, _ in ended}):
+    for package in sorted({key[0] for key in ended}):
         cases = {test: result for (pkg, test), result in ended.items() if pkg == package}
         suite = ElementTree.SubElement(suites, "testsuite", name=package, tests=str(len(cases)),
                                        failures=str(sum(1 for action, _ in cases.values() if action == "fail")),
