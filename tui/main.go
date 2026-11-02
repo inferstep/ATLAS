@@ -23,6 +23,7 @@ import (
 	"github.com/itigges22/atlas-tui/internal/debuglog"
 	"github.com/itigges22/atlas-tui/internal/proxyclient"
 	"github.com/itigges22/atlas-tui/internal/sessionstore"
+	"github.com/itigges22/atlas-tui/internal/termtext"
 )
 
 const (
@@ -231,7 +232,7 @@ func pickSession() *sessionstore.Session {
 			title = "(untitled)"
 		}
 		fmt.Fprintf(os.Stdout, "  [%d] %s  %s  %s\n",
-			i+1, s.UpdatedAt, truncate(title, 50), s.Cwd)
+			i+1, s.UpdatedAt, termtext.Truncate(title, 50), s.Cwd)
 	}
 	fmt.Fprint(os.Stdout, "Select a session number (or Enter to start fresh): ")
 	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')

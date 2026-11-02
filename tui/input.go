@@ -14,6 +14,7 @@ import (
 	"github.com/itigges22/atlas-tui/internal/debuglog"
 	"github.com/itigges22/atlas-tui/internal/proxyclient"
 	"github.com/itigges22/atlas-tui/internal/sessionstore"
+	"github.com/itigges22/atlas-tui/internal/termtext"
 )
 
 // handlePermKey answers the permission modal. y=allow once, a=allow for the
@@ -330,7 +331,7 @@ func (m tuiModel) copySelection() (tea.Model, tea.Cmd) {
 		"startX": m.selStartX, "startY": m.selStartY,
 		"endX": m.selEndX, "endY": m.selEndY,
 		"text_len": len(text),
-		"preview":  truncate(text, 60),
+		"preview":  termtext.Truncate(text, 60),
 	})
 	if text == "" {
 		m.showToast("nothing to copy")

@@ -14,6 +14,7 @@ import (
 
 	"github.com/itigges22/atlas-tui/internal/proxyclient"
 	"github.com/itigges22/atlas-tui/internal/sessionstore"
+	"github.com/itigges22/atlas-tui/internal/termtext"
 )
 
 // thinkingPrefix opens a streaming row of the model's reasoning.
@@ -1407,7 +1408,7 @@ func formatStreamingLLM(s string) string {
 	// model decodes (a 30k-token write_file is many KB) and we re-wrap
 	// it on EVERY tick + token + resize event. Without a cap, drag-
 	// resizing the terminal fires dozens of WindowSizeMsg in quick
-	// succession; each one runs wrapPlain across the entire buffer,
+	// succession; each one runs termtext.WrapPlain across the entire buffer,
 	// which on a big content payload looks like a freeze. The cap
 	// shows a tail view during streaming; the full buffer isn't lost
 	// — it's still there in m.streamingLLMText, just truncated for
@@ -1436,7 +1437,7 @@ func deniedRow(tool, reason string) string {
 func summarizeToolArgs(name string, args json.RawMessage) string {
 	var generic map[string]interface{}
 	if err := json.Unmarshal(args, &generic); err != nil {
-		return truncate(string(args), 80)
+		return termtext.Truncate(string(args), 80)
 	}
 	switch name {
 	case "read_file", "write_file":
@@ -1451,13 +1452,13 @@ func summarizeToolArgs(name string, args json.RawMessage) string {
 	for k, v := range generic {
 		parts = append(parts, fmt.Sprintf("%s=%s", k, truncateAny(v, 40)))
 	}
-	return truncate(strings.Join(parts, "  "), 100)
+	return termtext.Truncate(strings.Join(parts, "  "), 100)
 }
 
 func summarizeToolResult(name string, data json.RawMessage) string {
 	var generic map[string]interface{}
 	if err := json.Unmarshal(data, &generic); err != nil || generic == nil {
-		return truncate(string(data), 80)
+		return termtext.Truncate(string(data), 80)
 	}
 	for _, k := range []string{"summary", "stdout", "content", "message"} {
 		if v, ok := generic[k]; ok {

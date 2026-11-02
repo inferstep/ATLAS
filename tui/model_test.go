@@ -473,24 +473,6 @@ func TestRenderHelpHintRespectsMaxLines(t *testing.T) {
 	}
 }
 
-// Wrapping cuts between runes, never inside a multi-byte one, keeps each line
-// within the width, and loses no text (only the spaces at a cut).
-func TestWrapPlainKeepsMultiByteRunesIntact(t *testing.T) {
-	s := strings.Repeat("─", 30) + " — " + strings.Repeat("é", 20)
-	lines := wrapPlain(s, 12)
-	for _, line := range lines {
-		if !utf8.ValidString(line) {
-			t.Fatalf("wrapPlain produced invalid UTF-8: %q", line)
-		}
-		if n := len([]rune(line)); n > 12 {
-			t.Errorf("line rune count = %d, want <= 12 (%q)", n, line)
-		}
-	}
-	if strings.ReplaceAll(strings.Join(lines, ""), " ", "") != strings.ReplaceAll(s, " ", "") {
-		t.Errorf("the lines %q lost text of %q", lines, s)
-	}
-}
-
 // formatEventLine truncates styled lines by visible width — a byte
 // slice would spend the budget on escape codes and cut mid-sequence.
 func TestFormatEventLineTruncatesByVisibleWidth(t *testing.T) {

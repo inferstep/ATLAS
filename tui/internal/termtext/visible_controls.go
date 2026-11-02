@@ -1,4 +1,4 @@
-package main
+package termtext
 
 import (
 	"regexp"
@@ -10,13 +10,13 @@ import (
 // controlMark stands in for a control character in text from the proxy.
 const controlMark = '\uFFFD'
 
-// visibleControls returns text from the proxy as the terminal should show it:
+// VisibleControls returns text from the proxy as the terminal should show it:
 // each control character other than a newline or a tab becomes controlMark,
 // so the text cannot move the cursor, change the window or start a terminal
 // sequence; so does each direction mark, so the text cannot change the order
 // in which a terminal shows it. A carriage return before a newline is dropped
 // with no mark, because a Windows line ending is ordinary text.
-func visibleControls(s string) string {
+func VisibleControls(s string) string {
 	s = strings.ReplaceAll(s, "\r\n", "\n")
 	return strings.Map(func(r rune) rune {
 		if isMarked(r) {
@@ -46,10 +46,10 @@ func isDirectionMark(r rune) bool {
 // "&#x1b;", which the markdown renderer turns into its character.
 var characterReference = regexp.MustCompile(`&#(?:[0-9]+|[xX][0-9a-fA-F]+);`)
 
-// withMarkedReferences returns markdown with each numeric character reference
+// WithMarkedReferences returns markdown with each numeric character reference
 // to a marked character replaced by the reference to controlMark, so that the
 // renderer shows the mark. Every other reference stays as written.
-func withMarkedReferences(markdown string) string {
+func WithMarkedReferences(markdown string) string {
 	return characterReference.ReplaceAllStringFunc(markdown, func(reference string) string {
 		digits, base := reference[2:len(reference)-1], 10
 		if digits[0] == 'x' || digits[0] == 'X' {
@@ -67,17 +67,17 @@ func withMarkedReferences(markdown string) string {
 // the markdown renderer writes.
 var styleSequence = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
-// visibleControlsKeepingStyles is visibleControls for the markdown renderer's
+// VisibleControlsKeepingStyles is VisibleControls for the markdown renderer's
 // output: the renderer's style sequences stay, and each other control
 // character or direction mark is marked, whatever way it reached the output.
-func visibleControlsKeepingStyles(s string) string {
+func VisibleControlsKeepingStyles(s string) string {
 	var b strings.Builder
 	last := 0
 	for _, style := range styleSequence.FindAllStringIndex(s, -1) {
-		b.WriteString(visibleControls(s[last:style[0]]))
+		b.WriteString(VisibleControls(s[last:style[0]]))
 		b.WriteString(s[style[0]:style[1]])
 		last = style[1]
 	}
-	b.WriteString(visibleControls(s[last:]))
+	b.WriteString(VisibleControls(s[last:]))
 	return b.String()
 }
