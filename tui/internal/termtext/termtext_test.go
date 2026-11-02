@@ -23,3 +23,25 @@ func TestWrapPlainKeepsMultiByteRunesIntact(t *testing.T) {
 		t.Errorf("the lines %q lost text of %q", lines, s)
 	}
 }
+
+// StripANSI keeps the text and drops each escape sequence: a CSI sequence up
+// to its final byte, an OSC sequence up to BEL or ESC \, and any other escape
+// with the byte after it.
+func TestStripANSIDropsEachEscapeSequence(t *testing.T) {
+	for _, c := range []struct {
+		name, in, want string
+	}{
+		{"plain text", "plain text", "plain text"},
+		{"a style", "a \x1b[1;31mbold\x1b[0m b", "a bold b"},
+		{"an unfinished style runs to the end", "a\x1b[1;3", "a"},
+		{"a window title ending in BEL", "a\x1b]0;title\x07b", "ab"},
+		{"a link ending in ESC \\", "a\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\b", "alinkb"},
+		{"another escape and the byte after it", "a\x1b7b", "ab"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := StripANSI(c.in); got != c.want {
+				t.Errorf("StripANSI(%q) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
+}

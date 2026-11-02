@@ -83,42 +83,47 @@ func StripANSI(s string) string {
 	for i < len(s) {
 		c := s[i]
 		if c == 0x1b && i+1 < len(s) {
-			next := s[i+1]
-			switch next {
+			switch s[i+1] {
 			case '[':
-				// CSI: ESC [ ... <final byte 0x40-0x7e>
-				j := i + 2
-				for j < len(s) {
-					if s[j] >= 0x40 && s[j] <= 0x7e {
-						j++
-						break
-					}
-					j++
-				}
-				i = j
-				continue
+				i = csiEnd(s, i+2)
 			case ']':
-				// OSC: ESC ] ... BEL or ESC \
-				j := i + 2
-				for j < len(s) && s[j] != 0x07 {
-					if s[j] == 0x1b && j+1 < len(s) && s[j+1] == '\\' {
-						j += 2
-						break
-					}
-					j++
-				}
-				if j < len(s) && s[j] == 0x07 {
-					j++
-				}
-				i = j
-				continue
+				i = oscEnd(s, i+2)
 			default:
 				i += 2
-				continue
 			}
+			continue
 		}
 		b.WriteByte(c)
 		i++
 	}
 	return b.String()
+}
+
+// csiEnd returns the index just past a CSI sequence whose body starts at
+// s[j]. CSI: ESC [ ... <final byte 0x40-0x7e>
+func csiEnd(s string, j int) int {
+	for j < len(s) {
+		if s[j] >= 0x40 && s[j] <= 0x7e {
+			j++
+			break
+		}
+		j++
+	}
+	return j
+}
+
+// oscEnd returns the index just past an OSC sequence whose body starts at
+// s[j]. OSC: ESC ] ... BEL or ESC \
+func oscEnd(s string, j int) int {
+	for j < len(s) && s[j] != 0x07 {
+		if s[j] == 0x1b && j+1 < len(s) && s[j+1] == '\\' {
+			j += 2
+			break
+		}
+		j++
+	}
+	if j < len(s) && s[j] == 0x07 {
+		j++
+	}
+	return j
 }
