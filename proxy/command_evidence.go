@@ -711,69 +711,58 @@ func segmentEvidenceKind(seg string) commandEvidenceKind {
 	prog := filepath.Base(words[0])
 	args := words[1:]
 
-	if isShellProgram(prog) {
-		if script, ok := shellScript(t); ok {
-			return classifyCommandEvidence(script).Kind
-		}
-		return shellArgsKind(args)
-	}
-
 	switch {
+	case isShellProgram(prog):
+		return shellProgramKind(t, args)
 	case staticTools[prog]:
 		return evidenceStatic
 	case testRunners[prog]:
 		return testRunnerKind(args)
-	case prog == "curl" || prog == "wget" || prog == "http" || prog == "https" || prog == "httpie":
+	case isPythonProgram(prog):
+		return pythonEvidenceKind(args)
+	}
+
+	switch prog {
+	case "curl", "wget", "http", "https", "httpie":
 		if headOnlyProbeRe.MatchString(t) {
 			return evidenceNone
 		}
 		return evidenceProbe
-	case isPythonProgram(prog):
-		return pythonEvidenceKind(args)
-	case prog == "node" || prog == "nodejs":
+	case "node", "nodejs":
 		return scriptInterpreterKind(args, []string{"--check", "-c"})
-	case prog == "ruby":
+	case "ruby":
 		return scriptInterpreterKind(args, []string{"-c"})
-	case prog == "perl":
+	case "perl":
 		return scriptInterpreterKind(args, []string{"-c"})
-	case prog == "php":
+	case "php":
 		return scriptInterpreterKind(args, []string{"-l"})
-	case prog == "lua" || prog == "luajit" || prog == "Rscript" || prog == "julia" || prog == "elixir":
+	case "lua", "luajit", "Rscript", "julia", "elixir":
 		return scriptInterpreterKind(args, nil)
-	case prog == "deno":
+	case "deno":
 		return subcommandKind(args, []string{"run", "test", "eval", "serve", "task", "bench"},
 			[]string{"check", "lint", "fmt", "doc", "compile"})
-	case prog == "bun":
-		if len(args) > 0 && !strings.HasPrefix(args[0], "-") && !isKnownSubcommand(args[0], "test", "run", "x", "build", "install", "add", "remove", "init", "create", "upgrade") {
-			return evidenceExecution // bun app.ts
-		}
-		return subcommandKind(args, []string{"test", "run", "x"}, []string{"build"})
-	case prog == "go":
+	case "bun":
+		return bunKind(args)
+	case "go":
 		return subcommandKind(args, []string{"test", "run"}, []string{"build", "vet", "fmt"})
-	case prog == "cargo":
+	case "cargo":
 		return subcommandKind(args, []string{"test", "run", "bench"}, []string{"build", "check", "clippy", "fmt", "doc"})
-	case prog == "dotnet":
+	case "dotnet":
 		return subcommandKind(args, []string{"test", "run"}, []string{"build", "format"})
-	case prog == "swift":
+	case "swift":
 		if len(args) > 0 && strings.HasSuffix(args[0], ".swift") {
 			return evidenceExecution
 		}
 		return subcommandKind(args, []string{"test", "run"}, []string{"build"})
-	case prog == "mvn" || prog == "mvnw" || prog == "gradle" || prog == "gradlew":
+	case "mvn", "mvnw", "gradle", "gradlew":
 		return subcommandKind(args, []string{"test", "verify", "run", "bootRun"}, []string{"compile", "build", "package", "check", "assemble"})
-	case prog == "java" || prog == "kotlin" || prog == "scala":
-		if onlyVersionOrHelp(args) {
-			return evidenceStatic
-		}
-		if len(args) > 0 {
-			return evidenceExecution
-		}
-		return evidenceNone
-	case prog == "npm" || prog == "pnpm" || prog == "yarn":
+	case "java", "kotlin", "scala":
+		return jvmLauncherKind(args)
+	case "npm", "pnpm", "yarn":
 		return packageScriptKind(prog, args)
-	case prog == "npx" || prog == "pnpx" || prog == "bunx":
+	case "npx", "pnpx", "bunx":
 		return npxToolKind(args)
-	case prog == "make" || prog == "gmake" || prog == "just" || prog == "task":
+	case "make", "gmake", "just", "task":
 		return makeTargetKind(args)
 	}
 	// A path to a program or script: ./solve.py, bin/app. Checked after the
@@ -866,6 +855,15 @@ func shellScript(seg string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// shellProgramKind: a shell started with inline code is judged by that code,
+// and one started without it by its arguments.
+func shellProgramKind(seg string, args []string) commandEvidenceKind {
+	if script, ok := shellScript(seg); ok {
+		return classifyCommandEvidence(script).Kind
+	}
+	return shellArgsKind(args)
 }
 
 // shellArgsKind classifies a shell started without inline code: `bash -n
@@ -1015,6 +1013,27 @@ func subcommandKind(args []string, runs []string, checks []string) commandEviden
 			return evidenceStatic
 		}
 		return evidenceNone
+	}
+	return evidenceNone
+}
+
+// bunKind: `bun app.ts` runs the file it names; any other bun command is
+// judged by its subcommand.
+func bunKind(args []string) commandEvidenceKind {
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") && !isKnownSubcommand(args[0], "test", "run", "x", "build", "install", "add", "remove", "init", "create", "upgrade") {
+		return evidenceExecution // bun app.ts
+	}
+	return subcommandKind(args, []string{"test", "run", "x"}, []string{"build"})
+}
+
+// jvmLauncherKind: java, kotlin and scala run whatever they are given, unless
+// they are asked only for their version or help.
+func jvmLauncherKind(args []string) commandEvidenceKind {
+	if onlyVersionOrHelp(args) {
+		return evidenceStatic
+	}
+	if len(args) > 0 {
+		return evidenceExecution
 	}
 	return evidenceNone
 }

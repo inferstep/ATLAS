@@ -53,6 +53,11 @@ func TestClassifyCommandEvidence(t *testing.T) {
 		{"make check", evidenceExecution, false},
 		{"python3 -m unittest discover", evidenceExecution, false},
 		{"python3 - <<'EOF'\nimport app\nprint(app.solve())\nEOF", evidenceExecution, false},
+		{"lua main.lua", evidenceExecution, false},
+		{"bun app.ts", evidenceExecution, false},
+		{"dotnet test", evidenceExecution, false},
+		{"swift main.swift", evidenceExecution, false},
+		{"mvn test", evidenceExecution, false},
 
 		// Well formed is not working.
 		{"python3 -m py_compile app.py", evidenceStatic, false},
@@ -61,6 +66,13 @@ func TestClassifyCommandEvidence(t *testing.T) {
 		{"node --check app.js", evidenceStatic, false},
 		{"bash -n run.sh", evidenceStatic, false},
 		{"php -l index.php", evidenceStatic, false},
+		{"ruby -c app.rb", evidenceStatic, false},
+		{"perl -c app.pl", evidenceStatic, false},
+		{"deno check main.ts", evidenceStatic, false},
+		{"bun build", evidenceStatic, false},
+		{"swift build", evidenceStatic, false},
+		{"java -version", evidenceStatic, false},
+		{`cd app && bash -c "ruff check ."`, evidenceStatic, false},
 		{"ruff check .", evidenceStatic, false},
 		{"mypy app.py", evidenceStatic, false},
 		{"npx tsc --noEmit", evidenceStatic, false},
@@ -92,6 +104,8 @@ func TestClassifyCommandEvidence(t *testing.T) {
 		{"npm install", evidenceNone, false},
 		{"make install", evidenceNone, false},
 		{"curl -I http://localhost:5000/", evidenceNone, false},
+		{"java", evidenceNone, false},
+		{"FOO=1", evidenceNone, false},
 
 		// The verifying part ran, and the line's status is something else's.
 		{"pytest | tail -5", evidenceNone, true},
