@@ -27,7 +27,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/itigges22/atlas-tui/debuglog"
+	"github.com/itigges22/atlas-tui/internal/debuglog"
 )
 
 // chatEvent mirrors the SSEEvent shape in proxy/types.go.

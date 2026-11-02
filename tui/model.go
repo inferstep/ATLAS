@@ -26,7 +26,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/itigges22/atlas-tui/debuglog"
+	"github.com/itigges22/atlas-tui/internal/debuglog"
 )
 
 type envelopeMsg struct {

@@ -11,7 +11,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/itigges22/atlas-tui/debuglog"
+	"github.com/itigges22/atlas-tui/internal/debuglog"
 )
 
 // handlePermKey answers the permission modal. y=allow once, a=allow for the
