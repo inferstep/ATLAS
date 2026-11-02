@@ -21,6 +21,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/itigges22/atlas-tui/internal/proxyclient"
 )
 
 // thinkingVerbs cycles through quirky phrases while the model is
@@ -157,7 +158,7 @@ func formatDuration(d time.Duration) string {
 // usable inside height (caller has already accounted for the border).
 // `scroll` is rows from the bottom (0 = follow). Returns (rendered,
 // allLines, viewStart).
-func renderEventsPane(events []Envelope, height, width, scroll int) (string, []string, int) {
+func renderEventsPane(events []proxyclient.Envelope, height, width, scroll int) (string, []string, int) {
 	if height <= 0 {
 		return "", nil, 0
 	}
@@ -806,7 +807,7 @@ type fullScreenLayout struct {
 	inputH, eventsH, pipelineH, permMax, chatH int
 }
 
-func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
+func layoutFullScreen(p *pipelineState, events []proxyclient.Envelope, chat []chatMessage,
 	inputView, inputValue, inputMode string,
 	renderer *glamour.TermRenderer, header string,
 	turnActive bool, spinnerFrame int,
@@ -1097,7 +1098,7 @@ func snapshotPipelineAndChat(layout fullScreenLayout, pipelineAll []string, pipe
 
 // renderEventsBox renders the events pane in its box and records its screen
 // bounds in paneSnaps. A hidden events pane renders as "".
-func renderEventsBox(layout fullScreenLayout, events []Envelope, eventsScroll int, sel selectionState,
+func renderEventsBox(layout fullScreenLayout, events []proxyclient.Envelope, eventsScroll int, sel selectionState,
 	eventsTopY, rightLeftX, rightRightX int) string {
 	hideEvents, eventsH, innerW := layout.hideEvents, layout.eventsH, layout.innerW
 	eventsBox := ""

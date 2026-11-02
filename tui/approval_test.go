@@ -4,7 +4,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -14,10 +13,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/itigges22/atlas-tui/internal/proxyclient"
 )
 
 func deleteReqMsg(callID string, oneTimeOnly bool) chatStreamMsg {
@@ -27,7 +26,7 @@ func deleteReqMsg(callID string, oneTimeOnly bool) chatStreamMsg {
 		"tool_call_id":  callID,
 		"one_time_only": oneTimeOnly,
 	})
-	return chatStreamMsg{ev: chatEvent{Type: "permission_request", Data: data}}
+	return chatStreamMsg{ev: proxyclient.ChatEvent{Type: "permission_request", Data: data}}
 }
 
 // One "allow for session" answered every later deletion without the user
@@ -116,19 +115,23 @@ func TestTheApprovalPromptShowsTheEndOfTheCommand(t *testing.T) {
 	}
 }
 
-// The chat stream, the raw demo lane and the events stream build their own
-// transports, so the wrapper that adds the service token never ran for them,
-// and a proxy with a service token answered 401. An api-keys token is not
-// what such a proxy accepts.
-func TestEveryRequestToTheProxyCarriesTheServiceToken(t *testing.T) {
-	saved := serviceToken
-	serviceToken = "svc-secret"
-	defer func() { serviceToken = saved }()
+// The TUI's own requests to the proxy (calibration status, the demo's model
+// lookup and its health check) carry the header the client's SetProxyAuth
+// gives, so a proxy with a service token accepts them. Which token that header
+// holds is checked in internal/proxyclient.
+func TestEveryTUIRequestToTheProxyCarriesTheServiceToken(t *testing.T) {
 	keys := filepath.Join(t.TempDir(), "api-keys.json")
 	if err := os.WriteFile(keys, []byte(`{"api_key":"sk-other"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("ATLAS_API_KEYS_PATH", keys)
+	// The service token when there is one, else the key above: never empty.
+	probe := httptest.NewRequest(http.MethodGet, "/", nil)
+	proxyclient.SetProxyAuth(probe)
+	want := probe.Header.Get("Authorization")
+	if want == "" {
+		t.Fatal("SetProxyAuth set no header, so this test would prove nothing")
+	}
 
 	var mu sync.Mutex
 	seen := map[string]string{}
@@ -136,43 +139,24 @@ func TestEveryRequestToTheProxyCarriesTheServiceToken(t *testing.T) {
 		mu.Lock()
 		seen[r.URL.Path] = r.Header.Get("Authorization")
 		mu.Unlock()
-		if r.Header.Get("Authorization") != "Bearer svc-secret" {
+		if r.Header.Get("Authorization") != want {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		switch r.URL.Path {
-		case "/v1/agent", "/v1/chat/completions", "/events":
-			w.Header().Set("Content-Type", "text/event-stream")
-			fmt.Fprint(w, "data: [DONE]\n\n")
-		default:
-			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, `{"data":[{"id":"m"}]}`)
-		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":[{"id":"m"}]}`)
 	}))
 	defer srv.Close()
 
-	out := make(chan chatEvent, 16)
-	if err := sendChatOpts(context.Background(), srv.URL, "hi", "/", "default", "s", nil, demoOpts{}, out); err != nil {
-		t.Errorf("chat: %v", err)
-	}
-	if err := sendRawChat(context.Background(), srv.URL, "m", "hi", out); err != nil {
-		t.Errorf("raw chat: %v", err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	_ = streamEvents(ctx, srv.URL+"/events", make(chan Envelope, 4))
-	_ = cancelTurn(srv.URL, "s")
-	_ = postPermissionDecision(srv.URL, "s", "c", "allow", "once")
 	fetchCalibrationStatusCmd(srv.URL)()
 	fetchDemoModelIdentity(srv.URL)
 	proxySupportsRawDemo(srv.URL)
 
 	mu.Lock()
 	defer mu.Unlock()
-	for _, path := range []string{"/v1/agent", "/v1/chat/completions", "/events", "/cancel",
-		"/v1/permission", "/v1/calibration/status", "/v1/models", "/health"} {
-		if got := seen[path]; got != "Bearer svc-secret" {
-			t.Errorf("%s sent %q", path, got)
+	for _, path := range []string{"/v1/calibration/status", "/v1/models", "/health"} {
+		if got := seen[path]; got != want {
+			t.Errorf("%s sent %q, want %q", path, got, want)
 		}
 	}
 }

@@ -10,9 +10,10 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/itigges22/atlas-tui/internal/proxyclient"
 )
 
-func formatEventLine(ev Envelope, width int) string {
+func formatEventLine(ev proxyclient.Envelope, width int) string {
 	ts := time.Unix(0, int64(ev.Timestamp*1e9)).Format("15:04:05")
 	color := typeColor(ev.Type)
 	typeCell := lipgloss.NewStyle().Foreground(color).Width(13).Render(visibleControls(ev.Type))
@@ -30,30 +31,30 @@ func formatEventLine(ev Envelope, width int) string {
 
 func typeColor(t string) lipgloss.Color {
 	switch t {
-	case EvtStageStart:
+	case proxyclient.EvtStageStart:
 		return lipgloss.Color("33")
-	case EvtStageEnd:
+	case proxyclient.EvtStageEnd:
 		return lipgloss.Color("42")
-	case EvtToolCall:
+	case proxyclient.EvtToolCall:
 		return lipgloss.Color("214")
-	case EvtToolResult:
+	case proxyclient.EvtToolResult:
 		return lipgloss.Color("70")
-	case EvtMetric:
+	case proxyclient.EvtMetric:
 		return lipgloss.Color("99")
-	case EvtError:
+	case proxyclient.EvtError:
 		return lipgloss.Color("196")
-	case EvtDone:
+	case proxyclient.EvtDone:
 		return lipgloss.Color("226")
 	}
 	return lipgloss.Color("245")
 }
 
-func summarizePayload(ev Envelope) string {
+func summarizePayload(ev proxyclient.Envelope) string {
 	switch ev.Type {
-	case EvtToolCall:
+	case proxyclient.EvtToolCall:
 		return fmt.Sprintf("%v  %v",
 			ev.Payload["name"], truncateAny(ev.Payload["args_summary"], 60))
-	case EvtToolResult:
+	case proxyclient.EvtToolResult:
 		ok := ev.Payload["success"] == true
 		mark := "✓"
 		if !ok {
@@ -65,12 +66,12 @@ func summarizePayload(ev Envelope) string {
 		}
 		return fmt.Sprintf("%s  %v%s",
 			mark, ev.Payload["name"], dur)
-	case EvtMetric:
+	case proxyclient.EvtMetric:
 		return fmt.Sprintf("%v = %v",
 			ev.Payload["name"], ev.Payload["value"])
-	case EvtError:
+	case proxyclient.EvtError:
 		return truncateAny(ev.Payload["message"], 80)
-	case EvtStageEnd:
+	case proxyclient.EvtStageEnd:
 		ok := ev.Payload["success"] == true
 		mark := "✓"
 		if !ok {
@@ -81,7 +82,7 @@ func summarizePayload(ev Envelope) string {
 			dur = fmt.Sprintf(" %dms", ev.DurationMS)
 		}
 		return mark + dur
-	case EvtDone:
+	case proxyclient.EvtDone:
 		ok := ev.Payload["success"] == true
 		mark := "✓"
 		if !ok {

@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/charmbracelet/glamour"
+	"github.com/itigges22/atlas-tui/internal/proxyclient"
 )
 
 // windowTitle is a harmless sequence that would set the terminal window's title.
@@ -28,7 +29,7 @@ func TestTextFromTheProxyReachesTheTerminalWithItsControlsMarked(t *testing.T) {
 		t.Fatal(err)
 	}
 	pipeline := newPipelineState()
-	pipeline.apply(Envelope{Type: EvtStageStart, Stage: "plan" + windowTitle})
+	pipeline.apply(proxyclient.Envelope{Type: proxyclient.EvtStageStart, Stage: "plan" + windowTitle})
 	for _, c := range []struct {
 		name   string
 		render func() string
@@ -64,7 +65,7 @@ func TestTextFromTheProxyReachesTheTerminalWithItsControlsMarked(t *testing.T) {
 		}, "abcdefghijklmn\xc3\xa9"},
 		{"the stats line", func() string { return renderStatsPane(&pipeline, 120, 0, 0, 0) }, mark},
 		{"a line of the events pane", func() string {
-			return formatEventLine(Envelope{Type: EvtError, Payload: map[string]interface{}{"message": windowTitle}}, 120)
+			return formatEventLine(proxyclient.Envelope{Type: proxyclient.EvtError, Payload: map[string]interface{}{"message": windowTitle}}, 120)
 		}, mark},
 		{"a line of a file in the demo's file viewer", func() string {
 			path := filepath.Join(t.TempDir(), "notes.txt")

@@ -9,14 +9,16 @@ package main
 import (
 	"testing"
 	"time"
+
+	"github.com/itigges22/atlas-tui/internal/proxyclient"
 )
 
 // envOf is a tiny helper for building test envelopes inline.
-func envOf(typ, stage string, payload map[string]interface{}, ts float64) Envelope {
+func envOf(typ, stage string, payload map[string]interface{}, ts float64) proxyclient.Envelope {
 	if payload == nil {
 		payload = map[string]interface{}{}
 	}
-	return Envelope{
+	return proxyclient.Envelope{
 		EventID:   "evt_test",
 		Timestamp: ts,
 		Type:      typ,
@@ -27,7 +29,7 @@ func envOf(typ, stage string, payload map[string]interface{}, ts float64) Envelo
 
 func TestStageStartCreatesRunningStage(t *testing.T) {
 	p := newPipelineState()
-	p.apply(envOf(EvtStageStart, "phase2", nil, 1.0))
+	p.apply(envOf(proxyclient.EvtStageStart, "phase2", nil, 1.0))
 
 	stages := p.stages()
 	if len(stages) != 1 {
@@ -43,8 +45,8 @@ func TestStageStartCreatesRunningStage(t *testing.T) {
 
 func TestStageEndMarksStageComplete(t *testing.T) {
 	p := newPipelineState()
-	p.apply(envOf(EvtStageStart, "phase2", nil, 1.0))
-	p.apply(envOf(EvtStageEnd, "phase2",
+	p.apply(envOf(proxyclient.EvtStageStart, "phase2", nil, 1.0))
+	p.apply(envOf(proxyclient.EvtStageEnd, "phase2",
 		map[string]interface{}{"success": true}, 1.5))
 
 	stages := p.stages()
@@ -63,8 +65,8 @@ func TestStageEndMarksStageComplete(t *testing.T) {
 
 func TestStageEndSuccessFalseRendersFailState(t *testing.T) {
 	p := newPipelineState()
-	p.apply(envOf(EvtStageStart, "pr_cot", nil, 1.0))
-	p.apply(envOf(EvtStageEnd, "pr_cot",
+	p.apply(envOf(proxyclient.EvtStageStart, "pr_cot", nil, 1.0))
+	p.apply(envOf(proxyclient.EvtStageEnd, "pr_cot",
 		map[string]interface{}{"success": false}, 2.0))
 
 	stages := p.stages()
@@ -88,9 +90,9 @@ func TestStageRetryResetsTimingNotIdentity(t *testing.T) {
 	// suffix stripping. Here in the TUI, we receive whatever stage name
 	// the server sent — the server already did the suffix stripping.)
 	p := newPipelineState()
-	p.apply(envOf(EvtStageStart, "probe", nil, 1.0))
-	p.apply(envOf(EvtStageStart, "probe", nil, 5.0)) // retry — same stage name
-	p.apply(envOf(EvtStageEnd, "probe",
+	p.apply(envOf(proxyclient.EvtStageStart, "probe", nil, 1.0))
+	p.apply(envOf(proxyclient.EvtStageStart, "probe", nil, 5.0)) // retry — same stage name
+	p.apply(envOf(proxyclient.EvtStageEnd, "probe",
 		map[string]interface{}{"success": true}, 6.0))
 
 	stages := p.stages()
@@ -106,8 +108,8 @@ func TestStageRetryResetsTimingNotIdentity(t *testing.T) {
 
 func TestActiveStagePicksMostRecentRunning(t *testing.T) {
 	p := newPipelineState()
-	p.apply(envOf(EvtStageStart, "outer", nil, 1.0))
-	p.apply(envOf(EvtStageStart, "inner", nil, 2.0))
+	p.apply(envOf(proxyclient.EvtStageStart, "outer", nil, 1.0))
+	p.apply(envOf(proxyclient.EvtStageStart, "inner", nil, 2.0))
 
 	active := p.activeStage()
 	if active == nil {
@@ -120,8 +122,8 @@ func TestActiveStagePicksMostRecentRunning(t *testing.T) {
 
 func TestActiveStageNilWhenNoneRunning(t *testing.T) {
 	p := newPipelineState()
-	p.apply(envOf(EvtStageStart, "phase2", nil, 1.0))
-	p.apply(envOf(EvtStageEnd, "phase2",
+	p.apply(envOf(proxyclient.EvtStageStart, "phase2", nil, 1.0))
+	p.apply(envOf(proxyclient.EvtStageEnd, "phase2",
 		map[string]interface{}{"success": true}, 2.0))
 
 	if p.activeStage() != nil {
@@ -131,11 +133,11 @@ func TestActiveStageNilWhenNoneRunning(t *testing.T) {
 
 func TestToolCallCountersIncrement(t *testing.T) {
 	p := newPipelineState()
-	p.apply(envOf(EvtToolCall, "agent",
+	p.apply(envOf(proxyclient.EvtToolCall, "agent",
 		map[string]interface{}{"name": "edit_file", "turn": float64(1)}, 1.0))
-	p.apply(envOf(EvtToolResult, "agent",
+	p.apply(envOf(proxyclient.EvtToolResult, "agent",
 		map[string]interface{}{"name": "edit_file", "success": true}, 1.5))
-	p.apply(envOf(EvtToolResult, "agent",
+	p.apply(envOf(proxyclient.EvtToolResult, "agent",
 		map[string]interface{}{"name": "run_command", "success": false}, 2.0))
 
 	if p.toolCalls != 1 {
@@ -154,7 +156,7 @@ func TestToolCallCountersIncrement(t *testing.T) {
 
 func TestErrorEventIncrementsErrorCounter(t *testing.T) {
 	p := newPipelineState()
-	p.apply(envOf(EvtError, "pr_cot",
+	p.apply(envOf(proxyclient.EvtError, "pr_cot",
 		map[string]interface{}{"message": "model output empty",
 			"recoverable": true}, 1.0))
 	if p.errors != 1 {
@@ -164,7 +166,7 @@ func TestErrorEventIncrementsErrorCounter(t *testing.T) {
 
 func TestDoneEventCapturesFinalState(t *testing.T) {
 	p := newPipelineState()
-	p.apply(envOf(EvtDone, "pipeline",
+	p.apply(envOf(proxyclient.EvtDone, "pipeline",
 		map[string]interface{}{"success": true,
 			"total_duration_ms": float64(12453),
 			"summary":           "done"}, 1.0))
@@ -183,7 +185,7 @@ func TestDoneEventCapturesFinalState(t *testing.T) {
 func TestStagesPreserveInsertionOrder(t *testing.T) {
 	p := newPipelineState()
 	for _, stage := range []string{"probe", "phase1", "phase2", "pr_cot", "selected"} {
-		p.apply(envOf(EvtStageStart, stage, nil, 1.0))
+		p.apply(envOf(proxyclient.EvtStageStart, stage, nil, 1.0))
 	}
 	got := []string{}
 	for _, s := range p.stages() {
@@ -205,7 +207,7 @@ func TestStageEndWithoutMatchingStartSynthesizesEntry(t *testing.T) {
 	// reconnect). The TUI shouldn't crash — synthesize an entry so the
 	// stage_end is at least visible.
 	p := newPipelineState()
-	p.apply(envOf(EvtStageEnd, "phase2",
+	p.apply(envOf(proxyclient.EvtStageEnd, "phase2",
 		map[string]interface{}{"success": true}, 1.0))
 
 	stages := p.stages()

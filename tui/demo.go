@@ -3,7 +3,7 @@
 // completion, while the right pane enters the ATLAS V3 agent.
 //
 // Implementation note: each pane uses a real `tuiModel` as its chat
-// state holder. We forward every chatEvent into that model's
+// state holder. We forward every proxyclient.ChatEvent into that model's
 // appendChatEvent, then call renderChatPane to draw. That way the
 // V3 pane formats EXACTLY like a normal atlas-tui session — every
 // tool call, V3 stage, token stream, lens score row — with no
@@ -33,6 +33,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/itigges22/atlas-tui/internal/proxyclient"
 )
 
 //go:embed demo_prompts_fallback.json
@@ -54,11 +55,11 @@ type demoPrompt struct {
 	Notes                   string `json:"notes,omitempty"`
 }
 
-// demoStreamMsg delivers a chatEvent from one of the two streaming
+// demoStreamMsg delivers a proxyclient.ChatEvent from one of the two streaming
 // goroutines into the Bubbletea loop. Side picks which child to mutate.
 type demoStreamMsg struct {
 	side string // "raw" | "v3"
-	evt  chatEvent
+	evt  proxyclient.ChatEvent
 }
 
 // demoBatchMsg carries multiple events drained in one shot. Heavy token
@@ -286,7 +287,7 @@ func fetchDemoModelIdentity(proxyURL string) (string, string) {
 	if err != nil {
 		return "", demoModelFallback
 	}
-	setProxyAuth(req)
+	proxyclient.SetProxyAuth(req)
 	resp, err := (&http.Client{Timeout: 3 * time.Second}).Do(req)
 	if err != nil {
 		return "", demoModelFallback
@@ -315,7 +316,7 @@ func proxySupportsRawDemo(proxyURL string) bool {
 	if err != nil {
 		return false
 	}
-	setProxyAuth(req)
+	proxyclient.SetProxyAuth(req)
 	resp, err := (&http.Client{Timeout: 3 * time.Second}).Do(req)
 	if err != nil {
 		return false
@@ -424,18 +425,18 @@ func (m *demoModel) startStreams() tea.Cmd {
 }
 
 func (m *demoModel) runStream(side string) {
-	out := make(chan chatEvent, 128)
+	out := make(chan proxyclient.ChatEvent, 128)
 	errCh := make(chan error, 1)
 	go func() {
 		var err error
 		if side == "raw" {
-			err = sendRawChat(m.ctx, m.proxyURL, m.modelID, m.prompt.Prompt, out)
+			err = proxyclient.SendRawChat(m.ctx, m.proxyURL, m.modelID, m.prompt.Prompt, out)
 		} else {
 			sid := fmt.Sprintf("demo-%s-%d", side, time.Now().UnixNano())
-			err = sendChatOpts(m.ctx, m.proxyURL, m.prompt.Prompt, m.workingDir,
-				"yolo", sid, nil, demoOpts{
-					disableFreshSlot: true,
-					sandboxSubdir:    m.v3Sandbox,
+			err = proxyclient.SendChatOpts(m.ctx, m.proxyURL, m.prompt.Prompt, m.workingDir,
+				"yolo", sid, nil, proxyclient.DemoOpts{
+					DisableFreshSlot: true,
+					SandboxSubdir:    m.v3Sandbox,
 				}, out)
 		}
 		errCh <- err

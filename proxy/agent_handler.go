@@ -140,7 +140,7 @@ type agentRequest struct {
 	// Tools the client has approved for the whole session so the proxy
 	// skips the interactive prompt for them (see /v1/permission).
 	SessionAllowedTools []string `json:"session_allowed_tools,omitempty"`
-	// /demo split-pane flags — tags match tui/chat.go's agentRequest.
+	// /demo split-pane flags — tags match tui/internal/proxyclient/chat.go's agentRequest.
 	DisableFreshSlot bool   `json:"disable_fresh_slot,omitempty"` // keep the pre-warmed KV prefix
 	SandboxSubdir    string `json:"sandbox_subdir,omitempty"`     // confine writes to this workspace subdir
 	// Removed switches, read only to refuse them. V3 runs on every

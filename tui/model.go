@@ -27,10 +27,11 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/itigges22/atlas-tui/internal/debuglog"
+	"github.com/itigges22/atlas-tui/internal/proxyclient"
 )
 
 type envelopeMsg struct {
-	ev Envelope
+	ev proxyclient.Envelope
 }
 
 // tickMsg fires every second to refresh durations on running stages.
@@ -38,7 +39,7 @@ type tickMsg time.Time
 
 // chatStreamMsg is one event from a /v1/agent SSE turn.
 type chatStreamMsg struct {
-	ev chatEvent
+	ev proxyclient.ChatEvent
 }
 
 type chatRole int
@@ -70,7 +71,7 @@ type chatMessage struct {
 
 type tuiModel struct {
 	proxyURL string
-	events   chan Envelope
+	events   chan proxyclient.Envelope
 
 	// /demo handoff: set by the slash command just before quitting; main.go
 	// relaunches into the split-pane demo with this length (short|medium|long).
@@ -82,13 +83,13 @@ type tuiModel struct {
 
 	// Derived state — pipeline + counters from the event stream.
 	state    pipelineState
-	envelope []Envelope
+	envelope []proxyclient.Envelope
 	maxLines int
 
 	// Chat
 	input         textarea.Model
 	chat          []chatMessage
-	chatEvents    chan chatEvent
+	chatEvents    chan proxyclient.ChatEvent
 	turnActive    bool
 	turnCancel    context.CancelFunc
 	turnSessionID string
@@ -138,7 +139,7 @@ type tuiModel struct {
 	// set by /ask and cleared as it is used. Empty means the ordinary case,
 	// which is work. Deliberately not sticky: a mode that persisted would
 	// quietly declare later real work to be a question.
-	pendingTaskMode taskMode
+	pendingTaskMode proxyclient.TaskMode
 
 	// Session persistence. sessionUID is the stable id for the on-disk
 	// transcript (distinct from turnSessionID, which is minted per turn for
@@ -378,11 +379,11 @@ func newTUIModel(proxyURL string) tuiModel {
 
 	return tuiModel{
 		proxyURL:            proxyURL,
-		events:              make(chan Envelope, 256),
+		events:              make(chan proxyclient.Envelope, 256),
 		state:               newPipelineState(),
 		maxLines:            1000,
 		input:               ta,
-		chatEvents:          make(chan chatEvent, 64),
+		chatEvents:          make(chan proxyclient.ChatEvent, 64),
 		chatRenderer:        renderer,
 		workingDir:          wd,
 		mode:                "default",
@@ -474,7 +475,7 @@ func (m tuiModel) Init() tea.Cmd {
 	)
 }
 
-func waitForEnvelope(ch <-chan Envelope) tea.Cmd {
+func waitForEnvelope(ch <-chan proxyclient.Envelope) tea.Cmd {
 	return func() tea.Msg {
 		ev, ok := <-ch
 		if !ok {
@@ -484,7 +485,7 @@ func waitForEnvelope(ch <-chan Envelope) tea.Cmd {
 	}
 }
 
-func waitForChatEvent(ch <-chan chatEvent) tea.Cmd {
+func waitForChatEvent(ch <-chan proxyclient.ChatEvent) tea.Cmd {
 	return func() tea.Msg {
 		ev, ok := <-ch
 		if !ok {
@@ -511,7 +512,7 @@ func tickEvery(d time.Duration) tea.Cmd {
 // Cap at the last 40 rows; the proxy trims further if needed. Returns
 // nil when there's no prior history (first turn of a session) so the
 // JSON payload omits the field entirely.
-func (m *tuiModel) buildChatHistory() []historyMessage {
+func (m *tuiModel) buildChatHistory() []proxyclient.HistoryMessage {
 	if len(m.chat) == 0 {
 		return nil
 	}
@@ -524,7 +525,7 @@ func (m *tuiModel) buildChatHistory() []historyMessage {
 		}
 	}
 
-	out := make([]historyMessage, 0, len(m.chat))
+	out := make([]proxyclient.HistoryMessage, 0, len(m.chat))
 	for i, row := range m.chat {
 		if i == lastUserIdx {
 			continue
@@ -561,7 +562,7 @@ func (m *tuiModel) buildChatHistory() []historyMessage {
 		default:
 			continue // tool / system rows: skip
 		}
-		out = append(out, historyMessage{Role: role, Content: content})
+		out = append(out, proxyclient.HistoryMessage{Role: role, Content: content})
 	}
 	if len(out) == 0 {
 		return nil
@@ -572,19 +573,19 @@ func (m *tuiModel) buildChatHistory() []historyMessage {
 	return out
 }
 
-// sendChatCmd kicks off a /v1/agent turn. Runs sendChatOpts in a goroutine
+// sendChatCmd kicks off a /v1/agent turn. Runs proxyclient.SendChatOpts in a goroutine
 // because Bubbletea Cmds should be quick — the goroutine pumps events
 // onto m.chatEvents which the model drains via waitForChatEvent.
 // takeTaskMode returns the mode for the next request and clears any one-shot
 // selection. Ordinary messages are work; /ask makes exactly one request a
 // question.
-func (m *tuiModel) takeTaskMode() taskMode {
+func (m *tuiModel) takeTaskMode() proxyclient.TaskMode {
 	if m.pendingTaskMode != "" {
 		mode := m.pendingTaskMode
 		m.pendingTaskMode = ""
 		return mode
 	}
-	return taskModeWork
+	return proxyclient.TaskModeWork
 }
 
 func (m *tuiModel) sendChatCmd(message string) tea.Cmd {
@@ -617,15 +618,15 @@ func (m *tuiModel) sendChatCmd(message string) tea.Cmd {
 
 	return func() tea.Msg {
 		go func() {
-			err := sendChatOpts(ctx, proxyURL, message, workingDir, mode, sessionID,
-				history, demoOpts{allowedTools: allowed, taskMode: declared}, out)
+			err := proxyclient.SendChatOpts(ctx, proxyURL, message, workingDir, mode, sessionID,
+				history, proxyclient.DemoOpts{AllowedTools: allowed, TaskMode: declared}, out)
 			// Signal turn end via the same channel using a sentinel
-			// chatEvent (type="__turn_done__") — keeps the event
+			// proxyclient.ChatEvent (type="__turn_done__") — keeps the event
 			// ordering: all messages drain before the done marker.
 			payload, _ := json.Marshal(map[string]string{
 				"err": errString(err),
 			})
-			out <- chatEvent{Type: "__turn_done__", Data: payload}
+			out <- proxyclient.ChatEvent{Type: "__turn_done__", Data: payload}
 		}()
 		return nil
 	}

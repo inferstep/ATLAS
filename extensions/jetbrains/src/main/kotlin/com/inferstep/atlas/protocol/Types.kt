@@ -126,7 +126,7 @@ data class HistoryMessage(
  * The content of a replayed assistant history entry.
  *
  * An assistant turn is re-wrapped in the `{"type":"text","content":…}`
- * envelope rather than replayed as bare prose (tui/chat.go). The proxy keeps
+ * envelope rather than replayed as bare prose (tui/model.go). The proxy keeps
  * one history format for both clients, so this is the client's half of that
  * convention, and the one place it is written.
  */
@@ -163,7 +163,7 @@ enum class TaskMode {
  * The obligation lists stay null from this client. A person typing into a chat
  * box has told the plugin nothing structured about which files must exist or
  * which command must run, and deriving them from prose is the thing the
- * contract exists to replace (tui/chat.go says the same of the TUI). A caller
+ * contract exists to replace (tui/internal/proxyclient/chat.go says the same of the TUI). A caller
  * that genuinely knows can fill them in.
  */
 @Serializable
@@ -175,7 +175,7 @@ data class TaskContract(
 
 /**
  * POST /v1/agent request body. Field names match the anonymous struct in
- * proxy/agent_handler.go's handleAgent (see tui/chat.go's agentRequest).
+ * proxy/agent_handler.go's handleAgent (see tui/internal/proxyclient/chat.go's agentRequest).
  */
 @Serializable
 data class AgentRequest(

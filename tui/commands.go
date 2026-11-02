@@ -27,6 +27,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/itigges22/atlas-tui/internal/proxyclient"
 )
 
 // copyToClipboard writes s to the system clipboard. Tries in order:
@@ -385,7 +386,7 @@ func (m *tuiModel) slashAsk(input string, args []string) (consumed bool, cmd tea
 		return true, nil, false
 	}
 	question := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(input), "/ask"))
-	m.pendingTaskMode = taskModeQuestion
+	m.pendingTaskMode = proxyclient.TaskModeQuestion
 	m.chat = append(m.chat, chatMessage{Role: roleUser, Body: question})
 	m.lastUserMsg = question
 	return true, m.sendChatCmd(question + m.contextSuffix()), false
@@ -749,7 +750,7 @@ func fetchCalibrationStatusCmd(proxyURL string) tea.Cmd {
 		if err != nil {
 			return calibrationStatusMsg{err: err}
 		}
-		setProxyAuth(req)
+		proxyclient.SetProxyAuth(req)
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			return calibrationStatusMsg{err: err}

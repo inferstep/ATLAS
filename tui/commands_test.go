@@ -16,6 +16,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/itigges22/atlas-tui/internal/proxyclient"
 )
 
 // Input that starts with "/" is a command: it is consumed (never sent to the
@@ -94,7 +96,7 @@ func TestAskSelectsQuestionModeOnce(t *testing.T) {
 	defer srv.Close()
 
 	m := &tuiModel{workingDir: t.TempDir(), proxyURL: srv.URL,
-		chatEvents: make(chan chatEvent, 64)}
+		chatEvents: make(chan proxyclient.ChatEvent, 64)}
 	consumed, cmd, quit := m.handleSlash("/ask what does solve.py do?")
 	if !consumed || quit {
 		t.Fatalf("consumed=%v quit=%v", consumed, quit)
@@ -122,7 +124,7 @@ func TestAskSelectsQuestionModeOnce(t *testing.T) {
 	if m.pendingTaskMode != "" {
 		t.Errorf("pendingTaskMode=%q after the send; it must be one-shot", m.pendingTaskMode)
 	}
-	if m.takeTaskMode() != taskModeWork {
+	if m.takeTaskMode() != proxyclient.TaskModeWork {
 		t.Error("the next ordinary message is not work")
 	}
 	// The command word is not part of what the model sees.
@@ -138,7 +140,7 @@ func TestAskSelectsQuestionModeOnce(t *testing.T) {
 
 // Every owned sender declares a mode, so a new one cannot silently omit it.
 func TestEveryOwnedSenderDeclaresATaskMode(t *testing.T) {
-	src, err := os.ReadFile("chat.go")
+	src, err := os.ReadFile("internal/proxyclient/chat.go")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,10 +153,10 @@ func TestEveryOwnedSenderDeclaresATaskMode(t *testing.T) {
 	if n := strings.Count(body, "TaskContract:"); n != 1 {
 		t.Errorf("%d contract attachments, want one", n)
 	}
-	// Every in-repo caller of the builder passes demoOpts, which carries the
+	// Every in-repo caller of the builder passes DemoOpts, which carries the
 	// mode; the model's own send path sets it from takeTaskMode.
 	m, _ := os.ReadFile("model.go")
-	if !strings.Contains(string(m), "taskMode: declared") {
+	if !strings.Contains(string(m), "TaskMode: declared") {
 		t.Error("the model send path no longer declares a task mode")
 	}
 	if !strings.Contains(string(m), "func (m *tuiModel) takeTaskMode()") {

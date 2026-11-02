@@ -16,6 +16,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/itigges22/atlas-tui/internal/proxyclient"
 )
 
 // keyMsg builds a tea.KeyMsg matching what the runtime sends for a
@@ -50,8 +51,8 @@ func withStages(t *testing.T, width, height, n int) tuiModel {
 	m := sized(width, height)
 	now := float64(time.Now().UnixNano()) / 1e9
 	for i := 0; i < n; i++ {
-		updated, _ := m.Update(envelopeMsg{ev: Envelope{
-			EventID: fmt.Sprintf("e%d", i), Type: EvtStageStart,
+		updated, _ := m.Update(envelopeMsg{ev: proxyclient.Envelope{
+			EventID: fmt.Sprintf("e%d", i), Type: proxyclient.EvtStageStart,
 			Stage: fmt.Sprintf("stage%d", i), Timestamp: now,
 			Payload: map[string]interface{}{},
 		}})
@@ -183,8 +184,8 @@ func TestUnboundInputReachesTheTextarea(t *testing.T) {
 
 func TestEnvelopeMsgUpdatesPipelineState(t *testing.T) {
 	m := sized(80, 30)
-	updated, _ := m.Update(envelopeMsg{ev: Envelope{
-		EventID: "e1", Type: EvtStageStart, Stage: "phase2",
+	updated, _ := m.Update(envelopeMsg{ev: proxyclient.Envelope{
+		EventID: "e1", Type: proxyclient.EvtStageStart, Stage: "phase2",
 		Timestamp: 1.0, Payload: map[string]interface{}{},
 	}})
 	m = updated.(tuiModel)
@@ -199,7 +200,7 @@ func TestEnvelopeMsgUpdatesPipelineState(t *testing.T) {
 
 func TestChatStreamMsgAppendsAssistantText(t *testing.T) {
 	m := sized(80, 30)
-	updated, _ := m.Update(chatStreamMsg{ev: chatEvent{
+	updated, _ := m.Update(chatStreamMsg{ev: proxyclient.ChatEvent{
 		Type: "text", Data: json.RawMessage(`{"content": "hello world"}`),
 	}})
 	m = updated.(tuiModel)
@@ -210,7 +211,7 @@ func TestChatStreamMsgAppendsAssistantText(t *testing.T) {
 
 func TestChatStreamMsgToolResultMarksSuccess(t *testing.T) {
 	m := sized(80, 30)
-	updated, _ := m.Update(chatStreamMsg{ev: chatEvent{
+	updated, _ := m.Update(chatStreamMsg{ev: proxyclient.ChatEvent{
 		Type: "tool_result", Data: json.RawMessage(`{"tool": "read_file", "success": true, "data": {"content": "42 lines"}}`),
 	}})
 	m = updated.(tuiModel)
@@ -234,7 +235,7 @@ func TestTurnDoneMarkerEndsTheTurn(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			m := sized(80, 30)
 			m.turnActive = true
-			updated, _ := m.Update(chatStreamMsg{ev: chatEvent{Type: "__turn_done__", Data: json.RawMessage(c.data)}})
+			updated, _ := m.Update(chatStreamMsg{ev: proxyclient.ChatEvent{Type: "__turn_done__", Data: json.RawMessage(c.data)}})
 			mu := updated.(tuiModel)
 			if mu.turnActive {
 				t.Errorf("turnActive should be false after __turn_done__")
@@ -475,7 +476,7 @@ func TestWrapPlainKeepsMultiByteRunesIntact(t *testing.T) {
 // formatEventLine truncates styled lines by visible width — a byte
 // slice would spend the budget on escape codes and cut mid-sequence.
 func TestFormatEventLineTruncatesByVisibleWidth(t *testing.T) {
-	ev := Envelope{Type: EvtError, Stage: "phase2", Timestamp: 1.0,
+	ev := proxyclient.Envelope{Type: proxyclient.EvtError, Stage: "phase2", Timestamp: 1.0,
 		Payload: map[string]interface{}{"message": strings.Repeat("x", 200)}}
 	line := formatEventLine(ev, 40)
 	if got := lipgloss.Width(line); got != 40 {
@@ -534,7 +535,7 @@ func TestChatStreamRendersProxyInterventionEvents(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.typ, func(t *testing.T) {
 			m := sized(80, 30)
-			updated, _ := m.Update(chatStreamMsg{ev: chatEvent{Type: tc.typ, Data: json.RawMessage(tc.payload)}})
+			updated, _ := m.Update(chatStreamMsg{ev: proxyclient.ChatEvent{Type: tc.typ, Data: json.RawMessage(tc.payload)}})
 			mu := updated.(tuiModel)
 			if len(mu.chat) != 1 || mu.chat[0].Role != roleSystem {
 				t.Fatalf("chat = %+v, want one system row", mu.chat)
@@ -606,7 +607,7 @@ func TestEventRows(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			m := &tuiModel{}
 			for _, ev := range c.events {
-				m.appendChatEvent(chatEvent{Type: c.typ, Data: json.RawMessage(ev)})
+				m.appendChatEvent(proxyclient.ChatEvent{Type: c.typ, Data: json.RawMessage(ev)})
 			}
 			var got []string
 			for _, row := range m.chat {
@@ -686,7 +687,7 @@ func TestBuildChatHistory(t *testing.T) {
 	cases := []struct {
 		name string
 		chat []chatMessage
-		want []historyMessage
+		want []proxyclient.HistoryMessage
 	}{
 		{"empty chat", nil, nil},
 		{"tool and system rows are left out", []chatMessage{
@@ -695,7 +696,7 @@ func TestBuildChatHistory(t *testing.T) {
 			{Role: roleTool, Body: "list_directory result", Meta: "list_directory"},
 			{Role: roleSystem, Body: "spinner update", Meta: "llm"},
 			{Role: roleUser, Body: "current message — being sent now"},
-		}, []historyMessage{
+		}, []proxyclient.HistoryMessage{
 			{Role: "user", Content: "first ask"},
 			{Role: "assistant", Content: `{"content":"first reply","type":"text"}`},
 		}},
@@ -705,7 +706,7 @@ func TestBuildChatHistory(t *testing.T) {
 			{Role: roleUser, Body: "/review", Echo: true}, // slash echo
 			{Role: roleUser, Body: "! ls", Echo: true},    // bash echo
 			{Role: roleUser, Body: "current"},
-		}, []historyMessage{
+		}, []proxyclient.HistoryMessage{
 			{Role: "user", Content: "real ask"},
 			{Role: "assistant", Content: `{"content":"real reply","type":"text"}`},
 		}},
@@ -714,7 +715,7 @@ func TestBuildChatHistory(t *testing.T) {
 			{Role: roleAssistant, Body: ""},
 			{Role: roleAssistant, Body: "real reply"},
 			{Role: roleUser, Body: "current"},
-		}, []historyMessage{
+		}, []proxyclient.HistoryMessage{
 			{Role: "user", Content: "real ask"},
 			{Role: "assistant", Content: `{"content":"real reply","type":"text"}`},
 		}},
@@ -748,5 +749,20 @@ func TestBuildChatHistoryCapsAt40(t *testing.T) {
 	wantLast := `{"content":"a","type":"text"}`
 	if got[len(got)-1].Content != wantLast {
 		t.Errorf("last history row = %q, want %q (most-recent assistant, wrapped)", got[len(got)-1].Content, wantLast)
+	}
+}
+
+// Question mode is one-shot: the next ordinary message is work again.
+func TestQuestionModeIsOneShot(t *testing.T) {
+	m := &tuiModel{}
+	if got := m.takeTaskMode(); got != proxyclient.TaskModeWork {
+		t.Errorf("default task mode is %q, want work", got)
+	}
+	m.pendingTaskMode = proxyclient.TaskModeQuestion
+	if got := m.takeTaskMode(); got != proxyclient.TaskModeQuestion {
+		t.Errorf("selected mode was not used: %q", got)
+	}
+	if got := m.takeTaskMode(); got != proxyclient.TaskModeWork {
+		t.Errorf("question mode persisted into the next turn: %q — it must be one-shot", got)
 	}
 }

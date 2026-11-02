@@ -240,7 +240,7 @@ curl -N -H "Authorization: Bearer $(cat secrets/service-token)" http://localhost
 
 Use `/events` when you want a global observability feed (a TUI pipeline pane, a metrics scraper, a debug log viewer). Use `/v1/agent` when you want to drive a specific user turn.
 
-ATLAS services emit a typed JSON event stream over Server-Sent Events (SSE). atlas-proxy (Go) is the live envelope producer. The Go TUI consumes the stream via its own implementation of this contract (`tui/chat.go`); `atlas/events.py` is the canonical Python spec implementation (envelope types, `make_event`, `parse_envelope`), used by the test suite via the consumer harness in `tests/cli/event_harness.py`.
+ATLAS services emit a typed JSON event stream over Server-Sent Events (SSE). atlas-proxy (Go) is the live envelope producer. The Go TUI consumes the stream via its own implementation of this contract (`tui/internal/proxyclient/chat.go`); `atlas/events.py` is the canonical Python spec implementation (envelope types, `make_event`, `parse_envelope`), used by the test suite via the consumer harness in `tests/cli/event_harness.py`.
 
 #### Transport
 
