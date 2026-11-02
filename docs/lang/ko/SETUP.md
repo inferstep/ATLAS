@@ -466,26 +466,9 @@ docker compose down          # Stop all services (preserves images)
 docker compose down --rmi all  # Stop and remove images (next start rebuilds)
 ```
 
-### 로그 확인
+### 로그와 업데이트
 
-```bash
-docker compose logs -f llama-server    # Follow llama-server logs
-docker compose logs -f geometric-lens  # Follow Lens logs
-docker compose logs -f v3-service      # Follow V3 pipeline logs
-docker compose logs -f atlas-proxy     # Follow proxy logs
-docker compose logs -f sandbox         # Follow sandbox logs
-docker compose logs --tail 50          # Last 50 lines from all services
-```
-
-### 업데이트
-
-```bash
-cp .env .env.bak             # config backup (one file holds all your settings)
-git pull
-docker compose pull          # grab fresh :latest images from GHCR
-docker compose up -d         # recreate changed services
-atlas doctor                 # verify: services healthy, model/artifacts intact
-```
+서비스 로그 확인은 [OPERATIONS.md § Logs](../../OPERATIONS.md#logs)를, 설치 업데이트는 [OPERATIONS.md § Standard upgrade](../../OPERATIONS.md#standard-upgrade)를 참고하세요.
 
 ### 제거
 
@@ -886,25 +869,7 @@ mkdir -p secrets     # or set ATLAS_SECRETS_DIR
 
 ### 자체 모델 반입하기
 
-기본이 아닌 GGUF를 갈아 끼우고 싶다면, `atlas lens` 하위 명령이 탐침 + 학습 파이프라인을 감싸므로 밑단 스크립트를 배울 필요가 없습니다:
-
-```bash
-# 1. Drop your GGUF in models/ and update .env to point at it, restart llama-server.
-
-# 2. Probe whether the existing artifacts can score it (cheap, no training):
-atlas lens check
-# Reports: compat (artifacts work) | needs-build (different dim) | incompatible
-
-# 3. If 'needs-build', train fresh artifacts at the model's native embedding dim:
-atlas lens build --samples path/to/labeled.json
-# samples format: [{"text": str, "label": 0|1}, ...] where 1 = passing code
-# Canonical training set: huggingface.co/datasets/itigges22/ATLAS
-
-# 4. Re-run check — should now report compat:
-atlas lens check
-```
-
-전체 레퍼런스: [CLI.md § atlas lens](../../CLI.md#atlas-lens).
+기본이 아닌 GGUF로 바꾸려면 [CONFIGURATION.md § Adding your own model](../../CONFIGURATION.md#adding-your-own-model-drop-in--unregistered)과 [CLI.md § atlas lens](../../CLI.md#atlas-lens)를 참고하세요.
 
 ---
 

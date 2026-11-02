@@ -22,9 +22,11 @@ degraded-state JSON incl. lens self-test), v3 `:8070/health`, sandbox
 ## Logs
 
 ```bash
+docker compose logs -f llama-server  # the model server
 docker compose logs -f atlas-proxy   # agent loop, tool calls, gates
 docker compose logs -f v3-service    # pipeline phases
 docker compose logs -f geometric-lens
+docker compose logs -f sandbox       # command execution
 docker compose logs --tail 100      # everything recent
 ```
 
