@@ -577,6 +577,26 @@ func TestARunnerCoversWhatItDiscovers(t *testing.T) {
 	}
 }
 
+// A segment that runs no program, or a program that is not a runner, adds
+// nothing; `python -m unittest` takes test*.py; a Go package run takes only
+// the package's .go files; a file two roots discover is listed once.
+func TestRunnerEntries(t *testing.T) {
+	for _, c := range []struct {
+		command    string
+		candidates []string
+		want       []string
+	}{
+		{"FOO=1 && python3 -m unittest", []string{"test_calc.py", "calc.py"}, []string{"test_calc.py"}},
+		{"python3 app.py && pytest", []string{"app.py", "test_app.py"}, []string{"test_app.py"}},
+		{"go run .", []string{"main.go", "notes.py"}, []string{"main.go"}},
+		{"pytest tests tests/unit", []string{"tests/unit/test_u.py"}, []string{"tests/unit/test_u.py"}},
+	} {
+		if got := runnerEntries(c.command, "/w", c.candidates); !slices.Equal(got, c.want) {
+			t.Errorf("runnerEntries(%q) = %q, want %q", c.command, got, c.want)
+		}
+	}
+}
+
 // shellScript gives the script that a shell runs inline, with the options the
 // shell was started with put in front of it. A shell without a -c script gives
 // none.
