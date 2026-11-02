@@ -1125,10 +1125,24 @@ func TestWorkDeadlineEmitsExactlyOneTimedOutTerminal(t *testing.T) {
 			if census["done"] != 1 {
 				t.Errorf("%d terminal events", census["done"])
 			}
+			t.Logf("terminal=%v", terminal)
+		})
+	}
+}
+
+func TestAWorkDeadlineNeverReadsAsCompletion(t *testing.T) {
+	for _, where := range []string{"llm", "tool"} {
+		t.Run("deadline during the "+where, func(t *testing.T) {
+			dir := t.TempDir()
+			ctx, terminal, _ := timeoutFixture(t, dir, where)
+
+			if err := runAgentLoop(ctx, "Do something long."); err != nil {
+				t.Fatalf("agent loop error: %v", err)
+			}
+
 			if strings.Contains(terminal["summary"], "is on disk and parses") {
 				t.Errorf("a timeout implied completion: %q", terminal["summary"])
 			}
-			t.Logf("terminal=%v", terminal)
 		})
 	}
 }
