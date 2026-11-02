@@ -105,8 +105,5 @@ def _progress_emitter(events, start, progress_callback):
         if stage != "token":
             events.append(ev)
         if progress_callback:
-            try:
-                progress_callback(stage, detail, **data)
-            except TypeError:
-                progress_callback(stage, detail)
+            progress_callback(stage, detail, **data)
     return emit
