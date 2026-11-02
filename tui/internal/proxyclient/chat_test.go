@@ -18,9 +18,9 @@ import (
 	"time"
 )
 
-// SendChatOpts posts the request to /v1/agent, with the tools the user allowed
-// for the session (so the proxy does not ask again), and forwards the
-// streamed events in order.
+// SendChat posts the request to /v1/agent, with the earlier turns and the
+// tools the user allowed for the session (so the proxy does not ask again),
+// and forwards the streamed events in order.
 func TestSendChatPostsRequestBodyAndStreamsEvents(t *testing.T) {
 	var got agentRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -40,15 +40,21 @@ func TestSendChatPostsRequestBodyAndStreamsEvents(t *testing.T) {
 	out := make(chan ChatEvent, 16)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	err := SendChatOpts(ctx, srv.URL, "fix bug", "/work", "default", "sess-1", nil,
-		DemoOpts{AllowedTools: []string{"run_command", "write_file"}}, out)
+	err := SendChat(ctx, srv.URL, "fix bug", ChatOptions{
+		WorkingDir: "/work", Mode: "default", SessionID: "sess-1",
+		History:      []HistoryMessage{{Role: "user", Content: "earlier"}},
+		AllowedTools: []string{"run_command", "write_file"},
+	}, out)
 	if err != nil {
-		t.Fatalf("sendChatOpts: %v", err)
+		t.Fatalf("SendChat: %v", err)
 	}
 	close(out)
 
 	if got.Message != "fix bug" || got.WorkingDir != "/work" || got.Mode != "default" || got.SessionID != "sess-1" {
 		t.Errorf("request = %+v, want the message, working dir, mode and session id as given", got)
+	}
+	if len(got.History) != 1 || got.History[0].Content != "earlier" {
+		t.Errorf("history = %v, want the one earlier turn", got.History)
 	}
 	if strings.Join(got.SessionAllowedTools, ",") != "run_command,write_file" {
 		t.Errorf("session_allowed_tools = %v, want [run_command write_file]", got.SessionAllowedTools)
@@ -83,7 +89,7 @@ func TestDemoRawSideUsesOneDirectModelRequest(t *testing.T) {
 
 	out := make(chan ChatEvent, 8)
 	if err := SendRawChat(context.Background(), srv.URL, "configured-model", "build it", out); err != nil {
-		t.Fatalf("sendRawChat: %v", err)
+		t.Fatalf("SendRawChat: %v", err)
 	}
 	close(out)
 	if gotPath != "/v1/chat/completions" {
@@ -116,7 +122,9 @@ func TestSendChatHandlesNon200Status(t *testing.T) {
 	}))
 	defer srv.Close()
 	out := make(chan ChatEvent, 1)
-	err := SendChatOpts(context.Background(), srv.URL, "hi", "/", "default", "s", nil, DemoOpts{}, out)
+	err := SendChat(context.Background(), srv.URL, "hi", ChatOptions{
+		WorkingDir: "/", Mode: "default", SessionID: "s",
+	}, out)
 	if err == nil || !strings.Contains(err.Error(), "503") {
 		t.Errorf("error = %v, want one mentioning 503", err)
 	}
@@ -144,7 +152,9 @@ func TestSendChatContextCancelStopsStream(t *testing.T) {
 	out := make(chan ChatEvent, 100)
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(80*time.Millisecond, cancel)
-	err := SendChatOpts(ctx, srv.URL, "hi", "/", "default", "s", nil, DemoOpts{}, out)
+	err := SendChat(ctx, srv.URL, "hi", ChatOptions{
+		WorkingDir: "/", Mode: "default", SessionID: "s",
+	}, out)
 	if err == nil {
 		t.Error("a cancelled stream returned no error")
 	}
@@ -168,7 +178,7 @@ func TestCancelTurnPostsTheSessionID(t *testing.T) {
 		t.Error("an empty session id was not refused")
 	}
 	if err := CancelTurn(srv.URL, "sess-9"); err != nil {
-		t.Fatalf("cancelTurn: %v", err)
+		t.Fatalf("CancelTurn: %v", err)
 	}
 	if strings.Join(posted, ", ") != "/cancel sess-9" {
 		t.Errorf("the proxy got %q, want only /cancel for sess-9", posted)
@@ -288,8 +298,9 @@ func captureContract(t *testing.T, mode TaskMode, message string) map[string]int
 	}))
 	defer srv.Close()
 	out := make(chan ChatEvent, 16)
-	err := SendChatOpts(context.Background(), srv.URL, message, t.TempDir(), "default",
-		"sess-1", nil, DemoOpts{TaskMode: mode}, out)
+	err := SendChat(context.Background(), srv.URL, message, ChatOptions{
+		WorkingDir: t.TempDir(), Mode: "default", SessionID: "sess-1", TaskMode: mode,
+	}, out)
 	if err != nil {
 		t.Fatalf("send: %v", err)
 	}
@@ -354,8 +365,9 @@ func TestLegacyOmissionFixtureIsTheOnlyContractlessSender(t *testing.T) {
 	}))
 	defer srv.Close()
 	out := make(chan ChatEvent, 16)
-	if err := SendChatOpts(context.Background(), srv.URL, "hi", t.TempDir(),
-		"default", "s", nil, DemoOpts{omitTaskContract: true}, out); err != nil {
+	if err := SendChat(context.Background(), srv.URL, "hi", ChatOptions{
+		WorkingDir: t.TempDir(), Mode: "default", SessionID: "s", omitTaskContract: true,
+	}, out); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := got["task_contract"]; ok {
@@ -403,7 +415,9 @@ func TestEveryRequestToTheProxyCarriesTheServiceToken(t *testing.T) {
 	defer srv.Close()
 
 	out := make(chan ChatEvent, 16)
-	if err := SendChatOpts(context.Background(), srv.URL, "hi", "/", "default", "s", nil, DemoOpts{}, out); err != nil {
+	if err := SendChat(context.Background(), srv.URL, "hi", ChatOptions{
+		WorkingDir: "/", Mode: "default", SessionID: "s",
+	}, out); err != nil {
 		t.Errorf("chat: %v", err)
 	}
 	if err := SendRawChat(context.Background(), srv.URL, "m", "hi", out); err != nil {

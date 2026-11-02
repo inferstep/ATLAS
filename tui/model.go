@@ -573,7 +573,7 @@ func (m *tuiModel) buildChatHistory() []proxyclient.HistoryMessage {
 	return out
 }
 
-// sendChatCmd kicks off a /v1/agent turn. Runs proxyclient.SendChatOpts in a goroutine
+// sendChatCmd kicks off a /v1/agent turn. Runs proxyclient.SendChat in a goroutine
 // because Bubbletea Cmds should be quick — the goroutine pumps events
 // onto m.chatEvents which the model drains via waitForChatEvent.
 // takeTaskMode returns the mode for the next request and clears any one-shot
@@ -618,8 +618,10 @@ func (m *tuiModel) sendChatCmd(message string) tea.Cmd {
 
 	return func() tea.Msg {
 		go func() {
-			err := proxyclient.SendChatOpts(ctx, proxyURL, message, workingDir, mode, sessionID,
-				history, proxyclient.DemoOpts{AllowedTools: allowed, TaskMode: declared}, out)
+			err := proxyclient.SendChat(ctx, proxyURL, message, proxyclient.ChatOptions{
+				WorkingDir: workingDir, Mode: mode, SessionID: sessionID, History: history,
+				AllowedTools: allowed, TaskMode: declared,
+			}, out)
 			// Signal turn end via the same channel using a sentinel
 			// proxyclient.ChatEvent (type="__turn_done__") — keeps the event
 			// ordering: all messages drain before the done marker.

@@ -433,11 +433,13 @@ func (m *demoModel) runStream(side string) {
 			err = proxyclient.SendRawChat(m.ctx, m.proxyURL, m.modelID, m.prompt.Prompt, out)
 		} else {
 			sid := fmt.Sprintf("demo-%s-%d", side, time.Now().UnixNano())
-			err = proxyclient.SendChatOpts(m.ctx, m.proxyURL, m.prompt.Prompt, m.workingDir,
-				"yolo", sid, nil, proxyclient.DemoOpts{
-					DisableFreshSlot: true,
-					SandboxSubdir:    m.v3Sandbox,
-				}, out)
+			err = proxyclient.SendChat(m.ctx, m.proxyURL, m.prompt.Prompt, proxyclient.ChatOptions{
+				WorkingDir:       m.workingDir,
+				Mode:             "yolo",
+				SessionID:        sid,
+				DisableFreshSlot: true,
+				SandboxSubdir:    m.v3Sandbox,
+			}, out)
 		}
 		errCh <- err
 		close(out)

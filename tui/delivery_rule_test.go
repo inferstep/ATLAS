@@ -43,8 +43,9 @@ func TestARefusedRequestShowsTheProxysSentence(t *testing.T) {
 		w.Write(body)
 	}))
 	defer srv.Close()
-	err := proxyclient.SendChatOpts(context.Background(), srv.URL, "add a toggle", t.TempDir(),
-		"default", "s", nil, proxyclient.DemoOpts{}, make(chan proxyclient.ChatEvent, 4))
+	err := proxyclient.SendChat(context.Background(), srv.URL, "add a toggle", proxyclient.ChatOptions{
+		WorkingDir: t.TempDir(), Mode: "default", SessionID: "s",
+	}, make(chan proxyclient.ChatEvent, 4))
 	if err == nil || err.Error() != detail {
 		t.Fatalf("error %v, want the proxy's sentence", err)
 	}

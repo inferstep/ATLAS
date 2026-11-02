@@ -297,9 +297,6 @@ func CancelTurn(proxyURL, sessionID string) error {
 	return nil
 }
 
-// DemoOpts bundles the per-request flags the /demo split-pane needs.
-// Held in a struct rather than added as positional args to keep
-// SendChatOpts readable as the demo grows.
 // TaskMode is what the CLIENT declares about a request: whether the person
 // asked for the workspace to change, or asked a question about it. It mirrors
 // the proxy's task_mode and exists so the decision is a control the user
@@ -327,10 +324,23 @@ type taskContract struct {
 	Verification    []string `json:"verification,omitempty"`
 }
 
-type DemoOpts struct {
+// ChatOptions is everything about one /v1/agent turn besides the message.
+// Held in a struct rather than positional args, so a caller names each field.
+type ChatOptions struct {
+	WorkingDir string
+	// Mode is the permission mode: "default", "accept-edits" or "yolo".
+	Mode      string
+	SessionID string
+	// History is the prior-turn user/assistant transcript so the agent can
+	// answer follow-ups. nil for the first turn of a session.
+	History []HistoryMessage
+	// DisableFreshSlot and SandboxSubdir are the /demo split-pane flags: the
+	// V3 side keeps PC-045 from wiping the pre-warmed prefix cache, and writes
+	// files into per-side sandbox subdirs so the two panes never clobber each
+	// other.
 	DisableFreshSlot bool
 	SandboxSubdir    string
-	// allowedTools is the session allowlist sent as session_allowed_tools so
+	// AllowedTools is the session allowlist sent as session_allowed_tools so
 	// the proxy skips the permission prompt for pre-approved tools.
 	AllowedTools []string
 	// TaskMode is the client's declaration for this one request. Empty means
@@ -344,20 +354,11 @@ type DemoOpts struct {
 	omitTaskContract bool
 }
 
-// SendChatOpts opens an SSE POST to /v1/agent and forwards each parsed
+// SendChat opens an SSE POST to /v1/agent and forwards each parsed
 // event to out. Returns nil on clean [DONE], err otherwise. Caller is
 // responsible for closing the channel after this returns.
-//
-// history is the prior-turn user/assistant transcript so the agent can
-// answer follow-ups. Pass nil for the first turn of a session.
-//
-// opts carries the /demo split-pane flags (pass DemoOpts{} otherwise):
-// the V3 side keeps PC-045 from wiping the pre-warmed prefix cache
-// (disableFreshSlot), and writes files into per-side sandbox subdirs so
-// the two panes never clobber each other (sandboxSubdir).
-func SendChatOpts(ctx context.Context, proxyURL, message, workingDir, mode,
-	sessionID string, history []HistoryMessage,
-	opts DemoOpts, out chan<- ChatEvent) error {
+func SendChat(ctx context.Context, proxyURL, message string, opts ChatOptions,
+	out chan<- ChatEvent) error {
 
 	var contract *taskContract
 	if !opts.omitTaskContract {
@@ -371,10 +372,10 @@ func SendChatOpts(ctx context.Context, proxyURL, message, workingDir, mode,
 	}
 	body, err := json.Marshal(agentRequest{
 		Message:             message,
-		WorkingDir:          workingDir,
-		Mode:                mode,
-		SessionID:           sessionID,
-		History:             history,
+		WorkingDir:          opts.WorkingDir,
+		Mode:                opts.Mode,
+		SessionID:           opts.SessionID,
+		History:             opts.History,
 		SessionAllowedTools: opts.AllowedTools,
 		DisableFreshSlot:    opts.DisableFreshSlot,
 		SandboxSubdir:       opts.SandboxSubdir,

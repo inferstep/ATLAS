@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -116,22 +117,36 @@ func TestTheApprovalPromptShowsTheEndOfTheCommand(t *testing.T) {
 }
 
 // The TUI's own requests to the proxy (calibration status, the demo's model
-// lookup and its health check) carry the header the client's SetProxyAuth
-// gives, so a proxy with a service token accepts them. Which token that header
-// holds is checked in internal/proxyclient.
+// lookup and its health check) carry the service token, even when an
+// api-keys token is also on disk. internal/proxyclient checks the client's own
+// requests.
+//
+// The client reads the service token once, when the process starts, so the
+// check runs in a child process of this test binary that starts with one.
 func TestEveryTUIRequestToTheProxyCarriesTheServiceToken(t *testing.T) {
+	if os.Getenv("ATLAS_TUI_TOKEN_CHILD") == "" {
+		token := filepath.Join(t.TempDir(), "service-token")
+		if err := os.WriteFile(token, []byte("svc-secret\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		child := exec.Command(os.Args[0], "-test.v",
+			"-test.run=^TestEveryTUIRequestToTheProxyCarriesTheServiceToken$")
+		child.Env = append(os.Environ(), "ATLAS_TUI_TOKEN_CHILD=1", "ATLAS_SERVICE_TOKEN_FILE="+token)
+		out, err := child.CombinedOutput()
+		if err != nil {
+			t.Fatalf("the check failed in the child process: %v\n%s", err, out)
+		}
+		if !strings.Contains(string(out), "--- PASS: TestEveryTUIRequestToTheProxyCarriesTheServiceToken") {
+			t.Fatalf("the child process ran no check:\n%s", out)
+		}
+		return
+	}
+
 	keys := filepath.Join(t.TempDir(), "api-keys.json")
 	if err := os.WriteFile(keys, []byte(`{"api_key":"sk-other"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("ATLAS_API_KEYS_PATH", keys)
-	// The service token when there is one, else the key above: never empty.
-	probe := httptest.NewRequest(http.MethodGet, "/", nil)
-	proxyclient.SetProxyAuth(probe)
-	want := probe.Header.Get("Authorization")
-	if want == "" {
-		t.Fatal("SetProxyAuth set no header, so this test would prove nothing")
-	}
 
 	var mu sync.Mutex
 	seen := map[string]string{}
@@ -139,7 +154,7 @@ func TestEveryTUIRequestToTheProxyCarriesTheServiceToken(t *testing.T) {
 		mu.Lock()
 		seen[r.URL.Path] = r.Header.Get("Authorization")
 		mu.Unlock()
-		if r.Header.Get("Authorization") != want {
+		if r.Header.Get("Authorization") != "Bearer svc-secret" {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -155,8 +170,8 @@ func TestEveryTUIRequestToTheProxyCarriesTheServiceToken(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	for _, path := range []string{"/v1/calibration/status", "/v1/models", "/health"} {
-		if got := seen[path]; got != want {
-			t.Errorf("%s sent %q, want %q", path, got, want)
+		if got := seen[path]; got != "Bearer svc-secret" {
+			t.Errorf("%s sent %q", path, got)
 		}
 	}
 }

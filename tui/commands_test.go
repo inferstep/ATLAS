@@ -153,7 +153,7 @@ func TestEveryOwnedSenderDeclaresATaskMode(t *testing.T) {
 	if n := strings.Count(body, "TaskContract:"); n != 1 {
 		t.Errorf("%d contract attachments, want one", n)
 	}
-	// Every in-repo caller of the builder passes DemoOpts, which carries the
+	// Every in-repo caller of the builder passes ChatOptions, which carries the
 	// mode; the model's own send path sets it from takeTaskMode.
 	m, _ := os.ReadFile("model.go")
 	if !strings.Contains(string(m), "TaskMode: declared") {
