@@ -6,7 +6,7 @@
 // in interactive mode; pipe mode falls back to the built-in REPL.
 //
 // Bubbletea model is in model.go; pane rendering in panes.go;
-// chat/agent client and the /events SSE consumer both in chat.go.
+// chat/agent client and the /events SSE consumer both in internal/proxyclient.
 
 package main
 
@@ -21,6 +21,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/itigges22/atlas-tui/internal/debuglog"
+	"github.com/itigges22/atlas-tui/internal/proxyclient"
 )
 
 const (
@@ -28,7 +29,7 @@ const (
 )
 
 func main() {
-	installTokenTransport()
+	proxyclient.InstallTokenTransport()
 	proxyURL := flag.String("proxy", envOr("ATLAS_PROXY_URL", defaultProxyURL),
 		"atlas-proxy base URL (default: $ATLAS_PROXY_URL or http://localhost:8090)")
 	logPath := flag.String("log", envOr("ATLAS_TUI_LOG", ""),
@@ -82,7 +83,7 @@ func main() {
 
 	// SSE consumer goroutine: pushes envelopes onto a channel that
 	// the Bubbletea program drains via a tea.Cmd.
-	go streamEventsWithReconnect(ctx, *proxyURL+"/events", model.events)
+	go proxyclient.StreamEventsWithReconnect(ctx, *proxyURL+"/events", model.events)
 
 	opts := programOptions(*mouseFlag)
 	prog := tea.NewProgram(model, opts...)

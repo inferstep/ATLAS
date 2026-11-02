@@ -1,9 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-tui/internal/proxyclient"
 )
 
 // The done row shows the run's status and reason, not only its summary
@@ -54,4 +57,9 @@ func TestEachDoneStatusLooksDifferent(t *testing.T) {
 		fmt.Sprint(doneStatusStyle("incomplete").GetForeground()) {
 		t.Error("an unknown status does not read like incomplete")
 	}
+}
+
+func mkChatEvent(typ string, data interface{}) proxyclient.ChatEvent {
+	b, _ := json.Marshal(data)
+	return proxyclient.ChatEvent{Type: typ, Data: b}
 }

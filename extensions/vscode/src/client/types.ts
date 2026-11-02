@@ -1,6 +1,6 @@
 // Request/response and SSE event shapes for the atlas-proxy public client
 // API. Mirrors docs/API.md and the Go structs in proxy/internal/wire/ /
-// tui/chat.go — field tags there are the source of truth.
+// tui/internal/proxyclient/chat.go — field tags there are the source of truth.
 
 /** One prior-turn message replayed to the proxy on each /v1/agent call.
  * The proxy caps history at the most recent 40 entries. */
@@ -18,7 +18,8 @@ export type PermissionMode = 'default' | 'accept-edits' | 'yolo';
 export type TaskMode = 'work' | 'question';
 
 /** The structured declaration sent with a request (`task_contract`). Mirrors
- * proxy/internal/taskcontract/task_contract.go's TaskContract and tui/chat.go's taskContract.
+ * proxy/internal/taskcontract/task_contract.go's TaskContract and
+ * tui/internal/proxyclient/chat.go's taskContract.
  *
  * `expected_outputs` and `verification` stay unset from this client: someone
  * typing into a chat box has told the extension nothing structured about
@@ -37,7 +38,7 @@ export interface TaskContract {
 }
 
 /** POST /v1/agent request body. Field names MUST match the anonymous
- * struct in proxy/agent_handler.go's handleAgent (see tui/chat.go agentRequest). */
+ * struct in proxy/agent_handler.go's handleAgent (see tui/internal/proxyclient/chat.go agentRequest). */
 export interface AgentRequest {
 	message: string;
 	working_dir: string;
@@ -249,8 +250,8 @@ export interface CancelResponse {
 }
 
 /** POST /v1/permission response. 200 → delivered:true; 404 → the request
- * already resolved (treated as success by convention — see tui/chat.go
- * postPermissionDecision). */
+ * already resolved (treated as success by convention — see tui/internal/proxyclient/chat.go
+ * PostPermissionDecision). */
 export interface PermissionDecisionResponse {
 	delivered: boolean;
 }

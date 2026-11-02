@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/itigges22/atlas-tui/internal/proxyclient"
 )
 
 // A permission_request for a tool NOT on the session allowlist raises the
@@ -20,7 +21,7 @@ import (
 func TestPermissionRequestRaisesModal(t *testing.T) {
 	m := sized(80, 30)
 	m.turnSessionID = "turn-abc"
-	updated, _ := m.Update(chatStreamMsg{ev: chatEvent{Type: "permission_request", Data: json.RawMessage(
+	updated, _ := m.Update(chatStreamMsg{ev: proxyclient.ChatEvent{Type: "permission_request", Data: json.RawMessage(
 		`{"tool_name": "run_command", "message": "Run command: npm install", "tool_call_id": "call_3",
 		  "args": {"command": "npm install"}}`)}})
 	got := updated.(tuiModel).pendingPerm
@@ -41,7 +42,7 @@ func TestPermissionRequestAutoAllowsWhitelistedTool(t *testing.T) {
 	m.proxyURL = "http://127.0.0.1:1"
 	m.turnSessionID = "turn-abc"
 	m.sessionAllowedTools["run_command"] = true
-	updated, _ := m.Update(chatStreamMsg{ev: chatEvent{Type: "permission_request", Data: json.RawMessage(
+	updated, _ := m.Update(chatStreamMsg{ev: proxyclient.ChatEvent{Type: "permission_request", Data: json.RawMessage(
 		`{"tool_name": "run_command", "message": "Run command: npm install", "tool_call_id": "call_3",
 		  "args": {"command": "npm install"}}`)}})
 	mu := updated.(tuiModel)

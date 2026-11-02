@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/itigges22/atlas-tui/internal/proxyclient"
 )
 
 // thinkingPrefix opens a streaming row of the model's reasoning.
@@ -19,7 +21,7 @@ const thinkingPrefix = "  ‹thinking› "
 // appendChatEvent translates a /v1/agent SSE event into one or more
 // chat history rows. Each event type has its own method below; a type
 // with no case here is not shown.
-func (m *tuiModel) appendChatEvent(ev chatEvent) {
+func (m *tuiModel) appendChatEvent(ev proxyclient.ChatEvent) {
 	switch ev.Type {
 	case "turn_start":
 		m.onTurnStart(ev)
@@ -108,7 +110,7 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 }
 
 // onTurnStart adds the separator row that opens a new turn.
-func (m *tuiModel) onTurnStart(ev chatEvent) {
+func (m *tuiModel) onTurnStart(ev proxyclient.ChatEvent) {
 	// Visual separator + turn counter. Compact one-liner so a long
 	// task's chat doesn't drown in headers — but enough that the
 	// user can see "where am I, what turn just started".
@@ -128,7 +130,7 @@ func (m *tuiModel) onTurnStart(ev chatEvent) {
 }
 
 // onLLMCallStart adds the row for a new model call and starts streaming.
-func (m *tuiModel) onLLMCallStart(ev chatEvent) {
+func (m *tuiModel) onLLMCallStart(ev proxyclient.ChatEvent) {
 	// Marker: prompt is being encoded by llama-server. No tokens yet —
 	// time-to-first-token reflects prompt eval duration. The body is
 	// rewritten on llm_prompt_progress (live %), llm_first_token
@@ -158,7 +160,7 @@ func (m *tuiModel) onLLMCallStart(ev chatEvent) {
 }
 
 // onLLMPromptProgress shows how far the prompt has been encoded.
-func (m *tuiModel) onLLMPromptProgress(ev chatEvent) {
+func (m *tuiModel) onLLMPromptProgress(ev proxyclient.ChatEvent) {
 	// Live prompt-eval progress from the proxy's poller. ElapsedMS
 	// is always set; processed/total/pct are present only when
 	// llama-server's /slots endpoint exposes them. We render a bar
@@ -198,7 +200,7 @@ func (m *tuiModel) onLLMPromptProgress(ev chatEvent) {
 }
 
 // onLLMFirstToken marks the model-call row as decoding: the prompt is encoded.
-func (m *tuiModel) onLLMFirstToken(ev chatEvent) {
+func (m *tuiModel) onLLMFirstToken(ev proxyclient.ChatEvent) {
 	// Prompt eval finished — decoding has started. Show the prompt
 	// duration so the user can see "where the dead air went". The
 	// body is rebuilt below as tokens stream in.
@@ -214,7 +216,7 @@ func (m *tuiModel) onLLMFirstToken(ev chatEvent) {
 }
 
 // onLLMToken adds one streamed model token to the model-call row.
-func (m *tuiModel) onLLMToken(ev chatEvent) {
+func (m *tuiModel) onLLMToken(ev proxyclient.ChatEvent) {
 	// One delta from the LLM stream. Append to the streaming buffer
 	// and re-render the trailing llm row with header + tail of the
 	// stream so the user sees the JSON come together token-by-token.
@@ -240,7 +242,7 @@ func (m *tuiModel) onLLMToken(ev chatEvent) {
 }
 
 // onReasoningToken adds one streamed reasoning token to the model-call row.
-func (m *tuiModel) onReasoningToken(ev chatEvent) {
+func (m *tuiModel) onReasoningToken(ev proxyclient.ChatEvent) {
 	// reasoning_content may stream alongside
 	// content. Accumulate into a parallel buffer and re-render the
 	// streaming row with a "‹thinking›" prefix so the user can see
@@ -261,7 +263,7 @@ func (m *tuiModel) onReasoningToken(ev chatEvent) {
 }
 
 // onLLMCallEnd puts the call's totals in the model-call row and ends streaming.
-func (m *tuiModel) onLLMCallEnd(ev chatEvent) {
+func (m *tuiModel) onLLMCallEnd(ev proxyclient.ChatEvent) {
 	// Replace the streaming row with totals so the scrollback shows
 	// a compact "model replied · 8421 tok · 12.3s" instead of the
 	// raw token tail. The actual tool_call / text output rows that
@@ -302,7 +304,7 @@ func (m *tuiModel) onLLMCallEnd(ev chatEvent) {
 }
 
 // onText adds the assistant's text reply and saves the session.
-func (m *tuiModel) onText(ev chatEvent) {
+func (m *tuiModel) onText(ev proxyclient.ChatEvent) {
 	var p struct {
 		Content string `json:"content"`
 	}
@@ -318,7 +320,7 @@ func (m *tuiModel) onText(ev chatEvent) {
 }
 
 // onToolCall adds the row for a tool call and marks the file it changes.
-func (m *tuiModel) onToolCall(ev chatEvent) {
+func (m *tuiModel) onToolCall(ev proxyclient.ChatEvent) {
 	var p struct {
 		Name string          `json:"name"`
 		Args json.RawMessage `json:"args"`
@@ -366,7 +368,7 @@ func (m *tuiModel) markFileTouched(name string, args json.RawMessage) {
 }
 
 // onToolResult adds the row for a tool's result.
-func (m *tuiModel) onToolResult(ev chatEvent) {
+func (m *tuiModel) onToolResult(ev proxyclient.ChatEvent) {
 	var p struct {
 		Tool    string          `json:"tool"`
 		Success bool            `json:"success"`
@@ -394,7 +396,7 @@ func (m *tuiModel) onToolResult(ev chatEvent) {
 }
 
 // onGate adds the row for a completion gate that holds the run back.
-func (m *tuiModel) onGate(ev chatEvent) {
+func (m *tuiModel) onGate(ev proxyclient.ChatEvent) {
 	// A completion gate holding the run back — "you were asked to change
 	// something and have not". The rejection reached the model and
 	// nothing else, so the user watched an unexplained pause while the
@@ -413,7 +415,7 @@ func (m *tuiModel) onGate(ev chatEvent) {
 }
 
 // onFencedFetch adds the row for one fenced file fetch.
-func (m *tuiModel) onFencedFetch(ev chatEvent) {
+func (m *tuiModel) onFencedFetch(ev proxyclient.ChatEvent) {
 	// One attempt to fetch a file body through the fenced channel (#254):
 	// how it went and what the wire showed, so a stall has a visible
 	// cause instead of a pause.
@@ -444,7 +446,7 @@ func (m *tuiModel) onFencedFetch(ev chatEvent) {
 }
 
 // onRepair adds the row for a file the session left unparseable.
-func (m *tuiModel) onRepair(ev chatEvent) {
+func (m *tuiModel) onRepair(ev proxyclient.ChatEvent) {
 	// A file the session left unparseable (#214): shown when it opens,
 	// when an attempt changes it and it still fails, when it is fixed,
 	// and when it is handed back. A refused attempt changed nothing and
@@ -489,7 +491,7 @@ func (m *tuiModel) onRepair(ev chatEvent) {
 
 // onPermissionRequest answers allow for a tool approved for the session, or
 // raises the permission prompt.
-func (m *tuiModel) onPermissionRequest(ev chatEvent) {
+func (m *tuiModel) onPermissionRequest(ev proxyclient.ChatEvent) {
 	var p struct {
 		ToolName    string          `json:"tool_name"`
 		Message     string          `json:"message"`
@@ -511,7 +513,7 @@ func (m *tuiModel) onPermissionRequest(ev chatEvent) {
 		proxyURL := m.proxyURL
 		sid := m.turnSessionID
 		cid := p.ToolCallID
-		go func() { _ = postPermissionDecision(proxyURL, sid, cid, "allow", "once") }()
+		go func() { _ = proxyclient.PostPermissionDecision(proxyURL, sid, cid, "allow", "once") }()
 		m.chat = append(m.chat, chatMessage{
 			Role: roleSystem, Meta: "permission",
 			Body: "auto-allowed " + p.ToolName + " (session)", Echo: true,
@@ -531,7 +533,7 @@ func (m *tuiModel) onPermissionRequest(ev chatEvent) {
 }
 
 // onPermissionDenied closes the denied tool's prompt and adds the denied row.
-func (m *tuiModel) onPermissionDenied(ev chatEvent) {
+func (m *tuiModel) onPermissionDenied(ev proxyclient.ChatEvent) {
 	var p struct {
 		Tool   string `json:"tool"`
 		Reason string `json:"reason"`
@@ -549,7 +551,7 @@ func (m *tuiModel) onPermissionDenied(ev chatEvent) {
 }
 
 // onError adds an error row, unless the error only echoes a cancel.
-func (m *tuiModel) onError(ev chatEvent) {
+func (m *tuiModel) onError(ev proxyclient.ChatEvent) {
 	var p struct {
 		Error string `json:"error"`
 	}
@@ -566,7 +568,7 @@ func (m *tuiModel) onError(ev chatEvent) {
 }
 
 // onDone adds the row with the run's outcome.
-func (m *tuiModel) onDone(ev chatEvent) {
+func (m *tuiModel) onDone(ev proxyclient.ChatEvent) {
 	// The run's outcome, not only its summary (#236): whether it
 	// completed, stopped or failed is what a user needs at a glance. A
 	// missing status reads as incomplete, as docs/API.md says.
@@ -586,7 +588,7 @@ func (m *tuiModel) onDone(ev chatEvent) {
 }
 
 // onV3LLMStart adds the row for a new V3 model call.
-func (m *tuiModel) onV3LLMStart(ev chatEvent) {
+func (m *tuiModel) onV3LLMStart(ev proxyclient.ChatEvent) {
 	// V3 is starting an LLM call. Insert a dim "v3-llm" row that
 	// the v3_token handler will fill in. Mirrors the agent's
 	// llm_call_start row, but with a "V3" tag so the user can
@@ -607,7 +609,7 @@ func (m *tuiModel) onV3LLMStart(ev chatEvent) {
 }
 
 // onV3Token adds one streamed V3 token to the V3 model-call row.
-func (m *tuiModel) onV3Token(ev chatEvent) {
+func (m *tuiModel) onV3Token(ev proxyclient.ChatEvent) {
 	// Per-token delta from V3's streaming LLM call. Append to the
 	// active v3-llm row (updated in place so we don't spawn
 	// thousands of chat rows during a long candidate generation).
@@ -622,7 +624,7 @@ func (m *tuiModel) onV3Token(ev chatEvent) {
 }
 
 // onV3ReasoningToken adds one streamed reasoning token to the V3 model-call row.
-func (m *tuiModel) onV3ReasoningToken(ev chatEvent) {
+func (m *tuiModel) onV3ReasoningToken(ev proxyclient.ChatEvent) {
 	// Reasoning deltas from V3's streaming LLM call (candidate
 	// generation / repair phases think before emitting code).
 	// Rendered into the same in-place v3-llm row as v3_token, with
@@ -644,7 +646,7 @@ func (m *tuiModel) onV3ReasoningToken(ev chatEvent) {
 }
 
 // onV3LLMEnd puts the V3 call's summary in its row and ends V3 streaming.
-func (m *tuiModel) onV3LLMEnd(ev chatEvent) {
+func (m *tuiModel) onV3LLMEnd(ev proxyclient.ChatEvent) {
 	// V3's LLM call finished. Replace the streaming row with the
 	// summary detail ("1234 tok · 12345ms") so scrollback shows a
 	// compact line, not the raw token tail.
@@ -663,7 +665,7 @@ func (m *tuiModel) onV3LLMEnd(ev chatEvent) {
 }
 
 // onV3Progress adds a row of V3 pipeline narration.
-func (m *tuiModel) onV3Progress(ev chatEvent) {
+func (m *tuiModel) onV3Progress(ev proxyclient.ChatEvent) {
 	// V3 pipeline narration emitted by proxy/tool_write_v3.go via
 	// ctx.StreamFn("v3_progress", {message: "..."}). One row per
 	// stage (e.g. "[probe] Generating probe candidate..."). These
@@ -691,7 +693,7 @@ func (m *tuiModel) onV3Progress(ev chatEvent) {
 // each as a dedicated row in the chat with the stage tag bolded.
 // The pipeline pane reads the same events to drive its progress
 // rows. Added 2026-05.
-func (m *tuiModel) onV3Stage(ev chatEvent) {
+func (m *tuiModel) onV3Stage(ev proxyclient.ChatEvent) {
 	body := formatV3StageEvent(ev.Type, ev.Data)
 	if body != "" {
 		m.chat = append(m.chat, chatMessage{
@@ -707,7 +709,7 @@ func (m *tuiModel) onV3Stage(ev chatEvent) {
 // and the candidate index. We surface a compact one-liner per
 // candidate so the user can see WHERE quality cratered without
 // reading raw scores.
-func (m *tuiModel) onV3LensPerStep(ev chatEvent) {
+func (m *tuiModel) onV3LensPerStep(ev proxyclient.ChatEvent) {
 	body := formatLensPerStep(ev.Data)
 	if body != "" {
 		m.chat = append(m.chat, chatMessage{
@@ -723,7 +725,7 @@ func (m *tuiModel) onV3LensPerStep(ev chatEvent) {
 // (which is informational telemetry) — this one means a candidate
 // was actively rejected, so it gets its own row with a clear "veto"
 // meta tag so it stands out in the pane.
-func (m *tuiModel) onV3LensVeto(ev chatEvent) {
+func (m *tuiModel) onV3LensVeto(ev proxyclient.ChatEvent) {
 	body := formatLensVeto(ev.Data)
 	if body != "" {
 		m.chat = append(m.chat, chatMessage{
@@ -740,7 +742,7 @@ func (m *tuiModel) onV3LensVeto(ev chatEvent) {
 // failure mode from lens veto (which catches stub-shaped content);
 // this catches "your code calls bar() but bar isn't defined,
 // imported, builtin, or anywhere in the project."
-func (m *tuiModel) onV3StructuralVeto(ev chatEvent) {
+func (m *tuiModel) onV3StructuralVeto(ev proxyclient.ChatEvent) {
 	body := formatStructuralVeto(ev.Data)
 	if body != "" {
 		m.chat = append(m.chat, chatMessage{
@@ -755,7 +757,7 @@ func (m *tuiModel) onV3StructuralVeto(ev chatEvent) {
 // failing function. Informational row — shows that PR-CoT /
 // refinement got structural context layered on top of the bare
 // stderr the LLM otherwise sees.
-func (m *tuiModel) onV3CallChainContext(ev chatEvent) {
+func (m *tuiModel) onV3CallChainContext(ev proxyclient.ChatEvent) {
 	body := formatCallChainContext(ev.Data)
 	if body != "" {
 		m.chat = append(m.chat, chatMessage{
@@ -770,7 +772,7 @@ func (m *tuiModel) onV3CallChainContext(ev chatEvent) {
 // tool call's content. One row per write/edit. Fires whether or not
 // it triggers an intervention; the intervention itself is a
 // separate `agent_lens_intervention` event.
-func (m *tuiModel) onAgentLensScore(ev chatEvent) {
+func (m *tuiModel) onAgentLensScore(ev proxyclient.ChatEvent) {
 	body := formatAgentLensScore(ev.Data)
 	if body != "" {
 		m.chat = append(m.chat, chatMessage{
@@ -786,7 +788,7 @@ func (m *tuiModel) onAgentLensScore(ev chatEvent) {
 // queueing a corrective system message for the next LLM call.
 // We surface this prominently so the user knows the loop saw the
 // stuck pattern and broke it.
-func (m *tuiModel) onAgentLensIntervention(ev chatEvent) {
+func (m *tuiModel) onAgentLensIntervention(ev proxyclient.ChatEvent) {
 	body := formatAgentLensIntervention(ev.Data)
 	if body != "" {
 		m.chat = append(m.chat, chatMessage{
@@ -803,7 +805,7 @@ func (m *tuiModel) onAgentLensIntervention(ev chatEvent) {
 // queued a corrective for the next LLM call. Different signal
 // from the lens intervention (semantic vs structural) but same
 // "the loop noticed and broke the model out" surface.
-func (m *tuiModel) onAgentRepeatIntervention(ev chatEvent) {
+func (m *tuiModel) onAgentRepeatIntervention(ev proxyclient.ChatEvent) {
 	body := formatAgentRepeatIntervention(ev.Data)
 	if body != "" {
 		m.chat = append(m.chat, chatMessage{
@@ -817,7 +819,7 @@ func (m *tuiModel) onAgentRepeatIntervention(ev chatEvent) {
 // Asset-graph lint: cross-file coherence findings after a write
 // (orphaned templates/static files, dangling references). Advisory
 // only — render as a system row so the user sees what the model saw.
-func (m *tuiModel) onAssetLint(ev chatEvent) {
+func (m *tuiModel) onAssetLint(ev proxyclient.ChatEvent) {
 	var d struct {
 		Detail string `json:"detail"`
 	}
@@ -836,7 +838,7 @@ func (m *tuiModel) onAssetLint(ev chatEvent) {
 // queued a corrective for the next LLM call. Third member of the
 // "model is stuck" family alongside the lens and tool-repeat
 // interventions.
-func (m *tuiModel) onAgentReasoningIntervention(ev chatEvent) {
+func (m *tuiModel) onAgentReasoningIntervention(ev proxyclient.ChatEvent) {
 	body := formatAgentReasoningIntervention(ev.Data)
 	if body != "" {
 		m.chat = append(m.chat, chatMessage{
@@ -850,7 +852,7 @@ func (m *tuiModel) onAgentReasoningIntervention(ev chatEvent) {
 // Stream cut: the proxy detected the model's content repeating
 // itself mid-stream and stopped the call rather than letting it
 // spin to the token limit.
-func (m *tuiModel) onContentLoopCut(ev chatEvent) {
+func (m *tuiModel) onContentLoopCut(ev proxyclient.ChatEvent) {
 	var p struct {
 		Chars int `json:"chars"`
 	}
@@ -866,7 +868,7 @@ func (m *tuiModel) onContentLoopCut(ev chatEvent) {
 //
 // Stream cut: an edit_file old_str had stopped matching its file and was
 // still arriving (#215), so the call could not succeed.
-func (m *tuiModel) onOldStrCut(ev chatEvent) {
+func (m *tuiModel) onOldStrCut(ev proxyclient.ChatEvent) {
 	var p struct {
 		Path         string `json:"path"`
 		MatchedLines int    `json:"matched_lines"`
@@ -887,7 +889,7 @@ func (m *tuiModel) onOldStrCut(ev chatEvent) {
 // Without its case in appendChatEvent the user watched a stream stop and a
 // new turn begin with nothing said in between, and the run reported an
 // event the TUI could not render (measured on 2 of 28 benchmark sessions).
-func (m *tuiModel) onAgentLoopRecovery(ev chatEvent) {
+func (m *tuiModel) onAgentLoopRecovery(ev proxyclient.ChatEvent) {
 	var p struct {
 		Turn    int    `json:"turn"`
 		Attempt int    `json:"attempt"`
@@ -908,7 +910,7 @@ func (m *tuiModel) onAgentLoopRecovery(ev chatEvent) {
 //
 // Stream cut: the model burned its reasoning budget without ever
 // emitting content, so the proxy stopped the call and re-prompts.
-func (m *tuiModel) onReasoningBudgetCut(ev chatEvent) {
+func (m *tuiModel) onReasoningBudgetCut(ev proxyclient.ChatEvent) {
 	var p struct {
 		ReasoningChars int `json:"reasoning_chars"`
 	}
@@ -923,7 +925,7 @@ func (m *tuiModel) onReasoningBudgetCut(ev chatEvent) {
 //
 // Symbol-index context: the proxy matched project symbols against
 // the user's request and injected their snippets as a system note.
-func (m *tuiModel) onSymbolIndexInjected(ev chatEvent) {
+func (m *tuiModel) onSymbolIndexInjected(ev proxyclient.ChatEvent) {
 	body := formatSymbolIndexInjected(ev.Data)
 	if body != "" {
 		m.chat = append(m.chat, chatMessage{
@@ -939,7 +941,7 @@ func (m *tuiModel) onSymbolIndexInjected(ev chatEvent) {
 // we already drop per-token noise in the proxy callback — what
 // arrives here is structural ("candidate 1/3 scored 0.80") and
 // fits one row per event.
-func (m *tuiModel) onV3Plan(ev chatEvent) {
+func (m *tuiModel) onV3Plan(ev proxyclient.ChatEvent) {
 	body := formatV3StageEvent(ev.Type, ev.Data)
 	if body != "" {
 		m.chat = append(m.chat, chatMessage{
@@ -953,7 +955,7 @@ func (m *tuiModel) onV3Plan(ev chatEvent) {
 // Plan loaded — proxy emits one of these after a plan is selected
 // (initial generation OR revision). Carries the full step list,
 // which we stash on m.plan and render as a multi-line chat row.
-func (m *tuiModel) onPlanLoaded(ev chatEvent) {
+func (m *tuiModel) onPlanLoaded(ev proxyclient.ChatEvent) {
 	if msg, ok := applyPlanLoaded(m, ev.Data); ok {
 		m.chat = append(m.chat, msg)
 	}
@@ -965,7 +967,7 @@ func (m *tuiModel) onPlanLoaded(ev chatEvent) {
 // step in m.plan and renders a one-liner; matched=false (off-plan)
 // is silent here to avoid clogging chat. The off-streak that
 // triggers a revision flows through plan_revise below.
-func (m *tuiModel) onPlanAdherence(ev chatEvent) {
+func (m *tuiModel) onPlanAdherence(ev proxyclient.ChatEvent) {
 	if body := applyPlanAdherence(m, ev.Data); body != "" {
 		m.chat = append(m.chat, chatMessage{
 			Role: roleSystem, Meta: "plan", Body: body,
@@ -978,7 +980,7 @@ func (m *tuiModel) onPlanAdherence(ev chatEvent) {
 // Plan revising — agent went off-plan past the threshold. The
 // next plan_loaded supersedes m.plan; this row tells the user
 // re-planning is in flight.
-func (m *tuiModel) onPlanRevise(ev chatEvent) {
+func (m *tuiModel) onPlanRevise(ev proxyclient.ChatEvent) {
 	if body := applyPlanRevise(m, ev.Data); body != "" {
 		m.chat = append(m.chat, chatMessage{
 			Role: roleSystem, Meta: "plan", Body: body,
@@ -1294,11 +1296,11 @@ func formatLensPerStep(data json.RawMessage) string {
 // _end with success=false qualifies because the only reason a stage
 // would mark itself failed during a user-cancelled turn is the
 // context-cancelled propagation.
-func envelopeLooksCancelled(ev Envelope) bool {
-	if ev.Type == EvtError {
+func envelopeLooksCancelled(ev proxyclient.Envelope) bool {
+	if ev.Type == proxyclient.EvtError {
 		return true
 	}
-	if ev.Type == EvtStageEnd {
+	if ev.Type == proxyclient.EvtStageEnd {
 		if ok, _ := ev.Payload["success"].(bool); !ok {
 			return true
 		}

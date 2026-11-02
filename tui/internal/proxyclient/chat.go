@@ -1,17 +1,16 @@
-// PC-062: chat clients for the ATLAS agent stream and the demo's one-shot
-// raw OpenAI-compatible stream.
+// Package proxyclient is the TUI's client for the ATLAS proxy (PC-062): the
+// agent stream and the demo's one-shot raw OpenAI-compatible stream.
 //
 // Two SSE protocols flow into this TUI:
 //
-//   /events  — typed Envelope stream (streamEvents, below) — pipeline visibility
-//   /v1/agent — {type, data} chat stream (this file) — assistant reply
-//   /v1/chat/completions — standard OpenAI SSE used only by the raw demo pane
+//	/events  — typed Envelope stream (streamEvents, below) — pipeline visibility
+//	/v1/agent — {type, data} chat stream (this file) — assistant reply
+//	/v1/chat/completions — standard OpenAI SSE used only by the raw demo pane
 //
 // The chat stream is request-scoped: each user message opens a fresh
 // SSE connection that closes when the agent loop returns [DONE]. This
 // is intentional — chat turns are RPC-like, not a persistent feed.
-
-package main
+package proxyclient
 
 import (
 	"bufio"
@@ -30,17 +29,17 @@ import (
 	"github.com/itigges22/atlas-tui/internal/debuglog"
 )
 
-// chatEvent mirrors the SSEEvent shape in proxy/internal/wire/messages.go.
+// ChatEvent mirrors the SSEEvent shape in proxy/internal/wire/messages.go.
 // Different from Envelope — this is the older, simpler chat protocol.
-type chatEvent struct {
+type ChatEvent struct {
 	Type string          `json:"type"`
 	Data json.RawMessage `json:"data"`
 }
 
-// historyMessage is one prior-turn user/assistant text row sent to the
+// HistoryMessage is one prior-turn user/assistant text row sent to the
 // proxy on each /v1/agent call. Field shape MUST match the historyMsg
 // struct in proxy/agent_handler.go's handleAgent.
-type historyMessage struct {
+type HistoryMessage struct {
 	Role    string `json:"role"` // "user" or "assistant"
 	Content string `json:"content"`
 }
@@ -52,7 +51,7 @@ type agentRequest struct {
 	WorkingDir string           `json:"working_dir"`
 	Mode       string           `json:"mode"`       // "default" | "accept-edits" | "yolo"
 	SessionID  string           `json:"session_id"` // PC-062: required so /cancel can target this turn
-	History    []historyMessage `json:"history,omitempty"`
+	History    []HistoryMessage `json:"history,omitempty"`
 	// SessionAllowedTools carries the tools the user approved for the whole
 	// session so the proxy skips the interactive permission prompt for them
 	// on later turns. Populated from the model's session allowlist.
@@ -97,15 +96,15 @@ func newRawChatRequest(ctx context.Context, proxyURL, modelID, message string) (
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	setProxyAuth(req)
+	SetProxyAuth(req)
 	return req, nil
 }
 
-// sendRawChat makes one direct OpenAI-compatible model request. It never uses
+// SendRawChat makes one direct OpenAI-compatible model request. It never uses
 // /v1/agent, so the raw demo pane has no planner, tool loop, candidate search,
 // filesystem access, or other orchestration layer.
-func sendRawChat(ctx context.Context, proxyURL, modelID, message string,
-	out chan<- chatEvent) error {
+func SendRawChat(ctx context.Context, proxyURL, modelID, message string,
+	out chan<- ChatEvent) error {
 	if strings.TrimSpace(modelID) == "" {
 		modelID = "local-model"
 	}
@@ -163,7 +162,7 @@ func sendRawChat(ctx context.Context, proxyURL, modelID, message string,
 // or content. It returns the total and completion token counts the server
 // reported, or zeros when it reported none.
 func relayRawChatStream(resp *http.Response, started time.Time, content, reasoning *strings.Builder,
-	out chan<- chatEvent) (int, int, error) {
+	out chan<- ChatEvent) (int, int, error) {
 	firstToken := true
 	totalTokens := 0
 	completionTokens := 0
@@ -216,7 +215,7 @@ type rawChatDelta struct {
 // adds it to reasoning and content. The first delta with text also sends
 // llm_first_token. It returns firstToken, which is false from that delta on.
 func relayRawChatDelta(delta rawChatDelta, firstToken bool, started time.Time,
-	content, reasoning *strings.Builder, out chan<- chatEvent) bool {
+	content, reasoning *strings.Builder, out chan<- ChatEvent) bool {
 	if firstToken && (delta.Content != "" || delta.ReasoningContent != "") {
 		firstToken = false
 		out <- makeChatEvent("llm_first_token", map[string]int64{
@@ -234,18 +233,18 @@ func relayRawChatDelta(delta rawChatDelta, firstToken bool, started time.Time,
 	return firstToken
 }
 
-func makeChatEvent(eventType string, payload interface{}) chatEvent {
+func makeChatEvent(eventType string, payload interface{}) ChatEvent {
 	data, _ := json.Marshal(payload)
-	return chatEvent{Type: eventType, Data: data}
+	return ChatEvent{Type: eventType, Data: data}
 }
 
-// postPermissionDecision answers a mid-turn "permission_request" by POSTing to
+// PostPermissionDecision answers a mid-turn "permission_request" by POSTing to
 // /v1/permission. decision is "allow" or "deny"; scope is "once" or "session".
 // sessionID is the turn's session id (the value sent on THIS turn) and
 // toolCallID echoes the id carried on the request. A 404 means the pending
 // request already resolved (turn cancelled or timed out) — nothing left to
 // answer, so it is treated as success. Best-effort with a short timeout.
-func postPermissionDecision(proxyURL, sessionID, toolCallID, decision, scope string) error {
+func PostPermissionDecision(proxyURL, sessionID, toolCallID, decision, scope string) error {
 	if sessionID == "" || toolCallID == "" {
 		return fmt.Errorf("empty session id or tool call id")
 	}
@@ -261,7 +260,7 @@ func postPermissionDecision(proxyURL, sessionID, toolCallID, decision, scope str
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	setProxyAuth(req)
+	SetProxyAuth(req)
 	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
 	if err != nil {
 		return err
@@ -273,11 +272,11 @@ func postPermissionDecision(proxyURL, sessionID, toolCallID, decision, scope str
 	return nil
 }
 
-// cancelTurn POSTs /cancel for a session_id. Best-effort: returns
+// CancelTurn POSTs /cancel for a session_id. Best-effort: returns
 // immediately on connection failure. The TCP-disconnect path in the
 // chat client is the primary cancel mechanism; this is defense-in-depth
 // for cases where a reverse proxy buffers the disconnect.
-func cancelTurn(proxyURL, sessionID string) error {
+func CancelTurn(proxyURL, sessionID string) error {
 	if sessionID == "" {
 		return fmt.Errorf("empty session id")
 	}
@@ -288,7 +287,7 @@ func cancelTurn(proxyURL, sessionID string) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	setProxyAuth(req)
+	SetProxyAuth(req)
 	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -298,21 +297,18 @@ func cancelTurn(proxyURL, sessionID string) error {
 	return nil
 }
 
-// demoOpts bundles the per-request flags the /demo split-pane needs.
-// Held in a struct rather than added as positional args to keep
-// sendChatOpts readable as the demo grows.
-// taskMode is what the CLIENT declares about a request: whether the person
+// TaskMode is what the CLIENT declares about a request: whether the person
 // asked for the workspace to change, or asked a question about it. It mirrors
 // the proxy's task_mode and exists so the decision is a control the user
 // operates rather than something inferred from the words they typed.
 //
 // Nothing here reads the message. The same sentence goes either way depending
 // only on which control the user used.
-type taskMode string
+type TaskMode string
 
 const (
-	taskModeWork     taskMode = "work"
-	taskModeQuestion taskMode = "question"
+	TaskModeWork     TaskMode = "work"
+	TaskModeQuestion TaskMode = "question"
 )
 
 // taskContract is the optional structured declaration sent with a request.
@@ -323,62 +319,66 @@ const (
 // must exist or which command must run, and guessing from their prose is the
 // thing this replaces. A harness that genuinely knows fills them in.
 type taskContract struct {
-	TaskMode        taskMode `json:"task_mode"`
+	TaskMode        TaskMode `json:"task_mode"`
 	ExpectedOutputs []string `json:"expected_outputs,omitempty"`
 	Verification    []string `json:"verification,omitempty"`
 }
 
-type demoOpts struct {
-	disableFreshSlot bool
-	sandboxSubdir    string
-	// allowedTools is the session allowlist sent as session_allowed_tools so
+// ChatOptions is everything about one /v1/agent turn besides the message.
+// Held in a struct rather than positional args, so a caller names each field.
+type ChatOptions struct {
+	WorkingDir string
+	// Mode is the permission mode: "default", "accept-edits" or "yolo".
+	Mode      string
+	SessionID string
+	// History is the prior-turn user/assistant transcript so the agent can
+	// answer follow-ups. nil for the first turn of a session.
+	History []HistoryMessage
+	// DisableFreshSlot and SandboxSubdir are the /demo split-pane flags: the
+	// V3 side keeps PC-045 from wiping the pre-warmed prefix cache, and writes
+	// files into per-side sandbox subdirs so the two panes never clobber each
+	// other.
+	DisableFreshSlot bool
+	SandboxSubdir    string
+	// AllowedTools is the session allowlist sent as session_allowed_tools so
 	// the proxy skips the permission prompt for pre-approved tools.
-	allowedTools []string
-	// taskMode is the client's declaration for this one request. Empty means
+	AllowedTools []string
+	// TaskMode is the client's declaration for this one request. Empty means
 	// the ordinary case, which is work -- an owned sender always declares
 	// something, because a request with no contract is indistinguishable from
 	// a stranger's.
-	taskMode taskMode
+	TaskMode TaskMode
 	// omitTaskContract sends no contract at all. Exactly one fixture sets it,
 	// to prove an external or legacy caller is still accepted; ordinary owned
 	// traffic must never reach that path by accident.
 	omitTaskContract bool
 }
 
-// sendChatOpts opens an SSE POST to /v1/agent and forwards each parsed
+// SendChat opens an SSE POST to /v1/agent and forwards each parsed
 // event to out. Returns nil on clean [DONE], err otherwise. Caller is
 // responsible for closing the channel after this returns.
-//
-// history is the prior-turn user/assistant transcript so the agent can
-// answer follow-ups. Pass nil for the first turn of a session.
-//
-// opts carries the /demo split-pane flags (pass demoOpts{} otherwise):
-// the V3 side keeps PC-045 from wiping the pre-warmed prefix cache
-// (disableFreshSlot), and writes files into per-side sandbox subdirs so
-// the two panes never clobber each other (sandboxSubdir).
-func sendChatOpts(ctx context.Context, proxyURL, message, workingDir, mode,
-	sessionID string, history []historyMessage,
-	opts demoOpts, out chan<- chatEvent) error {
+func SendChat(ctx context.Context, proxyURL, message string, opts ChatOptions,
+	out chan<- ChatEvent) error {
 
 	var contract *taskContract
 	if !opts.omitTaskContract {
 		// Declared, never derived: the only input is the caller's selection,
 		// and an unselected owned caller is work.
-		mode := opts.taskMode
+		mode := opts.TaskMode
 		if mode == "" {
-			mode = taskModeWork
+			mode = TaskModeWork
 		}
 		contract = &taskContract{TaskMode: mode}
 	}
 	body, err := json.Marshal(agentRequest{
 		Message:             message,
-		WorkingDir:          workingDir,
-		Mode:                mode,
-		SessionID:           sessionID,
-		History:             history,
-		SessionAllowedTools: opts.allowedTools,
-		DisableFreshSlot:    opts.disableFreshSlot,
-		SandboxSubdir:       opts.sandboxSubdir,
+		WorkingDir:          opts.WorkingDir,
+		Mode:                opts.Mode,
+		SessionID:           opts.SessionID,
+		History:             opts.History,
+		SessionAllowedTools: opts.AllowedTools,
+		DisableFreshSlot:    opts.DisableFreshSlot,
+		SandboxSubdir:       opts.SandboxSubdir,
 		TaskContract:        contract,
 	})
 	if err != nil {
@@ -392,7 +392,7 @@ func sendChatOpts(ctx context.Context, proxyURL, message, workingDir, mode,
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	setProxyAuth(req)
+	SetProxyAuth(req)
 
 	// No overall timeout — agent turns can run minutes for long
 	// generations. Connection-level timeout only.
@@ -426,7 +426,7 @@ func sendChatOpts(ctx context.Context, proxyURL, message, workingDir, mode,
 
 // parseChatSSE reads the chat-protocol SSE stream. Returns nil when it
 // sees `data: [DONE]` (clean end-of-turn) or io.EOF.
-func parseChatSSE(ctx context.Context, r io.Reader, out chan<- chatEvent) error {
+func parseChatSSE(ctx context.Context, r io.Reader, out chan<- ChatEvent) error {
 	scanner := bufio.NewScanner(r)
 	// tool_result frames carry diff blobs; bump the buffer for the
 	// same reason streamEvents does below.
@@ -452,7 +452,7 @@ func parseChatSSE(ctx context.Context, r io.Reader, out chan<- chatEvent) error 
 		if data == "[DONE]" {
 			return nil
 		}
-		var ev chatEvent
+		var ev ChatEvent
 		if err := json.Unmarshal([]byte(data), &ev); err != nil {
 			continue // skip malformed frame, don't kill the turn
 		}
@@ -469,7 +469,7 @@ func parseChatSSE(ctx context.Context, r io.Reader, out chan<- chatEvent) error 
 }
 
 // loadBearerToken returns the token from the api-keys file, if one is
-// configured. setProxyAuth sends it only when no service token is: a proxy
+// configured. SetProxyAuth sends it only when no service token is: a proxy
 // with a service token accepts that token and nothing else.
 //
 // Search order: $ATLAS_API_KEYS_PATH, then ./secrets/api-keys.json
@@ -554,10 +554,10 @@ func loadServiceToken() string {
 	return strings.TrimSpace(string(data))
 }
 
-// setProxyAuth puts the credential the proxy checks on a request to it. The
+// SetProxyAuth puts the credential the proxy checks on a request to it. The
 // service token wins: when the installation has one, the proxy accepts only
 // it, and sending the api-keys token instead got a 401 on every call.
-func setProxyAuth(req *http.Request) {
+func SetProxyAuth(req *http.Request) {
 	tok := serviceToken
 	if tok == "" {
 		tok = loadBearerToken()
@@ -583,11 +583,11 @@ func (t *tokenTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return base.RoundTrip(req)
 }
 
-// installTokenTransport covers the clients that use the process default
+// InstallTokenTransport covers the clients that use the process default
 // transport and set no header themselves. Requests that build their own
 // transport (the chat stream, the raw demo lane, the events stream) set
-// the header with setProxyAuth; the wrapper never ran for them.
-func installTokenTransport() {
+// the header with SetProxyAuth; the wrapper never ran for them.
+func InstallTokenTransport() {
 	if serviceToken == "" {
 		return
 	}
@@ -636,7 +636,7 @@ func streamEvents(ctx context.Context, eventsURL string, out chan<- Envelope) er
 		return fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Accept", "text/event-stream")
-	setProxyAuth(req)
+	SetProxyAuth(req)
 
 	client := &http.Client{
 		// No timeout on the response body — SSE streams indefinitely.
@@ -706,10 +706,10 @@ func parseSSE(ctx context.Context, r io.Reader, out chan<- Envelope) error {
 	return scanner.Err()
 }
 
-// streamEventsWithReconnect wraps streamEvents with exponential backoff
+// StreamEventsWithReconnect wraps streamEvents with exponential backoff
 // reconnection. Useful when the proxy restarts mid-session — TUI keeps
 // running rather than dying on the first dropped connection.
-func streamEventsWithReconnect(ctx context.Context, eventsURL string, out chan<- Envelope) {
+func StreamEventsWithReconnect(ctx context.Context, eventsURL string, out chan<- Envelope) {
 	const initialBackoff = 500 * time.Millisecond
 	backoff := initialBackoff
 	maxBackoff := 30 * time.Second

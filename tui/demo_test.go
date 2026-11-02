@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/itigges22/atlas-tui/internal/proxyclient"
 )
 
 func TestFormatDemoModelLabel(t *testing.T) {
@@ -145,7 +146,7 @@ func TestDemoLabelsRawCompletionAsModelNotAgent(t *testing.T) {
 	}
 	_, _ = m.Update(demoBatchMsg{stream: []demoStreamMsg{{
 		side: "raw",
-		evt:  chatEvent{Type: "text", Data: payload},
+		evt:  proxyclient.ChatEvent{Type: "text", Data: payload},
 	}}})
 	if len(m.rawChild.chat) != 1 || m.rawChild.chat[0].Meta != "raw model" {
 		t.Fatalf("raw chat rows = %#v", m.rawChild.chat)

@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/itigges22/atlas-tui/internal/proxyclient"
 )
 
 // stageStatus tracks one logical pipeline stage's lifecycle.
@@ -61,11 +63,11 @@ func newPipelineState() pipelineState {
 
 // apply mutates p with the effect of one envelope. Pure function: same
 // envelope sequence → same state.
-func (p *pipelineState) apply(ev Envelope) {
+func (p *pipelineState) apply(ev proxyclient.Envelope) {
 	p.totalEvents++
 
 	switch ev.Type {
-	case EvtStageStart:
+	case proxyclient.EvtStageStart:
 		ts := envTime(ev)
 		if existing, ok := p.byName[ev.Stage]; ok {
 			// Re-entry into a logical stage (e.g. probe_retry). Reset
@@ -83,7 +85,7 @@ func (p *pipelineState) apply(ev Envelope) {
 			p.order = append(p.order, ev.Stage)
 		}
 
-	case EvtStageEnd:
+	case proxyclient.EvtStageEnd:
 		ts := envTime(ev)
 		s, ok := p.byName[ev.Stage]
 		if !ok {
@@ -100,23 +102,23 @@ func (p *pipelineState) apply(ev Envelope) {
 			s.Detail = d
 		}
 
-	case EvtToolCall:
+	case proxyclient.EvtToolCall:
 		p.toolCalls++
 		if turn, ok := ev.Payload["turn"].(float64); ok {
 			p.currentTurn = int(turn)
 		}
 
-	case EvtToolResult:
+	case proxyclient.EvtToolResult:
 		if boolField(ev.Payload, "success") {
 			p.toolSuccesses++
 		} else {
 			p.toolFailures++
 		}
 
-	case EvtError:
+	case proxyclient.EvtError:
 		p.errors++
 
-	case EvtDone:
+	case proxyclient.EvtDone:
 		p.done = true
 		p.doneSuccess = boolField(ev.Payload, "success")
 		if v, ok := ev.Payload["total_duration_ms"].(float64); ok {
@@ -154,7 +156,7 @@ func (p *pipelineState) activeStage() *stageStatus {
 	return candidates[0]
 }
 
-func envTime(ev Envelope) time.Time {
+func envTime(ev proxyclient.Envelope) time.Time {
 	return time.Unix(0, int64(ev.Timestamp*1e9))
 }
 

@@ -12,6 +12,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/itigges22/atlas-tui/internal/debuglog"
+	"github.com/itigges22/atlas-tui/internal/proxyclient"
 )
 
 // handlePermKey answers the permission modal. y=allow once, a=allow for the
@@ -67,7 +68,7 @@ func (m tuiModel) handlePermKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *tuiModel) postPermissionCmd(sessionID, toolCallID, decision, scope string) tea.Cmd {
 	proxyURL := m.proxyURL
 	return func() tea.Msg {
-		_ = postPermissionDecision(proxyURL, sessionID, toolCallID, decision, scope)
+		_ = proxyclient.PostPermissionDecision(proxyURL, sessionID, toolCallID, decision, scope)
 		return nil
 	}
 }
@@ -155,7 +156,7 @@ func (m tuiModel) cancelTurnOrQuit() (tea.Model, tea.Cmd) {
 			Body: "turn cancelled",
 		})
 		return m, func() tea.Msg {
-			_ = cancelTurn(proxyURL, sid)
+			_ = proxyclient.CancelTurn(proxyURL, sid)
 			return nil
 		}
 	}

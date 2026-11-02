@@ -1,6 +1,6 @@
 // Turn/session state for the chat: session_id minting, rolling history,
 // session-approved tools, and cancellation. Conventions mirror the TUI
-// reference client (tui/chat.go) — see the plan and docs/API.md.
+// reference client (tui/internal/proxyclient/chat.go) — see the plan and docs/API.md.
 //
 // Deliberately vscode-free so it is unit-testable under plain vitest.
 
@@ -8,7 +8,7 @@ import { randomBytes } from 'node:crypto';
 import type { AgentRequest, ChatEvent, HistoryMessage, PermissionMode, TaskMode } from '../client/types';
 
 /** The proxy caps replayed history at the most recent 40 entries; we cap
- * client-side too so the request body never grows unbounded (tui/chat.go). */
+ * client-side too so the request body never grows unbounded (tui/model.go). */
 export const HISTORY_LIMIT = 40;
 
 /** Minimal client surface TurnManager needs — satisfied by AtlasClient,
@@ -19,7 +19,7 @@ export interface TurnClient {
 }
 
 /** Client-minted per-turn session id: 12 random bytes, hex-encoded
- * (24 chars) — same recipe as tui/chat.go. */
+ * (24 chars) — same recipe as tui/model.go. */
 export function mintSessionId(): string {
 	return randomBytes(12).toString('hex');
 }
@@ -80,7 +80,7 @@ export class TurnManager {
 			history: [...this.history],
 			// Declared, never derived: the only input is the caller's
 			// selection. The obligation lists stay absent for the same reason
-			// the TUI's do (tui/chat.go).
+			// the TUI's do (tui/internal/proxyclient/chat.go).
 			task_contract: { task_mode: taskMode },
 		};
 		if (this.sessionAllowedTools.size > 0) {
@@ -113,7 +113,7 @@ export class TurnManager {
 			const finalText = assistantText !== '' ? assistantText : doneSummary;
 			if (finalText !== '') {
 				// TUI convention: assistant history entries are re-wrapped in
-				// the {"type":"text","content":...} envelope (tui/chat.go).
+				// the {"type":"text","content":...} envelope (tui/model.go).
 				this.history.push({
 					role: 'assistant',
 					content: JSON.stringify({ type: 'text', content: finalText }),

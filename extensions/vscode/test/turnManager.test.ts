@@ -93,7 +93,7 @@ describe('TurnManager', () => {
 		const turns = new TurnManager();
 
 		// The message is identical: the declaration tracks the control the
-		// user operated, never the words they typed (tui/chat_test.go).
+		// user operated, never the words they typed (tui/internal/proxyclient/chat_test.go).
 		const same = 'what does solve.py do?';
 		await drain(turns.runTurn(client, same, 'default', 'work', '/tmp/ws'));
 		await drain(turns.runTurn(client, same, 'default', 'question', '/tmp/ws'));
