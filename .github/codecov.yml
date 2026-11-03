@@ -47,7 +47,7 @@ flag_management:
     - name: python
       paths:
         - atlas/
-        - v3-service/
+        - services/v3-service/
         - geometric-lens/
         - services/sandbox/
         - scripts/

@@ -16,7 +16,7 @@ path reads each token's state from the same forward
 `embedding_extractor.py`). A number put in place of a score reads as a
 verdict: to the min-energy selector, energy 0.0 is the best energy in the
 pool, and to the allocator, 0.5 is a neutral verdict
-(`v3-service/scoring.py`). The case that showed it is in the
+(`services/v3-service/scoring.py`). The case that showed it is in the
 [CHANGELOG](../../CHANGELOG.md) ("Lens scoring boundary").
 
 The limit is not a property of the text. The generation budgets that
@@ -26,8 +26,8 @@ the largest micro-batch `atlas tier fit` will choose (2,048), and the
 compute buffer grows with the micro-batch (about ubatch × n_embd × 280
 bytes: 4.4 GB at 4,096 on a 3,840-dim model), so no configuration on the
 reference hardware scores every candidate ATLAS can generate
-(`v3-service/stages/plan_search.py`; `get_max_tokens` in
-`v3-service/stages/budget_forcing.py`; `agentMaxTokens` in
+(`services/v3-service/stages/plan_search.py`; `get_max_tokens` in
+`services/v3-service/stages/budget_forcing.py`; `agentMaxTokens` in
 `services/proxy/model_prompt.go`; `fit_runtime_knobs` in `atlas/commands/fit.py`).
 
 Splitting the input is not a score either. Tokens in a later piece are

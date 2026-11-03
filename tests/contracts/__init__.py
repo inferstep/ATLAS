@@ -40,7 +40,7 @@ COPY_NOTICE_MARKER = "CANONICAL COPY NOTICE"
 STRUCTURED_LOG_COPIES = [
     REPO / "geometric-lens" / "geometric_lens" / "structured_log.py",
     REPO / "services" / "sandbox" / "structured_log.py",
-    REPO / "v3-service" / "structured_log.py",
+    REPO / "services" / "v3-service" / "structured_log.py",
 ]
 
 # atlas/redact.py is the same module under a different name, which is why
@@ -48,7 +48,7 @@ STRUCTURED_LOG_COPIES = [
 PRIVATE_VALUE_COPIES = [
     REPO / "geometric-lens" / "geometric_lens" / "private_values.py",
     REPO / "services" / "sandbox" / "private_values.py",
-    REPO / "v3-service" / "private_values.py",
+    REPO / "services" / "v3-service" / "private_values.py",
     REPO / "atlas" / "redact.py",
 ]
 

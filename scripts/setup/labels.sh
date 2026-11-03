@@ -41,7 +41,7 @@ LABELS=(
     "area/proxy|1d76db|Go agent loop and SSE contract (services/proxy/)"
     "area/tui|1d76db|Bubbletea terminal UI (clients/tui/)"
     "area/cli|1d76db|Python atlas CLI (atlas/)"
-    "area/v3|1d76db|V3 candidate generation and selection (v3-service/)"
+    "area/v3|1d76db|V3 candidate generation and selection (services/v3-service/)"
     "area/lens|1d76db|Geometric Lens scoring (geometric-lens/)"
     "area/inference|1d76db|llama-server images and patches (services/inference/)"
     "area/sandbox|1d76db|Sandboxed execution (services/sandbox/)"

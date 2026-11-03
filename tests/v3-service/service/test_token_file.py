@@ -10,7 +10,8 @@ import pytest
 import adapters
 from stages import llm_client
 
-SANDBOX = Path(__file__).resolve().parents[3] / "services" / "sandbox"
+REPO = Path(__file__).resolve().parents[3]
+SANDBOX = REPO / "services" / "sandbox"
 
 
 def sandbox_server():
@@ -44,3 +45,18 @@ def test_a_token_file_that_cannot_be_read_stops_it_and_one_that_is_not_there_is_
     with pytest.raises(SystemExit) as stop:
         load()
     assert f"the service token file {unreadable} cannot be read (Permission denied), so {who} stops" in str(stop.value)
+
+
+def test_the_model_client_falls_back_to_the_checkouts_secrets_folder(monkeypatch):
+    # With no token file named and no container mount, the client reads the
+    # checkout's own secrets/service-token, at the root of the repository.
+    monkeypatch.delenv("ATLAS_SERVICE_TOKEN_FILE", raising=False)
+    tried = []
+
+    def not_there(path, *args, **kwargs):
+        tried.append(path)
+        raise FileNotFoundError(path)
+
+    monkeypatch.setattr(llm_client, "open", not_there, raising=False)
+    assert llm_client._service_token() == ""
+    assert tried == ["/run/atlas-secrets/service-token", str(REPO / "secrets" / "service-token")]

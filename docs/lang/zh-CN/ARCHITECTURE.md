@@ -406,7 +406,7 @@ flowchart TD
 
 ##### v3-service：`/v3/plan`（Python）
 
-定义在 `v3-service/planning.py`，由 `v3-service/main.py` 提供路由。处理程序：
+定义在 `services/v3-service/planning.py`，由 `services/v3-service/main.py` 提供路由。处理程序：
 
 1. 用用户消息、工作目录和截断后的项目文件渲染 `PLAN_PROMPT_TEMPLATE`。
 2. 以种子偏移和温度 `[0.3, 0.5, 0.7]` 调用 LLM 3 次。默认发送可选的 `chat_template_kwargs: {enable_thinking: false}` 控制项，并为计划 JSON 预留 2,048 个输出 token。支持的模板会关闭其推理通道，其他模板忽略该标志。`ATLAS_PLAN_THINKING=1` 请求推理，并把预算提高到 8,192。不注入任何针对模型系列的提示指令。
@@ -457,7 +457,7 @@ API 契约见 [API.md § POST /v3/plan](../../reference/API.md#post-v3plan)。
 | `planAutoReviseThreshold` | 5 | 触发自动修订前，非侦察的偏离计划工具调用次数（侦察工具绝不延长连续计数，因此自然的探索不算在内）。足够严格，能及早发现错误的计划；又足够宽松，几次零星的偏离调用不会被判为折腾。 |
 | `planMaxRevisions` | 2 | 每个循环的自动修订上限。超过之后，最后的计划保留，只是不再修订。如果一次修订返回相同的步骤，则丢弃计划。防止偏离计划的异常输入让 `/v3/plan` 无休止地循环。 |
 
-`v3-service/planning.py` 常量：
+`services/v3-service/planning.py` 常量：
 
 | 常量 | 默认值 | 理由 |
 |---|---|---|
@@ -562,7 +562,7 @@ flowchart LR
 
 这条下限正是它与此前被移除的纯 C(x) 分配器的区别：那一版没有下限，会把 k=1 交给探测*刚刚失败*的任务。由 lens 驱动的分配是否优于固定或随机分配的层级，目前尚未测量。此前的四臂比较（带闸门、固定 k=3、把同样的层级组合在任务间打乱、k=8，每臂 n=175）无法作为任何一方的证据：它在 Qwen3.5-9B 上、使用不在本仓库中的打过补丁的运行器、开启了线上闸门无法使用的升级思考模式、并在训练 G(x) 头所用的 LiveCodeBench 任务上运行，而在该样本量下各臂的差异都在噪声范围之内。
 
-线上路径的差异：代理的 V3 桥接会在 `ATLAS_V3_TIMEOUT`（默认 180s）后放弃一次 pipeline 调用，这是 bench 从未有过的上限；因此无限制地升级到 k=8 会把预算全花在生成上，最终返回超时兜底，而不是时钟本可以产出的 k=3 答案。为此线上编排器会把剩余的实际时间以及在该任务上观测到的单次调用延迟一并传入，闸门则把 tier 降到预算真正能生成的水平 —— 同时保留一次精化迭代，使升级不会饿死 Phase 3 —— 但绝不会低于下限。bench 运行器不传预算，严格按测得的结果分配。实现位于 `v3-service/stages/cxgx_gate.py`，由两个编排器共享。
+线上路径的差异：代理的 V3 桥接会在 `ATLAS_V3_TIMEOUT`（默认 180s）后放弃一次 pipeline 调用，这是 bench 从未有过的上限；因此无限制地升级到 k=8 会把预算全花在生成上，最终返回超时兜底，而不是时钟本可以产出的 k=3 答案。为此线上编排器会把剩余的实际时间以及在该任务上观测到的单次调用延迟一并传入，闸门则把 tier 降到预算真正能生成的水平 —— 同时保留一次精化迭代，使升级不会饿死 Phase 3 —— 但绝不会低于下限。bench 运行器不传预算，严格按测得的结果分配。实现位于 `services/v3-service/stages/cxgx_gate.py`，由两个编排器共享。
 
 **Phase 1: 约束驱动的生成**
 
@@ -595,7 +595,7 @@ Wait 注入会追加 "Wait, let me reconsider.\n" 以请求更长的一轮推理
 
 ### 模块图
 
-pipeline 阶段是 `v3-service/stages/` 中的 12 个 Python 模块。`v3-service/pipeline.py` 编排其中 11 个（10 个直接调用，`constraint_refinement` 通过精化循环）；`embedding_store` 只在离线 bench 运行器（`atlas/bench/v3_runner.py`）下运行，该运行器会把 checkout 中的 `v3-service/` 加入自身路径，因此两个调用方共享同一份阶段实现：
+pipeline 阶段是 `services/v3-service/stages/` 中的 12 个 Python 模块。`services/v3-service/pipeline.py` 编排其中 11 个（10 个直接调用，`constraint_refinement` 通过精化循环）；`embedding_store` 只在离线 bench 运行器（`atlas/bench/v3_runner.py`）下运行，该运行器会把 checkout 中的 `services/v3-service/` 加入自身路径，因此两个调用方共享同一份阶段实现：
 
 ```mermaid
 graph LR

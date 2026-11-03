@@ -17,7 +17,7 @@ import threading
 
 import pytest
 
-V3 = os.path.join(os.path.dirname(__file__), "..", "..", "..", "v3-service")
+V3 = os.path.join(os.path.dirname(__file__), "..", "..", "..", "services", "v3-service")
 if V3 not in sys.path:
     sys.path.insert(0, V3)
 

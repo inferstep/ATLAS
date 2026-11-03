@@ -15,7 +15,7 @@ import os
 import sys
 import threading
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "v3-service"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "services", "v3-service"))
 import pipeline
 
 

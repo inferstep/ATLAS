@@ -605,7 +605,7 @@ neutral pair.
 
 The neutral path is never part of the product. If you see `NEUTRAL_COMBINED`
 in `atlas/bench/` and think it breaks "the lens is required", this is why it
-isn't a bug. The product's scorer in `v3-service/scoring.py` raises
+isn't a bug. The product's scorer in `services/v3-service/scoring.py` raises
 `LensUnavailable` instead.
 
 ---

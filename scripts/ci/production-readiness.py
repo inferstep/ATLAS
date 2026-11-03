@@ -27,7 +27,7 @@ PYTHON_TARGETS = (
     "atlas",
     "tests",
     "geometric-lens",
-    "v3-service",
+    "services/v3-service",
     "services/sandbox",
 )
 # Mirrors the CI python-tests matrix (.github/workflows/test.yml) plus the
@@ -39,7 +39,7 @@ PYTEST_PATHS = ("tests/v3-service", "tests/atlas",
                 "tests/infrastructure", "tests/concurrency", "tests/perf",
                 "tests/contracts", "tests/e2e")
 # geometric-lens/tests runs as its own gate (python-tests-lens), matching
-# its dedicated CI matrix leg: geometric-lens/ and v3-service/ both define
+# its dedicated CI matrix leg: geometric-lens/ and services/v3-service/ both define
 # top-level modules named `pipeline`/`main`, so the two trees cannot share
 # one pytest process.
 LENS_PYTEST_PATH = "geometric-lens/tests"

@@ -54,7 +54,7 @@ addopts = "-m 'not integration'"
 # The Python code the suites are measured against. A file no test imports
 # still counts, at 0%. Paths are stored relative to the repo root, so a
 # report reads the same on any machine.
-source = ["atlas", "v3-service", "geometric-lens", "services/sandbox", "scripts"]
+source = ["atlas", "services/v3-service", "geometric-lens", "services/sandbox", "scripts"]
 omit = ["geometric-lens/tests/*"]
 relative_files = true
 

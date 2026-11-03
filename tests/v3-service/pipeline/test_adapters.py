@@ -10,7 +10,7 @@ a JavaScript probe and treated every .js as a canvas game.
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "v3-service"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "services" / "v3-service"))
 
 import adapters as A
 import contract as C
@@ -200,6 +200,6 @@ def test_adapter_ids_are_the_ones_records_carry():
 
 def test_adapter_routing_lives_only_here():
     """Adapter routing has exactly one home."""
-    v3 = Path(__file__).resolve().parents[3] / "v3-service"
+    v3 = Path(__file__).resolve().parents[3] / "services" / "v3-service"
     owners = [p.name for p in v3.glob("*.py") if "def select_adapter(" in p.read_text()]
     assert owners == ["adapters.py"], f"select_adapter owners: {owners}"

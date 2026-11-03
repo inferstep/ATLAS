@@ -73,7 +73,7 @@ def _workflow_lines():
 COPIED = (
     ("services/sandbox/requirements-runtime.txt", None),   # every pin of the file
     ("services/sandbox/requirements-verify.txt", ("jinja2", "ruff", "mypy")),
-    ("v3-service/requirements.txt", None),
+    ("services/v3-service/requirements.txt", None),
     ("geometric-lens/requirements.txt", ("httpx",)),
 )
 

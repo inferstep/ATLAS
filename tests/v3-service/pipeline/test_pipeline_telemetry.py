@@ -20,7 +20,7 @@ from types import SimpleNamespace
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(PROJECT_ROOT))
-sys.path.insert(0, str(PROJECT_ROOT / "v3-service"))
+sys.path.insert(0, str(PROJECT_ROOT / "services" / "v3-service"))
 
 import adapters
 import pipeline as v3pipeline
@@ -528,7 +528,7 @@ def test_concurrent_writers_append_complete_unique_records(tmp_path):
     sink = tmp_path / "pool.jsonl"
     writer = textwrap.dedent(f"""
         import os, sys
-        sys.path.insert(0, {str(PROJECT_ROOT / "v3-service")!r})
+        sys.path.insert(0, {str(PROJECT_ROOT / "services" / "v3-service")!r})
         os.environ["ATLAS_V3_CAPTURE_POOL"] = {str(sink)!r}
         import pipeline
         cap = pipeline._PoolCapture.from_env()
@@ -567,7 +567,7 @@ def test_candidate_bytes_reach_no_serialiser_or_emitter():
     """Source sentinel: the writer is referenced only where the pool exists.
     A capture call inside an emitter, a response builder or a log formatter is
     how benchmark-only bytes become production output."""
-    v3dir = PROJECT_ROOT / "v3-service"
+    v3dir = PROJECT_ROOT / "services" / "v3-service"
     owners = sorted(p.name for p in v3dir.glob("*.py")
                     if "_PoolCapture" in p.read_text()
                     or "CAPTURE_ENV" in p.read_text())
@@ -743,7 +743,7 @@ def test_the_three_roles_stay_distinct(monkeypatch, tmp_path):
 def test_no_new_field_reaches_any_public_surface():
     """The shadow pool is a file. It is not a response, an envelope or a
     wire type, and no Go field exists for it."""
-    v3dir = PROJECT_ROOT / "v3-service"
+    v3dir = PROJECT_ROOT / "services" / "v3-service"
     response_block = (v3dir / "main.py").read_text().split(
         "response = {", 1)[1].split("}", 1)[0]
     for leaked in ("incumbent", "shadow", "consensus", "cluster"):

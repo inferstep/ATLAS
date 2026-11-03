@@ -3,7 +3,7 @@
 # Dockerfiles in services/proxy/, geometric-lens/, services/sandbox/, services/inference/ use
 # their own subdirectory as context and are unaffected by this file.
 #
-# Goal: keep the v3 build context to just the `v3-service/` Python modules
+# Goal: keep the v3 build context to just the `services/v3-service/` Python modules
 # (what its Dockerfile actually COPYs), so CI doesn't ship docs/ + tests/ +
 # proxy sources / etc. across the wire on every build.
 
@@ -34,7 +34,7 @@ models/
 data/
 projects/
 docs/reports/ablation/
-# Not COPY'd by the v3 image (stages/ ships from v3-service/); also holds
+# Not COPY'd by the v3 image (stages/ ships from services/v3-service/); also holds
 # heavy runtime output (results/, datasets/.cache/).
 benchmark/
 

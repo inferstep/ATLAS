@@ -286,7 +286,7 @@ def v3_service(fake_llama, fake_lens, sandbox_executor):
            "ATLAS_SERVICE_TOKEN_FILE": conftest._TOKEN_FILE}
     proc = subprocess.Popen(
         ["python", "main.py"],
-        cwd=str(REPO / "v3-service"), env=env,
+        cwd=str(REPO / "services" / "v3-service"), env=env,
         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     try:
         wait_for_port(port)
@@ -582,7 +582,7 @@ def test_a_lens_that_v3_cannot_reach_stops_the_run(
            "ATLAS_SANDBOX_URL": f"http://127.0.0.1:{sandbox_executor}"}
     v3_proc = subprocess.Popen(
         ["python", "main.py"],
-        cwd=str(REPO / "v3-service"), env=env,
+        cwd=str(REPO / "services" / "v3-service"), env=env,
         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     wait_for_port(v3_port)
     port, proc = start_proxy({

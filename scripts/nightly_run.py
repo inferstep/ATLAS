@@ -127,7 +127,7 @@ PROJECT = "atlas-nightly"
 # context of its build, its Dockerfile, and the paths of the repository that the build reads. The model server is
 # not here: its image is never built on the server.
 BUILDS = {"geometric-lens": ("geometric-lens", "geometric-lens/Dockerfile", ("geometric-lens/",)),
-          "v3-service": (".", "v3-service/Dockerfile", ("v3-service/", ".dockerignore")),
+          "v3-service": (".", "services/v3-service/Dockerfile", ("services/v3-service/", ".dockerignore")),
           "sandbox": ("services/sandbox", "services/sandbox/Dockerfile", ("services/sandbox/",)),
           "atlas-proxy": ("services/proxy", "services/proxy/Dockerfile", ("services/proxy/",))}
 # What a run takes from the tree of `dev` and runs or mounts on the server itself, each with what it is. A name

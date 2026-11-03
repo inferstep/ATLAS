@@ -117,7 +117,7 @@ updates:
   - package-ecosystem: docker
     directories:
       - /services/proxy
-      - /v3-service
+      - /services/v3-service
       - /services/sandbox
       - /geometric-lens
       - /services/inference
