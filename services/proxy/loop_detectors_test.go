@@ -136,9 +136,20 @@ func repeatedRewriteStubs(t *testing.T, dir, rel string, calls *int) *httptest.S
 	}))
 }
 
-func TestRepeatedRewritesOfABrokenFileReachTheRepeatDetectorTerminal(t *testing.T) {
-	dir := t.TempDir()
-	rel := "solve.py"
+// repeatedRewriteRun is what the stream showed of a repeated-rewrite run: the
+// terminal summary, and how often each path that could end the run fired.
+type repeatedRewriteRun struct {
+	summary        string
+	interventions  int
+	acceptedWrites int
+	banEntries     int
+	rescues        int
+}
+
+// runRepeatedRewrites runs a model that re-sends the same broken file from
+// memory, in two variants, against the agent loop, and counts what it streams.
+func runRepeatedRewrites(t *testing.T, dir, rel string) repeatedRewriteRun {
+	t.Helper()
 	calls := 0
 	srv := repeatedRewriteStubs(t, dir, rel, &calls)
 	defer srv.Close()
@@ -150,64 +161,70 @@ func TestRepeatedRewritesOfABrokenFileReachTheRepeatDetectorTerminal(t *testing.
 	ctx.PermissionMode = PermissionYolo
 	ctx.MaxTurns = 40
 
-	var summary string
-	interventions, acceptedWrites, banEntries, rescues := 0, 0, 0, 0
+	var run repeatedRewriteRun
 	ctx.StreamFn = func(eventType string, data interface{}) {
 		b, _ := json.Marshal(data)
 		switch eventType {
 		case "agent_repeat_intervention":
-			interventions++
+			run.interventions++
 		case "tool_result":
 			if strings.Contains(string(b), `"success":true`) &&
 				strings.Contains(string(b), "bytes_written") {
-				acceptedWrites++
+				run.acceptedWrites++
 			}
 		case "gate":
 			if strings.Contains(string(b), "no longer available") {
-				banEntries++
+				run.banEntries++
 			}
 		case "done":
-			summary = string(b)
+			run.summary = string(b)
 		}
 		if strings.Contains(string(b), "named deliverable") ||
 			strings.Contains(string(b), "was never created") {
-			rescues++
+			run.rescues++
 		}
 	}
 	if err := runAgentLoop(ctx, "Create solve.py that solves the task."); err != nil {
 		t.Fatalf("agent loop error: %v", err)
 	}
+	return run
+}
+
+func TestRepeatedRewritesOfABrokenFileReachTheRepeatDetectorTerminal(t *testing.T) {
+	dir := t.TempDir()
+	rel := "solve.py"
+	run := runRepeatedRewrites(t, dir, rel)
 
 	// --- routing premises: this run reached the repeat-DETECTOR terminal ---
-	if interventions < 2 {
-		t.Fatalf("second-detection condition not reached: %d repeat interventions", interventions)
+	if run.interventions < 2 {
+		t.Fatalf("second-detection condition not reached: %d repeat interventions", run.interventions)
 	}
-	if acceptedWrites == 0 {
+	if run.acceptedWrites == 0 {
 		t.Fatal("no write landed, so the productive-change hint was never set")
 	}
 	onDisk, err := os.ReadFile(filepath.Join(dir, rel))
 	if err != nil {
 		t.Fatalf("expected output missing, so output-rescue would have fired: %v", err)
 	}
-	if rescues > 0 {
-		t.Fatalf("output-rescue fired (%d); this is not the terminal under test", rescues)
+	if run.rescues > 0 {
+		t.Fatalf("output-rescue fired (%d); this is not the terminal under test", run.rescues)
 	}
-	if banEntries > 0 {
-		t.Fatalf("refusal-ban fired (%d); wrong terminal", banEntries)
+	if run.banEntries > 0 {
+		t.Fatalf("refusal-ban fired (%d); wrong terminal", run.banEntries)
 	}
-	if strings.Contains(summary, "re-sent after being refused") {
-		t.Fatalf("terminal came from the refusal ban, not the repeat detector:\n%s", summary)
+	if strings.Contains(run.summary, "re-sent after being refused") {
+		t.Fatalf("terminal came from the refusal ban, not the repeat detector:\n%s", run.summary)
 	}
-	if !strings.Contains(summary, "kept repeating") && !strings.Contains(summary, "Made your change") {
-		t.Fatalf("terminal did not come from the repeat-detector call site:\n%s", summary)
+	if !strings.Contains(run.summary, "kept repeating") && !strings.Contains(run.summary, "Made your change") {
+		t.Fatalf("terminal did not come from the repeat-detector call site:\n%s", run.summary)
 	}
 
 	// --- the behaviour under test ---
-	if strings.Contains(summary, "Made your change") {
-		t.Errorf("completion claimed over invalid bytes:\n%s", summary)
+	if strings.Contains(run.summary, "Made your change") {
+		t.Errorf("completion claimed over invalid bytes:\n%s", run.summary)
 	}
-	if !strings.Contains(summary, "Stopped:") {
-		t.Errorf("terminal must be an honest stop:\n%s", summary)
+	if !strings.Contains(run.summary, "Stopped:") {
+		t.Errorf("terminal must be an honest stop:\n%s", run.summary)
 	}
 	after, _ := os.ReadFile(filepath.Join(dir, rel))
 	if string(after) != string(onDisk) {
@@ -216,7 +233,7 @@ func TestRepeatedRewritesOfABrokenFileReachTheRepeatDetectorTerminal(t *testing.
 	if !strings.Contains(string(after), "]]") {
 		t.Errorf("the fixture did not leave an invalid deliverable: %q", string(after))
 	}
-	t.Logf("interventions=%d accepted_writes=%d summary=%s", interventions, acceptedWrites, summary)
+	t.Logf("interventions=%d accepted_writes=%d summary=%s", run.interventions, run.acceptedWrites, run.summary)
 }
 
 // --- Restoration at the repeat-detector terminal -----------------------------
