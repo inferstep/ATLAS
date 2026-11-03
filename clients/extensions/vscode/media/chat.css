@@ -61,6 +61,8 @@ body {
 
 .done-marker.done-completed { background: var(--vscode-testing-iconPassed, #3fb950); color: #fff; }
 .done-marker.done-incomplete { background: var(--vscode-editorWarning-foreground, #cca700); color: #000; }
+/* A status this extension does not know reads like incomplete: never finished. */
+.done-marker.done-other { background: var(--vscode-editorWarning-foreground, #cca700); color: #000; }
 .done-marker.done-stopped { background: var(--vscode-charts-orange, #d18616); color: #000; }
 .done-marker.done-timed_out { background: var(--vscode-charts-purple, #b180d7); color: #000; }
 .done-marker.done-failed { background: var(--vscode-errorForeground, #f14c4c); color: #fff; }
