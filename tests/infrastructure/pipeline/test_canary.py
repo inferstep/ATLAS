@@ -244,10 +244,10 @@ def test_the_planted_typescript_function_is_over_the_extensions_limit(canary, ma
     plant = next(plant for plant in manifest["plants"] if plant.get("language") == "typescript")
     lines = (checkout / plant["path"]).read_text(encoding="utf-8").splitlines()
     start, end = lines.index("export function canaryLongFunction(): number {"), lines.index("}")
-    limit = re.search(r"^const FUNCTION_LINES = (\d+);", (ROOT / "extensions/vscode/eslint.config.mjs")
+    limit = re.search(r"^const FUNCTION_LINES = (\d+);", (ROOT / "clients/extensions/vscode/eslint.config.mjs")
                       .read_text(encoding="utf-8"), re.M)
     assert end - start + 1 > int(limit.group(1))
-    assert plant["path"].startswith("extensions/vscode/src/")
+    assert plant["path"].startswith("clients/extensions/vscode/src/")
 
 
 def test_a_planted_function_in_a_language_the_script_does_not_write_is_refused(canary, tmp_path):

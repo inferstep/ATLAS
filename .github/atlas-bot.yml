@@ -105,7 +105,7 @@ areas:
   geometric-lens/: area/lens
   inference/: area/inference
   sandbox/: area/sandbox
-  extensions/: area/extensions
+  clients/extensions/: area/extensions
   scripts/: area/install
   docker-compose: area/install
   deploy/: area/install

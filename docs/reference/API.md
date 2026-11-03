@@ -1525,6 +1525,6 @@ A minimal client needs four things (plus one header), and two more are optional:
    unreachable response as "can't tell" — older proxies won't have
    this route yet.
 
-The TUI ([atlas tui](CLI.md)) is a Go reference implementation — its `model.go`/`events.go` show how to handle every event type, and `panes.go` shows one approach to rendering them. Browse `tui/` in the repo for a complete worked example. The VS Code extension (`extensions/vscode/`) is a TypeScript client built exactly to this section's surface, with unit-tested SSE parsing and permission handling.
+The TUI ([atlas tui](CLI.md)) is a Go reference implementation — its `model.go`/`events.go` show how to handle every event type, and `panes.go` shows one approach to rendering them. Browse `tui/` in the repo for a complete worked example. The VS Code extension (`clients/extensions/vscode/`) is a TypeScript client built exactly to this section's surface, with unit-tested SSE parsing and permission handling.
 
 This document and the TUI source are the canonical reference for building a client.

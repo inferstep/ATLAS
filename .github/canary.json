@@ -370,11 +370,11 @@
       "red": [
         "lint + test + build"
       ],
-      "what": "a function of 120 lines in extensions/vscode/src/canaryLongFunction.ts",
+      "what": "a function of 120 lines in clients/extensions/vscode/src/canaryLongFunction.ts",
       "shows": "Function 'canaryLongFunction' has too many lines",
       "action": "long_function",
       "language": "typescript",
-      "path": "extensions/vscode/src/canaryLongFunction.ts",
+      "path": "clients/extensions/vscode/src/canaryLongFunction.ts",
       "length": 120
     },
     {

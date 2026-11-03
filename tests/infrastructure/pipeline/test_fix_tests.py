@@ -489,8 +489,8 @@ def test_more_go_test_files_than_the_limit_are_not_tried_one_by_one_and_that_is_
 
 
 @pytest.mark.parametrize("files, note", [
-    pytest.param({"extensions/vscode/test/sse.test.ts": "it('parses', () => {});\n"},
-                 "extensions/vscode/test/sse.test.ts: a TypeScript or JavaScript test file; this check does not read "
+    pytest.param({"clients/extensions/vscode/test/sse.test.ts": "it('parses', () => {});\n"},
+                 "clients/extensions/vscode/test/sse.test.ts: a TypeScript or JavaScript test file; this check does not read "
                  "those yet", id="a TypeScript test file"),
     pytest.param({"geometric-lens/tests/test_score.py": "def test_scores():\n    assert True\n"},
                  "geometric-lens/tests/test_score.py: the packages its tests need are not installed in this job",
