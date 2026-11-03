@@ -45,6 +45,15 @@ LANDING_PATHS = {
     "structuralEdit": ("executeStructuralEdit",),
 }
 LANDINGS = [(tool, path) for tool, paths in LANDING_PATHS.items() for path in paths]
+# The function that starts writeFile's V3 route; applyWriteGates runs its gates.
+V3_ROUTE = "writeFileWithV3"
+# The one way that lands bytes without the gates, on purpose, and why
+# (tool_write.go, writeFileThroughV3): "a NEW file lands with a warning so the
+# model can run it and read the real traceback." The direct route lands such
+# content the same way, before its gates.
+UNGATED_WAY = "writeNewFileWithWarning"
+# What a function of the tool files calls to change the disk.
+DISK_WRITES = ("os.WriteFile(", "os.Rename(", "os.Create(", "os.OpenFile(")
 
 
 def _tool_source() -> str:
@@ -59,19 +68,25 @@ def _function(src: str, name: str) -> str:
     return src[src.index(f"func {name}("):].split("\n}\n", 1)[0]
 
 
-def _reach(src: str, start: str) -> str:
-    """`start` and every function of the tool files that it names, and that those name in turn.
-
-    A gate in a function that `start` no longer calls is not in its reach.
-    """
+def _reached(src: str, start: str, stops=frozenset()) -> list:
+    """The names of `start` and of every function of the tool files that it names, and that those name
+    in turn. A function in `stops` is not entered."""
     defined = set(re.findall(r"^func (\w+)\(", src, re.M))
     seen, todo = [], [start]
     while todo:
         name = todo.pop()
-        if name not in seen:
+        if name not in seen and name not in stops:
             seen.append(name)
             todo += [n for n in re.findall(r"\w+", _function(src, name)) if n in defined]
-    return "\n".join(_function(src, name) for name in seen)
+    return seen
+
+
+def _reach(src: str, start: str) -> str:
+    """The text of `start` and of every function it reaches (see _reached).
+
+    A gate in a function that `start` no longer calls is not in its reach.
+    """
+    return "\n".join(_function(src, name) for name in _reached(src, start))
 
 
 def _tool_bodies() -> dict:
@@ -128,6 +143,19 @@ def test_the_write_route_runs_every_gate_from_its_list(gate, consequence):
 
 def test_every_write_tool_names_the_ways_it_lands_bytes():
     assert sorted(LANDING_PATHS) == sorted(WRITE_TOOLS)
+
+
+@pytest.mark.parametrize("tool", WRITE_TOOLS)
+def test_no_write_tool_lands_bytes_outside_its_named_ways(tool):
+    src = _tool_source()
+    writers = {name for name in re.findall(r"^func (\w+)\(", src, re.M)
+               if any(write in _function(src, name) for write in DISK_WRITES)}
+    named = {path for paths in LANDING_PATHS.values() for path in paths} | {V3_ROUTE, UNGATED_WAY}
+    outside = sorted(set(_reached(src, f"{tool}Tool", stops=named)) & writers)
+    assert not outside, (
+        f"{tool}Tool reaches {outside}, which change the disk, on a way that LANDING_PATHS does not name. "
+        f"Name the way, so its gates are checked, or make it run them."
+    )
 
 
 @pytest.mark.parametrize("tool, path", LANDINGS)
