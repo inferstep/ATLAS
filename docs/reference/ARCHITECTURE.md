@@ -147,7 +147,7 @@ Every non-test Go file of `proxy/`, sub-folders included, with its area of owner
 | `evidence_wiring.go` | Connects syntax and declared-command evidence producers to candidate routes, assigns candidate identities, and records available or missing evidence |
 | `internal/wire/execution_outcome.go` | Classifies command completion, interruption, and resource exhaustion so an incomplete run cannot count as successful verification |
 | `feasibility_decision.go` | Assesses whether available evidence producers could satisfy the task before generation and records the assessment without controlling generation |
-| `fenced_framing.go` | Recognizes complete fenced file payloads, extracts their contents, and supplies framing grammar and retry guidance |
+| `internal/fencing/framing.go` | Recognizes complete fenced file payloads, extracts their contents, and supplies framing grammar and retry guidance |
 | `internal/workspacefs/file_kind.go` | Answers what a path holds, and reads only a regular file: a named pipe would hold the open until a writer appeared, so the kind of the open handle is judged before anything is read |
 | `internal/workspacefs/file_kind_unix.go` | The non-blocking open flag, so a pipe named the way a reader looks opens at once instead of waiting for a writer |
 | `internal/workspacefs/file_kind_other.go` | The same flag where it has no equivalent, leaving the kind check to decide on its own |

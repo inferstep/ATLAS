@@ -41,110 +41,7 @@ func writeStubSSE(w http.ResponseWriter, content string, tokens int) {
 
 // --- the classifier both paths share --------------------------------------
 
-// Only a closed fence proves a whole file. Properly framed content that looks
-// unfinished is a file; unframed content that looks finished is not evidence.
-func TestFramingIsDecidedByFencesAlone(t *testing.T) {
-	cases := []struct {
-		name    string
-		payload string
-		want    fenceFraming
-		body    string
-	}{
-		{"complete block", "```lang\nBODY\n```", fenceFramingComplete, "BODY\n"},
-		{"complete bare-tag block", "```\nBODY\n```", fenceFramingComplete, "BODY\n"},
-		{"opener then body, never closed", "```lang\nBODY", fenceFramingUnterminated, ""},
-		{"opener only", "```lang", fenceFramingUnterminated, ""},
-		{"closing fence only", "BODY\n```", fenceFramingUnterminated, ""},
-		{"no fence at all", "BODY\n", fenceFramingAbsent, ""},
-		{"empty", "", fenceFramingAbsent, ""},
-		{"whitespace only", "   \n\t\n", fenceFramingAbsent, ""},
-		{"fenced but empty body", "```lang\n\n```", fenceFramingUnterminated, ""},
-		// Framed, and the last line is a comment, a dangling clause or an
-		// open bracket: complete, because the fence closed.
-		{"framed, ends on a comment", "```lang\nx = 1\n# trailing note about the rule\n```",
-			fenceFramingComplete, "x = 1\n# trailing note about the rule\n"},
-		{"framed, stops mid-word", "```lang\nprose that simply stops mid senten\n```",
-			fenceFramingComplete, "prose that simply stops mid senten\n"},
-		{"framed, open bracket", "```lang\ndata = [\n  1,\n  2,\n```", fenceFramingComplete, "data = [\n  1,\n  2,\n"},
-		{"framed, not ASCII", "```lang\nこんにちは\n```", fenceFramingComplete, "こんにちは\n"},
-		{"framed, inert bytes", "```lang\nAAAA\nBBBB\nCCC\n```", fenceFramingComplete, "AAAA\nBBBB\nCCC\n"},
-		// Unframed: a finished-looking program, or one cut mid-emission, is
-		// never handed on as a file.
-		{"unframed program", "x = 1\nprint(x)\n", fenceFramingAbsent, ""},
-		{"unframed word", "COMPLETE\n", fenceFramingAbsent, ""},
-		{"unframed, cut mid-emission", "AAAA\nBBBB\nCCC", fenceFramingAbsent, ""},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			got, body := classifyFencedPayload(c.payload)
-			if got != c.want {
-				t.Errorf("framing %v, want %v", got, c.want)
-			}
-			if body != c.body {
-				t.Errorf("body %q, want %q", body, c.body)
-			}
-		})
-	}
-}
-
-// A file that legitimately contains fences must never be cut at an interior
-// one. Under a ``` wrapper an interior closing fence makes the reply ambiguous
-// (it is also the shape of a file plus a second block), so nothing is returned;
-// under a ```` wrapper the whole body is the file.
-func TestFramingKeepsInteriorFences(t *testing.T) {
-	body := "# doc\n```lang\ninner\n```\nmore\n"
-	if framing, got := classifyFencedPayload("```markdown\n" + body + "```"); framing != fenceFramingAmbiguous || got != "" {
-		t.Fatalf("``` wrapper: framing %v body %q, want ambiguous and no bytes", framing, got)
-	}
-	framing, got := classifyFencedPayload("````markdown\n" + body + "````")
-	if framing != fenceFramingComplete || got != body {
-		t.Fatalf("```` wrapper: framing %v body %q, want the whole body", framing, got)
-	}
-	if !strings.Contains(fencedRetryNote(fenceFramingAmbiguous, "markdown"), "four backticks") {
-		t.Fatalf("the ambiguous retry note does not give the four-backtick path")
-	}
-}
-
-func TestFramingClassificationsAreTruthful(t *testing.T) {
-	for _, c := range []struct {
-		f    fenceFraming
-		want string
-	}{
-		{fenceFramingComplete, "complete"},
-		{fenceFramingUnterminated, "fence opened, never closed"},
-		{fenceFramingAbsent, "no fence at all"},
-		{fenceFramingAmbiguous, "more than one fence closes the block"},
-	} {
-		if got := c.f.String(); got != c.want {
-			t.Errorf("%v: %q, want %q", int(c.f), got, c.want)
-		}
-	}
-}
-
 // --- inline and fetched must agree ----------------------------------------
-
-// The sub-call already refused everything the classifier calls incomplete.
-// This pins that the two paths ask the SAME question, so a later change to
-// one cannot drift from the other.
-func TestInlineAndFetchedShareFramingSemantics(t *testing.T) {
-	payloads := []string{
-		"```lang\nBODY\n```",
-		"```lang\nBODY",
-		"BODY\n",
-		"",
-	}
-	for _, p := range payloads {
-		framing, body := classifyFencedPayload(p)
-		fetched := extractFencedContent(p)
-		if (framing == fenceFramingComplete) != (fetched != "") {
-			t.Errorf("%q: inline says %v, fetched-path extraction says %q",
-				p, framing, fetched)
-		}
-		if framing == fenceFramingComplete && body != fetched {
-			t.Errorf("%q: inline body %q != fetched body %q", p, body, fetched)
-		}
-	}
-}
 
 // --- the failure class, end to end ----------------------------------------
 
@@ -359,75 +256,10 @@ func TestTheSubCallFallsBackWhenTheGrammarIsRefused(t *testing.T) {
 	}
 }
 
-// The grammar is built from the path's tag and cannot be steered by it.
-func TestTheGrammarIsBuiltFromASafeTag(t *testing.T) {
-	g := fenceBlockGrammar("py\"; drop\n")
-	if strings.Contains(g, "drop\n") || strings.Contains(g, "\"; ") {
-		t.Errorf("tag characters reached the grammar unescaped: %q", g)
-	}
-	if !strings.HasPrefix(g, "root ::= \"````pydrop\\n\"") {
-		t.Errorf("unexpected grammar: %q", g)
-	}
-}
-
-// A Markdown file's own code blocks survive the fence. With a three-backtick
-// fence no body line could start with ```, so the file's first code block
-// would end it, and the truncated body would parse as complete.
-func TestAFileWithACodeBlockSurvivesTheFence(t *testing.T) {
-	body := "# Tool\n\nInstall:\n\n```bash\npip install tool\n```\n\nMore docs here.\n"
-	g := fenceBlockGrammar("markdown")
-	if !strings.HasPrefix(g, "root ::= \"````markdown\\n\" line* \"````\"") {
-		t.Fatalf("the outer fence is not four backticks: %q", g)
-	}
-	// The line rule: up to three leading backticks, never four.
-	if !strings.Contains(g, "\"```\" ( [^`\\n] [^\\n]* )?") {
-		t.Fatalf("the line rule does not admit a line starting with ```: %q", g)
-	}
-	framing, got := classifyFencedPayload("````markdown\n" + body + "````")
-	if framing != fenceFramingComplete || got != body {
-		t.Fatalf("round trip: framing=%v body=%q, want the whole file", framing, got)
-	}
-	if !fencedGrammarFits(body) || fencedGrammarFits("intro\n````\nnested\n````\n") {
-		t.Error("fencedGrammarFits misjudges which files the fence can carry")
-	}
-}
-
 // If the fence grammar takes the model's three-backtick closer as a body line,
 // the grammar cannot end, and the attempt runs on until the idle watchdog cuts
 // it; a stream can even write the model's next tool calls into the file. So a
 // code file may end on three backticks.
-
-func TestTheGrammarLetsACodeFileEndOnThreeBackticks(t *testing.T) {
-	py := fenceBlockGrammar("python")
-	if !strings.Contains(py, "line* ( \"````\" | \"```\" \"\\n\"? )") {
-		t.Errorf("a python block cannot end on three backticks: %q", py)
-	}
-	for _, tag := range []string{"markdown", ""} {
-		g := fenceBlockGrammar(tag)
-		if !strings.Contains(g, "line* \"````\"\n") || strings.Contains(g, "| \"```\" \"\\n\"?") {
-			t.Errorf("tag %q must keep only the four-backtick closer: %q", tag, g)
-		}
-	}
-}
-
-func TestCloseShortFence(t *testing.T) {
-	for _, c := range []struct{ name, in, want string }{
-		{"a closer of three becomes four", "````python\nprint(1)\n```", "````python\nprint(1)\n````"},
-		{"with the newline after it", "````python\nprint(1)\n```\n", "````python\nprint(1)\n````\n"},
-		{"interior ``` lines stay", "````python\ns = '''\n```\nx\n```\n'''\n```", "````python\ns = '''\n```\nx\n```\n'''\n````"},
-		{"a four-backtick closer is left alone", "````python\nx\n````", "````python\nx\n````"},
-		{"a three-backtick opener is left alone", "```python\nx\n```", "```python\nx\n```"},
-		{"no closing line at all", "````python\nx = 1\n", "````python\nx = 1\n"},
-		{"text after the closer", "````python\nx\n```\n{\"type\":\"done\"}", "````python\nx\n```\n{\"type\":\"done\"}"},
-		{"a closed block with a stray ``` after it", "````python\nx\n````\n```", "````python\nx\n````\n```"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			if got := closeShortFence(c.in); got != c.want {
-				t.Errorf("got %q\nwant %q", got, c.want)
-			}
-		})
-	}
-}
 
 // grammarAwareServer answers a request that carries a grammar with one reply and
 // any other with another. It returns its address and what it has seen so far.

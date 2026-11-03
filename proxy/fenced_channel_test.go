@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/fencing"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -24,38 +25,6 @@ import (
 // lines are where the model fails: the same debounce solution parses 6 of 6
 // times in a fenced block and 0 of 6 times as a JSON string. "@fenced" routes
 // the file body around the JSON channel through one unconstrained sub-call.
-
-func TestFencedContentExtraction(t *testing.T) {
-	markdown := "# readme\n\n```\nexample\n```\n\ntail line"
-	for _, tc := range []struct {
-		name, reply, want string
-	}{
-		{"tagged block in prose", "Here is the file:\n```python\nx = 1\nprint(x)\n```\nDone.", "x = 1\nprint(x)\n"},
-		{"bare fence", "```\ny = 2\n```", "y = 2\n"},
-		{"c++ tag", "```c++\nint x;\n```", "int x;\n"},
-		{"c# tag", "```c#\nint x;\n```", "int x;\n"},
-		{"objective-c tag", "```objective-c\nint x;\n```", "int x;\n"},
-		// A file's own leading blank lines are its content, not part of the
-		// fence line. (Whitespace-only content is not a case: an empty block
-		// is what makes the sub-call ask again.)
-		{"one leading blank line", "```python\n\nx = 1\n```", "\nx = 1\n"},
-		{"three leading blank lines", "```python\n\n\n\nx = 1\n```", "\n\n\nx = 1\n"},
-		{"blank lines before a def", "```python\n\n\ndef f():\n    pass\n```", "\n\ndef f():\n    pass\n"},
-		{"CRLF fence line", "```python\r\nx = 1\n```", "x = 1\n"},
-		// Inside a ``` wrapper, the file's own ``` lines look the same as a
-		// second block, so nothing is returned and the sub-call asks again
-		// with a four-backtick note. Inside a ```` wrapper the whole file
-		// comes back.
-		{"file with ``` lines in a ``` wrapper", "```markdown\n" + markdown + "\n```", ""},
-		{"file with ``` lines in a ```` wrapper", "````markdown\n" + markdown + "\n````", markdown + "\n"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := extractFencedContent(tc.reply); got != tc.want {
-				t.Errorf("extractFencedContent(%q) = %q, want %q", tc.reply, got, tc.want)
-			}
-		})
-	}
-}
 
 func TestFenceTagFollowsExtension(t *testing.T) {
 	for path, want := range map[string]string{"app.html": "html", "main.go": "go", "solve.py": "python"} {
@@ -72,33 +41,6 @@ func TestRawResponseForFenceRoundTrips(t *testing.T) {
 	var back wire.ModelResponse
 	if json.Unmarshal([]byte(raw), &back) != nil || back.Name != "write_file" {
 		t.Fatalf("round trip failed: %s", raw)
-	}
-}
-
-// An inline body reaches disk only when its framing proves it complete: a
-// closed fence. A bare body carries no framing either way, so it may have
-// stopped mid-emission, and it is resolved through the sub-call instead.
-func TestInlineFencedBodyRequiresFramingToProveCompletion(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		inline   string
-		wantBody string // "": falls back to the sub-call
-	}{
-		{"truncated fence", "```python\nprint(", ""},
-		{"opener only", "```python", ""},
-		{"complete fence", "```python\nprint(\"hi\")\n```", "print(\"hi\")\n"},
-		{"bare body, however finished it looks", "print(\"hi\")\n", ""},
-		{"bare body cut mid-emission", "print(", ""},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got, ok, _ := resolveInlineFencedBody(tc.inline)
-			if !ok {
-				got = ""
-			}
-			if got != tc.wantBody {
-				t.Errorf("resolved %q, want %q", got, tc.wantBody)
-			}
-		})
 	}
 }
 
@@ -714,7 +656,7 @@ func TestAFailedRequestCarriesNoStaleStats(t *testing.T) {
 	}
 }
 
-// The fence grammar reserves four backticks for the closer (fenceBlockGrammar),
+// The fence grammar reserves four backticks for the closer (fencing.BlockGrammar),
 // and the model closes code with three, which the grammar takes as a body
 // line. A grammar-constrained attempt then cannot end on its own: the fenced
 // watchdog must cut it, and a retry without the grammar lands the file.
@@ -803,7 +745,7 @@ func TestAGrammarConstrainedFencedAttemptIsWatched(t *testing.T) {
 	ctx.Ctx = context.Background()
 	start := time.Now()
 	out, _, err := callLLMOnceWithGrammar(ctx, []wire.AgentMessage{{Role: "user", Content: "x"}},
-		0.2, fenceBlockGrammar("python"))
+		0.2, fencing.BlockGrammar("python"))
 	if el := time.Since(start); el > 10*time.Second {
 		t.Fatalf("the grammar-constrained attempt was not watched: %v", el)
 	}

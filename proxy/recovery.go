@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/fencing"
 	"github.com/itigges22/atlas-proxy/internal/shellcmd"
 	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
@@ -44,7 +45,7 @@ const fencedRecoveryFloor = 90 * time.Second
 func fencedRunFirstRecovery(ctx *AgentContext, st *runState, relPath, content string) string {
 	// Raw model intent only. An inline write is the model doing something
 	// different, which is exactly what this is asking for.
-	if !isFencedSentinel(content) {
+	if !fencing.IsSentinel(content) {
 		return ""
 	}
 	key := ledgerKey(ctx, relPath)

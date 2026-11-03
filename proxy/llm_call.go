@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/fencing"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -779,7 +780,7 @@ func callLLMOnceRestating(ctx *AgentContext, messages []wire.AgentMessage, tempe
 	// constrained by the fence grammar: the grammar reserves four backticks
 	// for the closer, and a model that closes with three would otherwise
 	// generate to the token ceiling.
-	fencedSubCall := grammar == rawEmissionSentinel || isFenceBlockGrammar(grammar)
+	fencedSubCall := grammar == rawEmissionSentinel || fencing.IsBlockGrammar(grammar)
 	progress := func() { /* only a fenced sub-call has a watchdog to feed */ }
 	armStalled := func() { /* only a fenced sub-call has a watchdog to arm */ }
 	if fencedSubCall {
@@ -1177,7 +1178,7 @@ func (rd *llmStream) endOnReadError(err error, reqCtx context.Context) (string, 
 			err, time.Since(rd.sentAt).Round(time.Millisecond), rd.rawLines,
 			truncateStr(rd.firstLine, 120), rd.reasoningBuf.Len(), rd.contentBuf.Len())
 		if rd.reasoningBuf.Len() > 0 {
-			if body := extractFencedContent(rd.reasoningBuf.String()); body != "" &&
+			if body := fencing.ExtractContent(rd.reasoningBuf.String()); body != "" &&
 				strings.TrimSpace(body) != rawEmissionSentinel {
 				log.Printf("[agent] recovered the fenced block from reasoning_content after a stream cut (%d chars)",
 					rd.reasoningBuf.Len())
@@ -1197,7 +1198,7 @@ func (rd *llmStream) recoverEmptyContent() (string, int, error) {
 	// the wrong one here — this call asked for a fenced block, so a
 	// block sitting in reasoning_content is exactly the answer.
 	if rd.grammar == rawEmissionSentinel && rd.reasoningBuf.Len() > 0 {
-		if body := extractFencedContent(rd.reasoningBuf.String()); body != "" &&
+		if body := fencing.ExtractContent(rd.reasoningBuf.String()); body != "" &&
 			strings.TrimSpace(body) != rawEmissionSentinel {
 			log.Printf("[agent] raw sub-call emitted its fenced block into reasoning_content (%d chars) — salvaging",
 				rd.reasoningBuf.Len())
