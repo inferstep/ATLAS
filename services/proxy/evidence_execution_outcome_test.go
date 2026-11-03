@@ -317,15 +317,26 @@ func TestTheExecutorWireCarriesTheOutcome(t *testing.T) {
 		// A skip here would pass in silence once the sandbox moves.
 		t.Fatalf("the executor this test pins is not at ../sandbox: %v", err)
 	}
+	for _, required := range []string{"EXEC_CONTRACT", "run_bounded("} {
+		if !strings.Contains(string(body), required) {
+			t.Errorf("the executor no longer carries %q", required)
+		}
+	}
 	models, err := os.ReadFile("../sandbox/executor_models.py")
 	if err != nil {
 		t.Fatal(err)
 	}
-	body = append(body, models...)
-	for _, required := range []string{`outcome: str = "internal_unclassified"`,
-		"peak_memory_bytes", "EXEC_CONTRACT", "run_bounded("} {
-		if !strings.Contains(string(body), required) {
-			t.Errorf("the executor no longer carries %q", required)
+	// The fields this side decodes, declared in the shell answer itself: the
+	// same words elsewhere in the executor would not reach the wire.
+	_, answer, found := strings.Cut(string(models), "\nclass ShellResponse(BaseModel):\n")
+	if !found {
+		t.Fatal("the executor no longer has a shell answer, ShellResponse")
+	}
+	// The class ends where the next class begins, or with the file.
+	answer, _, _ = strings.Cut(answer, "\n\n\nclass ")
+	for _, field := range []string{`outcome: str = "internal_unclassified"`, "peak_memory_bytes: int"} {
+		if !strings.Contains("\n"+answer, "\n    "+field) {
+			t.Errorf("the shell answer no longer declares %q", field)
 		}
 	}
 	// And a round trip through the field name this side decodes.
