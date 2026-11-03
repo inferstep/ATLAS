@@ -232,6 +232,26 @@ def test_the_address_space_ceiling_stops_a_child_above_it():
     assert "Cannot allocate memory" in above.stderr, (above.returncode, above.stdout)
 
 
+def test_a_limit_the_host_refuses_is_a_spawn_failure_with_its_reason(monkeypatch):
+    """A host that refuses a child's limit, as macOS can refuse RLIMIT_AS: the command does not run, and the
+    answer says why rather than raising out of the runner."""
+    contract = rc.ResourceContract(wall_seconds=20, memory_bytes=384 * MiB, max_processes=16,
+                                   output_bytes=1 * MiB, address_space_multiple=2.0)
+
+    def refused_limits(_contract):
+        def limits():
+            raise ValueError("current limit exceeds maximum limit")
+        return limits
+
+    monkeypatch.setattr(rc, "_apply_child_limits", refused_limits)
+    got = rc.run_bounded([sys.executable, "-c", "print('ran')"], contract)
+
+    assert got.outcome == rc.OUTCOME_SPAWN_FAILED
+    assert got.stdout == ""
+    assert "the command was not started: its resource limits could not be set" in got.stderr
+    assert "ATLAS_EXEC_ADDRESS_SPACE_MULTIPLE=2" in got.stderr
+
+
 # --- time, output, processes -------------------------------------------------
 
 
