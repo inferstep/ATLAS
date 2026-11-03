@@ -244,45 +244,64 @@ func expandEnvOptions(result envSplitExpansion, index int, valid bool) envSplitE
 		option := normalizeEnvSplitOption(result.words[k])
 		text, end, split := envSplitString(result.words, k, option)
 		if split {
-			if !valid {
-				result.refusal = shellWrapperQuotingRefusal
+			if result = spliceEnvSplit(result, k, text, end, valid); result.refusal != "" {
 				return result
 			}
-			if end > len(result.words) {
-				result.refusal = shellWrapperMissingRefusal
-				return result
-			}
-			if result.depth >= maxShellWrapperDepth {
-				result.refusal = shellWrapperDepthRefusal
-				return result
-			}
-			words, ok := shellCommandWords(text)
-			if !ok {
-				result.refusal = shellWrapperQuotingRefusal
-				return result
-			}
-			result.words = append(append(append([]string{}, result.words[:k]...), words...), result.words[end:]...)
-			result.depth++
-			result.expanded = true
 			continue // A split may expose another -S at this same position.
 		}
-		if option == "--" {
+		next, more := envOptionEnd(option, k)
+		if !more {
 			break
 		}
-		if strings.HasPrefix(option, "-") {
-			k++
-			if wrapperOptionTakesValue("env", option) {
-				k++
-			}
-			continue
-		}
-		if strings.Contains(option, "=") {
-			k++
-			continue
-		}
-		break
+		k = next
 	}
 	return result
+}
+
+// spliceEnvSplit puts the words of an env split-string's text in place of the
+// option at k and its text, one layer deeper. It refuses text whose quoting
+// cannot be checked, a missing text, and a spent depth budget.
+func spliceEnvSplit(result envSplitExpansion, k int, text string, end int, valid bool) envSplitExpansion {
+	if !valid {
+		result.refusal = shellWrapperQuotingRefusal
+		return result
+	}
+	if end > len(result.words) {
+		result.refusal = shellWrapperMissingRefusal
+		return result
+	}
+	if result.depth >= maxShellWrapperDepth {
+		result.refusal = shellWrapperDepthRefusal
+		return result
+	}
+	words, ok := shellCommandWords(text)
+	if !ok {
+		result.refusal = shellWrapperQuotingRefusal
+		return result
+	}
+	result.words = append(append(append([]string{}, result.words[:k]...), words...), result.words[end:]...)
+	result.depth++
+	result.expanded = true
+	return result
+}
+
+// envOptionEnd is where the env option at k ends: after it, after it and its
+// value, or after an assignment. False at "--" and at the first word that is
+// none of these, where the command begins.
+func envOptionEnd(option string, k int) (int, bool) {
+	if option == "--" {
+		return k, false
+	}
+	if strings.HasPrefix(option, "-") {
+		if wrapperOptionTakesValue("env", option) {
+			return k + 2, true
+		}
+		return k + 1, true
+	}
+	if strings.Contains(option, "=") {
+		return k + 1, true
+	}
+	return k, false
 }
 
 // Normalize GNU env's combined flags and unambiguous split-string abbreviations.
