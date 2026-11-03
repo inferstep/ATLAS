@@ -198,16 +198,24 @@ def test_the_smoke_rule_is_the_one_that_github_has_with_no_app_and_no_repository
 
 
 def test_every_check_required_on_dev_is_reported_by_a_job(first_run):
-    patterns = []
+    names, patterns = set(), []
     for workflow in sorted((REPO / ".github" / "workflows").glob("*.yml")):
         for job_id, job in (yaml.safe_load(workflow.read_text()).get("jobs") or {}).items():
             name = str(job.get("name", job_id))
+            matrix = (job.get("strategy") or {}).get("matrix") or {}
+            one = re.fullmatch(r"[^$]*\$\{\{ matrix\.(\w+) \}\}[^$]*", name)
+            values = matrix.get(one.group(1)) if one else None
+            if isinstance(values, list) and all(isinstance(value, str) for value in values):
+                # A name made from a list of plain values: each value gives one name, so a
+                # required check whose value left the matrix is not reported.
+                names |= {name.replace("${{ matrix." + one.group(1) + " }}", value) for value in values}
+                continue
             literal = re.sub(r"\$\{\{.*?\}\}", "", name)
             if literal.strip():   # a name that is only a matrix value would match anything
                 parts = [re.escape(part) for part in re.split(r"\$\{\{.*?\}\}", name)]
                 patterns.append(re.compile(".+".join(parts)))
     for check in sorted(required_checks(first_run.rulesets, "dev")):
-        assert any(p.fullmatch(check) for p in patterns), f"no workflow job reports the required check {check!r}"
+        assert check in names or any(p.fullmatch(check) for p in patterns), f"no workflow job reports the required check {check!r}"
 
 
 def test_every_required_check_is_on_the_canary_list_with_a_plant_that_turns_it_red_or_the_reason_it_has_none(first_run):
@@ -221,10 +229,15 @@ def test_every_required_check_is_on_the_canary_list_with_a_plant_that_turns_it_r
     assert [finding.message for finding in findings] == []
 
 
+# Until a release brings renamed checks to staging and main, they keep the old
+# names, listed in RELEASE_ONLY_CHECKS; any other check they need, dev needs too.
 def test_staging_and_main_require_only_checks_that_dev_requires(first_run):
     dev = required_checks(first_run.rulesets, "dev")
+    script = (REPO / "scripts" / "setup" / "rulesets.sh").read_text(encoding="utf-8")
+    release_only = set(re.findall(r'"([^"]+)"', script.split("RELEASE_ONLY_CHECKS=(", 1)[1].split("\n)\n", 1)[0]))
+    assert release_only == {"pytest (tests/v3)", "pytest (tests/cli)"}
     for branch in ("staging", "main"):
-        assert required_checks(first_run.rulesets, branch) <= dev
+        assert required_checks(first_run.rulesets, branch) - release_only <= dev
 
 
 def test_the_release_step_names_rulesets_that_the_script_writes(first_run):

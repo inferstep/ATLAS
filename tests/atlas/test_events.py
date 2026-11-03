@@ -23,7 +23,7 @@ from atlas.events import (
     parse_envelope,
     terminal_status,
 )
-from tests.cli.event_harness import iter_events, iter_sse_lines
+from tests.atlas.event_harness import iter_events, iter_sse_lines
 
 
 # --- making events ----------------------------------------------------------

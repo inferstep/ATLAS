@@ -20,8 +20,8 @@ def _load_sandbox_module():
 
     Every import starts the module's background-job janitor thread, which
     never exits; importing per test left one per test running for the rest of
-    the session, and thread-count assertions in tests/v3 then failed when the
-    suites ran together. Tests that change module attributes restore them
+    the session, and the thread-count assertions of the cancellation tests then
+    failed when the suites ran together. Tests that change module attributes restore them
     (try/finally or monkeypatch), so sharing the module is safe.
     """
     global _SANDBOX_MODULE
