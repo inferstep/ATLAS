@@ -709,7 +709,7 @@ atlas tier --json       # machine output (for scripts)
 atlas tier --raw        # just the probe (no classification)
 ```
 
-tier 表给出的是按显存区间的起点；**`atlas tier fit`** 会针对你运行的*具体*模型进一步精化 —— 它读取 GGUF 的 KV 几何结构和你 GPU 的显存，求解出能完全留在 GPU 上的最大上下文（`atlas tier fit --write` 会把结果写入 `.env`）。每当你更换 `ATLAS_MODEL_FILE` 或 GPU 时都运行一次。参见 [CLI.md § atlas tier fit](../../CLI.md#atlas-tier-fit)，下载前的规模估算见 [TROUBLESHOOTING.md § What fits on my GPU?](../../TROUBLESHOOTING.md#what-fits-on-my-gpu)。
+tier 表给出的是按显存区间的起点；**`atlas tier fit`** 会针对你运行的*具体*模型进一步精化 —— 它读取 GGUF 的 KV 几何结构和你 GPU 的显存，求解出能完全留在 GPU 上的最大上下文（`atlas tier fit --write` 会把结果写入 `.env`）。每当你更换 `ATLAS_MODEL_FILE` 或 GPU 时都运行一次。参见 [CLI.md § atlas tier fit](../../reference/CLI.md#atlas-tier-fit)，下载前的规模估算见 [TROUBLESHOOTING.md § What fits on my GPU?](../../TROUBLESHOOTING.md#what-fits-on-my-gpu)。
 
 medium tier 是 ATLAS 的开发目标 —— `atlas-bootstrap.sh` 默认使用它的模型+上下文设置。其他 tier 请在 bootstrap 完成后运行 **`atlas init`**（首次运行向导）。它通过 `atlas tier` 探测硬件，从注册表挑选合适的模型，带 SHA 校验地下载，并重写 `.env`。当你的硬件或注册表默认模型变化时用 `atlas init --reconfigure` 重跑；向导跑完后，`atlas tier fit --write` 会把向导的 tier 级默认收紧到所选模型。
 
@@ -822,7 +822,7 @@ atlas bench --run-id mymodel_lens --tasks 200    # 生成候选并自标注
 atlas lens build --force --from-results benchmark/results/mymodel_lens/v3_lcb/per_task
 ```
 
-`atlas lens build` 会训练 lens 的两个部分、校准阈值，并在激活的 bundle 中写入 `provenance.json` 清单。参见 [CLI.md § atlas lens](../../CLI.md#atlas-lens)。
+`atlas lens build` 会训练 lens 的两个部分、校准阈值，并在激活的 bundle 中写入 `provenance.json` 清单。参见 [CLI.md § atlas lens](../../reference/CLI.md#atlas-lens)。
 
 ### 自带 llama-server
 
@@ -861,7 +861,7 @@ mkdir -p secrets     # or set ATLAS_SECRETS_DIR
 
 ### 自带模型
 
-要换用非默认的 GGUF，请参见 [CONFIGURATION.md § Adding your own model](../../CONFIGURATION.md#adding-your-own-model-drop-in--unregistered) 和 [CLI.md § atlas lens](../../CLI.md#atlas-lens)。
+要换用非默认的 GGUF，请参见 [CONFIGURATION.md § Adding your own model](../../CONFIGURATION.md#adding-your-own-model-drop-in--unregistered) 和 [CLI.md § atlas lens](../../reference/CLI.md#atlas-lens)。
 
 ---
 
@@ -896,7 +896,7 @@ mkdir -p secrets     # or set ATLAS_SECRETS_DIR
 
 ## 后续步骤
 
-- [CLI.md](../../CLI.md) —— ATLAS 运行后的使用指南
+- [CLI.md](../../reference/CLI.md) —— ATLAS 运行后的使用指南
 - [CONFIGURATION.md](../../CONFIGURATION.md) —— 所有环境变量和调优选项
 - [TROUBLESHOOTING.md](../../TROUBLESHOOTING.md) —— 常见问题与解决方案
-- [ARCHITECTURE.md](../../ARCHITECTURE.md) —— 系统内部工作原理
+- [ARCHITECTURE.md](../../reference/ARCHITECTURE.md) —— 系统内部工作原理

@@ -503,7 +503,7 @@ Docker を使用している場合、NVIDIA コンテナランタイムが設定
 atlas tier fit --write
 docker compose up -d llama-server --no-deps --force-recreate
 ```
-`atlas tier fit` は GGUF ヘッダーと GPU の VRAM を読み取り、完全に GPU 上で動く最大の構成を求めます（[CLI.md § atlas tier fit](../../CLI.md#atlas-tier-fit) を参照）。ATLAS は llama-server を `--fit off` で実行するため、収まらない構成は CPU で部分的に黙って動く代わりに、起動時に明確に失敗します。
+`atlas tier fit` は GGUF ヘッダーと GPU の VRAM を読み取り、完全に GPU 上で動く最大の構成を求めます（[CLI.md § atlas tier fit](../../reference/CLI.md#atlas-tier-fit) を参照）。ATLAS は llama-server を `--fit off` で実行するため、収まらない構成は CPU で部分的に黙って動く代わりに、起動時に明確に失敗します。
 
 `atlas tier fit` が **DOES NOT FIT** と報告する場合、モデル自体がこのカードには大きすぎます — 出力には収まる最大の量子化ファイルサイズが表示されます。優先順:
 
@@ -601,7 +601,7 @@ ps aux | grep llama-server | grep ctx-size
 
 **原因:** エンドポイントが間違っています。エージェントループは `POST /v1/agent` 上でのみ動作します。`POST /v1/chat/completions`（および `/v1/` 配下の他のパス）は llama-server への透過的なパススルーで、ツールも V3 もストリーミングチャットイベントもありません。
 
-**修正:** クライアントを `POST http://localhost:8090/v1/agent` に向けてください。Bubbletea TUI（`atlas` / `atlas tui`）はこれを自動で行います。サードパーティクライアントを書く場合は、[docs/API.md](../../API.md) の `/v1/agent` SSE イベントプロトコルを参照してください。`ATLAS_AGENT_LOOP` 環境変数によるトグルはもうありません — 分岐はエンドポイントベースで、設定ベースではありません。
+**修正:** クライアントを `POST http://localhost:8090/v1/agent` に向けてください。Bubbletea TUI（`atlas` / `atlas tui`）はこれを自動で行います。サードパーティクライアントを書く場合は、[docs/reference/API.md](../../reference/API.md) の `/v1/agent` SSE イベントプロトコルを参照してください。`ATLAS_AGENT_LOOP` 環境変数によるトグルはもうありません — 分岐はエンドポイントベースで、設定ベースではありません。
 
 ### 機能ファイルで V3 パイプラインが起動しない
 
@@ -783,7 +783,7 @@ docker compose logs geometric-lens
 
 **影響:** リクエストは実行されます。レンズは生の C(x) エネルギーと G(x) 確率を返します。キャリブレーション済みの用途（正規化ルーティング、拒否と是正のしきい値）は、そのモデルのキャリブレーションファイルが存在するまで無効のままです。
 
-**修正:** `atlas lens build` がしきい値をキャリブレーションし、`cx_normalization.json` と `gx_thresholds.json` をバンドルに書き出します。[CLI.md § atlas lens](../../CLI.md#atlas-lens) を参照してください。
+**修正:** `atlas lens build` がしきい値をキャリブレーションし、`cx_normalization.json` と `gx_thresholds.json` をバンドルに書き出します。[CLI.md § atlas lens](../../reference/CLI.md#atlas-lens) を参照してください。
 
 ### スコアはもっともらしいのにスケールが大きく外れている（エンベディング規約のドリフト）
 

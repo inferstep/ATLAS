@@ -1456,7 +1456,7 @@ with each `/v1/agent` request: `task_mode` (`work` or `question`), optional
 `expected_outputs` and `verification` commands, and a `candidate_policy`.
 The proxy, not v3-service, decides whether a V3 candidate may replace the
 model's own bytes, under one of three policies
-([docs/CANDIDATE_POLICY.md](docs/CANDIDATE_POLICY.md)):
+([docs/CANDIDATE_POLICY.md](docs/reference/CANDIDATE_POLICY.md)):
 
 - `strict`, the default: a candidate lands only when a verification the
   client declared passes against those exact bytes.

@@ -2,7 +2,7 @@
 
 API endpoints for each ATLAS service. All services communicate over HTTP/JSON. Streaming endpoints use Server-Sent Events (SSE).
 
-> **Ports listed are defaults.** Most are configurable through environment variables (see [CONFIGURATION.md](CONFIGURATION.md)); the lens port is set by uvicorn's `--port`, and the sandbox's is fixed at 8020. The HTTP contracts below are deployment-mode-agnostic — only the host:port differs. Quick reference:
+> **Ports listed are defaults.** Most are configurable through environment variables (see [CONFIGURATION.md](../CONFIGURATION.md)); the lens port is set by uvicorn's `--port`, and the sandbox's is fixed at 8020. The HTTP contracts below are deployment-mode-agnostic — only the host:port differs. Quick reference:
 >
 > | Service | Docker Compose (host=container) | Bare metal | K3s NodePort (`atlas.conf.example`) |
 > |---|---|---|---|
@@ -12,7 +12,7 @@ API endpoints for each ATLAS service. All services communicate over HTTP/JSON. S
 > | sandbox | host `30820` → container `8020` | fixed `8020` (clients take `ATLAS_SANDBOX_URL`) | `ATLAS_SANDBOX_NODEPORT` (default 30820) |
 > | llama-server | `8080` | `ATLAS_LLAMA_PORT` (default 8080) | `ATLAS_LLAMA_NODEPORT` (default 32735) |
 >
-> The K3s manifests are rendered from `templates/*.yaml.tmpl` into `$K8S_DIR/manifests/` by `scripts/install.sh` at install time. See [SETUP.md Method 3](SETUP.md) for the full K3s deployment.
+> The K3s manifests are rendered from `templates/*.yaml.tmpl` into `$K8S_DIR/manifests/` by `scripts/install.sh` at install time. See [SETUP.md Method 3](../SETUP.md) for the full K3s deployment.
 
 ---
 
@@ -50,7 +50,7 @@ The main entry point. Wraps llama-server with an agent loop, grammar-constrained
 
 **Catch-all:** any unmatched path is proxied directly to llama-server.
 
-**Requests:** send each POST body with `Content-Type: application/json`; a POST of another type gets 415. A request that carries an `Origin` header gets 403 unless its origin is on `ATLAS_ALLOWED_ORIGINS` (see [Configuration](CONFIGURATION.md)).
+**Requests:** send each POST body with `Content-Type: application/json`; a POST of another type gets 415. A request that carries an `Origin` header gets 403 unless its origin is on `ATLAS_ALLOWED_ORIGINS` (see [Configuration](../CONFIGURATION.md)).
 
 ---
 
@@ -83,7 +83,7 @@ Tool-based agent endpoint. Sends a user message, runs the agent loop (LLM → to
 
 **Response:** `text/event-stream` of `data: {...}\n\n` lines. The proxy flushes a `: connected\n\n` SSE comment on connect so clients see HTTP/200 immediately, then emits typed events for the duration of the turn, terminated by `data: [DONE]\n\n`.
 
-**The lens is required** ([ADR 0011](adr/0011-the-lens-is-required.md)). Before any work, the proxy checks that the Geometric Lens can score (the same check as `/ready`; the answer is cached for 5 s). If it cannot, the request gets a plain HTTP 503 error envelope, not a stream: `error` is `dependency_unavailable`, and `detail` says why and to run `atlas doctor`. If the lens stops scoring during the run, the run ends with `done` `status: "failed"`, `reason: "lens_unavailable"`; the tool call that needed the score is answered with `success: false`, and the summary says whether earlier changes are on disk.
+**The lens is required** ([ADR 0011](../adr/0011-the-lens-is-required.md)). Before any work, the proxy checks that the Geometric Lens can score (the same check as `/ready`; the answer is cached for 5 s). If it cannot, the request gets a plain HTTP 503 error envelope, not a stream: `error` is `dependency_unavailable`, and `detail` says why and to run `atlas doctor`. If the lens stops scoring during the run, the run ends with `done` `status: "failed"`, `reason: "lens_unavailable"`; the tool call that needed the score is answered with `success: false`, and the summary says whether earlier changes are on disk.
 
 #### Event types on `/v1/agent`
 
@@ -523,7 +523,7 @@ The payload also carries a `dimensions` array — the seven status dimensions th
 
 **Verdict values:**
 
-- **Lens:** `supported` | `uncalibrated` | `no-artifacts` | `incomplete-artifacts` | `dim-mismatch` | `drifted` | `self-test-failed` | `model-server-unreachable` | `unreachable`. `incomplete-artifacts` means C(x) loaded but G(x) artifacts are missing; `uncalibrated` means weights loaded without the model's calibration files (`cx_normalization.json` / `gx_thresholds.json`) — both point at `atlas lens build`. `can_score` is `true` only for `supported` and `uncalibrated`; for every other verdict the `direct_agent` dimension is `blocked` and requests are refused ([ADR 0011](adr/0011-the-lens-is-required.md)). `model_server_reachable` is llama-server's reachability as the lens reports it.
+- **Lens:** `supported` | `uncalibrated` | `no-artifacts` | `incomplete-artifacts` | `dim-mismatch` | `drifted` | `self-test-failed` | `model-server-unreachable` | `unreachable`. `incomplete-artifacts` means C(x) loaded but G(x) artifacts are missing; `uncalibrated` means weights loaded without the model's calibration files (`cx_normalization.json` / `gx_thresholds.json`) — both point at `atlas lens build`. `can_score` is `true` only for `supported` and `uncalibrated`; for every other verdict the `direct_agent` dimension is `blocked` and requests are refused ([ADR 0011](../adr/0011-the-lens-is-required.md)). `model_server_reachable` is llama-server's reachability as the lens reports it.
 - **ASA:** `active` | `missing` | `unverified` | `incompatible`. `active` means the control vector is marked for the served model; whether its effect was measured is the registry's `asa_status`. `incompatible` means the control vector on disk is marked for a different model than the one selected.
 
 **Use:**
@@ -1010,7 +1010,7 @@ When the Lens could not score the text, the response is not a score: `scored: fa
 | `nonfinite_score` | A score came out NaN or infinite (a degenerate forward or calibration); reported as unscored, never serialized as a number | `field` (`cx_energy`, `cx_normalized`, `gx_score`), `detail` |
 | `internal` | Anything else; the service log has the traceback | `detail` |
 
-Nothing in such a response is truncated, split or substituted: the whole sequence is what the calibrated score is computed from ([ADR 0010](adr/0010-lens-capacity-boundary-is-typed.md)). v3-service records the failure on the candidate, ranks it after every scored candidate, and delivers it only as the last verified candidate standing; the proxy applies no threshold to an unscored write.
+Nothing in such a response is truncated, split or substituted: the whole sequence is what the calibrated score is computed from ([ADR 0010](../adr/0010-lens-capacity-boundary-is-typed.md)). v3-service records the failure on the candidate, ranks it after every scored candidate, and delivers it only as the last verified candidate standing; the proxy applies no threshold to an unscored write.
 
 **Example:**
 ```bash
@@ -1037,7 +1037,7 @@ It also carries the embedding capacity contract: `embed_capacity_tokens` (the lo
 curl http://localhost:8099/ready
 ```
 
-Readiness probe (`geometric-lens/main.py`). Flips to 503 when scoring is degraded (lens weights missing, embedding-dim mismatch). It answers 200 for a lens with no G(x) model, so the atlas-proxy asks this and then the lens `/health` before it accepts a request ([ADR 0011](adr/0011-the-lens-is-required.md)); its `/health` and `/ready` report the result as `lens_ready`. The payload repeats `embed_capacity_tokens`; the capacity never changes the verdict.
+Readiness probe (`geometric-lens/main.py`). Flips to 503 when scoring is degraded (lens weights missing, embedding-dim mismatch). It answers 200 for a lens with no G(x) model, so the atlas-proxy asks this and then the lens `/health` before it accepts a request ([ADR 0011](../adr/0011-the-lens-is-required.md)); its `/health` and `/ready` report the result as `lens_ready`. The payload repeats `embed_capacity_tokens`; the capacity never changes the verdict.
 
 ### Additional endpoints
 
@@ -1459,7 +1459,7 @@ code set), never on `detail`** (the human message may change):
 Codes: `unauthorized`, `invalid_input`, `unsupported_operation`,
 `dependency_unavailable`, `resource_limit`, `internal_error` — the
 closed set is exactly what live `writeError` calls emit
-(`AllErrorCodes` in `proxy/main.go`). Machine-readable schemas live in `docs/schemas/`: the full
+(`AllErrorCodes` in `proxy/main.go`). Machine-readable schemas live in `docs/reference/schemas/`: the full
 OpenAPI 3.1 spec for this surface (`proxy_openapi.yaml`, parity-checked
 against the registered routes in CI) plus JSON Schemas for the error and
 SSE envelopes.

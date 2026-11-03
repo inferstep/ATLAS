@@ -1,5 +1,5 @@
-<!-- source: docs/ARCHITECTURE.md synced-through: fb1a649f8ad3d23c19524227bf89ff811f985f03 -->
-> **[English](../../ARCHITECTURE.md)** | **简体中文** | **[日本語](../ja/ARCHITECTURE.md)** | **[한국어](../ko/ARCHITECTURE.md)**
+<!-- source: docs/reference/ARCHITECTURE.md synced-through: fb1a649f8ad3d23c19524227bf89ff811f985f03 -->
+> **[English](../../reference/ARCHITECTURE.md)** | **简体中文** | **[日本語](../ja/ARCHITECTURE.md)** | **[한국어](../ko/ARCHITECTURE.md)**
 
 # ATLAS 架构
 
@@ -39,7 +39,7 @@ graph LR
 
 聊天前端是 **atlas-tui**（Bubbletea）：一个原生 Go 终端 UI，消费 `/v1/agent`（按轮次的聊天 SSE）和 `/events`（面向 pipeline 窗格的全局类型化信封事件流）。用 `atlas`（默认交互模式）或 `atlas tui`（显式指定）启动。Pipeline 窗格实时展示 V3 各阶段；聊天窗格通过 glamour 渲染助手的 markdown；斜杠命令 `/add /diff /commit /run` 等负责处理本地文件上下文与 shell 调用。输入是模式感知的（chat / `!bash` / `/slash`），并带有提示下拉。
 
-希望使用工具调用 + V3 pipeline 的第三方客户端应直接对接 `/v1/agent`；`/v1/chat/completions` 是对 llama-server 的透传（见 §3）。该契约记录在 [API.md](../../API.md) 中。
+希望使用工具调用 + V3 pipeline 的第三方客户端应直接对接 `/v1/agent`；`/v1/chat/completions` 是对 llama-server 的透传（见 §3）。该契约记录在 [API.md](../../reference/API.md) 中。
 
 ### 1.1 支持的加速器
 
@@ -55,7 +55,7 @@ llama-server 是唯一使用 GPU 的服务；其余每个 ATLAS 服务都跑在 
 
 **后端选择发生在安装时，而非运行时。** `atlas init` 运行 `tier.detect_gpu()`（见 `atlas/commands/tier.py`），在所有检测到的厂商中挑选显存最大的 GPU（可用 `ATLAS_GPU_VENDOR` / `ATLAS_GPU_INDEX` 覆盖），并把 `ATLAS_BACKEND={cuda|rocm|metal|vulkan}` 写入 `.env`。当主机存在打包好的原生后端时，检测会解析到它：NVIDIA 用 CUDA，x86_64 上的 AMD 用 ROCm，macOS 用混合 Metal 路径。当主机没有打包好的原生后端时（Intel Arc、arm64 上的 AMD、无法识别的厂商），向导会提供 Vulkan 通用回退（默认选是）：一个镜像覆盖 AMD、Intel、Adreno、MoltenVK 和 lavapipe CPU 光栅化器，性能比调优过的原生后端低大约 20–40%。只有当完全不存在可用的后端时，它才会拒绝 —— 而不是写出一个无法启动的 `.env`。每个后端都有自己预构建的镜像；用户不会运行一个打包了所有后端库的臃肿镜像。
 
-**自带模型的表面（V3.1.1）。** `atlas lens check` 是针对运行中的 llama-server 的一次廉价预检，用于报告当前加载的模型是否与 Lens 兼容。`atlas lens build --samples <path>` 封装了 `geometric-lens/geometric_lens/training.py`，按模型原生的嵌入维度训练全新的 C(x)（`cost_field.pt`）**和** G(x)（XGBoost）工件。二者结合让用户无需 fork lens 代码即可换入非默认的 GGUF —— C(x) 构造函数接受任意 `input_dim`，因此逐模型变化的只有训练出来的权重。面向用户的流程见 [CLI.md § atlas lens](../../CLI.md#atlas-lens)；`atlas lens publish`（或合并的 `atlas publish`）会把工件上传到 HuggingFace，并开出固定其哈希的注册表 PR。
+**自带模型的表面（V3.1.1）。** `atlas lens check` 是针对运行中的 llama-server 的一次廉价预检，用于报告当前加载的模型是否与 Lens 兼容。`atlas lens build --samples <path>` 封装了 `geometric-lens/geometric_lens/training.py`，按模型原生的嵌入维度训练全新的 C(x)（`cost_field.pt`）**和** G(x)（XGBoost）工件。二者结合让用户无需 fork lens 代码即可换入非默认的 GGUF —— C(x) 构造函数接受任意 `input_dim`，因此逐模型变化的只有训练出来的权重。面向用户的流程见 [CLI.md § atlas lens](../../reference/CLI.md#atlas-lens)；`atlas lens publish`（或合并的 `atlas publish`）会把工件上传到 HuggingFace，并开出固定其哈希的注册表 PR。
 
 **与厂商无关的部分**（在每个后端上都可用）：语法约束的 JSON、自嵌入（`/embedding`）、逐层隐藏状态、ASA 控制向量（由 llama.cpp 的 `control_vector_load` 加载，与后端无关）、KV 缓存量化、整个外层 agent 循环、V3 pipeline、Geometric Lens 以及 sandbox。
 
@@ -84,7 +84,7 @@ K3s 部署路径（`scripts/install.sh`，清单在 `templates/` 中）截至 V3
 
 ## 3. atlas-proxy（外层）
 
-代理是聊天前端的入口点。它在 `/v1/agent` 上接收用户消息（类型化事件流 —— TUI 使用的就是它），并运行一个内部 agent 循环：调用 llama-server、解析工具调用、执行它们，然后把事件流式回传。`/v1/chat/completions` 端点是对 llama-server 的透明透传；保留它是为了 SDK 兼容性，它并不运行 agent 循环。完整的事件类型目录见 [API.md](../../API.md)。
+代理是聊天前端的入口点。它在 `/v1/agent` 上接收用户消息（类型化事件流 —— TUI 使用的就是它），并运行一个内部 agent 循环：调用 llama-server、解析工具调用、执行它们，然后把事件流式回传。`/v1/chat/completions` 端点是对 llama-server 的透明透传；保留它是为了 SDK 兼容性，它并不运行 agent 循环。完整的事件类型目录见 [API.md](../../reference/API.md)。
 
 代理由 12 个 Go 文件组成，每个文件只负责一件事：
 
@@ -197,7 +197,7 @@ run-first 门本身引用一条指令，`runFirstInstruction`：运行该扩展�
 
 ### 工具
 
-`proxy/tools.go` 中注册了 16 个工具。各工具的说明、限制及是否只读请参见 [API.md § Tools available to the agent loop](../../API.md#tools-available-to-the-agent-loop)。
+`proxy/tools.go` 中注册了 16 个工具。各工具的说明、限制及是否只读请参见 [API.md § Tools available to the agent loop](../../reference/API.md#tools-available-to-the-agent-loop)。
 
 ### 交付物账本（观测性）
 
@@ -311,7 +311,7 @@ run-first 门本身引用一条指令，`runFirstInstruction`：运行该扩展�
    解析 GGUF 层元数据，并报告 `compat` / `needs-build` /
    `incompatible`。`atlas asa build` 从已加载的模型推导提取层，
    写出向量和标记，并运行在 lens 容器内部。`atlas asa publish`
-   在上传前会拒绝缺失或不匹配的标记。见 [CLI.md § atlas asa](../../CLI.md#atlas-asa)。
+   在上传前会拒绝缺失或不匹配的标记。见 [CLI.md § atlas asa](../../reference/CLI.md#atlas-asa)。
 
 ### 逐文件 Tier 分类
 
@@ -365,7 +365,7 @@ tier 上限为 0（无上限）；由循环内部的检测器栈决定何时中�
 
 `comparison` 仍描述契约与旧有机制的对比；`influences_live_decision` 仍描述观察者及其 sink 能否影响策略，且保持为 false。一次 schema 变更意味着一个新版本 —— 封闭字段集加一个为它编写的读取器 —— 从不是对既有版本的重定义，也从不是一个对未知字段耸肩放行的解析器。
 
-客户端：TUI 对普通消息发送 `work`，对一次性 `/ask <message>` 发送 `question`；VS Code 扩展与 JetBrains 插件发送用户选择的 Work/Question 模式，默认为 `work`；e2e 与可靠性 harness 发送 `work`。每个自有客户端都会声明，因此没有契约的请求来自外部调用者，不获得 V3 候选（[CANDIDATE_POLICY.md](../../CANDIDATE_POLICY.md)）。`expected_outputs` 与 `verification` 会被携带与校验，但**尚未迁移** —— 交付物与验证义务仍按旧方式推导。
+客户端：TUI 对普通消息发送 `work`，对一次性 `/ask <message>` 发送 `question`；VS Code 扩展与 JetBrains 插件发送用户选择的 Work/Question 模式，默认为 `work`；e2e 与可靠性 harness 发送 `work`。每个自有客户端都会声明，因此没有契约的请求来自外部调用者，不获得 V3 候选（[CANDIDATE_POLICY.md](../../reference/CANDIDATE_POLICY.md)）。`expected_outputs` 与 `verification` 会被携带与校验，但**尚未迁移** —— 交付物与验证义务仍按旧方式推导。
 
 ### Plan 模式（按轮次预检）
 
@@ -422,7 +422,7 @@ flowchart TD
 5. 选出得分最高的计划；平局时步骤较少者优先（少些冗余）。如果获胜计划的验证步骤只启动服务器，就去掉其 `verify_step` 标记，但该步骤仍留在计划中，交由循环自身的验证门控把关。
 6. 如果所有候选都解析失败，返回一个单步回退（`{action: "investigate the request and act"}`），这样 agent 循环绝不会因规划器失败而阻塞。
 
-API 契约见 [API.md § POST /v3/plan](../../API.md#post-v3plan)。
+API 契约见 [API.md § POST /v3/plan](../../reference/API.md#post-v3plan)。
 
 ##### proxy：桥接、钩子、门控（Go）
 

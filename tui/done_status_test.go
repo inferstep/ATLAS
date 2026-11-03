@@ -11,7 +11,7 @@ import (
 )
 
 // The done row shows the run's status and reason, not only its summary
-// (#236), and a missing status reads as incomplete (docs/API.md).
+// (#236), and a missing status reads as incomplete (docs/reference/API.md).
 func TestTheDoneRowShowsStatusAndReason(t *testing.T) {
 	m := &tuiModel{}
 	m.appendChatEvent(mkChatEvent("done", map[string]string{

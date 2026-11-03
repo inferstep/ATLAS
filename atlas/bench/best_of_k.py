@@ -79,7 +79,7 @@ def _unscored_answer(data) -> bool:
 # lens and stops the run when it cannot score (docs/adr/0011-the-lens-is-
 # required.md); the bench keeps this so it still works for a model with no lens
 # bundle yet. It is never part of the product. Why:
-# docs/CLI.md, "Why the bench keeps a neutral lens score".
+# docs/reference/CLI.md, "Why the bench keeps a neutral lens score".
 NEUTRAL_COMBINED = {
     "cx_energy": 0.0, "cx_normalized": 0.5, "cx_calibrated": False,
     "gx_score": 0.5, "gx_available": False, "verdict": "unavailable",

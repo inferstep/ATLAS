@@ -573,7 +573,7 @@ func (m *tuiModel) onError(ev proxyclient.ChatEvent) {
 func (m *tuiModel) onDone(ev proxyclient.ChatEvent) {
 	// The run's outcome, not only its summary (#236): whether it
 	// completed, stopped or failed is what a user needs at a glance. A
-	// missing status reads as incomplete, as docs/API.md says.
+	// missing status reads as incomplete, as docs/reference/API.md says.
 	var p struct {
 		Summary string `json:"summary"`
 		Status  string `json:"status"`

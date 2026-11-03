@@ -40,7 +40,7 @@ marks *audience* rather than maturity and composes with a level:
 check is the V3-selection assertions of `tests/e2e`, and no release is
 qualified against this row until that check passes. V3 runs for every work
 request whose file clears the cost rules
-([CANDIDATE_POLICY.md](CANDIDATE_POLICY.md#when-the-producer-is-not-consulted-at-all)).
+([CANDIDATE_POLICY.md](reference/CANDIDATE_POLICY.md#when-the-producer-is-not-consulted-at-all)).
 
 ## Service contracts
 

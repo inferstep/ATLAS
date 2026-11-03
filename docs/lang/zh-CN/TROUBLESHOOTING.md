@@ -506,7 +506,7 @@ ps aux | grep llama-server | grep -e '-ngl' -e 'n-gpu-layers'
 atlas tier fit --write
 docker compose up -d llama-server --no-deps --force-recreate
 ```
-`atlas tier fit` 读取 GGUF 头和 GPU 显存，求解出完全在 GPU 上运行的最大配置（参见 [CLI.md § atlas tier fit](../../CLI.md#atlas-tier-fit)）。ATLAS 以 `--fit off` 运行 llama-server，因此放不下的配置会在启动时明确失败，而不是部分悄悄跑在 CPU 上。
+`atlas tier fit` 读取 GGUF 头和 GPU 显存，求解出完全在 GPU 上运行的最大配置（参见 [CLI.md § atlas tier fit](../../reference/CLI.md#atlas-tier-fit)）。ATLAS 以 `--fit off` 运行 llama-server，因此放不下的配置会在启动时明确失败，而不是部分悄悄跑在 CPU 上。
 
 如果 `atlas tier fit` 报告 **DOES NOT FIT**，说明模型本身对这张卡太大了 —— 输出会给出能放下的最大量化文件大小。按优先级：
 
@@ -604,7 +604,7 @@ ps aux | grep llama-server | grep ctx-size
 
 **原因：** 你访问的是错误的端点。agent 循环仅在 `POST /v1/agent` 上运行。`POST /v1/chat/completions`（以及 `/v1/` 下的其他路径）是到 llama-server 的透明透传 —— 没有工具、没有 V3、没有流式聊天事件。
 
-**解决方法：** 把客户端指向 `POST http://localhost:8090/v1/agent`。Bubbletea TUI（`atlas` / `atlas tui`）会自动这样做。如果你在编写第三方客户端，`/v1/agent` 的 SSE 事件协议见 [docs/API.md](../../API.md)。`ATLAS_AGENT_LOOP` 环境变量开关已不存在 —— 区分基于端点，而非配置。
+**解决方法：** 把客户端指向 `POST http://localhost:8090/v1/agent`。Bubbletea TUI（`atlas` / `atlas tui`）会自动这样做。如果你在编写第三方客户端，`/v1/agent` 的 SSE 事件协议见 [docs/reference/API.md](../../reference/API.md)。`ATLAS_AGENT_LOOP` 环境变量开关已不存在 —— 区分基于端点，而非配置。
 
 ### V3 Pipeline 未对功能文件触发
 
@@ -786,7 +786,7 @@ docker compose logs geometric-lens
 
 **影响：** 请求可以运行。lens 打的是原始 C(x) 能量与 G(x) 概率；校准后的用途（归一化路由、否决与纠正阈值）在该模型的校准文件存在之前保持关闭。
 
-**解决方法：** `atlas lens build` 校准阈值并把 `cx_normalization.json` 与 `gx_thresholds.json` 写入 bundle。见 [CLI.md § atlas lens](../../CLI.md#atlas-lens)。
+**解决方法：** `atlas lens build` 校准阈值并把 `cx_normalization.json` 与 `gx_thresholds.json` 写入 bundle。见 [CLI.md § atlas lens](../../reference/CLI.md#atlas-lens)。
 
 ### 分数看着合理但量级严重偏离（嵌入约定漂移）
 

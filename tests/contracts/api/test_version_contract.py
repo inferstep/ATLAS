@@ -29,7 +29,7 @@ def _truth() -> str:
     pytest.param("docs/lang/zh-CN/README.md", "version-V{}-", id="zh-CN-readme-badge"),
     pytest.param("docs/lang/ja/README.md", "version-V{}-", id="ja-readme-badge"),
     pytest.param("docs/lang/ko/README.md", "version-V{}-", id="ko-readme-badge"),
-    pytest.param("docs/ARCHITECTURE.md", "ATLAS V{}", id="architecture-header"),
+    pytest.param("docs/reference/ARCHITECTURE.md", "ATLAS V{}", id="architecture-header"),
     # The latest-release line of each README links its release page.
     pytest.param("README.md", "releases/tag/v{})", id="readme-latest-release"),
     pytest.param("docs/lang/zh-CN/README.md", "releases/tag/v{})", id="zh-CN-readme-latest-release"),

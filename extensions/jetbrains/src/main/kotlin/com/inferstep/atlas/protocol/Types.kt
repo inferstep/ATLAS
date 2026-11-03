@@ -1,6 +1,6 @@
 // Protocol types for the atlas-proxy public client API.
 //
-// Mirrors extensions/vscode/src/client/types.ts and docs/API.md; the field
+// Mirrors extensions/vscode/src/client/types.ts and docs/reference/API.md; the field
 // tags in proxy/internal/wire/ are the source of truth, so every name here that
 // differs from the Kotlin identifier is pinned with @SerialName to the exact
 // wire name.
@@ -318,7 +318,7 @@ data class StatusDimension(
 // ---------------------------------------------------------------------------
 
 /**
- * The closed error-code set (`docs/API.md` § Versioning and error codes).
+ * The closed error-code set (`docs/reference/API.md` § Versioning and error codes).
  *
  * Exactly the six codes `AllErrorCodes` in proxy/main.go emits, which a
  * contract test asserts. Switch on these, never on `detail`: the human
@@ -507,7 +507,7 @@ enum class DoneStatus {
     ;
 
     /** Only `completed` is a finished task; anything else, including an
-     * absent or unrecognized status, is incomplete (docs/API.md). */
+     * absent or unrecognized status, is incomplete (docs/reference/API.md). */
     fun isCompleted(): Boolean = this == COMPLETED
 
     companion object {

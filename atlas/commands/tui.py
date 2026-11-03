@@ -3,7 +3,7 @@
 Replaces the Aider-based chat UI with a native Bubbletea TUI built into
 the tui/ directory. Three panes (pipeline, events, chat) feed off
 two SSE streams from atlas-proxy: /events (typed envelope visibility)
-and /v1/agent (per-turn chat protocol). See docs/CLI.md for the full
+and /v1/agent (per-turn chat protocol). See docs/reference/CLI.md for the full
 keymap and slash-command reference.
 
 Launch strategy:

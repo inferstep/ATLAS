@@ -526,7 +526,7 @@ Docker를 사용 중이라면 NVIDIA 컨테이너 런타임이 설정되어 있�
 atlas tier fit --write
 docker compose up -d llama-server --no-deps --force-recreate
 ```
-`atlas tier fit`은 GGUF 헤더와 GPU의 VRAM을 읽어 완전히 GPU 위에서 동작하는 최대 구성을 계산합니다([CLI.md § atlas tier fit](../../CLI.md#atlas-tier-fit) 참고). ATLAS는 llama-server를 `--fit off`로 실행하므로, 들어가지 않는 구성은 일부가 조용히 CPU에서 도는 대신 시작 시 명확하게 실패합니다.
+`atlas tier fit`은 GGUF 헤더와 GPU의 VRAM을 읽어 완전히 GPU 위에서 동작하는 최대 구성을 계산합니다([CLI.md § atlas tier fit](../../reference/CLI.md#atlas-tier-fit) 참고). ATLAS는 llama-server를 `--fit off`로 실행하므로, 들어가지 않는 구성은 일부가 조용히 CPU에서 도는 대신 시작 시 명확하게 실패합니다.
 
 `atlas tier fit`이 **DOES NOT FIT**을 보고하면 모델 자체가 이 카드에 너무 큽니다 — 출력에 들어갈 수 있는 최대 양자화 파일 크기가 표시됩니다. 우선순위 순서:
 
@@ -624,7 +624,7 @@ ps aux | grep llama-server | grep ctx-size
 
 **원인:** 잘못된 엔드포인트를 호출하고 있습니다. 에이전트 루프는 `POST /v1/agent`에서만 실행됩니다. `POST /v1/chat/completions`(및 `/v1/` 하위의 다른 모든 경로)는 llama-server로의 투명한 패스스루입니다 — 도구도, V3도, 스트리밍 채팅 이벤트도 없습니다.
 
-**해결:** 클라이언트가 `POST http://localhost:8090/v1/agent`를 가리키게 하세요. Bubbletea TUI(`atlas` / `atlas tui`)는 이를 자동으로 수행합니다. 서드파티 클라이언트를 작성하는 경우 `/v1/agent` SSE 이벤트 프로토콜은 [docs/API.md](../../API.md)를 참고하세요. `ATLAS_AGENT_LOOP` 환경 변수 토글은 더 이상 없습니다 — 분기는 설정이 아니라 엔드포인트 기반입니다.
+**해결:** 클라이언트가 `POST http://localhost:8090/v1/agent`를 가리키게 하세요. Bubbletea TUI(`atlas` / `atlas tui`)는 이를 자동으로 수행합니다. 서드파티 클라이언트를 작성하는 경우 `/v1/agent` SSE 이벤트 프로토콜은 [docs/reference/API.md](../../reference/API.md)를 참고하세요. `ATLAS_AGENT_LOOP` 환경 변수 토글은 더 이상 없습니다 — 분기는 설정이 아니라 엔드포인트 기반입니다.
 
 ### V3 파이프라인이 기능 파일에서 실행되지 않음
 
@@ -806,7 +806,7 @@ docker compose logs geometric-lens
 
 **영향:** 요청은 실행됩니다. 렌즈는 원시 C(x) 에너지와 G(x) 확률을 산출하며, 보정이 필요한 용도(정규화된 라우팅, 거부 및 교정 임계값)는 해당 모델의 보정 파일이 생길 때까지 꺼져 있습니다.
 
-**해결:** `atlas lens build`가 임계값을 보정하고 `cx_normalization.json`과 `gx_thresholds.json`을 번들에 기록합니다. [CLI.md § atlas lens](../../CLI.md#atlas-lens)를 참고하세요.
+**해결:** `atlas lens build`가 임계값을 보정하고 `cx_normalization.json`과 `gx_thresholds.json`을 번들에 기록합니다. [CLI.md § atlas lens](../../reference/CLI.md#atlas-lens)를 참고하세요.
 
 ### 점수는 그럴듯한데 스케일이 크게 어긋남 (임베딩 규약 드리프트)
 

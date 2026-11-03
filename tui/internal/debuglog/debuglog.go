@@ -27,7 +27,7 @@ var (
 // Open opens path for append. Empty path → no-op (logger
 // stays at io.Discard). Returns the close func or nil.
 func Open(path string) (func(), error) {
-	// "off" is the documented opt-out (docs/CLI.md, and the Python wrapper
+	// "off" is the documented opt-out (docs/reference/CLI.md, and the Python wrapper
 	// strips ATLAS_TUI_LOG=off before exec'ing this binary). Anyone who runs
 	// the binary directly bypasses that wrapper, and without this the word
 	// was taken as a filename: `ATLAS_TUI_LOG=off atlas-tui` created a file

@@ -443,8 +443,8 @@ In VS Code, **ATLAS: Use This Folder** runs this for the open folder.
 This table lists only TUI-scoped variables. The proxy endpoint
 (`ATLAS_PROXY_URL`) and the workspace auto-realign toggle
 (`ATLAS_AUTO_WORKSPACE`) are documented in
-[CONFIGURATION.md § 7](CONFIGURATION.md#7-python-cli); every variable that
-affects the proxy and inference stack is in [CONFIGURATION.md](CONFIGURATION.md).
+[CONFIGURATION.md § 7](../CONFIGURATION.md#7-python-cli); every variable that
+affects the proxy and inference stack is in [CONFIGURATION.md](../CONFIGURATION.md).
 
 ---
 
@@ -508,7 +508,7 @@ layers to CPU.
 Run it whenever `ATLAS_MODEL_FILE` or the GPU changes; `atlas onboard` prints
 the recommendation and flags a stale `.env`. For the full VRAM-budget
 derivation see [ARCHITECTURE.md](ARCHITECTURE.md); for pre-download sizing see
-[TROUBLESHOOTING.md § What fits on my GPU?](TROUBLESHOOTING.md#what-fits-on-my-gpu).
+[TROUBLESHOOTING.md § What fits on my GPU?](../TROUBLESHOOTING.md#what-fits-on-my-gpu).
 
 ---
 
@@ -551,7 +551,7 @@ What it does:
 | 1 | Model file missing / not configured — wire `.env` or use `--url`. |
 | 2 | **Rebuild required** — the image can't load this architecture; rebuild yourself, then re-run. |
 
-Full walkthrough: [CONFIGURATION.md § Adding your own model](CONFIGURATION.md#adding-your-own-model-drop-in--unregistered).
+Full walkthrough: [CONFIGURATION.md § Adding your own model](../CONFIGURATION.md#adding-your-own-model-drop-in--unregistered).
 
 ---
 
@@ -585,12 +585,12 @@ completes; re-running with the same `--run-id` skips finished tasks
 (`Resuming: N/total complete, M remaining`). Nothing is lost to an OOM kill,
 reboot, or closed session. If the run reports fewer tasks than `--tasks`
 requested, the dataset cache is a partial download — see
-[TROUBLESHOOTING.md § Benchmark Issues](TROUBLESHOOTING.md#benchmark-issues).
+[TROUBLESHOOTING.md § Benchmark Issues](../TROUBLESHOOTING.md#benchmark-issues).
 
 ### Why the bench keeps a neutral lens score
 
 The product path requires the lens: a lens that cannot score stops the run
-([ADR 0011](adr/0011-the-lens-is-required.md)). `atlas bench` does not follow
+([ADR 0011](../adr/0011-the-lens-is-required.md)). `atlas bench` does not follow
 that rule on purpose. Its own lens client (`atlas/bench/best_of_k.py`) answers
 a lens with no model loaded with `NEUTRAL_COMBINED`: C(x) energy `0.0`,
 normalized `0.5`, G(x) `0.5`, verdict `"unavailable"`. The runner
@@ -674,7 +674,7 @@ than the server's micro-batch are embedded in line-boundary chunks and
 mean-pooled rather than dropped; the build log notes each chunked sample.
 That is a training-time convention: the serving path scores a whole
 sequence or reports it unscored, and a chunked score has not been measured
-against a whole-sequence one ([ADR 0010](adr/0010-lens-capacity-boundary-is-typed.md)).
+against a whole-sequence one ([ADR 0010](../adr/0010-lens-capacity-boundary-is-typed.md)).
 
 Extracted embeddings are cached (keyed by text hash and dim), so re-running a
 build only embeds the new samples. The cache sits beside its input:
@@ -692,7 +692,7 @@ After a successful build:
 
 Uploads trained artifacts to a HuggingFace repo and generates a maintainer-reviewable PR body that adds the model to the ATLAS registry.
 
-> **New to publishing?** See [docs/project/PUBLISHING.md](project/PUBLISHING.md) for the end-to-end walkthrough — HF account setup, token generation, what happens after submission, and troubleshooting. The reference below assumes you've already got `HF_TOKEN` set.
+> **New to publishing?** See [docs/project/PUBLISHING.md](../project/PUBLISHING.md) for the end-to-end walkthrough — HF account setup, token generation, what happens after submission, and troubleshooting. The reference below assumes you've already got `HF_TOKEN` set.
 
 ```bash
 atlas lens publish <registry-name> --repo alice/atlas-lens-my-model
@@ -766,7 +766,7 @@ After build:
 
 ### `atlas asa publish`
 
-Same shape as `atlas lens publish` — uploads the trained `.gguf` to a HuggingFace repo and generates a maintainer-reviewable registry PR. Full contributor walkthrough lives in [docs/project/PUBLISHING.md](project/PUBLISHING.md).
+Same shape as `atlas lens publish` — uploads the trained `.gguf` to a HuggingFace repo and generates a maintainer-reviewable registry PR. Full contributor walkthrough lives in [docs/project/PUBLISHING.md](../project/PUBLISHING.md).
 
 ```bash
 atlas asa publish <registry-name> --repo alice/atlas-asa-my-model
@@ -796,7 +796,7 @@ Both subcommands require a running `llama-server`. `atlas lens check` reuses the
 
 TUI-specific symptoms are below. For stack-wide issues (llama-server won't
 start, benchmark failures, GPU sizing) see
-[TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+[TROUBLESHOOTING.md](../TROUBLESHOOTING.md).
 
 ### TUI renders, but files the agent writes never appear in the file pane
 

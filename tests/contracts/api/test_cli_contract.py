@@ -26,19 +26,19 @@ def test_every_subcommand_has_a_main():
 
 
 def test_every_subcommand_is_documented():
-    doc = (REPO / "docs" / "CLI.md").read_text()
+    doc = (REPO / "docs" / "reference" / "CLI.md").read_text()
     missing = [name for name, _ in _SUBCOMMAND_HELP
                if f"atlas {name}" not in doc and f"`{name}`" not in doc]
     assert not missing, (
-        f"subcommands absent from docs/CLI.md: {missing}")
+        f"subcommands absent from docs/reference/CLI.md: {missing}")
 
 
 def test_removed_surfaces_stay_removed():
     """Names removed in the completion pass must not resurface in
     user-facing docs or help without a real implementation behind them."""
     checks = [
-        ("docs/API.md", "plan_tasks"),
-        ("docs/ARCHITECTURE.md", "plan_tasks"),
+        ("docs/reference/API.md", "plan_tasks"),
+        ("docs/reference/ARCHITECTURE.md", "plan_tasks"),
         ("atlas/display.py", "/ablation"),
     ]
     for rel, needle in checks:

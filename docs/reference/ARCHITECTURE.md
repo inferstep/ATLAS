@@ -1,4 +1,4 @@
-> **English** | **[简体中文](lang/zh-CN/ARCHITECTURE.md)** | **[日本語](lang/ja/ARCHITECTURE.md)** | **[한국어](lang/ko/ARCHITECTURE.md)**
+> **English** | **[简体中文](../lang/zh-CN/ARCHITECTURE.md)** | **[日本語](../lang/ja/ARCHITECTURE.md)** | **[한국어](../lang/ko/ARCHITECTURE.md)**
 
 # ATLAS Architecture
 
@@ -46,7 +46,7 @@ llama-server is the only GPU-using service; every other ATLAS service runs on CP
 
 | Backend | Status (V3.1.x) | Image / build path | Compose override | Tested cards |
 |---|---|---|---|---|
-| **CUDA** (NVIDIA) | Supported (since V3.1.0) | `inference/Dockerfile.v31` → `atlas-llama` | (default) | RTX 5060 Ti 16GB (canonical). The published image is compiled for Blackwell (compute capability 12.0/12.1) only; earlier generations need a local rebuild — see [SETUP.md](SETUP.md) |
+| **CUDA** (NVIDIA) | Supported (since V3.1.0) | `inference/Dockerfile.v31` → `atlas-llama` | (default) | RTX 5060 Ti 16GB (canonical). The published image is compiled for Blackwell (compute capability 12.0/12.1) only; earlier generations need a local rebuild — see [SETUP.md](../SETUP.md) |
 | **ROCm / HIP** (AMD) | Community-tested (since V3.1.1) | `inference/Dockerfile.rocm` → `atlas-llama-rocm`, built on the host (`pull_policy: build`; no GHCR image) | `compose/docker-compose.rocm.yml` | RX 7900 XTX (community smoke-test, GH #26) |
 | **Metal** (Apple Silicon) | Supported ([#32](https://github.com/inferstep/ATLAS/issues/32)) | Hybrid: native llama-server (Metal) + Docker for the rest (macOS can't passthrough GPU to containers) | `compose/docker-compose.macos.yml` | M-series; Q4_K_M on ≤16 GB, Q6_K on ≥24 GB unified |
 | **Vulkan** (cross-vendor fallback) | Preview | `inference/Dockerfile.vulkan` → `atlas-llama-vulkan` | `compose/docker-compose.vulkan.yml` | lavapipe CPU boot path (smoke-tested); no real-GPU validation yet |
@@ -515,7 +515,7 @@ A request may carry `task_contract.task_mode`, validated at the request boundary
   question.
 
 Shadow diagnostic records (private, observational, off by default — see
-[OPERATIONS.md](OPERATIONS.md#private-diagnostics-task-contract-shadow-capture)) version **per
+[OPERATIONS.md](../OPERATIONS.md#private-diagnostics-task-contract-shadow-capture)) version **per
 record kind**, because adding a field to one must not silently redefine another:
 
 | Record | Version | Contract |
@@ -768,7 +768,7 @@ Legend: blue = generation, green = verification/selection, brown = repair.
 
 When the incumbent holds, `phase_solved` is `incumbent`, and the proxy writes the model's own bytes.
 
-**Candidate Allocation: the CxGx gate** (emitted as `phase2` / `phase2_allocated`) decides how many candidates the failed probe earns. The probe's combined C(x)+G(x) score (one embedding extraction, both models) drives a two-step rule: the calibrated C(x) normalized energy picks a base tier on the same ladder Budget Forcing uses, and the G(x) quality score escalates that tier by +1 when it falls below the model's calibrated severe boundary and +2 when it falls well below (0.75x it) — the case where the probe looks cheap to C(x) but wrong to G(x). The tier sets k (`nothink` 1, `standard` 3, `hard` 5, `extreme` 8) under a hard **k >= 3 floor**, so the gate can only add candidates to the previously pinned k=3, never remove them; its worst case is the old behavior. Both signals require this model's calibration files (`cx_normalization.json`, `gx_thresholds.json`): an uncalibrated lens, or a probe the lens declines (too long for the embedding batch, empty), allocates exactly k=3 at `standard`, so an uncalibrated bundle runs the pipeline it ran before rather than routing on a scale that means nothing for it. A lens that cannot score at all stops the run instead ([ADR 0011](adr/0011-the-lens-is-required.md)).
+**Candidate Allocation: the CxGx gate** (emitted as `phase2` / `phase2_allocated`) decides how many candidates the failed probe earns. The probe's combined C(x)+G(x) score (one embedding extraction, both models) drives a two-step rule: the calibrated C(x) normalized energy picks a base tier on the same ladder Budget Forcing uses, and the G(x) quality score escalates that tier by +1 when it falls below the model's calibrated severe boundary and +2 when it falls well below (0.75x it) — the case where the probe looks cheap to C(x) but wrong to G(x). The tier sets k (`nothink` 1, `standard` 3, `hard` 5, `extreme` 8) under a hard **k >= 3 floor**, so the gate can only add candidates to the previously pinned k=3, never remove them; its worst case is the old behavior. Both signals require this model's calibration files (`cx_normalization.json`, `gx_thresholds.json`): an uncalibrated lens, or a probe the lens declines (too long for the embedding batch, empty), allocates exactly k=3 at `standard`, so an uncalibrated bundle runs the pipeline it ran before rather than routing on a scale that means nothing for it. A lens that cannot score at all stops the run instead ([ADR 0011](../adr/0011-the-lens-is-required.md)).
 
 The floor is the difference between this and the C(x)-only allocator removed earlier: that one had no floor, so it handed k=1 to tasks whose probe had *just failed*. Whether lens-driven allocation beats fixed or randomly assigned tiers is unmeasured. An earlier four-arm comparison (gated, fixed k=3, the same tier mix shuffled across tasks, and k=8, at n=175 per arm) is not evidence either way: it ran on Qwen3.5-9B with a patched runner that is not in this repository, with thinking enabled on escalation, which the live gate cannot apply, on LiveCodeBench tasks the G(x) head was trained on, and at that sample size its arms are within noise of each other.
 
@@ -953,7 +953,7 @@ no threshold to an unscored write. The capacity the lens knows (declared
 through `LLAMA_EMBED_CAPACITY_TOKENS`, or observed from a refusal) is
 reported on `/health` and `/ready` and, when it is below the proxy's
 generation ceiling, as `lens_scoring: partial` in the status dimensions.
-Decision record: [ADR 0010](adr/0010-lens-capacity-boundary-is-typed.md).
+Decision record: [ADR 0010](../adr/0010-lens-capacity-boundary-is-typed.md).
 
 Every current Lens bundle also contains `model_identity.json`. The service
 requires its model name to match the served-model id reported by
@@ -961,7 +961,7 @@ llama-server's `/v1/models` (with `ATLAS_MODEL_NAME` as the fallback when the
 probe fails); embedding-width equality alone cannot establish compatibility
 between two different models.
 
-> **Note:** Model weights (.pt, .pkl files) are not committed to the repository — they are built during training and baked into the container image or mounted at runtime. When model files are absent, its scoring endpoints answer `enabled: false` (with placeholder numbers: C(x) 0.0, G(x) `gx_score: 0.5`, `verdict: "unavailable"`). The proxy and V3 treat that answer as a lens that cannot score, and ATLAS refuses requests until the files exist ([ADR 0011](adr/0011-the-lens-is-required.md)). A score the Lens attempted and could not compute is answered `scored: false` with a typed `failure` and no number: a failure of the lens or its model server stops the run, and an input the lens declines (too long, empty, non-finite) is reported unscored. Training data and weights are available on [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS).
+> **Note:** Model weights (.pt, .pkl files) are not committed to the repository — they are built during training and baked into the container image or mounted at runtime. When model files are absent, its scoring endpoints answer `enabled: false` (with placeholder numbers: C(x) 0.0, G(x) `gx_score: 0.5`, `verdict: "unavailable"`). The proxy and V3 treat that answer as a lens that cannot score, and ATLAS refuses requests until the files exist ([ADR 0011](../adr/0011-the-lens-is-required.md)). A score the Lens attempted and could not compute is answered `scored: false` with a typed `failure` and no number: a failure of the lens or its model server stops the run, and an input the lens declines (too long, empty, non-finite) is reported unscored. Training data and weights are available on [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS).
 
 > **Nothing is kept between runs.** The lens keeps nothing of the code it scores: it holds no project index and no store of past sessions, so nothing from one run reaches a later one through it. It serves the health and readiness checks and three `/internal/lens/*` scoring calls (`geometric-lens/main.py`).
 
@@ -1052,7 +1052,7 @@ graph LR
 
 `llama-server` and `sandbox` start independently. `geometric-lens` waits for `llama-server` to be healthy; `v3-service` waits for `llama-server` and `geometric-lens`; `atlas-proxy` waits for `llama-server`, `geometric-lens`, `v3-service`, and `sandbox`. The same `inference/entrypoint-v3.1.sh` drives Docker Compose, bare metal, and K3s, so context size, KV cache quantization, flash attention, and mlock are env-var-controlled and behavior is identical across those modes; the macOS hybrid path launches native llama-server via `scripts/install/atlas-llama-macos.sh`, which mirrors the entrypoint's flags.
 
-Install and per-mode bring-up steps (NVIDIA / ROCm overrides, bare metal, macOS hybrid Metal, K3s manifests) are in [SETUP.md](SETUP.md); the macOS native path is in [SETUP_MACOS.md](SETUP_MACOS.md).
+Install and per-mode bring-up steps (NVIDIA / ROCm overrides, bare metal, macOS hybrid Metal, K3s manifests) are in [SETUP.md](../SETUP.md); the macOS native path is in [SETUP_MACOS.md](../SETUP_MACOS.md).
 
 ---
 
