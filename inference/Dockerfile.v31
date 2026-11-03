@@ -135,6 +135,10 @@ FROM ${RUNTIME_IMAGE}
 # Re-declare ARG after FROM so the runtime stage can reference it if
 # needed; Docker scopes ARGs per-stage unless re-declared.
 ARG RUNTIME_IMAGE
+# The week of the build, from build-images.yml. A new week runs the package
+# installs of this stage again, so they take the distribution's fixes
+# between base bumps; the build stage above stays in the cache.
+ARG PACKAGE_REFRESH
 # NVIDIA has not rebuilt the 12.9.0 runtime image since May 2025, so its CA
 # bundle is older than the distribution's: take the current one.
 RUN if command -v dnf >/dev/null 2>&1; then \
