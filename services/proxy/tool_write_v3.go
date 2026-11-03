@@ -597,9 +597,13 @@ func decideWriteCandidateDelivery(ctx *AgentContext, entry routeEntry, write *v3
 	var vetoes []string
 	var delivery deliveryAuthorization
 	if write.candidateProposed {
-		delivery = authorizeCandidateDelivery(ctx, entry, path, code, evidence.evID,
-			v3Result.Evidence, evidence.observed, evidence.selected, evidence.unmet,
-			write.deliveredCheck, write.scope, automaticIntent{VetoInput: vetoInput})
+		delivery = authorizeCandidateDelivery(ctx, candidateAuthorizationRequest{
+			Entry: entry, Path: path, Code: code, Identity: evidence.evID,
+			Envelope: v3Result.Evidence, Evidence: evidence.observed,
+			SelectedCandidateID: evidence.selected, Unmet: evidence.unmet,
+			Observed: write.deliveredCheck, Scope: write.scope,
+			Automatic: automaticIntent{VetoInput: vetoInput},
+		})
 		vetoes = delivery.Vetoes
 		vetoInput.Unmet = delivery.Unmet
 		write.lifecycle.noteAuthorization(delivery, evidence.evID, contentSHA256(code), vetoes)
