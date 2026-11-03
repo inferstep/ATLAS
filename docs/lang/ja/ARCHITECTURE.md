@@ -124,7 +124,7 @@ K3s デプロイパス（`scripts/install/install.sh`、`deploy/k3s/` 内のマ�
 | `internal/shellcmd/shell_wrapper.go` | `validateShellCommand` の背後にあるコマンドポリシー: 複合コマンドを分割し、実行ラッパー（`sh -c`、`eval` など）の中を最大 16 層まで調べ、壊滅的なコマンドと検査できないラッパーを拒否 |
 | `internal/shellcmd/destructive.go` | どのコマンドにも許されないシェルの形。破壊的な削除、フォークボム、デバイスへの書き込み |
 | `server_events.go` | 型付きエンベロープのブローカー（`/events`）と SSE の配管 |
-| `internal/v3client/client.go` | v3-service の `/v3/generate` + `/v3/plan` 向け SSE クライアント。呼び出しの上限 `ATLAS_V3_TIMEOUT` は `tool_write_v3_timeout.go` に残ります |
+| `internal/v3client/client.go` | v3-service の `/v3/generate` + `/v3/plan` 向け SSE クライアント。呼び出しの上限 `ATLAS_V3_TIMEOUT` は `tool_write_v3.go` に残ります |
 | `loop_state.go` | 共有型、ティア、ターン上限 |
 | `internal/wire/messages.go` | モデルのメッセージ、ツール結果、計画など、境界を越える型 |
 | `internal/wire/v3.go` | V3 サービスのリクエスト、レスポンス、証拠エンベロープとその検証 |
@@ -140,7 +140,7 @@ K3s デプロイパス（`scripts/install/install.sh`、`deploy/k3s/` 内のマ�
 | `candidate_attribution.go` | 自動候補配信が成功・拒否された理由を、ルート/認可/ポリシー/配信の各担当者が既に下した決定を使って記録する |
 | `candidate_automatic.go` | V3 が選択した正確な候補が自動配信の安全性・識別要件を満たすかチェックする |
 | `candidate_capture_only.go` | キャプチャ専用の計測実行中は候補配信を防ぎ、その抑制を記録する |
-| `delivery.go` | 候補配信を認可し、その一回使い切りの許可を消費し、現在のワークスペース状態を再チェックし、承認されたバイトを書き込む |
+| `delivery.go` | 候補配信を認可し、その一回使い切りの許可を消費し、現在のワークスペース状態を再チェックし、承認されたバイトを書き込む。サービス作成の候補内容を配信してよい本番ルートと発元ツールのリストも持つ |
 | `candidate_policy.go` | 固定の候補ポリシー、その取り得る結果、各決定の非公開記録を定義する |
 | `candidate_provenance.go` | 配信された内容がどこから来て、どのポリシーがディスクへの到達を許可したかを報告する |
 | `candidate_reachability.go` | ミューテーションが候補生成をバイパスした理由（適格性と残り時間を含む）を判定・記録する |
@@ -161,10 +161,8 @@ K3s デプロイパス（`scripts/install/install.sh`、`deploy/k3s/` 内のマ�
 | `evidence_staging_contract.go` | サンドボックスのステージングリクエスト・観測・実行予算とその識別子束ねを定義・検証する |
 | `candidate_mutation_target.go` | クライアントが出力パスを宣言していないとき、パースされたミューテーションコールが候補配信を正確な対象に接地しているかチェックする |
 | `evidence_syntax.go` | プロキシの構文チェック観測を、正確な候補バイトと構造的義務に束ねられた証拠に変える |
-| `delivery_registry.go` | サービス作成の候補内容を配信してよい本番ルートと発元ツールのリスト |
 | `delivery_v3_fallback.go` | V3 が失敗・タイムアウトした後に書かれたファイルを追跡し、最終サマリでまだ現行の未チェック内容を開示する |
-| `evidence_verification.go` | クライアント宣言のコマンド観測から証拠を生成し、それが個々の検証義務のどれを充足するかを追跡する |
-| `evidence_verification_requirements.go` | 宣言された検証の証拠の強度を、このセッションが観測したテスト資産の出自に応じて制限する |
+| `evidence_verification.go` | クライアント宣言のコマンド観測から証拠を生成し、それが個々の検証義務のどれを充足するかを追跡する。宣言された検証の証拠の強度も、このセッションが観測したテスト資産の出自に応じて制限する |
 | `gates_workspace_observation.go` | フォアグラウンドとバックグラウンドのコマンドが行ったファイル変更を観測し、成果物と削除をセッション台帳に記録する |
 
 ### エージェントループのフロー

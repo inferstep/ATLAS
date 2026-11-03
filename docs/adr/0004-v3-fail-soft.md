@@ -18,7 +18,7 @@ skip, never a hard turn failure (`writeFileWithV3` in `services/proxy/tool_write
 gets at most `ATLAS_V3_TIMEOUT` (default 300 s) or half the time the
 session has left, whichever is shorter; `ATLAS_V3_TIMEOUT=0` turns off
 both caps (`v3CallTimeout` and `callV3GenerateStreaming` in
-`services/proxy/tool_write_v3_timeout.go`).
+`services/proxy/tool_write_v3.go`).
 
 Rationale: the fallback content still passes the gates every write
 passes (syntax, structural and comparative; `writeWithoutCandidate` in
