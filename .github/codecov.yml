@@ -53,11 +53,11 @@ flag_management:
         - scripts/
     - name: typescript
       paths:
-        - extensions/vscode/
+        - clients/extensions/vscode/
 
 # Go reports name files by module path, and the extension's report by its
 # own folder. These turn both into paths from the repository root.
 fixes:
   - "github.com/itigges22/atlas-proxy/::services/proxy/"
   - "github.com/itigges22/atlas-tui/::tui/"
-  - "src/::extensions/vscode/src/"
+  - "src/::clients/extensions/vscode/src/"

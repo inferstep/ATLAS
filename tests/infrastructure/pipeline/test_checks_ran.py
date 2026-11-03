@@ -83,10 +83,10 @@ def test_every_form_of_the_on_block_is_read(ran, change, on):
     pytest.param({"pull_request": {"branches": ["main", "dev"]}}, ["a.py"], True, id="a branch filter with dev"),
     pytest.param({"pull_request": {"branches": ["release/**"]}}, ["a.py"], False, id="a pattern dev does not fit"),
     pytest.param({"pull_request": {"branches-ignore": ["dev"]}}, ["a.py"], False, id="dev ignored"),
-    pytest.param({"pull_request": {"paths": ["extensions/vscode/**", ".github/workflows/ui.yml"]}},
+    pytest.param({"pull_request": {"paths": ["clients/extensions/vscode/**", ".github/workflows/ui.yml"]}},
                  ["services/proxy/loop.go"], False, id="no changed file in its paths"),
-    pytest.param({"pull_request": {"paths": ["extensions/vscode/**", ".github/workflows/ui.yml"]}},
-                 ["services/proxy/loop.go", "extensions/vscode/src/a/b.ts"], True, id="one changed file in its paths"),
+    pytest.param({"pull_request": {"paths": ["clients/extensions/vscode/**", ".github/workflows/ui.yml"]}},
+                 ["services/proxy/loop.go", "clients/extensions/vscode/src/a/b.ts"], True, id="one changed file in its paths"),
     pytest.param({"pull_request": {"paths-ignore": ["docs/**", "*.md"]}}, ["docs/a/b.md", "README.md"], False,
                  id="every changed file ignored"),
     pytest.param({"pull_request": {"paths-ignore": ["docs/**", "*.md"]}}, ["docs/a.md", "services/proxy/loop.go"], True,
@@ -116,7 +116,7 @@ def test_every_workflow_of_this_repository_can_be_judged(ran, change):
     assert ".github/workflows/test.yml" in expected
     # A workflow with a path filter starts only for its own files.
     assert ".github/workflows/vscode-extension.yml" not in expected
-    with_ui, _ = ran.expected_workflows(workflows, change, ["extensions/vscode/src/extension.ts"], own="")
+    with_ui, _ = ran.expected_workflows(workflows, change, ["clients/extensions/vscode/src/extension.ts"], own="")
     assert ".github/workflows/vscode-extension.yml" in with_ui
 
 
