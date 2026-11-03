@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -142,14 +143,12 @@ func TestAssetLintStaysInsideTheWorkspace(t *testing.T) {
 	workspace := t.TempDir()
 	linkOutOfWorkspace(t, workspace, "templates/linked.html", outsideMarker)
 	writeInWorkspace(t, workspace, "templates/real.html", "<p>inside</p>\n")
-	// The lint names every template nothing renders, so its findings name the
-	// templates it read.
-	findings := assetlint.Findings(workspace)
-	if !findingsContaining(findings, "templates/real.html") {
-		t.Errorf("the lint did not read the template inside the workspace: %q", findings)
-	}
-	if findingsContaining(findings, "templates/linked.html") {
-		t.Errorf("the lint read a link that leaves the workspace: %q", findings)
+	// The lint names every template nothing renders, so the one finding is the
+	// one template inside the workspace: a read past the link, under any name,
+	// adds a finding.
+	want := []string{`templates/real.html is referenced by nothing (no render_template call or include names "real.html").`}
+	if got := assetlint.Findings(workspace); !slices.Equal(got, want) {
+		t.Errorf("assetlint.Findings = %q, want %q", got, want)
 	}
 }
 
