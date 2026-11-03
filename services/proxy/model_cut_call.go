@@ -323,6 +323,17 @@ func selectorSpan(ctx *AgentContext, path, source, selector string) (lineSpan, b
 
 var pyStringConstantOpen = regexp.MustCompile(`^([A-Za-z_]\w*)\s*=\s*[rRbBuUfF]{0,2}("""|''')`)
 
+// closingLine is the index of the first line from start on that holds delim,
+// or -1 when none does.
+func closingLine(lines []string, start int, delim string) int {
+	for j := start; j < len(lines); j++ {
+		if strings.Contains(lines[j], delim) {
+			return j
+		}
+	}
+	return -1
+}
+
 // largeStringConstants names module-level triple-quoted string constants of
 // 20+ lines in a Python file: where a template, and the code inside it, lives.
 func largeStringConstants(path, source string) []string {
@@ -341,14 +352,11 @@ func largeStringConstants(path, source string) []string {
 		if strings.Contains(rest, delim) {
 			continue
 		}
-		for j := i + 1; j < len(lines); j++ {
-			if strings.Contains(lines[j], delim) {
-				if j-i+1 >= 20 {
-					out = append(out, fmt.Sprintf("`%s` (lines %d-%d)", m[1], i+1, j+1))
-				}
-				i = j
-				break
+		if j := closingLine(lines, i+1, delim); j >= 0 {
+			if j-i+1 >= 20 {
+				out = append(out, fmt.Sprintf("`%s` (lines %d-%d)", m[1], i+1, j+1))
 			}
+			i = j
 		}
 		if len(out) == 2 {
 			break
