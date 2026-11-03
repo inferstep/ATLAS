@@ -1,9 +1,13 @@
 """scripts/ci/code_health.py measures what docs/project/CODE_STYLE.md limits, and the
 committed baseline matches the code."""
 
+import ast
 import importlib.util
 import os
+import subprocess
 import sys
+
+import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 _spec = importlib.util.spec_from_file_location("code_health", os.path.join(ROOT, "scripts", "ci", "code_health.py"))
@@ -54,6 +58,7 @@ def test_a_folder_over_the_soft_limit_counts_files_and_sub_folders():
 
 def test_a_crowded_folder_is_a_note_and_never_a_failure(monkeypatch, capsys):
     monkeypatch.setattr(ch, "tracked_paths", lambda: [f"crowded/file{i}" for i in range(26)])
+    monkeypatch.setattr(ch, "measure_complexity", lambda: {"cognitive": {}, "cyclomatic": {}})
     monkeypatch.setattr(sys, "argv", ["code_health.py"])
     assert ch.main() == 0
     assert "crowded (26)" in capsys.readouterr().out
@@ -104,3 +109,82 @@ def test_the_main_package_counts_only_its_own_code_files(tmp_path, monkeypatch):
 def test_the_main_package_is_within_its_pin():
     assert ch.main_package_problems(ch.main_package_size(), ch.load_baseline()) == [], (
         "proxy's main package grew past its pin: put the new subject in its own package")
+
+
+# Two functions whose cognitive complexity SonarQube's rule S3776 counts by hand:
+# for +1, if +2 (nested once), and +1, else +1; while +1, except +2 (nested once),
+# if +3 (nested twice), or +1. The copied measure must give the same.
+@pytest.mark.parametrize("src, sonar", [
+    ("def first(rows):\n"
+     "    total = 0\n"
+     "    for row in rows:\n"
+     "        if row.ok and row.size > 0:\n"
+     "            total += row.size\n"
+     "        else:\n"
+     "            total -= 1\n"
+     "    return total\n", 5),
+    ("def second(path, retries):\n"
+     "    while retries > 0:\n"
+     "        try:\n"
+     "            return fetch(path)\n"
+     "        except OSError:\n"
+     "            retries -= 1\n"
+     "            if retries == 0 or not path:\n"
+     "                raise\n"
+     "    return None\n", 7),
+])
+def test_the_copied_cognitive_measure_counts_like_sonar(src, sonar):
+    get_cognitive_complexity = ch.load_cognitive_measure()
+    assert get_cognitive_complexity(ast.parse(src).body[0]) == sonar
+    assert ch.HERE not in sys.path
+
+
+def test_a_go_tool_line_names_the_function_as_the_size_check_does(monkeypatch):
+    printed = ("42 app (*tuiModel).appendChatEvent clients/tui/internal/app/events.go:26:1\n"
+               "17 app formatV3StageEvent clients/tui/internal/app/events.go:997:1\n")
+    monkeypatch.setattr(ch.shutil, "which", lambda name: "/usr/local/go/bin/go")
+    monkeypatch.setattr(ch.subprocess, "run",
+                        lambda *args, **kwargs: subprocess.CompletedProcess(args, 1, printed, "exit status 1\n"))
+    assert ch.go_scores(ch.GOCYCLO, ["clients/tui/internal/app/events.go"]) == {
+        "clients/tui/internal/app/events.go:tuiModel.appendChatEvent": 42,
+        "clients/tui/internal/app/events.go:formatV3StageEvent": 17,
+    }
+
+
+def test_a_go_tool_that_did_not_run_fails_rather_than_listing_nothing(monkeypatch):
+    monkeypatch.setattr(ch.shutil, "which", lambda name: "/usr/local/go/bin/go")
+    monkeypatch.setattr(ch.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(
+        args, 1, "", "go: github.com/uudashr/gocognit@v1.2.1: dial tcp: lookup proxy.golang.org: no such host\n"))
+    with pytest.raises(ch.CannotMeasure, match="did not run"):
+        ch.go_scores(ch.GOCOGNIT, ["services/proxy/main.go"])
+
+
+def test_a_run_without_go_fails_and_names_the_install(monkeypatch, capsys):
+    monkeypatch.setattr(ch.shutil, "which", lambda name: None)
+    monkeypatch.setattr(sys, "argv", ["code_health.py"])
+    assert ch.main() == 1
+    assert "install Go (https://go.dev/dl/)" in capsys.readouterr().out
+
+
+def test_go_tests_are_measured_for_complexity_and_the_two_held_files_are_not(monkeypatch):
+    measured = []
+
+    def record(tool, paths):
+        measured.extend(paths)
+        return {}
+
+    monkeypatch.setattr(ch, "go_scores", record)
+    monkeypatch.setattr(ch, "python_cognitive", lambda paths: {})
+    ch.measure_complexity()
+    assert "services/proxy/main_test.go" in measured
+    assert "services/proxy/tool_args.go" not in measured
+    assert "services/proxy/tool_args_test.go" not in measured
+
+
+def test_a_new_or_risen_complexity_fails_and_a_fallen_one_passes():
+    base = {"cognitive": {"a.go:rises": 20, "a.go:falls": 30}, "cyclomatic": {"b.go:stays": 18}}
+    scores = {"cognitive": {"a.go:rises": 21, "a.go:falls": 25, "c.py:new": 16}, "cyclomatic": {"b.go:stays": 18}}
+    assert ch.complexity_problems(scores, base) == [
+        "cognitive complexity grew: a.go:rises (20 -> 21); the baseline allows no growth",
+        "new function over cognitive complexity 15: c.py:new (16)",
+    ]
