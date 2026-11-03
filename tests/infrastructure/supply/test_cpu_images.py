@@ -29,7 +29,7 @@ def test_lens_image_installs_torch_from_cpu_only_index():
 def test_min_python_gate_passes_on_current_tree():
     """The shipped tree must not use syntax newer than requires-python.
 
-    Guards the drift that produced 29 fixture errors: sandbox/executor_server.py
+    Guards the drift that produced 29 fixture errors: services/sandbox/executor_server.py
     carried a PEP 604 annotation while pyproject declared >=3.9, and the CI
     matrix (3.11/3.12 only) could not see it.
     """

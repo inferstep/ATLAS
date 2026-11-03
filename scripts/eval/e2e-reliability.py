@@ -408,7 +408,7 @@ TASKS["ask_bug"] = Task(
 # one look, and where the failure that matters is not "did it work" but "did
 # it break the twelve things that already worked".
 
-_EXECUTOR = REPO / "sandbox" / "executor_server.py"
+_EXECUTOR = REPO / "services" / "sandbox" / "executor_server.py"
 _EXISTING_LANGS = ("python", "javascript", "typescript", "go", "java",
                    "kotlin", "rust", "ruby", "php", "bash", "json", "yaml")
 

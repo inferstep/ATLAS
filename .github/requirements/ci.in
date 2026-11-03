@@ -1,6 +1,6 @@
 # What the CI jobs install, locked with hashes in ci.txt (Scorecard
 # Pinned-Dependencies). Make ci.txt again with scripts/ci/ci-lock.sh.
-# ruff and mypy match sandbox/requirements-verify.txt (a contract test checks).
+# ruff and mypy match services/sandbox/requirements-verify.txt (a contract test checks).
 pytest
 # Coverage output for the pytest jobs (ATLAS_COVERAGE_DIR in
 # scripts/ci/production-readiness.py).
@@ -17,13 +17,13 @@ yamllint
 # What the tests need of the product's own packages. Each pin below is a copy
 # of the pin in a product file, and a contract test holds the two the same.
 # Dependabot moves both in one pull request and makes ci.txt again.
-# From sandbox/requirements-runtime.txt: the sandbox service, which the
+# From services/sandbox/requirements-runtime.txt: the sandbox service, which the
 # tests under tests/infrastructure start.
 fastapi==0.162.0
 defusedxml==0.7.1
 pydantic==2.14.1
 uvicorn==0.54.0
-# From sandbox/requirements-verify.txt: the sandbox's check of Jinja
+# From services/sandbox/requirements-verify.txt: the sandbox's check of Jinja
 # templates. Without it the check passes everything.
 jinja2==3.1.6
 # From v3-service/requirements.txt: the grammars behind structural_edit and

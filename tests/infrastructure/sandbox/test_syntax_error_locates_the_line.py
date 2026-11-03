@@ -40,7 +40,7 @@ BROKEN = (
 def _extract(stderr: str) -> list:
     """The sandbox's extraction, mirrored.
 
-    Kept in step with _syntax_check_impl in sandbox/executor_server.py; the
+    Kept in step with _syntax_check_impl in services/sandbox/executor_server.py; the
     contract under test is that the returned string carries a line number.
     """
     errors, lineno = [], None
@@ -100,7 +100,7 @@ def test_a_line_number_already_present_is_not_duplicated(tmp_path):
 
 def test_the_sandbox_still_preserves_the_line_number():
     """Guards the extraction in the service itself, not just this mirror."""
-    src = (REPO / "sandbox" / "executor_server.py").read_text()
+    src = (REPO / "services" / "sandbox" / "executor_server.py").read_text()
     impl = src.split("def _syntax_check_impl", 1)[1].split("\n    elif lang ==", 1)[0]
     assert 'line.startswith(\'File "\')' in impl, (
         "the File frame carries the line number; dropping it again breaks "

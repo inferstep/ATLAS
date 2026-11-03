@@ -2,7 +2,7 @@
 """Run the candidate-staging integration test against a real executor.
 
 The Go test in `services/proxy/evidence_staging_integration_test.go` needs a live
-`sandbox/executor_server.py`: the whole point of it is to check that the real
+`services/sandbox/executor_server.py`: the whole point of it is to check that the real
 executor's snapshot is isolated, its `finally` really deletes, and its
 observation really describes the tree either side. A stub cannot answer any of
 that.
@@ -31,7 +31,7 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-EXECUTOR = ROOT / "sandbox" / "executor_server.py"
+EXECUTOR = ROOT / "services" / "sandbox" / "executor_server.py"
 PROXY = ROOT / "services" / "proxy"
 TESTS = (
     "TestRealExecutorStagesTheExactCandidateForACleanPass|"
@@ -132,7 +132,7 @@ def main() -> int:
     url = f"http://127.0.0.1:{port}"
 
     serve = workdir / "serve.py"
-    serve.write_text(SERVE.format(sandbox=str(ROOT / "sandbox"),
+    serve.write_text(SERVE.format(sandbox=str(ROOT / "services" / "sandbox"),
                                   executor=str(EXECUTOR), port=port))
     env = dict(os.environ,
                ATLAS_SANDBOX_WORKSPACE_ROOT=str(ws),

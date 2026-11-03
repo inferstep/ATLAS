@@ -222,7 +222,7 @@ func TestAnEditNeedsAReadUnlessTheSessionsOwnWriteIsOnDisk(t *testing.T) {
 	}
 }
 
-// The java branch of sandbox/executor_server.py's _syntax_check_impl, verbatim
+// The java branch of services/sandbox/executor_server.py's _syntax_check_impl, verbatim
 // (lines 1341-1366 at 9756223, including its continuation lines, comment and
 // trailing whitespace), inside a minimal dispatch so it stands alone.
 const javaDispatch = `def _syntax_check_impl(lang, code, workspace, filename=None):

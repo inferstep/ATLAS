@@ -35,7 +35,7 @@ def lets_others_write(mode):
 
 
 def test_no_chmod_in_the_sandbox_dockerfile_gives_others_write():
-    sandbox = commands(ROOT / "sandbox" / "Dockerfile")
+    sandbox = commands(ROOT / "services" / "sandbox" / "Dockerfile")
     assert sandbox, "no command was read, so this test reads the Dockerfile wrongly"
     modes = [word for command in sandbox if command.startswith(("chmod", "RUN chmod"))
              for word in command.split() if re.fullmatch(r"[0-7]{3,4}|[ugoa]*[+=][rwxX]+", word)]

@@ -10,7 +10,7 @@ import pytest
 import adapters
 from stages import llm_client
 
-SANDBOX = Path(__file__).resolve().parents[3] / "sandbox"
+SANDBOX = Path(__file__).resolve().parents[3] / "services" / "sandbox"
 
 
 def sandbox_server():

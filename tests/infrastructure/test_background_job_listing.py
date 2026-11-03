@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-SANDBOX_DIR = Path(__file__).resolve().parents[2] / "sandbox"
+SANDBOX_DIR = Path(__file__).resolve().parents[2] / "services" / "sandbox"
 
 
 @pytest.fixture(scope="module")

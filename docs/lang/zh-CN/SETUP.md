@@ -532,7 +532,7 @@ pip install -r geometric-lens/requirements.txt
 pip install -r v3-service/requirements.txt
 
 # 6. Install sandbox dependencies
-pip install -r sandbox/requirements-runtime.txt -r sandbox/requirements-verify.txt
+pip install -r services/sandbox/requirements-runtime.txt -r services/sandbox/requirements-verify.txt
 ```
 
 ### 启动服务
@@ -565,7 +565,7 @@ ATLAS_SANDBOX_URL=http://localhost:8020 \
 python main.py
 
 # Terminal 4: Sandbox
-cd sandbox
+cd services/sandbox
 python executor_server.py
 # 沙箱在启动时检查能否通过 /proc 管理子进程。
 # 在没有可读 /proc 的主机上（例如 macOS），它以降级的限制启动，

@@ -526,7 +526,7 @@ pip install -r geometric-lens/requirements.txt
 pip install -r v3-service/requirements.txt
 
 # 6. Install sandbox dependencies
-pip install -r sandbox/requirements-runtime.txt -r sandbox/requirements-verify.txt
+pip install -r services/sandbox/requirements-runtime.txt -r services/sandbox/requirements-verify.txt
 ```
 
 ### サービスの起動
@@ -559,7 +559,7 @@ ATLAS_SANDBOX_URL=http://localhost:8020 \
 python main.py
 
 # Terminal 4: Sandbox
-cd sandbox
+cd services/sandbox
 python executor_server.py
 # サンドボックスは起動時に、/proc を通じて子プロセスを管理できるか確認します。
 # 読み取れる /proc がないホスト（macOS など）では、制限を弱めた状態で起動し、

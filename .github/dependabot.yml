@@ -118,7 +118,7 @@ updates:
     directories:
       - /services/proxy
       - /v3-service
-      - /sandbox
+      - /services/sandbox
       - /geometric-lens
       - /services/inference
     target-branch: dev

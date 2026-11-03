@@ -73,7 +73,7 @@ ON_DEV = {
     "v3-service/Dockerfile": "FROM scratch\n# v3 of dev\n", "v3-service/main.py": "# of dev\n",
     "geometric-lens/Dockerfile": "FROM scratch\n# the lens of dev\n", "geometric-lens/main.py": "# of dev\n",
     "geometric-lens/geometric_lens/models/gx_weights.json": "{}\n",
-    "sandbox/Dockerfile": "FROM scratch\n# the sandbox of dev\n", "sandbox/executor_server.py": "# of dev\n",
+    "services/sandbox/Dockerfile": "FROM scratch\n# the sandbox of dev\n", "services/sandbox/executor_server.py": "# of dev\n",
     "services/inference/Dockerfile.v31": "FROM scratch\n", "services/inference/entrypoint-v3.1.sh": "#!/bin/sh\n",
     "tests/replay/recordings/one.json": "{}\n", "docs/API.md": "the page\n",
 }
@@ -256,7 +256,7 @@ def test_the_image_is_built_from_the_commits_files_and_the_tree_of_the_run_stays
     pytest.param("atlas-proxy", "services/proxy/prompt.go", "services/proxy", ["Dockerfile", "prompt.go"], id="proxy"),
     pytest.param("geometric-lens", "geometric-lens/main.py", "geometric-lens", ["Dockerfile", "geometric_lens", "main.py"],
                  id="lens"),
-    pytest.param("sandbox", "sandbox/executor_server.py", "sandbox", ["Dockerfile", "executor_server.py"], id="sandbox"),
+    pytest.param("sandbox", "services/sandbox/executor_server.py", "services/sandbox", ["Dockerfile", "executor_server.py"], id="sandbox"),
     # The build of v3-service has the whole repository as its context. The copy holds only what that build reads.
     pytest.param("v3-service", "v3-service/main.py", ".", [".dockerignore", "v3-service"], id="v3-service"),
     pytest.param("v3-service", ".dockerignore", ".", [".dockerignore", "v3-service"], id="v3-service-by-its-dockerignore"),
@@ -281,7 +281,7 @@ def test_each_service_is_built_from_its_own_folder_and_only_the_others_are_pulle
 
 
 def test_a_commit_that_changes_two_services_gets_both_built_and_both_removed(tmp_path, repository):
-    commit = repository.on_a_branch({"services/proxy/prompt.go": "a change\n", "sandbox/executor_server.py": "a change\n"})
+    commit = repository.on_a_branch({"services/proxy/prompt.go": "a change\n", "services/sandbox/executor_server.py": "a change\n"})
     run = OneCommit(tmp_path, repository).run(commit)
     assert run.report["changed_services"] == ["sandbox", "atlas-proxy"]
     assert run.did() == START + ["pull the model server", "pull the lens", "pull v3-service", "build the sandbox",
@@ -646,7 +646,7 @@ def test_no_call_of_the_run_names_an_image_of_its_own_under_the_registry_or_remo
                  "failed: the time limit of 0.05 minutes was reached, in the step: the smoke run", True, True, id="the-time-limit"),
 ])
 def test_whatever_ends_the_run_the_images_that_it_built_are_removed(tmp_path, repository, plan, more, says, proxy_built, stack):
-    commit = repository.on_a_branch({"sandbox/executor_server.py": "a change\n", "services/proxy/prompt.go": "a change\n"})
+    commit = repository.on_a_branch({"services/sandbox/executor_server.py": "a change\n", "services/proxy/prompt.go": "a change\n"})
     run = OneCommit(tmp_path, repository, **plan).run(commit, *more)
     assert run.report["result"].startswith(says), run.report["result"]
     sandbox, proxy = run.name_of("sandbox"), run.name_of("atlas-proxy")
@@ -737,7 +737,7 @@ OF_DEV = "aaaaaaaaaaaa"
 @pytest.mark.parametrize("changed", [
     pytest.param({"tests/replay/recordings/one.json": '{"again": true}\n'}, id="only-the-recordings"),
     # Another service is built, and it does not send the text.
-    pytest.param({"tests/replay/recordings/one.json": '{"again": true}\n', "sandbox/executor_server.py": "a change\n"},
+    pytest.param({"tests/replay/recordings/one.json": '{"again": true}\n', "services/sandbox/executor_server.py": "a change\n"},
                  id="the-recordings-and-the-sandbox"),
     pytest.param({"tests/replay/recordings/one.json": '{"again": true}\n', "v3-service/main.py": "a change\n"},
                  id="the-recordings-and-v3-service"),

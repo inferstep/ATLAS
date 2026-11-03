@@ -15,7 +15,7 @@ issue.
 ATLAS is a local coding agent made of a few services: the Go agent loop
 (`services/proxy/`), the terminal client (`clients/tui/`), the Python CLI (`atlas/`), the V3
 candidate pipeline (`v3-service/`), the Geometric Lens (`geometric-lens/`),
-the sandbox (`sandbox/`) and the llama.cpp images (`services/inference/`).
+the sandbox (`services/sandbox/`) and the llama.cpp images (`services/inference/`).
 [The repository map](../docs/README.md#repository-map) says what every directory owns, and
 [ARCHITECTURE.md](../docs/reference/ARCHITECTURE.md) explains how the pieces work
 together.
@@ -395,7 +395,7 @@ pytest tests/v3-service/stages/test_plan_search.py -v
 # End-to-end acceptance: real proxy + sandbox executor + fake
 # llama-server. No GPU or model needed. Build the proxy binary first.
 cd services/proxy && go build -o /tmp/test-atlas-proxy . && cd ../..
-pip install -r sandbox/requirements-runtime.txt
+pip install -r services/sandbox/requirements-runtime.txt
 pytest tests/e2e -v
 ```
 

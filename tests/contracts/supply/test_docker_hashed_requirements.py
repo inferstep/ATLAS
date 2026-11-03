@@ -16,8 +16,8 @@ ROOT = Path(__file__).resolve().parents[3]
 SERVICE_CONFIGS = [
     ("geometric-lens/Dockerfile", "geometric-lens/requirements.txt", "geometric-lens/requirements-lock.txt"),
     ("v3-service/Dockerfile", "v3-service/requirements.txt", "v3-service/requirements-lock.txt"),
-    ("sandbox/Dockerfile", "sandbox/requirements-runtime.txt", "sandbox/requirements-lock.txt"),
-    ("sandbox/Dockerfile", "sandbox/requirements-verify.txt", "sandbox/requirements-lock.txt"),
+    ("services/sandbox/Dockerfile", "services/sandbox/requirements-runtime.txt", "services/sandbox/requirements-lock.txt"),
+    ("services/sandbox/Dockerfile", "services/sandbox/requirements-verify.txt", "services/sandbox/requirements-lock.txt"),
 ]
 
 

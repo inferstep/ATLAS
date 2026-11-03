@@ -9,7 +9,7 @@ import pytest
 from tests.conftest import run_shell_sync
 from fastapi import HTTPException
 
-SANDBOX_DIR = Path(__file__).parents[2] / "sandbox"
+SANDBOX_DIR = Path(__file__).parents[2] / "services" / "sandbox"
 
 
 _SANDBOX_MODULE = None
@@ -32,7 +32,7 @@ def _load_sandbox_module():
 
 def _import_sandbox_module():
     # executor_server imports its sibling `structured_log`, which only
-    # resolves when sandbox/ is importable. In the container that holds
+    # resolves when services/sandbox/ is importable. In the container that holds
     # because the module runs from its own directory; loading it by path
     # from the test suite does not, so put the directory on sys.path
     # first. Without this every test here fails at import with
@@ -436,7 +436,7 @@ def test_python_syntax_check_handles_a_subdirectory_path(tmp_path):
 def test_jinja2_is_a_baked_sandbox_verify_dependency():
     req = (SANDBOX_DIR / "requirements-verify.txt").read_text().lower()
     assert "jinja2" in req, (
-        "jinja2 must be in sandbox/requirements-verify.txt — the Jinja template "
+        "jinja2 must be in services/sandbox/requirements-verify.txt — the Jinja template "
         "syntax check imports it, and without it the check fails open")
 
 

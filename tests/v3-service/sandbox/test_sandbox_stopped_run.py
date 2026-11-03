@@ -15,7 +15,7 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(PROJECT_ROOT / "v3-service"))
-sys.path.insert(0, str(PROJECT_ROOT / "sandbox"))
+sys.path.insert(0, str(PROJECT_ROOT / "services" / "sandbox"))
 
 import adapters
 import pipeline

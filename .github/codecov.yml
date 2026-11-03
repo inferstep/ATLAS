@@ -49,7 +49,7 @@ flag_management:
         - atlas/
         - v3-service/
         - geometric-lens/
-        - sandbox/
+        - services/sandbox/
         - scripts/
     - name: typescript
       paths:

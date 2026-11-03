@@ -41,7 +41,7 @@ SLOW_GATES_BY_PATH = ((lambda p: p.startswith(PROXY), ("go-proxy-test",)),)
 SUITES_BY_PATH = (
     ("atlas/", ("tests/atlas", "tests/contracts")),
     ("v3-service/", ("tests/v3-service",)),
-    ("sandbox/", (INFRASTRUCTURE_SUITE,)),
+    ("services/sandbox/", (INFRASTRUCTURE_SUITE,)),
     ("scripts/", (INFRASTRUCTURE_SUITE,)),
     (PROXY, ("tests/replay", "tests/e2e")),
 )
