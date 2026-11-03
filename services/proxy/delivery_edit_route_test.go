@@ -38,47 +38,74 @@ const editContract = `{"task_mode":"work","output_knowledge":"declared",` +
 // materially different candidate to decide about.
 const editAttempt = "def solve(values):\n    return sum(v for v in values)\n"
 
+// editTools are the four tools that can land a service-authored replacement.
+var editTools = []string{"edit_file", "structural_edit", "insert_after", "replace_lines"}
+
 // Every edit tool lands an authorized candidate through the protected route:
 // one grant minted and consumed, one routing ending, one delivery ending,
 // candidate evidence, a settlement record, and the landed bytes on disk. The
 // edit tool records the landing in the ledger after the route returns; that
 // is checked through the loop in TestADeliveredEditCandidateRegistersTheChangedPath.
-func TestEveryEditToolLandsACandidateThroughAConsumedGrant(t *testing.T) {
-	for _, tool := range []string{"edit_file", "structural_edit", "insert_after", "replace_lines"} {
+func TestEveryEditToolLandsTheCandidateWithASettlement(t *testing.T) {
+	for _, tool := range editTools {
 		t.Run(tool, func(t *testing.T) {
 			w := editWorld(t, editContract, map[string]stubEffect{"pytest": {ExitCode: 0}})
-			recs := captureShadow(t, func() {
-				res := deliverEditCandidate(w.ctx, tool, w.path, "solve.py",
-					editOriginal, editAttempt)
-				if res.Result == nil || !res.Result.Success {
-					t.Fatalf("delivery did not complete: %+v", res)
-				}
+			var res editRouteOutcome
+			captureShadow(t, func() {
+				res = deliverEditCandidate(w.ctx, tool, w.path, "solve.py", editOriginal, editAttempt)
 			})
 
+			if res.Result == nil {
+				t.Fatalf("delivery gave no result: %+v", res)
+			}
+			if !res.Result.Success {
+				t.Fatalf("delivery did not complete: %+v", res)
+			}
 			if w.disk(t) != routeWinner {
 				t.Fatal("the authorized candidate did not land")
 			}
 			if deliverySettlementFor(w.ctx, w.path) == nil {
 				t.Fatal("an edit-route delivery wrote no settlement record")
 			}
-			minted, consumed := 0, 0
-			for _, r := range recordsOfKind(recs, "authorization_grant_event") {
-				switch r["event"] {
-				case "minted":
-					minted++
-				case "consumed_authorized":
-					consumed++
-				}
+		})
+	}
+}
+
+func TestEveryEditToolMintsAndConsumesOneGrant(t *testing.T) {
+	for _, tool := range editTools {
+		t.Run(tool, func(t *testing.T) {
+			w := editWorld(t, editContract, map[string]stubEffect{"pytest": {ExitCode: 0}})
+			recs := captureShadow(t, func() {
+				deliverEditCandidate(w.ctx, tool, w.path, "solve.py", editOriginal, editAttempt)
+			})
+
+			if n := mintedGrants(recs); n != 1 {
+				t.Errorf("minted %d grants, want one", n)
 			}
-			if minted != 1 || consumed != 1 {
-				t.Fatalf("minted %d consumed %d, want one each", minted, consumed)
+			if n := consumedGrants(recs); n != 1 {
+				t.Errorf("consumed %d grants, want one", n)
 			}
+		})
+	}
+}
+
+func TestEveryEditToolEndsTheRouteAndTheDeliveryOnceWithEvidence(t *testing.T) {
+	for _, tool := range editTools {
+		t.Run(tool, func(t *testing.T) {
+			w := editWorld(t, editContract, map[string]stubEffect{"pytest": {ExitCode: 0}})
+			recs := captureShadow(t, func() {
+				deliverEditCandidate(w.ctx, tool, w.path, "solve.py", editOriginal, editAttempt)
+			})
+
 			if n := len(recordsOfKind(recs, "shadow_route_disposition")); n != 1 {
 				t.Fatalf("%d routing endings, want exactly 1", n)
 			}
 			ends := recordsOfKind(recs, "shadow_delivery_disposition")
-			if len(ends) != 1 || ends[0]["disposition"] != string(deliveryConsumedAndLanded) {
-				t.Fatalf("delivery endings %v", ends)
+			if len(ends) != 1 {
+				t.Fatalf("%d delivery endings, want exactly 1: %v", len(ends), ends)
+			}
+			if ends[0]["disposition"] != string(deliveryConsumedAndLanded) {
+				t.Fatalf("delivery ending %v, want %s", ends[0]["disposition"], deliveryConsumedAndLanded)
 			}
 			if len(recordsOfKind(recs, "candidate_evidence_observation")) == 0 {
 				t.Error("no candidate evidence was produced for an edit candidate")
