@@ -414,9 +414,9 @@ func (loop *agentLoop) refuseFencedFetch(turn int, parsed wire.ModelResponse, in
 	st.bounceToolCall(ctx, "write_file", fencedBounce)
 	// A refusal here is a failed call like any other, and it has
 	// to reach every mechanism that counts one. Otherwise a model
-	// can re-send this call for its whole budget while the
-	// allowance correctly refuses each generation and nothing
-	// bounds the TURNS.
+	// can re-send this call for its whole budget: the fenced
+	// allowance lets two fetches of a file fail, then refuses each
+	// further one before it starts, and nothing bounds the TURNS.
 	//
 	// A run that ended because the client left, or because the
 	// work deadline fired, is not a model repeating itself, and

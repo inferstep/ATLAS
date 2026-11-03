@@ -541,9 +541,10 @@ const c3RecoveryRepeat = 2
 // noopEditIntent returns the path of an edit_file call whose old_str and
 // new_str are identical, and "" for anything else.
 //
-// Deliberately only the explicit form, the one the case above is made of. edit_file also refuses edits that are merely INEFFECTIVE -- a
-// replacement that leaves the file byte-identical -- and that is a different
-// failure with different evidence, so it stays where it is.
+// Deliberately only the explicit form, the one the case above is made of.
+// edit_file also refuses edits that are merely INEFFECTIVE -- a replacement
+// that leaves the file byte-identical -- and that is a different failure with
+// different evidence, so it stays where it is.
 func noopEditIntent(name string, args json.RawMessage) string {
 	if name != "edit_file" {
 		return ""
