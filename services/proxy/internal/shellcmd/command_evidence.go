@@ -501,6 +501,13 @@ func readHereDocOperator(cmd string, i int) (int, hereDoc) {
 	for j < len(cmd) && (cmd[j] == ' ' || cmd[j] == '\t') {
 		j++
 	}
+	doc.delim, j = readHereDocDelim(cmd, j)
+	return j, doc
+}
+
+// readHereDocDelim reads the delimiter word of a here-document starting at j,
+// with its quotes and backslashes removed, and returns the index just past it.
+func readHereDocDelim(cmd string, j int) (string, int) {
 	var delim strings.Builder
 	for j < len(cmd) {
 		d := cmd[j]
@@ -525,8 +532,7 @@ func readHereDocOperator(cmd string, i int) (int, hereDoc) {
 		delim.WriteByte(d)
 		j++
 	}
-	doc.delim = delim.String()
-	return j, doc
+	return delim.String(), j
 }
 
 // readHereDocBodies consumes, in order, the bodies of the pending
