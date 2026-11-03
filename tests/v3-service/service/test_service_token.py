@@ -87,7 +87,7 @@ def test_a_refused_client_that_sends_its_body_slowly_is_cut_off_at_the_time_limi
                     client.sendall(b"x")  # one byte at a time, each well inside the limit
                     closed = client.recv(1) == b""
                 except socket.timeout:
-                    pass
+                    continue  # nothing arrived yet: send the next byte
                 except OSError:
                     closed = True
             took = time.monotonic() - answered
