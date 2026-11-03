@@ -718,20 +718,28 @@ def _step_write_env(m: model_registry.Model, profile: tier.TierProfile,
 # Step 5 — generate api-keys.json
 # ---------------------------------------------------------------------------
 
-def _print_secrets_dir_not_ours(secrets_dir: str, st: os.stat_result, color: bool) -> None:
-    """Why api-keys.json is not written into a secrets/ folder this user cannot set to 0700, and the fix."""
+def _print_secrets_dir_refused(secrets_dir: str, st: os.stat_result, color: bool) -> None:
+    """Why api-keys.json is not written into a secrets/ folder that cannot be set to 0700, and the fix."""
+    try:
+        uid, gid = os.getuid(), os.getgid()
+    except AttributeError:  # non-POSIX host
+        uid = gid = None
+    mode = oct(st.st_mode & 0o777)
+    if st.st_uid == uid:
+        _safe_print(f"  {RED if color else ''}{secrets_dir} is yours, with mode {mode}, but its filesystem "
+                    f"refused the change to 0700, so atlas init does not write api-keys.json into it."
+                    f"{RESET if color else ''}")
+        _safe_print(f"  Fix: chmod 700 {secrets_dir} where the filesystem allows it, or keep the checkout "
+                    "on a filesystem that does, then run atlas init again.")
+        return
     try:
         import pwd
         owner = f"{pwd.getpwuid(st.st_uid).pw_name} (uid {st.st_uid})"
     except (ImportError, KeyError):  # non-POSIX host, or a uid with no name
         owner = f"uid {st.st_uid}"
-    try:
-        you = f"{os.getuid()}:{os.getgid()}"
-    except AttributeError:  # non-POSIX host
-        you = "<your uid>:<your gid>"
-    _safe_print(f"  {RED if color else ''}{secrets_dir} belongs to {owner}, with mode "
-                f"{oct(st.st_mode & 0o777)}: atlas init cannot set it to 0700, so it does not "
-                f"write api-keys.json into it.{RESET if color else ''}")
+    you = f"{uid}:{gid}" if uid is not None else "<your uid>:<your gid>"
+    _safe_print(f"  {RED if color else ''}{secrets_dir} belongs to {owner}, with mode {mode}: atlas init "
+                f"cannot set it to 0700, so it does not write api-keys.json into it.{RESET if color else ''}")
     _safe_print("  Docker makes a folder it bind-mounts as root when the folder does not exist yet.")
     _safe_print(f"  Fix: sudo chown -R {you} {secrets_dir}, then run atlas init again.")
 
@@ -777,7 +785,7 @@ def _step_write_api_keys(atlas_root: str, args: argparse.Namespace,
         # bind-mount folder that did not exist, is neither.
         st = os.stat(secrets_dir)
         if st.st_mode & 0o077 or not os.access(secrets_dir, os.W_OK):
-            _print_secrets_dir_not_ours(secrets_dir, st, color)
+            _print_secrets_dir_refused(secrets_dir, st, color)
             return keys_path, None, ""
 
     backup = _backup_if_exists(keys_path) if args.reconfigure else None
