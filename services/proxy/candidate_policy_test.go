@@ -300,7 +300,7 @@ func TestCandidateWeakerThanBaselineIsRejected(t *testing.T) {
 // The hidden evaluator has no representation anywhere the policy can reach.
 func TestHiddenEvaluatorCannotInfluenceThePolicy(t *testing.T) {
 	for _, f := range append(packageFiles(t, "internal/taskcontract"), "candidate_policy.go", "candidate_advisory_policy.go",
-		"candidate_provenance.go", "evidence_verification_requirements.go") {
+		"candidate_provenance.go", "evidence_verification.go") {
 		src, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)

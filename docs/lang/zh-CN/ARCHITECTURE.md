@@ -109,7 +109,7 @@ K3s 部署路径（`scripts/install/install.sh`，清单在 `deploy/k3s/` 中）
 | `guardrails*.go` | 按工具的引导防护（收缩、缺失命令/模块的引导、doctype 剥离） |
 | `internal/shellcmd/shell_wrapper.go` | `validateShellCommand` 背后的命令策略：拆分复合命令，最多深入 16 层检查执行包装器（`sh -c`、`eval` 等），拒绝灾难性命令和无法检查的包装器 |
 | `server_events.go` | 类型化信封 broker（`/events`）与 SSE 管道 |
-| `internal/v3client/client.go` | 面向 v3-service `/v3/generate` + `/v3/plan` 的 SSE 客户端；调用上限 `ATLAS_V3_TIMEOUT` 留在 `tool_write_v3_timeout.go` |
+| `internal/v3client/client.go` | 面向 v3-service `/v3/generate` + `/v3/plan` 的 SSE 客户端；调用上限 `ATLAS_V3_TIMEOUT` 留在 `tool_write_v3.go` |
 | `loop_state.go` | 共享类型、层级、轮次上限 |
 
 ```mermaid

@@ -129,6 +129,11 @@ RUN --mount=type=cache,id=llama-ccache,target=/root/.ccache,sharing=locked \
 # inference path.
 # ---------------------------------------------------------------------------
 FROM ubuntu:${UBUNTU_TAG}
+# The week of the commit, which build-images.yml passes for a push to dev and
+# for a PR build (a release build passes none). A commit of a new week runs
+# the package installs of this stage again, so they take the distribution's
+# fixes between base bumps; the build stage above stays in the cache.
+ARG PACKAGE_REFRESH
 
 # Runtime deps:
 #   libvulkan1               — the Vulkan loader (calls into ICDs)

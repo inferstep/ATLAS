@@ -970,7 +970,6 @@ from what is available then.
 | `services/proxy/candidate_automatic.go` | whether the exact selected candidate may land, and the grant basis |
 | `services/proxy/candidate_provenance.go` | what the terminal is told about delivered bytes |
 | `services/proxy/internal/taskcontract/verification_requirements.go` | typed verification requirements |
-| `services/proxy/evidence_verification_requirements.go` | asset authority as this session observed it |
 | `services/proxy/evidence_wiring.go` | the staged declared-verification producer; the producer inventory and the two production call paths |
 | `services/proxy/tool_write_v3.go` | the new-file route: proposal, staging, policy, delivery |
 | `services/proxy/delivery_edit_route.go` | the edit route, through the same owners |
@@ -978,7 +977,7 @@ from what is available then.
 | `services/proxy/internal/taskcontract/obligation_kinds.go` | the six kinds, the three roles |
 | `services/proxy/task_obligation_kinds.go` | derivation, `baselineWitness` |
 | `services/proxy/evidence_syntax.go` | the proxy-owned syntax producer, `workspaceIdentity` |
-| `services/proxy/evidence_verification.go` | the client-declared verification producer |
+| `services/proxy/evidence_verification.go` | the client-declared verification producer, and asset authority as this session observed it |
 | `services/proxy/evidence_staging_contract.go` | the staging request/result types and their fail-closed validation |
 | `services/proxy/evidence_candidate_staging.go` | `stageCandidate` — the one thing that executes |
 | `services/proxy/candidate_authorization.go` | `decideAuthorization`, baseline-preservation derivation |

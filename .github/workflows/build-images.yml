@@ -160,12 +160,20 @@ jobs:
             [registry."docker.io"]
               mirrors = ["mirror.gcr.io"]
 
+      # The ISO week of the commit's date (UTC), for the Dockerfiles'
+      # PACKAGE_REFRESH: a commit of a new week runs the package installs
+      # again.
+      - name: Week of the package refresh
+        id: week
+        run: echo "arg=PACKAGE_REFRESH=$(TZ=UTC git log -1 --format=%cd --date=format-local:%G-W%V)" >> "$GITHUB_OUTPUT"
+
       - name: Build (no push)
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: ${{ matrix.service.context }}
           file: ${{ matrix.service.dockerfile }}
           push: false
+          build-args: ${{ steps.week.outputs.arg }}
           cache-from: type=gha,scope=${{ matrix.service.name }}
           # No cache-to: PR builds read the branch cache but don't write,
           # so a PR can't poison or thrash the 10 GB GHA cache budget.
@@ -323,6 +331,16 @@ jobs:
           tags: |
             type=sha,prefix=sha-,format=short
 
+      # The ISO week of the commit's date (UTC), for the Dockerfiles'
+      # PACKAGE_REFRESH, on a push to dev only: a commit of a new week runs
+      # the package installs again, so :dev takes the distribution's fixes
+      # weekly. A push to main, a tag and a manual run pass no week and build
+      # as they did before.
+      - name: Week of the package refresh
+        id: week
+        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+        run: echo "arg=PACKAGE_REFRESH=$(TZ=UTC git log -1 --format=%cd --date=format-local:%G-W%V)" >> "$GITHUB_OUTPUT"
+
       # Cache strategy:
       #   llama / llama-vulkan -> registry-based cache (CUDA/Vulkan builds
       #             are ~6 GB; GHA cache is capped at 10 GB total per repo,
@@ -339,6 +357,7 @@ jobs:
           context: ${{ matrix.service.context }}
           file: ${{ matrix.service.dockerfile }}
           push: true
+          build-args: ${{ steps.week.outputs.arg }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER }}/atlas-llama:buildcache
@@ -358,6 +377,7 @@ jobs:
           context: ${{ matrix.service.context }}
           file: ${{ matrix.service.dockerfile }}
           push: true
+          build-args: ${{ steps.week.outputs.arg }}
           platforms: ${{ startsWith(github.ref, 'refs/tags/v') && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -374,6 +394,7 @@ jobs:
           context: ${{ matrix.service.context }}
           file: ${{ matrix.service.dockerfile }}
           push: true
+          build-args: ${{ steps.week.outputs.arg }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.service.name }}
