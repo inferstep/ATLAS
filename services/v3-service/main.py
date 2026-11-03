@@ -21,6 +21,7 @@ import uuid
 import threading
 import socket
 import select
+import time
 
 # Watcher poll interval, included in every measured cancellation latency.
 WATCH_POLL_SEC = 0.25
@@ -32,10 +33,10 @@ REQUEST_ID_HEADER = "X-ATLAS-Request-ID"
 # request without end from filling the service's memory.
 MAX_REQUEST_BODY_BYTES = 64 << 20
 # A request refused before its body is read: after the answer, the body is
-# read and dropped, up to this many bytes and for this long. A socket that
-# closes on unread bytes resets the connection, and the reset can reach the
-# client before it reads the answer. A larger body is not read: the
-# connection is closed on it.
+# read and dropped, up to this many bytes and for this long in all. A socket
+# that closes on unread bytes resets the connection, and the reset can reach
+# the client before it reads the answer. What is left after the bytes or the
+# time is not read: the connection is closed on it.
 REFUSED_BODY_DRAIN_BYTES = 64 << 10
 REFUSED_BODY_DRAIN_SECONDS = 1.0
 import os
@@ -949,8 +950,9 @@ class V3Handler(BaseHTTPRequestHandler):
             except ValueError:
                 declared = REFUSED_BODY_DRAIN_BYTES
             left = min(max(declared, 0), REFUSED_BODY_DRAIN_BYTES)
-            self.connection.settimeout(REFUSED_BODY_DRAIN_SECONDS)
-            while left > 0:
+            deadline = time.monotonic() + REFUSED_BODY_DRAIN_SECONDS
+            while left > 0 and time.monotonic() < deadline:
+                self.connection.settimeout(deadline - time.monotonic())
                 chunk = self.rfile.read1(left)
                 if not chunk:
                     break
