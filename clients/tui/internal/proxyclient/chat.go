@@ -625,7 +625,7 @@ type Envelope struct {
 	DurationMS int64                  `json:"duration_ms,omitempty"`
 }
 
-// Legal types — mirror atlas.cli.events.EVENT_TYPES.
+// Legal types — mirror atlas.events.EVENT_TYPES.
 const (
 	EvtStageStart = "stage_start"
 	EvtStageEnd   = "stage_end"
