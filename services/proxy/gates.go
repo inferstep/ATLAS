@@ -831,7 +831,7 @@ type orphanedSymbol struct {
 //
 // Observed on "add a done command that marks a task complete": `done_task` was
 // written correctly and the argv dispatcher was never touched, so the feature
-// was unreachable, `todo.py done 1` exited 0 doing nothing, and the agent
+// was unreachable, the script's `done 1` exited 0 doing nothing, and the agent
 // reported it verified.
 //
 // Fail-soft: an unreachable service, an unparsed file, or a path the run never
