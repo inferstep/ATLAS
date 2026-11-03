@@ -620,7 +620,7 @@ def lens_artifact_dir_for(model: Model, atlas_root: str) -> Optional[str]:
     Resolution:
       1. model.lens_artifact_dir if set (PC-058 future per-model layout)
       2. else: ATLAS_LENS_MODELS env var if set
-      3. else: <atlas_root>/geometric-lens/geometric_lens/models/
+      3. else: <atlas_root>/services/geometric-lens/geometric_lens/models/
 
     Returns the resolved absolute path, or None for models that don't
     claim Lens support (lens_status != "supported"). Callers should

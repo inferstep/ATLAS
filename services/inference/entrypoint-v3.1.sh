@@ -126,7 +126,7 @@ esac
 # entrypoint activates one. The default path lives next to the
 # model file on the persistent /models volume so it survives container
 # rebuilds. Operator drops the vector once (workflow:
-# ATLAS/geometric-lens/asa_calibration/README.md), and every llama-server
+# ATLAS/services/geometric-lens/asa_calibration/README.md), and every llama-server
 # start picks it up automatically. To override the path or scale, set
 # ATLAS_CONTROL_VECTOR / ATLAS_CONTROL_VECTOR_SCALE / _LAYER_RANGE.
 # Default scale is conservative (0.5) — bump if behavior change is too
