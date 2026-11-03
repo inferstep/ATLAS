@@ -570,6 +570,8 @@ python executor_server.py
 # 沙箱在启动时检查能否通过 /proc 管理子进程。
 # 在没有可读 /proc 的主机上（例如 macOS），它以降级的限制启动，
 # 并在 /health 和执行结果中报告 "resource limits not enforced"。
+# 它只在 127.0.0.1:8020 上监听（地址由 ATLAS_SANDBOX_HOST 设置）；
+# 若工作区根目录（/tmp/sandbox）是链接或属于其他用户，它不会启动。
 
 # Terminal 5: atlas-proxy
 ATLAS_PROXY_PORT=8090 \

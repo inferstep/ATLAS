@@ -571,6 +571,8 @@ python executor_server.py
 # 샌드박스는 시작할 때 /proc로 자식 프로세스를 관리할 수 있는지 확인합니다.
 # 읽을 수 있는 /proc가 없는 호스트(예: macOS)에서는 제한이 약해진 상태로 시작하고,
 # /health와 실행 결과에 "resource limits not enforced"라고 보고합니다.
+# 127.0.0.1:8020에서만 수신합니다(주소는 ATLAS_SANDBOX_HOST로 설정합니다).
+# 작업 공간 기준 폴더(/tmp/sandbox)가 링크이거나 다른 사용자의 것이면 시작하지 않습니다.
 
 # Terminal 5: atlas-proxy
 ATLAS_PROXY_PORT=8090 \
