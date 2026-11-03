@@ -160,33 +160,44 @@ func TestOperatorLogSitesCannotQuoteABody(t *testing.T) {
 		src := readSourceForTest(t, file)
 		lines := strings.Split(src, "\n")
 		for i, line := range lines {
-			var bad string
-			for _, f := range forbidden {
-				if strings.Contains(line, f) {
-					bad = f
-				}
-			}
+			bad := lastOfIn(forbidden, line)
 			if bad == "" {
 				continue
 			}
-			// Walk back to the call this argument belongs to.
-			call := ""
-			for j := i; j >= 0 && j > i-6; j-- {
-				if strings.Contains(lines[j], "log.Printf(") || strings.Contains(lines[j], "logEvent(") {
-					call = lines[j]
-					break
-				}
-				if strings.Contains(lines[j], "return ") || strings.Contains(lines[j], "Warning:") ||
-					strings.Contains(lines[j], "NewEnvelope(") {
-					break // not a logger call
-				}
-			}
-			if call != "" {
+			if loggerCallOf(lines, i) != "" {
 				t.Errorf("%s:%d hands %s to the logger; route it through a safe summary",
 					file, i+1, bad)
 			}
 		}
 	}
+}
+
+// lastOfIn returns the last of exprs that line contains, or "".
+func lastOfIn(exprs []string, line string) string {
+	found := ""
+	for _, expr := range exprs {
+		if strings.Contains(line, expr) {
+			found = expr
+		}
+	}
+	return found
+}
+
+// loggerCallOf walks back from line i, up to five lines, to the logger call
+// that line i is an argument of, and returns that call's line. At a return, a
+// "Warning:" text or a NewEnvelope call it stops and returns "": not a logger
+// call.
+func loggerCallOf(lines []string, i int) string {
+	for j := i; j >= 0 && j > i-6; j-- {
+		if strings.Contains(lines[j], "log.Printf(") || strings.Contains(lines[j], "logEvent(") {
+			return lines[j]
+		}
+		if strings.Contains(lines[j], "return ") || strings.Contains(lines[j], "Warning:") ||
+			strings.Contains(lines[j], "NewEnvelope(") {
+			return ""
+		}
+	}
+	return ""
 }
 
 func readSourceForTest(t *testing.T, name string) string {
