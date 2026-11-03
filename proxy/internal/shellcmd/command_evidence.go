@@ -1,4 +1,4 @@
-package main
+package shellcmd
 
 import (
 	"fmt"
@@ -17,41 +17,41 @@ import (
 // "executed clean". The program never ran, and the run still ended
 // `completed`.
 //
-// classifyCommandEvidence answers two separate questions about one command
+// ClassifyCommandEvidence answers two separate questions about one command
 // line: what kind of evidence its verifying part produces, and whether that
 // part's exit status actually reaches the status the line reports.
 
-// commandEvidenceKind orders what a successful command can show, weakest
+// CommandEvidenceKind orders what a successful command can show, weakest
 // first.
-type commandEvidenceKind int
+type CommandEvidenceKind int
 
 const (
-	// evidenceNone: recon or setup (ls, cat, echo, cd, pip install). Proves
+	// EvidenceNone: recon or setup (ls, cat, echo, cd, pip install). Proves
 	// nothing about the artifact.
-	evidenceNone commandEvidenceKind = iota
-	// evidenceStatic: the code was parsed, linted, type-checked, formatted or
+	EvidenceNone CommandEvidenceKind = iota
+	// EvidenceStatic: the code was parsed, linted, type-checked, formatted or
 	// compiled, or a tool printed its version or help. It says the code is
 	// well formed, not that it does anything.
-	evidenceStatic
+	EvidenceStatic
 	// evidenceProbe: a response body was fetched from a running service.
 	evidenceProbe
-	// evidenceExecution: the program, or its tests, actually ran.
-	evidenceExecution
+	// EvidenceExecution: the program, or its tests, actually ran.
+	EvidenceExecution
 )
 
-func (k commandEvidenceKind) String() string {
+func (k CommandEvidenceKind) String() string {
 	switch k {
-	case evidenceStatic:
+	case EvidenceStatic:
 		return "static"
 	case evidenceProbe:
 		return "probe"
-	case evidenceExecution:
+	case EvidenceExecution:
 		return "execution"
 	}
 	return "none"
 }
 
-// verifies reports whether the kind can stand as verification that the program
+// Verifies reports whether the kind can stand as verification that the program
 // works: the command ran the program or its tests, or fetched a response body,
 // and the line reports that part's exit status. A parse, a lint, a build, a
 // `--version`, a headers-only probe, and a test whose status `| tail` or
@@ -59,16 +59,16 @@ func (k commandEvidenceKind) String() string {
 // proves the SERVER is up, not that the artifact works: measured on a "build me
 // a snake game" session, `curl -I` was recorded as the verification and `done`
 // shipped an index.html with no HTML in it.
-func (k commandEvidenceKind) verifies() bool {
-	return k == evidenceProbe || k == evidenceExecution
+func (k CommandEvidenceKind) Verifies() bool {
+	return k == evidenceProbe || k == EvidenceExecution
 }
 
-// commandEvidence is the classification of one command line.
-type commandEvidence struct {
+// CommandEvidence is the classification of one command line.
+type CommandEvidence struct {
 	// Kind is the strongest kind among the segments whose exit status reaches
 	// the line's own status. A segment whose status is hidden contributes
 	// nothing here.
-	Kind commandEvidenceKind
+	Kind CommandEvidenceKind
 	// Honest holds those segments, in order, each with the here-document it
 	// reads, if any. A failed line is charged to all of them.
 	Honest []string
@@ -86,7 +86,7 @@ type commandEvidence struct {
 	MaskNote string
 }
 
-// classifyCommandEvidence splits a command at its top-level shell operators
+// ClassifyCommandEvidence splits a command at its top-level shell operators
 // and classifies each segment.
 //
 // A segment's failure reaches the line's exit status only if every operator
@@ -95,23 +95,23 @@ type commandEvidence struct {
 // status (the sandbox runs `bash -c` without pipefail), `;` and a newline
 // report whatever ran last, `||` replaces a failure with the fallback's
 // result, and `&` backgrounds the command so its status is never observed.
-func classifyCommandEvidence(command string) commandEvidence {
-	segs, ops, bodies := splitTopLevelShell(command)
+func ClassifyCommandEvidence(command string) CommandEvidence {
+	segs, ops, bodies := SplitTopLevelShell(command)
 	// `bash -c "pytest | tail"` is the command inside the quotes.
 	if script, ok := soleShellScript(segs, bodies); ok {
-		return classifyCommandEvidence(script)
+		return ClassifyCommandEvidence(script)
 	}
 	// `set -e` makes `;` stop at the first failure, and `set -o pipefail`
 	// makes a pipeline report its first failure, so neither hides one.
 	errexit, pipefail := shellOptions(segs)
-	var ev commandEvidence
+	var ev CommandEvidence
 	var bare, cdBefore []string
-	var kinds []commandEvidenceKind
+	var kinds []CommandEvidenceKind
 	lastCd := ""
 	for i, seg := range segs {
-		kind := segmentEvidenceKind(seg)
-		if kind == evidenceNone {
-			if w := shellFields(strings.TrimSpace(seg)); len(w) > 0 && w[0] == "cd" {
+		kind := SegmentEvidenceKind(seg)
+		if kind == EvidenceNone {
+			if w := ShellFields(strings.TrimSpace(seg)); len(w) > 0 && w[0] == "cd" {
 				lastCd = seg
 			}
 			continue
@@ -148,7 +148,7 @@ func soleShellScript(segs, bodies []string) (string, bool) {
 // line's: the operator and the word after it, "&" for the background
 // operator, or "" when nothing does. asserted is set when segment i is a
 // probe piped into a check on the body it fetched.
-func hiddenStatus(i int, kind commandEvidenceKind, segs, ops []string, errexit, pipefail bool) (hiddenBy string, asserted bool) {
+func hiddenStatus(i int, kind CommandEvidenceKind, segs, ops []string, errexit, pipefail bool) (hiddenBy string, asserted bool) {
 	for j := i; j < len(ops) && hiddenBy == ""; j++ {
 		op := ops[j]
 		if j+1 >= len(segs) {
@@ -178,7 +178,7 @@ func hiddenStatus(i int, kind commandEvidenceKind, segs, ops []string, errexit, 
 
 // maskNote says, for the model, what hid a verifying segment's result and
 // what to run instead, or "" when the line reports that result.
-func maskNote(seg string, kind commandEvidenceKind, hiddenBy string, asserted bool) string {
+func maskNote(seg string, kind CommandEvidenceKind, hiddenBy string, asserted bool) string {
 	switch {
 	case hiddenBy == "&":
 		return fmt.Sprintf("`&` runs `%s` in the background, so its exit status is never seen. Run it in "+
@@ -196,7 +196,7 @@ func maskNote(seg string, kind commandEvidenceKind, hiddenBy string, asserted bo
 
 // mask records that a verifying segment's result was hidden. The first note
 // is the one the model sees.
-func (ev *commandEvidence) mask(note string) {
+func (ev *CommandEvidence) mask(note string) {
 	if !ev.Masked {
 		ev.Masked, ev.MaskNote = true, note
 	}
@@ -205,18 +205,18 @@ func (ev *commandEvidence) mask(note string) {
 // coveringSegments picks the honest segments a passing line binds files from:
 // each that ran or probed something, and each compile step whose output a
 // later segment ran, preceded by the `cd` that set where it ran.
-func coveringSegments(honest, bare, cdBefore []string, kinds []commandEvidenceKind) []string {
+func coveringSegments(honest, bare, cdBefore []string, kinds []CommandEvidenceKind) []string {
 	lastRun := -1
 	for i, k := range kinds {
-		if k == evidenceExecution {
+		if k == EvidenceExecution {
 			lastRun = i
 		}
 	}
 	var covering []string
 	placed := ""
 	for i, k := range kinds {
-		if k.verifies() || (i < lastRun && compileStep(bare[i])) {
-			// Where it ran decides what a runner discovers (runnerEntries).
+		if k.Verifies() || (i < lastRun && compileStep(bare[i])) {
+			// Where it ran decides what a runner discovers (RunnerEntries).
 			if cdBefore[i] != "" && cdBefore[i] != placed {
 				covering = append(covering, cdBefore[i])
 				placed = cdBefore[i]
@@ -231,7 +231,7 @@ func coveringSegments(honest, bare, cdBefore []string, kinds []commandEvidenceKi
 // the segments that set shell options.
 func shellOptions(segs []string) (errexit, pipefail bool) {
 	for _, seg := range segs {
-		f := shellFields(strings.TrimSpace(seg))
+		f := ShellFields(strings.TrimSpace(seg))
 		if len(f) == 0 || f[0] != "set" {
 			continue
 		}
@@ -260,7 +260,7 @@ func shellOptions(segs []string) (errexit, pipefail bool) {
 // pipeAssertion reports a pipeline stage that checks what it receives rather
 // than passing it through: `grep` (not -v, -c or -L), `diff`, `cmp`, `jq -e`.
 func pipeAssertion(seg string) bool {
-	f := programWords(shellFields(strings.TrimSpace(seg)))
+	f := ProgramWords(ShellFields(strings.TrimSpace(seg)))
 	if len(f) == 0 {
 		return false
 	}
@@ -289,7 +289,7 @@ func pipeAssertion(seg string) bool {
 // server answers with: curl without -f, httpie without --check-status. wget
 // fails on an HTTP error by default.
 func probeStatusBlind(seg string) bool {
-	words := programWords(shellFields(strings.TrimSpace(seg)))
+	words := ProgramWords(ShellFields(strings.TrimSpace(seg)))
 	if len(words) == 0 {
 		return false
 	}
@@ -331,7 +331,7 @@ func failurePropagates(seg string) bool {
 
 // firstWord is the word a segment starts with, for messages.
 func firstWord(seg string) string {
-	f := shellFields(seg)
+	f := ShellFields(seg)
 	if len(f) == 0 {
 		return ""
 	}
@@ -340,7 +340,7 @@ func firstWord(seg string) string {
 
 // programName is the program a segment runs, past wrappers like timeout.
 func programName(seg string) string {
-	if w := programWords(shellFields(strings.TrimSpace(seg))); len(w) > 0 {
+	if w := ProgramWords(ShellFields(strings.TrimSpace(seg))); len(w) > 0 {
 		return w[0]
 	}
 	return firstWord(seg)
@@ -354,7 +354,7 @@ type hereDoc struct {
 	seg       int
 }
 
-// splitTopLevelShell splits a command line into segments and the operators
+// SplitTopLevelShell splits a command line into segments and the operators
 // between them: ops[i] separates segs[i] and segs[i+1]. Quotes, backslash
 // escapes, parentheses, $( ) and backticks are respected, so an operator
 // inside a quoted string or a subshell is not a separator. `2>&1`, `&>` and
@@ -363,7 +363,7 @@ type hereDoc struct {
 // and never split. Best effort, like splitShellSegments, which it does not
 // replace: that one drops the operators, and the operators are the point
 // here.
-func splitTopLevelShell(cmd string) (segs, ops, bodies []string) {
+func SplitTopLevelShell(cmd string) (segs, ops, bodies []string) {
 	var cur strings.Builder
 	var nest shellNesting
 	var pending []hereDoc
@@ -572,9 +572,9 @@ func hereDocBodiesBySegment(segs []string, bodyAt map[int]*strings.Builder) (bod
 	return bodies
 }
 
-// shellFields splits one segment into words, honouring quotes and dropping
+// ShellFields splits one segment into words, honouring quotes and dropping
 // them. Redirections stay as their own words.
-func shellFields(seg string) []string {
+func ShellFields(seg string) []string {
 	var out []string
 	var cur strings.Builder
 	inSingle, inDouble, have := false, false, false
@@ -622,11 +622,11 @@ var timeoutValueFlags = map[string]bool{
 	"-s": true, "-k": true, "--signal": true, "--kill-after": true,
 }
 
-// programWords strips what runs a program without being it: leading
+// ProgramWords strips what runs a program without being it: leading
 // environment assignments, the wrappers timeout, env, nice, nohup, time,
 // command, exec and stdbuf, and environment runners (`uv run`, `poetry run`,
 // `bundle exec`). `timeout 30 python app.py` is a run of app.py.
-func programWords(words []string) []string {
+func ProgramWords(words []string) []string {
 	for len(words) > 0 {
 		w := words[0]
 		switch {
@@ -758,16 +758,16 @@ func onlyVersionOrHelp(args []string) bool {
 	return true
 }
 
-// segmentEvidenceKind classifies one segment by the program it runs.
-func segmentEvidenceKind(seg string) commandEvidenceKind {
+// SegmentEvidenceKind classifies one segment by the program it runs.
+func SegmentEvidenceKind(seg string) CommandEvidenceKind {
 	t := strings.TrimSpace(seg)
 	// `(cd app && pytest)`: a subshell reports what ran last inside it.
 	if inner, ok := leadingSubshell(t); ok {
-		return classifyCommandEvidence(inner).Kind
+		return ClassifyCommandEvidence(inner).Kind
 	}
-	words := programWords(shellFields(t))
+	words := ProgramWords(ShellFields(t))
 	if len(words) == 0 {
-		return evidenceNone
+		return EvidenceNone
 	}
 	prog := filepath.Base(words[0])
 	args := words[1:]
@@ -776,7 +776,7 @@ func segmentEvidenceKind(seg string) commandEvidenceKind {
 	case isShellProgram(prog):
 		return shellProgramKind(t, args)
 	case staticTools[prog]:
-		return evidenceStatic
+		return EvidenceStatic
 	case testRunners[prog]:
 		return testRunnerKind(args)
 	case isPythonProgram(prog):
@@ -786,7 +786,7 @@ func segmentEvidenceKind(seg string) commandEvidenceKind {
 	switch prog {
 	case "curl", "wget", "http", "https", "httpie":
 		if headOnlyProbeRe.MatchString(t) {
-			return evidenceNone
+			return EvidenceNone
 		}
 		return evidenceProbe
 	case "node", "nodejs":
@@ -812,7 +812,7 @@ func segmentEvidenceKind(seg string) commandEvidenceKind {
 		return subcommandKind(args, []string{"test", "run"}, []string{"build", "format"})
 	case "swift":
 		if len(args) > 0 && strings.HasSuffix(args[0], ".swift") {
-			return evidenceExecution
+			return EvidenceExecution
 		}
 		return subcommandKind(args, []string{"test", "run"}, []string{"build"})
 	case "mvn", "mvnw", "gradle", "gradlew":
@@ -830,11 +830,11 @@ func segmentEvidenceKind(seg string) commandEvidenceKind {
 	// named programs, so /usr/bin/python3 -m py_compile is still a parse.
 	if strings.Contains(words[0], "/") && !strings.HasSuffix(words[0], "/") {
 		if onlyVersionOrHelp(args) {
-			return evidenceStatic
+			return EvidenceStatic
 		}
-		return evidenceExecution
+		return EvidenceExecution
 	}
-	return evidenceNone
+	return EvidenceNone
 }
 
 // leadingSubshell returns what a segment runs in a `( … )` subshell, when
@@ -876,7 +876,7 @@ func leadingSubshell(t string) (string, bool) {
 // SCRIPT`, flags combined or not (`bash -lc`, `sh -ec`) — with `set -e` or
 // `set -o …` prepended for the options the shell was started with.
 func shellScript(seg string) (string, bool) {
-	words := programWords(shellFields(strings.TrimSpace(seg)))
+	words := ProgramWords(ShellFields(strings.TrimSpace(seg)))
 	if len(words) == 0 || !isShellProgram(filepath.Base(words[0])) {
 		return "", false
 	}
@@ -920,16 +920,16 @@ func shellScript(seg string) (string, bool) {
 
 // shellProgramKind: a shell started with inline code is judged by that code,
 // and one started without it by its arguments.
-func shellProgramKind(seg string, args []string) commandEvidenceKind {
+func shellProgramKind(seg string, args []string) CommandEvidenceKind {
 	if script, ok := shellScript(seg); ok {
-		return classifyCommandEvidence(script).Kind
+		return ClassifyCommandEvidence(script).Kind
 	}
 	return shellArgsKind(args)
 }
 
 // shellArgsKind classifies a shell started without inline code: `bash -n
 // script.sh` parses, `bash script.sh` runs, a bare shell reads its stdin.
-func shellArgsKind(args []string) commandEvidenceKind {
+func shellArgsKind(args []string) CommandEvidenceKind {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
@@ -938,16 +938,16 @@ func shellArgsKind(args []string) commandEvidenceKind {
 		case strings.HasPrefix(a, "--"):
 		case strings.HasPrefix(a, "-") && a != "-":
 			if strings.Contains(a[1:], "n") {
-				return evidenceStatic
+				return EvidenceStatic
 			}
 			if strings.HasSuffix(a, "o") && i+1 < len(args) {
 				i++ // bash -eo pipefail script.sh
 			}
 		default:
-			return evidenceExecution // bash script.sh
+			return EvidenceExecution // bash script.sh
 		}
 	}
-	return evidenceNone
+	return EvidenceNone
 }
 
 func isShellProgram(p string) bool {
@@ -970,7 +970,7 @@ func isPythonProgram(p string) bool {
 // `-m venv` are setup, `-m pytest` runs tests, inline code runs unless all it
 // does is parse, and a script runs unless the only arguments ask for its
 // version or help.
-func pythonEvidenceKind(args []string) commandEvidenceKind {
+func pythonEvidenceKind(args []string) CommandEvidenceKind {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
@@ -978,78 +978,78 @@ func pythonEvidenceKind(args []string) commandEvidenceKind {
 			return pythonModuleKind(args[i+1], args[i+2:])
 		case a == "-c" && i+1 < len(args):
 			if parseOnlyInlineRe.MatchString(args[i+1]) {
-				return evidenceStatic
+				return EvidenceStatic
 			}
-			return evidenceExecution
+			return EvidenceExecution
 		case a == "--version" || a == "-V" || a == "--help" || a == "-h":
-			return evidenceStatic
+			return EvidenceStatic
 		case strings.HasPrefix(a, "-") && a != "-":
 			continue // interpreter flags: -u, -B, -W, -X ...
 		default:
 			if onlyVersionOrHelp(args[i+1:]) {
-				return evidenceStatic
+				return EvidenceStatic
 			}
-			return evidenceExecution // python solve.py ..., or `python -` reading a script
+			return EvidenceExecution // python solve.py ..., or `python -` reading a script
 		}
 	}
-	return evidenceNone // bare interpreter
+	return EvidenceNone // bare interpreter
 }
 
 // pythonModuleKind classifies `python -m MODULE ARGS`.
-func pythonModuleKind(mod string, args []string) commandEvidenceKind {
+func pythonModuleKind(mod string, args []string) CommandEvidenceKind {
 	switch {
 	case staticPythonModules[mod]:
-		return evidenceStatic
+		return EvidenceStatic
 	case setupPythonModules[mod]:
-		return evidenceNone
+		return EvidenceNone
 	case testRunners[mod] || mod == "unittest":
 		return testRunnerKind(args)
 	}
-	return evidenceExecution // python -m app
+	return EvidenceExecution // python -m app
 }
 
 // testRunnerKind: a runner asked only to list, collect or describe its tests
 // runs none of them.
-func testRunnerKind(args []string) commandEvidenceKind {
+func testRunnerKind(args []string) CommandEvidenceKind {
 	if onlyVersionOrHelp(args) {
-		return evidenceStatic
+		return EvidenceStatic
 	}
 	for _, a := range args {
 		switch a {
 		case "--collect-only", "--co", "--fixtures", "--markers", "--listTests", "--list-tests",
 			"--dry-run", "--help", "-h", "--version":
-			return evidenceStatic
+			return EvidenceStatic
 		}
 	}
-	return evidenceExecution
+	return EvidenceExecution
 }
 
 // scriptInterpreterKind: a check flag makes it static, a version or help
 // flag too, and so does a script asked only for its version or help.
 // Anything else that names code runs it.
-func scriptInterpreterKind(args []string, checkFlags []string) commandEvidenceKind {
+func scriptInterpreterKind(args, checkFlags []string) CommandEvidenceKind {
 	for _, a := range args {
 		for _, f := range checkFlags {
 			if a == f {
-				return evidenceStatic
+				return EvidenceStatic
 			}
 		}
 	}
 	if len(args) == 0 {
-		return evidenceNone
+		return EvidenceNone
 	}
 	if onlyVersionOrHelp(args) || args[0] == "-v" {
-		return evidenceStatic
+		return EvidenceStatic
 	}
 	for i, a := range args {
 		if !strings.HasPrefix(a, "-") {
 			if onlyVersionOrHelp(args[i+1:]) {
-				return evidenceStatic // node app.js --version
+				return EvidenceStatic // node app.js --version
 			}
 			break
 		}
 	}
-	return evidenceExecution
+	return EvidenceExecution
 }
 
 func isKnownSubcommand(a string, names ...string) bool {
@@ -1062,98 +1062,98 @@ func isKnownSubcommand(a string, names ...string) bool {
 }
 
 // subcommandKind classifies `tool <subcommand>` by the subcommand.
-func subcommandKind(args []string, runs []string, checks []string) commandEvidenceKind {
+func subcommandKind(args, runs, checks []string) CommandEvidenceKind {
 	for _, a := range args {
 		if strings.HasPrefix(a, "-") {
 			continue
 		}
 		if isKnownSubcommand(a, runs...) {
-			return evidenceExecution
+			return EvidenceExecution
 		}
 		if isKnownSubcommand(a, checks...) {
-			return evidenceStatic
+			return EvidenceStatic
 		}
-		return evidenceNone
+		return EvidenceNone
 	}
-	return evidenceNone
+	return EvidenceNone
 }
 
 // bunKind: `bun app.ts` runs the file it names; any other bun command is
 // judged by its subcommand.
-func bunKind(args []string) commandEvidenceKind {
+func bunKind(args []string) CommandEvidenceKind {
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") && !isKnownSubcommand(args[0], "test", "run", "x", "build", "install", "add", "remove", "init", "create", "upgrade") {
-		return evidenceExecution // bun app.ts
+		return EvidenceExecution // bun app.ts
 	}
 	return subcommandKind(args, []string{"test", "run", "x"}, []string{"build"})
 }
 
 // jvmLauncherKind: java, kotlin and scala run whatever they are given, unless
 // they are asked only for their version or help.
-func jvmLauncherKind(args []string) commandEvidenceKind {
+func jvmLauncherKind(args []string) CommandEvidenceKind {
 	if onlyVersionOrHelp(args) {
-		return evidenceStatic
+		return EvidenceStatic
 	}
 	if len(args) > 0 {
-		return evidenceExecution
+		return EvidenceExecution
 	}
-	return evidenceNone
+	return EvidenceNone
 }
 
 // packageScriptKind: `npm test` and `npm start` run; `npm run <script>` runs
 // unless the script name says it builds or checks; installs prove nothing.
-func packageScriptKind(prog string, args []string) commandEvidenceKind {
+func packageScriptKind(prog string, args []string) CommandEvidenceKind {
 	if len(args) == 0 {
-		return evidenceNone
+		return EvidenceNone
 	}
 	sub := args[0]
 	switch sub {
 	case "test", "t", "start":
-		return evidenceExecution
+		return EvidenceExecution
 	case "run", "run-script":
 		if len(args) > 1 {
 			if staticScriptNames.MatchString(args[1]) {
-				return evidenceStatic
+				return EvidenceStatic
 			}
-			return evidenceExecution
+			return EvidenceExecution
 		}
-		return evidenceNone
+		return EvidenceNone
 	case "install", "i", "ci", "add", "remove", "uninstall", "update", "init", "audit", "outdated", "ls", "list", "view", "info":
-		return evidenceNone
+		return EvidenceNone
 	}
 	if prog == "yarn" || prog == "pnpm" {
 		// `yarn build`, `pnpm dev`: a bare script name.
 		if staticScriptNames.MatchString(sub) {
-			return evidenceStatic
+			return EvidenceStatic
 		}
-		return evidenceExecution
+		return EvidenceExecution
 	}
-	return evidenceNone
+	return EvidenceNone
 }
 
 // npxToolKind classifies `npx TOOL`, `pnpx TOOL` and `bunx TOOL` by the tool
 // they run: a static tool checks, a test runner runs tests, any other tool
 // runs.
-func npxToolKind(args []string) commandEvidenceKind {
+func npxToolKind(args []string) CommandEvidenceKind {
 	for len(args) > 0 && strings.HasPrefix(args[0], "-") {
 		args = args[1:] // npx --yes jest
 	}
 	if len(args) == 0 {
-		return evidenceNone
+		return EvidenceNone
 	}
 	tool := filepath.Base(args[0])
 	switch {
 	case staticTools[tool]:
-		return evidenceStatic
+		return EvidenceStatic
 	case testRunners[tool]:
 		return testRunnerKind(args[1:])
 	}
-	return evidenceExecution
+	return EvidenceExecution
 }
 
 // makeTargetKind classifies `make TARGET` by the target's name. Lint and
 // format targets check; test, check and run targets execute; setup targets
 // prove nothing. Any other target, and a bare `make`, builds.
-func makeTargetKind(args []string) commandEvidenceKind {
+func makeTargetKind(args []string) CommandEvidenceKind {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
@@ -1170,22 +1170,22 @@ func makeTargetKind(args []string) commandEvidenceKind {
 		switch {
 		case strings.Contains(t, "lint") || strings.Contains(t, "fmt") || strings.Contains(t, "format") ||
 			strings.Contains(t, "typecheck") || strings.Contains(t, "type-check") || t == "vet" || t == "tidy":
-			return evidenceStatic
+			return EvidenceStatic
 		case strings.Contains(t, "test") || strings.Contains(t, "check") || strings.Contains(t, "spec") ||
 			strings.Contains(t, "e2e") || strings.Contains(t, "smoke") || strings.Contains(t, "verify") ||
 			t == "run" || t == "start" || t == "serve" || t == "demo" || t == "dev" ||
 			strings.HasPrefix(t, "run-") || strings.HasPrefix(t, "run_"):
-			return evidenceExecution
+			return EvidenceExecution
 		case t == "install" || t == "uninstall" || t == "clean" || t == "distclean" || t == "deps" ||
 			t == "setup" || t == "bootstrap" || t == "venv" || t == "init":
-			return evidenceNone
+			return EvidenceNone
 		}
-		return evidenceStatic
+		return EvidenceStatic
 	}
-	return evidenceStatic // the default target, which conventionally builds
+	return EvidenceStatic // the default target, which conventionally builds
 }
 
-// runnerEntries returns the candidate files a test runner or package run
+// RunnerEntries returns the candidate files a test runner or package run
 // executes without naming them. A bare `pytest`, or `pytest tests/`, imports
 // every test file it discovers; `python -m unittest` does the same for
 // test*.py; `go run .` builds and runs a package, and `go test ./...` the
@@ -1194,13 +1194,13 @@ func makeTargetKind(args []string) commandEvidenceKind {
 // are commandNamesPath's job and are left to it. Only candidates are
 // returned, so nothing outside what this session changed is claimed, and the
 // caller follows their imports as it does for a named entry point.
-func runnerEntries(command, workDir string, candidates []string) []string {
-	segs, _, _ := splitTopLevelShell(command)
+func RunnerEntries(command, workDir string, candidates []string) []string {
+	segs, _, _ := SplitTopLevelShell(command)
 	dir := workDir
 	var out []string
 	seen := map[string]bool{}
 	for _, seg := range segs {
-		words := programWords(shellFields(strings.TrimSpace(seg)))
+		words := ProgramWords(ShellFields(strings.TrimSpace(seg)))
 		if len(words) == 0 {
 			continue
 		}
@@ -1399,7 +1399,7 @@ func dirHasGoTests(dir string) bool {
 // compileStep reports a segment that compiles source into something a later
 // segment can run: `javac App.java`, `gcc main.c -o main`, `go build`.
 func compileStep(seg string) bool {
-	words := programWords(shellFields(strings.TrimSpace(seg)))
+	words := ProgramWords(ShellFields(strings.TrimSpace(seg)))
 	if len(words) == 0 {
 		return false
 	}
@@ -1408,9 +1408,9 @@ func compileStep(seg string) bool {
 	case compilers[prog]:
 		return true
 	case prog == "go" || prog == "cargo" || prog == "dotnet" || prog == "swift":
-		return subcommandKind(args, nil, []string{"build"}) == evidenceStatic
+		return subcommandKind(args, nil, []string{"build"}) == EvidenceStatic
 	case prog == "mvn" || prog == "mvnw" || prog == "gradle" || prog == "gradlew":
-		return subcommandKind(args, nil, []string{"compile", "build", "package", "assemble"}) == evidenceStatic
+		return subcommandKind(args, nil, []string{"compile", "build", "package", "assemble"}) == EvidenceStatic
 	case prog == "npm" || prog == "pnpm" || prog == "yarn":
 		name := ""
 		if len(args) > 1 && (args[0] == "run" || args[0] == "run-script") {
@@ -1420,7 +1420,7 @@ func compileStep(seg string) bool {
 		}
 		return name != "" && buildScriptNames.MatchString(name)
 	case prog == "make" || prog == "gmake":
-		return makeTargetKind(args) == evidenceStatic
+		return makeTargetKind(args) == EvidenceStatic
 	}
 	return false
 }

@@ -7,13 +7,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/itigges22/atlas-proxy/internal/shellcmd"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // A green run counts as verification only when it shows the program working:
 // it ran the program or its tests, or fetched a response body, and the line
-// reports that part's exit status. classifyCommandEvidence, in
-// command_evidence.go, makes the call.
+// reports that part's exit status. ClassifyCommandEvidence, in
+// internal/shellcmd/command_evidence.go, makes the call.
 func TestIsVerificationCommand(t *testing.T) {
 	for _, group := range []struct {
 		kind     string
@@ -76,7 +77,7 @@ func TestIsVerificationCommand(t *testing.T) {
 	} {
 		for _, cmd := range group.cmds {
 			t.Run(cmd, func(t *testing.T) {
-				if got := classifyCommandEvidence(cmd).Kind.verifies(); got != group.verifies {
+				if got := shellcmd.ClassifyCommandEvidence(cmd).Kind.Verifies(); got != group.verifies {
 					t.Errorf("verifies = %v for %s, want %v", got, group.kind, group.verifies)
 				}
 			})
@@ -105,7 +106,7 @@ func TestTheProbeARedirectPrescribesCountsAsVerification(t *testing.T) {
 				t.Fatalf("probes %q, want a probe named: %v:\n%s", probes, c.names, c.msg)
 			}
 			for _, p := range probes {
-				if !classifyCommandEvidence(p[1]).Kind.verifies() {
+				if !shellcmd.ClassifyCommandEvidence(p[1]).Kind.Verifies() {
 					t.Errorf("the message prescribes %q, which does not count as verification", p[1])
 				}
 			}

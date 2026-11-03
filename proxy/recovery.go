@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/shellcmd"
 	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
@@ -1017,7 +1018,7 @@ func settleDebtByExecution(ctx *AgentContext, st *runState, command string, succ
 	}
 	// Only a segment whose result the line reports can have come up clean:
 	// `python app.py | tail` exits 0 whatever app.py did.
-	honest := strings.Join(classifyCommandEvidence(command).Honest, " && ")
+	honest := strings.Join(shellcmd.ClassifyCommandEvidence(command).Honest, " && ")
 	for key, e := range st.mutationDebt {
 		if e.Kind != debtContent || !executionAttempt(honest, e.Rel) {
 			continue

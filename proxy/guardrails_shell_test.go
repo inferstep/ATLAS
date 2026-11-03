@@ -10,7 +10,7 @@ import (
 // what would be catastrophic even there: wiping the whole project, a fork
 // bomb, destroying a device. A wrapper (bash -c, eval, env -S, sudo, ...)
 // does not hide such a command; the wrappers themselves are parsed in
-// shell_wrapper.go.
+// internal/shellcmd/shell_wrapper.go.
 func TestValidateShellCommandBlocksCatastrophic(t *testing.T) {
 	for _, group := range []struct {
 		kind string

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/shellcmd"
 	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
@@ -346,10 +347,10 @@ func TestATLASRunsNoInstallOfItsOwn(t *testing.T) {
 // response cannot show that the page works. Declined in silence, the run
 // repeats the same probe until it runs out of turns.
 func TestAHeadersOnlyProbeIsDeclinedOutLoud(t *testing.T) {
-	if classifyCommandEvidence("curl -I http://127.0.0.1:5001").Kind.verifies() {
+	if shellcmd.ClassifyCommandEvidence("curl -I http://127.0.0.1:5001").Kind.Verifies() {
 		t.Fatal("precondition changed: a HEAD probe now counts as verification")
 	}
-	if !isHeadOnlyProbe("curl -I http://127.0.0.1:5001") || isHeadOnlyProbe("curl http://127.0.0.1:5001/") {
+	if !shellcmd.IsHeadOnlyProbe("curl -I http://127.0.0.1:5001") || shellcmd.IsHeadOnlyProbe("curl http://127.0.0.1:5001/") {
 		t.Fatal("head-only detection is wrong")
 	}
 	w := startBgWorld(t, map[string]string{"app.py": importsMissing, "requirements.txt": "flask\n"},

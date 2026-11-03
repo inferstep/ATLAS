@@ -15,6 +15,7 @@ import (
 	"log"
 	"strings"
 
+	"github.com/itigges22/atlas-proxy/internal/shellcmd"
 	"github.com/itigges22/atlas-proxy/internal/v3client"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
@@ -113,20 +114,20 @@ func matchPlanStep(plan *wire.Plan, satisfied []bool, toolName string, args json
 
 // verifyStepSatisfiedBy returns the index of the plan's unsatisfied verify
 // step when command verifies (it probes a service or runs the program, as
-// classifyCommandEvidence judges it) and runs the same program as the step's
+// ClassifyCommandEvidence judges it) and runs the same program as the step's
 // planned command; -1 otherwise.
 func verifyStepSatisfiedBy(plan *wire.Plan, satisfied []bool, command string) int {
 	if plan == nil || plan.VerifyStep == "" || len(satisfied) != len(plan.Steps) {
 		return -1
 	}
-	if !classifyCommandEvidence(command).Kind.verifies() {
+	if !shellcmd.ClassifyCommandEvidence(command).Kind.Verifies() {
 		return -1
 	}
 	for i, step := range plan.Steps {
 		if step.ID != plan.VerifyStep || satisfied[i] || !actionMatchesTool(step.Action, "run_command") {
 			continue
 		}
-		if p := commandProgram(step.Target); p != "" && p == commandProgram(command) {
+		if p := shellcmd.CommandProgram(step.Target); p != "" && p == shellcmd.CommandProgram(command) {
 			return i
 		}
 	}

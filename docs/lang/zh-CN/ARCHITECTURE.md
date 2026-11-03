@@ -107,7 +107,7 @@ K3s 部署路径（`scripts/install.sh`，清单在 `templates/` 中）截至 V3
 | `permissions.go` | 权限闸门（`/v1/permission`）、信任模式、硬阻断模式 |
 | `lens.go` | lens 打分调用、校准状态 |
 | `guardrails*.go` | 按工具的引导防护（收缩、缺失命令/模块的引导、doctype 剥离） |
-| `shell_wrapper.go` | `validateShellCommand` 背后的命令策略：拆分复合命令，最多深入 16 层检查执行包装器（`sh -c`、`eval` 等），拒绝灾难性命令和无法检查的包装器 |
+| `internal/shellcmd/shell_wrapper.go` | `validateShellCommand` 背后的命令策略：拆分复合命令，最多深入 16 层检查执行包装器（`sh -c`、`eval` 等），拒绝灾难性命令和无法检查的包装器 |
 | `events.go` | 类型化信封 broker（`/events`）与 SSE 管道 |
 | `internal/v3client/client.go` | 面向 v3-service `/v3/generate` + `/v3/plan` 的 SSE 客户端；调用上限 `ATLAS_V3_TIMEOUT` 留在 `v3_bridge.go` |
 | `types.go` | 共享类型、层级、轮次上限 |
@@ -276,7 +276,7 @@ run-first 门本身引用一条指令，`runFirstInstruction`：运行该扩展�
 
 `SessionWrites` 是另一张更旧的、以模型提供的原始路径为键的表；`proxy/types.go` 记录了由此而来的别名问题。其读者是 write_file 覆盖守卫对模型自身草稿的概念、活跃调试快速路径、会话清单注记、V3 项目上下文、制品门的漂移检查与编辑工具的宽松门；这些都不在此改变。
 
-工作契约的验证要求（`decideVerificationDemand`）把它问及的代码交付物取自账本，每个变更工具的落地都被 `recordLedgerEffect` 规范记录。回答它的覆盖——一次通过的运行点名了哪些路径、持有的是什么字节——由 `proxy/guardrails.go` 的 `changedPathsForCoverage` 计算：会话写入加账本的规范代码交付物，因此要求与其覆盖读同一身份。在那之前，覆盖只读会话写入表，而 `edit_file` 与 `structural_edit` 从不写入它、任何编辑工具也不为交付的候选写入它，因此 `task_mode: work` 下的每个编辑任务无论模型运行了什么都以 `verification_demanded_unmet` 收场。覆盖只陈述一次运行在其当前字节上点名了一条变更路径；完成仍需要那次运行，后续变更仍重新武装该要求，账本自身的验证仍结算变更债。只有运行了程序或其测试、或抓取了页面的片段才绑定覆盖，且仅当命令行报告该片段的退出状态时（`classifyCommandEvidence`）：一次解析、一次 lint 或一次构建不绑定任何东西，管道进 `tail` 的测试也不。不点名文件的运行器绑定它发现的会话文件（`runnerEntries`）：一个裸 `pytest` 或 `pytest tests/` 绑定其测试文件，`python -m unittest` 绑定其 `test*.py`，`go run .` 绑定其包，`go test ./...` 绑定含测试的包（无测试时只编译），`npm test`、`jest` 或 `vitest` 绑定其默认模式匹配的文件；import 从那里如同从点名入口一样被跟随。失败的运行同样被记录，同一字节上的失败收回更早的通过，因此最新结果说了算。要求在退出时未满足，验证门在终结器拒绝退出之前言明，附上本可运行该文件的命令。一次被取消的编辑不报告变更，账本对它无观测。
+工作契约的验证要求（`decideVerificationDemand`）把它问及的代码交付物取自账本，每个变更工具的落地都被 `recordLedgerEffect` 规范记录。回答它的覆盖——一次通过的运行点名了哪些路径、持有的是什么字节——由 `proxy/guardrails.go` 的 `changedPathsForCoverage` 计算：会话写入加账本的规范代码交付物，因此要求与其覆盖读同一身份。在那之前，覆盖只读会话写入表，而 `edit_file` 与 `structural_edit` 从不写入它、任何编辑工具也不为交付的候选写入它，因此 `task_mode: work` 下的每个编辑任务无论模型运行了什么都以 `verification_demanded_unmet` 收场。覆盖只陈述一次运行在其当前字节上点名了一条变更路径；完成仍需要那次运行，后续变更仍重新武装该要求，账本自身的验证仍结算变更债。只有运行了程序或其测试、或抓取了页面的片段才绑定覆盖，且仅当命令行报告该片段的退出状态时（`shellcmd.ClassifyCommandEvidence`）：一次解析、一次 lint 或一次构建不绑定任何东西，管道进 `tail` 的测试也不。不点名文件的运行器绑定它发现的会话文件（`shellcmd.RunnerEntries`）：一个裸 `pytest` 或 `pytest tests/` 绑定其测试文件，`python -m unittest` 绑定其 `test*.py`，`go run .` 绑定其包，`go test ./...` 绑定含测试的包（无测试时只编译），`npm test`、`jest` 或 `vitest` 绑定其默认模式匹配的文件；import 从那里如同从点名入口一样被跟随。失败的运行同样被记录，同一字节上的失败收回更早的通过，因此最新结果说了算。要求在退出时未满足，验证门在终结器拒绝退出之前言明，附上本可运行该文件的命令。一次被取消的编辑不报告变更，账本对它无观测。
 
 
 ### 工具选择偏差缓解

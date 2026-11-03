@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/shellcmd"
 	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
@@ -358,7 +359,7 @@ func (s *runState) verificationDemandedAndUnmet() bool {
 // run_command.
 //
 // Only a run that ran the program or its tests, or fetched a page, and whose
-// exit status the line actually reports (classifyCommandEvidence) counts as
+// exit status the line actually reports (ClassifyCommandEvidence) counts as
 // verification. A parse, a lint or a `--version` does not, and neither does a
 // test whose status `| tail` or `|| true` replaced; the exit gates name such a
 // command back to the run instead of counting it. Once a verification passes,
@@ -369,13 +370,13 @@ func (s *runState) observeVerification(ctx *AgentContext, userMessage string, tu
 	if ctx == nil || result == nil {
 		return
 	}
-	if result.Success && isHeadOnlyProbe(command) {
+	if result.Success && shellcmd.IsHeadOnlyProbe(command) {
 		log.Printf("[agent] headers-only probe does not verify: %q", truncateStr(command, 60))
 		s.headOnlyProbe = command
 	}
-	ev := classifyCommandEvidence(command)
+	ev := shellcmd.ClassifyCommandEvidence(command)
 	declared := contractRequiresCommand(ctx, command)
-	if ev.Kind == evidenceNone && !declared {
+	if ev.Kind == shellcmd.EvidenceNone && !declared {
 		if result.Success && ev.Masked {
 			s.uncountedCheck = uncountedNote(command, ev.MaskNote)
 			log.Printf("[agent] result hidden, not verification: %q", truncateStr(command, 60))
@@ -391,7 +392,7 @@ func (s *runState) observeVerification(ctx *AgentContext, userMessage string, tu
 			turn, truncateStr(command, 60))
 	case !result.Success:
 		s.observeFailedCheck(ctx, turn, command, ev, result)
-	case ev.Kind.verifies() && !declared && inlineCodeTouchesNothing(ctx, ev):
+	case ev.Kind.Verifies() && !declared && inlineCodeTouchesNothing(ctx, ev):
 		// Inline code that neither names nor imports a file this session
 		// changed ran nothing the work is made of, so it neither verifies nor
 		// clears a failure. `python -c "print(1)"` passed the fix-intent gate
@@ -400,7 +401,7 @@ func (s *runState) observeVerification(ctx *AgentContext, userMessage string, tu
 			"the inline code it ran touches no file this session changed. Run the program or its tests.")
 		log.Printf("[agent] inline code touched no changed file, not verification: %q",
 			truncateStr(command, 60))
-	case ev.Kind.verifies() && silentRunWhenOutputPromised(ctx, userMessage, command, result.Data):
+	case ev.Kind.Verifies() && silentRunWhenOutputPromised(ctx, userMessage, command, result.Data):
 		// Exit 0 with empty stdout is not verification of a task whose
 		// prompt demands printed output: a program whose tail, solve() call
 		// included, was swallowed by a comment parses, runs, prints nothing
@@ -412,7 +413,7 @@ func (s *runState) observeVerification(ctx *AgentContext, userMessage string, tu
 		s.verifiedThisLoop = false
 		log.Printf("[agent] run exited 0 with no stdout on a print-demanding task — latching the verification gate: %q",
 			truncateStr(command, 60))
-	case ev.Kind.verifies():
+	case ev.Kind.Verifies():
 		s.observePassedRun(ctx, turn, command, ev)
 	default:
 		s.observeUnprovenPass(ctx, turn, command, ev, declared)
@@ -421,7 +422,7 @@ func (s *runState) observeVerification(ctx *AgentContext, userMessage string, tu
 
 // observePassedRun records a run that showed the work working, which clears
 // every earlier failure.
-func (s *runState) observePassedRun(ctx *AgentContext, turn int, command string, ev commandEvidence) {
+func (s *runState) observePassedRun(ctx *AgentContext, turn int, command string, ev shellcmd.CommandEvidence) {
 	s.verifiedThisLoop = true
 	s.lastVerifyWasLocalProbe = isHTTPProbe(strings.Join(ev.Covering, " && "))
 	s.failing, s.sawFailedVerification = nil, false
@@ -444,7 +445,7 @@ func (s *runState) observePassedRun(ctx *AgentContext, turn int, command string,
 // check, or a declared command that runs nothing. It clears only its own
 // earlier failure, and it is recorded only when the client declared it, so the
 // declaration can be discharged; the record binds no file (showsWorking).
-func (s *runState) observeUnprovenPass(ctx *AgentContext, turn int, command string, ev commandEvidence, declared bool) {
+func (s *runState) observeUnprovenPass(ctx *AgentContext, turn int, command string, ev shellcmd.CommandEvidence, declared bool) {
 	if s.failing[command] {
 		delete(s.failing, command)
 		if len(s.failing) == 0 {
@@ -459,7 +460,7 @@ func (s *runState) observeUnprovenPass(ctx *AgentContext, turn int, command stri
 	switch {
 	case ev.Masked:
 		s.uncountedCheck = uncountedNote(command, ev.MaskNote)
-	case ev.Kind == evidenceStatic:
+	case ev.Kind == shellcmd.EvidenceStatic:
 		s.uncountedCheck = uncountedNote(command,
 			"it checks that the code is well formed, not that it works. Run the program or its tests.")
 		log.Printf("[agent] static check only, not verification: %q", truncateStr(command, 60))
@@ -469,7 +470,7 @@ func (s *runState) observeUnprovenPass(ctx *AgentContext, turn int, command stri
 // observeFailedCheck latches the verification gate on a red run and takes
 // back any earlier pass, because the latest result is the one that describes
 // what is on disk.
-func (s *runState) observeFailedCheck(ctx *AgentContext, turn int, command string, ev commandEvidence, result *wire.ToolResult) {
+func (s *runState) observeFailedCheck(ctx *AgentContext, turn int, command string, ev shellcmd.CommandEvidence, result *wire.ToolResult) {
 	s.noteFailure(command)
 	s.verifiedThisLoop = false
 	s.verifiedStandalone = false
@@ -509,7 +510,7 @@ func (s *runState) noteFailure(command string) {
 // rehashes every tracked path and bumps the generation where bytes moved)
 // before the result reaches the loop. So the identity below describes the
 // workspace the command LEFT, never the one it found.
-func recordVerificationEvidence(ctx *AgentContext, turn int, command string, ev commandEvidence, failed bool) {
+func recordVerificationEvidence(ctx *AgentContext, turn int, command string, ev shellcmd.CommandEvidence, failed bool) {
 	segs := ev.Covering
 	if failed {
 		segs = ev.Honest

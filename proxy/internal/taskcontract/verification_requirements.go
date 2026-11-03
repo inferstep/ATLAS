@@ -32,7 +32,7 @@ type VerificationRecord struct {
 	Covered  map[string]string // session-written path -> sha256 when it ran
 	Turn     int
 
-	// Kind is what the run demonstrates (commandEvidenceKind.String):
+	// Kind is what the run demonstrates (shellcmd.CommandEvidenceKind.String):
 	// "execution" or "probe" show the program working; "static" (a parse,
 	// lint or build) and "none" are recorded only because the client declared
 	// the command, and bind no coverage. Empty is a record made before kinds

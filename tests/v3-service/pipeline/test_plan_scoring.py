@@ -41,7 +41,7 @@ def test_plan_scorer_credits_running_the_program(command):
 
 
 # The agent loop does not count these as verification
-# (proxy/command_evidence.go), so a plan whose verify step is one of them
+# (proxy/internal/shellcmd/command_evidence.go), so a plan whose verify step is one of them
 # must not outrank a plan that runs the program.
 @pytest.mark.parametrize("command", [
     "markdownlint README.md",

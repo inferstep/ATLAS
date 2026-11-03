@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/itigges22/atlas-proxy/internal/shellcmd"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -52,7 +53,7 @@ const shellAnswerForATestThatFailed = `{"success":false,"stdout":"","stderr":"As
 func TestTheGateGivesAServerThatTheTimeLimitStoppedTheAdviceForAServer(t *testing.T) {
 	state := &runState{}
 	ctx := &AgentContext{runSetup: runSetup{WorkingDir: t.TempDir()}}
-	state.observeFailedCheck(ctx, 1, "python app.py", commandEvidence{},
+	state.observeFailedCheck(ctx, 1, "python app.py", shellcmd.CommandEvidence{},
 		resultOfRunCommand(t, shellAnswerForAServerStoppedAtTheTimeLimit))
 	if !state.serverStartBlocked {
 		t.Fatal("the gate's step for a failed check did not see that the time limit stopped a server")
@@ -68,7 +69,7 @@ func TestTheGateGivesAServerThatTheTimeLimitStoppedTheAdviceForAServer(t *testin
 func TestTheGateGivesATestThatFailedTheAdviceForARedTest(t *testing.T) {
 	state := &runState{}
 	ctx := &AgentContext{runSetup: runSetup{WorkingDir: t.TempDir()}}
-	state.observeFailedCheck(ctx, 1, "pytest", commandEvidence{}, resultOfRunCommand(t, shellAnswerForATestThatFailed))
+	state.observeFailedCheck(ctx, 1, "pytest", shellcmd.CommandEvidence{}, resultOfRunCommand(t, shellAnswerForATestThatFailed))
 	if state.serverStartBlocked {
 		t.Fatal("a test that failed was taken for a server that never exits")
 	}

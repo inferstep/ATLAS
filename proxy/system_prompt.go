@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/itigges22/atlas-proxy/internal/shellcmd"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -82,7 +83,7 @@ func writeProjectContext(sb *strings.Builder, project *ProjectInfo) {
 		sb.WriteString(fmt.Sprintf("Framework: %s\n", project.Framework))
 	}
 	if project.BuildCommand != "" {
-		if classifyCommandEvidence(project.BuildCommand).Kind.verifies() {
+		if shellcmd.ClassifyCommandEvidence(project.BuildCommand).Kind.Verifies() {
 			sb.WriteString(fmt.Sprintf("Build command: %s\n", project.BuildCommand))
 		} else {
 			sb.WriteString(fmt.Sprintf("Build/syntax check: %s (does not run the program)\n", project.BuildCommand))

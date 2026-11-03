@@ -10,9 +10,10 @@ package main
 
 import (
 	"fmt"
-	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/shellcmd"
 )
 
 // run_command executes inside the sandbox container, which is already a
@@ -29,25 +30,6 @@ import (
 // toward write_file/edit_file by the system prompt (that's where V3 + the lens
 // add value), but they are no longer hard-refused at the shell.
 
-// shellFindDeleteRe catches `find ... -delete` / `find ... -exec rm` — a
-// recursive delete whose target is usually `.` (the project root), so its
-// blast radius is the whole workspace. Kept blocked; targeted deletes use
-// `rm <file>` or delete_file.
-var shellFindDeleteRe = regexp.MustCompile(
-	`\bfind\b.*?(-delete\b|-exec\s+rm\b)`)
-
-// shellForkBombRe matches the classic fork bomb and close variants: a function
-// whose body pipes to itself and backgrounds (`| … &`) then invokes itself.
-// The `&` (background spawn) inside the braces is the signature that separates
-// a bomb from a benign `f() { ls | grep x; }`.
-var shellForkBombRe = regexp.MustCompile(`\(\)\s*\{[^}]*\|[^}]*&[^}]*\}\s*;`)
-
-// shellDeviceWriteRe matches a redirect straight onto a block device. The
-// commands that format or overwrite a device (mkfs, wipefs, dd of=/dev/...)
-// are matched at a command position instead (catastrophicCommand), so a
-// command that only mentions one, like `grep mkfs notes.txt`, is allowed.
-var shellDeviceWriteRe = regexp.MustCompile(`(^|\s)>\s*/dev/(sd|nvme|mmcblk|vd|hd|xvd)`)
-
 // validateShellCommand rejects catastrophic commands (whole-project wipe,
 // fork bomb, device destruction) and execution wrappers that cannot be inspected
 // within the quoting and depth limits. Everything else — mv, cp, mkdir, rm of specific
@@ -58,107 +40,7 @@ var shellDeviceWriteRe = regexp.MustCompile(`(^|\s)>\s*/dev/(sd|nvme|mmcblk|vd|h
 // two, and they disagreed: run_command's deny-list saw through `env rm -rf /`
 // and `(rm -rf /)` and run_background's check did not.
 func validateShellCommand(cmd string) string {
-	return inspectShellCommand(cmd)
-}
-
-// commandSegments splits a command line where a new command can start: at
-// `;`, `|`, `&`, newlines, a subshell's parentheses, and command
-// substitution. Single quotes hide everything; double quotes hide the
-// operators but not `$(...)` or backticks, which the shell still runs.
-func commandSegments(cmd string) []string {
-	var out []string
-	var cur strings.Builder
-	cut := func() {
-		out = append(out, cur.String())
-		cur.Reset()
-	}
-	inSingle, inDouble := false, false
-	for i := 0; i < len(cmd); i++ {
-		c := cmd[i]
-		switch {
-		case c == '\\' && !inSingle && i+1 < len(cmd):
-			cur.WriteByte(c)
-			cur.WriteByte(cmd[i+1])
-			i++
-			continue
-		case c == '\'' && !inDouble:
-			inSingle = !inSingle
-		case c == '"' && !inSingle:
-			inDouble = !inDouble
-		case inSingle:
-		case c == '`' || c == ')' || (c == '$' && i+1 < len(cmd) && cmd[i+1] == '('):
-			cut()
-			if c == '$' {
-				i++ // the `(` of `$(`
-			}
-			continue
-		case inDouble:
-		case c == ';' || c == '|' || c == '&' || c == '\n' || c == '(':
-			cut()
-			continue
-		}
-		cur.WriteByte(c)
-	}
-	cut()
-	return out
-}
-
-// catastrophicCommand checks the command one segment runs.
-func catastrophicCommand(seg string) string {
-	fields := strings.Fields(seg)
-	i := commandPosition(fields)
-	if i >= len(fields) {
-		return ""
-	}
-	head, args := filepath.Base(fields[i]), fields[i+1:]
-	switch {
-	case head == "rm":
-		return catastrophicRm(args)
-	case head == "wipefs" || head == "mkfs" || strings.HasPrefix(head, "mkfs."):
-		return "refused: formatting or wiping a filesystem (mkfs/wipefs) is blocked. Work with files under the project directory instead."
-	case head == "dd":
-		for _, a := range args {
-			if strings.HasPrefix(a, "of=/dev/") {
-				return "refused: dd onto a device is blocked. Work with files under the project directory instead."
-			}
-		}
-	case head == "find" && shellFindDeleteRe.MatchString(seg):
-		return "refused: `find ... -delete` / `-exec rm` recursively deletes from the search root (usually the whole project). Delete specific files with `rm <file>` or the delete_file tool."
-	}
-	return ""
-}
-
-// catastrophicRm flags a recursive `rm` whose target would wipe the whole
-// project (or root / home). A targeted recursive delete of a subdirectory
-// (`rm -rf __pycache__`, `rm -rf node_modules`, `rm -rf build`) is allowed —
-// only roots and glob-everything targets are catastrophic.
-func catastrophicRm(args []string) string {
-	recursive := false
-	var targets []string
-	for _, f := range args {
-		if strings.HasPrefix(f, "--") {
-			if f == "--recursive" {
-				recursive = true
-			}
-			continue
-		}
-		if strings.HasPrefix(f, "-") {
-			if strings.ContainsAny(f, "rR") {
-				recursive = true
-			}
-			continue
-		}
-		targets = append(targets, f)
-	}
-	if !recursive {
-		return "" // `rm file` / `rm -f file` is fine; only recursive wipes are gated
-	}
-	for _, t := range targets {
-		if isCatastrophicDeleteTarget(t) {
-			return "refused: `rm -r` of " + t + " would wipe the whole project (or root). Delete a specific subdirectory by name instead (e.g. `rm -rf build`), or use delete_file."
-		}
-	}
-	return ""
+	return shellcmd.InspectShellCommand(cmd)
 }
 
 // workspaceRefRe matches `/workspace` as a path component (preceded by
@@ -438,4 +320,34 @@ func foregroundServerRejectionWithSource(cmd string,
 			"Then probe it with run_command (`curl -sf http://localhost:<port>/`), and "+
 			"stop_background when you are done.",
 		truncateStr(cmd, 80), cmd)
+}
+
+// inlineCodeTouchesNothing reports whether every segment a passing command
+// binds files from runs inline code that neither names nor imports a file
+// this session changed. Such a run exercised nothing the work is made of. A
+// `cd` among the segments only places the run.
+func inlineCodeTouchesNothing(ctx *AgentContext, ev shellcmd.CommandEvidence) bool {
+	changed := changedPathsForCoverage(ctx)
+	ran := false
+	for _, seg := range ev.Covering {
+		fields := strings.Fields(seg)
+		if k := shellcmd.CommandPosition(fields); k < len(fields) && fields[k] == "cd" {
+			continue
+		}
+		code, ok := shellcmd.InlineCode(seg)
+		if !ok {
+			return false
+		}
+		ran = true
+		// The code runs to the end of the segment, so a file passed to it as
+		// an argument is in it too.
+		for _, p := range changed {
+			for _, stmt := range strings.Split(code, ";") {
+				if sourceReferencesPath(strings.TrimSpace(stmt), p) {
+					return false
+				}
+			}
+		}
+	}
+	return ran
 }
