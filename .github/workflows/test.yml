@@ -345,7 +345,7 @@ jobs:
           persist-credentials: false
 
       - name: function and file size against the baseline
-        # docs/CODE_STYLE.md: no new function over 100 lines or file over
+        # docs/project/CODE_STYLE.md: no new function over 100 lines or file over
         # 1,500, and nothing on .github/code-health-baseline.json grows.
         # Standard library only; the runner's python3 is enough.
         run: python3 scripts/ci/code_health.py
@@ -521,7 +521,7 @@ jobs:
 
       # This job builds or runs an image of Docker Hub. The Docker service
       # asks a mirror first, so a limit or a fault of Docker Hub does not turn
-      # the job red (docs/quality/gates.md, "Docker Hub and the checks").
+      # the job red (docs/project/gates.md, "Docker Hub and the checks").
       # zizmor asks for the `$/` form here. actionlint, in its newest version,
       # does not read that form yet, so the form both read is kept.
       - uses: ./.github/actions/docker-hub-mirror  # zizmor: ignore[self-repository]

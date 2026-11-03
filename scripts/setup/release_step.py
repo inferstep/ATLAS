@@ -19,7 +19,7 @@ the push fails. The required checks are never opened: GitHub refuses an
 unchecked commit even while the step is open.
 
 Needs `gh` logged in as a repository admin. Run it with --apply only with
-the release owner's approval for this push (docs/RELEASE.md).
+the release owner's approval for this push (docs/project/RELEASE.md).
 """
 
 from __future__ import annotations

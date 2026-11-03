@@ -227,7 +227,7 @@ def in_seconds(span):
 def test_the_timer_starts_one_look_every_15_minutes():
     assert dict(settings(TIMER)) == {"Description": "ATLAS nightly run: a look every 15 minutes", "OnCalendar": "*:0/15",
                                      "AccuracySec": "1min", "Unit": UNIT.name, "WantedBy": "timers.target"}
-    page = (ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8")
+    page = (ROOT / "docs" / "project" / "gates.md").read_text(encoding="utf-8")
     assert "starts the script with `--tick`, every 15 minutes" in page
 
 
@@ -251,7 +251,7 @@ def test_the_unit_starts_the_script_of_the_look_from_the_tree_of_the_run_and_sta
     # stack would stay down.
     assert marker.startswith(start[start.index("--dir") + 1] + "/")
     assert "%t" not in " ".join(start + after)
-    page = " ".join((ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8").split())
+    page = " ".join((ROOT / "docs" / "project" / "gates.md").read_text(encoding="utf-8").split())
     assert "That holds for a restart of the server too: the file that names what was stopped lies in the folder of the run, on disk." in page
     assert start[5:7] == ["%h/atlas-nightly/venv/bin/python", "%h/atlas-nightly/tree/scripts/nightly_run.py"]
     assert (ROOT / "scripts" / "server" / "nightly_look.sh").is_file()
@@ -301,7 +301,7 @@ def test_no_file_of_the_timer_names_a_path_or_a_machine_of_a_server(path):
 
 
 def test_the_gates_page_gives_the_steps_on_the_server_with_the_names_of_the_files():
-    page = (ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8")
+    page = (ROOT / "docs" / "project" / "gates.md").read_text(encoding="utf-8")
     steps = page.split("### The steps on the server", 1)[1].split("\n## ", 1)[0]
     for word in ("scripts/server/atlas-nightly.service", "scripts/server/atlas-nightly.timer", "~/.config/systemd/user/",
                  "~/.config/atlas-nightly/status-app.pem", "chmod 600", "systemctl --user enable --now atlas-nightly.timer",
@@ -328,11 +328,11 @@ def test_the_gates_page_gives_the_steps_on_the_server_with_the_names_of_the_file
 
 def test_no_text_of_the_nightly_run_says_where_the_server_is():
     # The server is "one machine that is not always on". Where it stands is said nowhere in the repository.
-    for path in (ROOT / "scripts" / "nightly_run.py", ROOT / "docs" / "quality" / "gates.md", UNIT, TIMER, SCRIPT):
+    for path in (ROOT / "scripts" / "nightly_run.py", ROOT / "docs" / "project" / "gates.md", UNIT, TIMER, SCRIPT):
         text = " ".join(path.read_text(encoding="utf-8").split())
         for words in ("at home", "machine at ", "in the house", "home network", "homelab"):
             assert words not in text, f"{path.name} says `{words}`"
-    page = " ".join((ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8").split())
+    page = " ".join((ROOT / "docs" / "project" / "gates.md").read_text(encoding="utf-8").split())
     assert "The server is one machine, and it is not always on." in page
     assert "The server is one machine that is not always on, so a night with no status counts neither way." in page
 

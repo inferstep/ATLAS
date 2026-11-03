@@ -731,7 +731,7 @@ def test_a_base_that_changed_the_text_after_the_merge_was_made_asks_nothing_of_t
 
 
 def test_the_gates_page_has_the_words_of_the_rule():
-    page = " ".join((ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8").split())
+    page = " ".join((ROOT / "docs" / "project" / "gates.md").read_text(encoding="utf-8").split())
     for sentence in (
         ("The smoke result says that a session still runs with the new text: it starts, the model's replies are read, the "
          "tool calls run, it ends. It is a yes or a no, with the seconds. It is not a score."),
@@ -755,7 +755,7 @@ def test_the_gates_page_has_the_words_of_the_rule():
         "A status that comes later does not start the job again.",
         "The line counts only while the server wrote no status for the head commit.",
     ):
-        assert sentence in page, f"docs/quality/gates.md no longer has: {sentence!r}"
+        assert sentence in page, f"docs/project/gates.md no longer has: {sentence!r}"
 
 
 @pytest.mark.parametrize("state, shown_count", [

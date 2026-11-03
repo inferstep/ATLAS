@@ -48,7 +48,7 @@ from typing import NamedTuple
 
 ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = Path(".github") / "canary.json"
-RENEW = "Renew the canary (docs/quality/gates.md, section \"The canary\")."
+RENEW = "Renew the canary (docs/project/gates.md, section \"The canary\")."
 
 
 class Finding(NamedTuple):
@@ -432,7 +432,7 @@ def night_lines(manifest: dict, night: dict, base: str, now: datetime) -> list[s
         return [f"the newest night of the development server was not looked for: no account is set as the writer of "
                 f"the server's statuses (`server.writer` in {MANIFEST})"]
     look = ("Look at the development server: is it on, does its timer run, and what does the last report in the folder "
-            "of the run say (docs/quality/gates.md, section \"The nightly run\").")
+            "of the run say (docs/project/gates.md, section \"The nightly run\").")
     if night["started"] is None:
         return [f"no night of the server for more than {back} nights: {min(night['commits'], NIGHT_COMMITS)} commit(s) "
                 f"of `{base}` of the last {back + 1} days have no `{name}` status of the server. {look}"]

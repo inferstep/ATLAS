@@ -774,7 +774,7 @@ def test_the_compose_plant_is_in_an_overlay_file_that_no_job_starts_a_service_fr
 
 
 def test_the_page_names_the_checks_with_no_violation_as_the_list_has_them(manifest):
-    page = (ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8")
+    page = (ROOT / "docs" / "project" / "gates.md").read_text(encoding="utf-8")
     table = page[page.index("Checks with no violation, and why:"):page.index("No check with no violation of its own is red")]
     codeql = [name for name in manifest["not_covered"] if name.startswith("codeql (")]
     number = {3: "three", 4: "four", 5: "five", 6: "six"}[len(codeql)]
@@ -798,7 +798,7 @@ def test_the_list_is_plain_json_with_the_keys_the_script_reads():
     writer = data["server"]["writer"]
     assert type(writer) is int
     assert writer in (0, 340202947)
-    page = " ".join((ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8").split())
+    page = " ".join((ROOT / "docs" / "project" / "gates.md").read_text(encoding="utf-8").split())
     not_yet = "Today the list names no account, so the nights are not looked for yet." in page
     assert not_yet == (writer == 0), "the gates page and `server.writer` in the list do not say the same about the nights"
     assert data["server"]["look_back_days"] == 14
@@ -885,7 +885,7 @@ def test_a_ruled_branch_for_which_github_gives_no_required_check_is_a_finding(ca
     assert finding.check == "staging"
     assert "`staging` is in `ruled_branches` of the list, and GitHub gives no required check for it." in finding.message
     assert "Fix: look at the rulesets of the repository: is the one for `staging` there and active?" in finding.message
-    page = " ".join((ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8").split())
+    page = " ".join((ROOT / "docs" / "project" / "gates.md").read_text(encoding="utf-8").split())
     assert "A branch of that list for which GitHub gives no required check at all is a finding" in page
 
 
@@ -1036,7 +1036,7 @@ def test_a_status_of_that_name_by_another_account_is_not_a_night_of_the_server(c
     # The fix sends the reader to a section. The page has to have it.
     named = set(re.findall(r'section "([^"]+)"', printed))
     assert named == {"The nightly run"}, printed
-    headings = set(re.findall(r"^#{2,3} (.+)$", (ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8"), re.M))
+    headings = set(re.findall(r"^#{2,3} (.+)$", (ROOT / "docs" / "project" / "gates.md").read_text(encoding="utf-8"), re.M))
     assert named <= headings, f"the fix of the finding names a section that the gates page does not have: {sorted(named - headings)}"
 
 

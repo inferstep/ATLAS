@@ -1,7 +1,7 @@
 name: weekly cleanup
 
 # What the fixers would change on `dev`, as the text of one issue
-# (docs/quality/gates.md, section "The weekly cleanup"). No job here changes
+# (docs/project/gates.md, section "The weekly cleanup"). No job here changes
 # the repository: nothing is pushed and no pull request is opened.
 #
 # Two jobs. The first runs the fixers, the builds and the tests, on a copy,

@@ -23,7 +23,7 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 STEP = "./.github/actions/docker-hub-mirror"
 ACTION = ROOT / ".github" / "actions" / "docker-hub-mirror" / "action.yml"
 SCRIPT = ROOT / "scripts" / "ci" / "docker_hub_mirror.py"
-PAGE = ROOT / "docs" / "quality" / "gates.md"
+PAGE = ROOT / "docs" / "project" / "gates.md"
 SECTION = "Docker Hub and the checks"
 
 _spec = importlib.util.spec_from_file_location("docker_hub_mirror", SCRIPT)
@@ -144,7 +144,7 @@ def test_the_step_comes_after_the_checkout_and_before_the_first_docker_command(n
 def test_a_job_that_uses_docker_with_no_mirror_step_starts_for_no_change(name, events, key, job):
     fix = (f"{name}: the job `{key}` builds or runs an image and has no mirror step. When Docker Hub refuses a pull, "
            f"the job is red for a change that is not at fault. Fix: add `- uses: {STEP}` right after its checkout "
-           f"(docs/quality/gates.md, section \"{SECTION}\"). If the job starts for no pull request and not in the merge "
+           f"(docs/project/gates.md, section \"{SECTION}\"). If the job starts for no pull request and not in the merge "
            "queue, list it in OTHER_STARTS of this test with the condition that says so.")
     assert (name, key) in OTHER_STARTS, fix
     condition = OTHER_STARTS[(name, key)]

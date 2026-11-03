@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Code-health check: function and file size, against a baseline.
 
-docs/CODE_STYLE.md sets the limits: a function over FUNC_MAX lines, or a
+docs/project/CODE_STYLE.md sets the limits: a function over FUNC_MAX lines, or a
 file over FILE_MAX lines, fails. Code that was already over the limit is
 listed in .github/code-health-baseline.json with its size then. It may
 shrink but not grow. So the check stops new oversized code and keeps the
@@ -193,7 +193,7 @@ def main() -> int:
         listed = ", ".join(f"{folder} ({n})" for folder, n in sorted(crowded.items(), key=lambda kv: -kv[1]))
         print(f"note: {len(crowded)} folder(s) over {FOLDER_SOFT_MAX} entries: {listed}")
     if problems:
-        print("See docs/CODE_STYLE.md: split the function or file into parts with one job each.")
+        print("See docs/project/CODE_STYLE.md: split the function or file into parts with one job each.")
         return 1
     print(f"code health ok: no new or grown items ({len(funcs)} functions and {len(files)} files on the baseline)")
     return 0

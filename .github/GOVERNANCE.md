@@ -44,7 +44,7 @@ are still the ones it writes.
   approval, and only maintainers can dismiss a review. An admin's own
   pull request merges without the approval, which is logged. The two
   branches move forward by the release step in
-  [docs/RELEASE.md](../docs/RELEASE.md#the-release-step).
+  [docs/project/RELEASE.md](../docs/project/RELEASE.md#the-release-step).
 - **Branches.** Only admins, the `maintainers` team, and Dependabot can
   create, push or delete other branches. Everyone else works from a fork.
   Anyone with write access could otherwise push a branch with a new
@@ -55,7 +55,7 @@ are still the ones it writes.
   `maintainers` team can create, push or delete one. Dependabot and the
   repository's admin role cannot. The development server builds and runs
   the tip of such a branch
-  ([docs/quality/gates.md](../docs/quality/gates.md#the-smoke-run-of-one-commit)),
+  ([docs/project/gates.md](../docs/project/gates.md#the-smoke-run-of-one-commit)),
   so no program may push one.
 - **Release tags** (`v*`). Only admins and maintainers can create one,
   and nobody can move or delete one once it exists.
@@ -86,7 +86,7 @@ earning maintainer trust, so every rung also has hard technical limits.
   `staging` or `main` needs. The security- and
   release-critical paths stay with the lead even when subsystems gain
   owners: `.github/workflows/`, `scripts/`, `sandbox/`, `.github/SECURITY.md`,
-  `docs/RELEASE.md`, `docs/project/PUBLISHING.md` and
+  `docs/project/RELEASE.md`, `docs/project/PUBLISHING.md` and
   `atlas/commands/model_registry.py` (see
   [CODEOWNERS](CODEOWNERS)).
 - Only keys in `.github/allowed_signers` make valid release tags. The
@@ -230,7 +230,7 @@ than 5 business days, the time CONTRIBUTING promises.
 Maintainers can promote `dev` to `staging`. A stable release (`main`, a
 `vX.Y.Z` tag, `:latest`) needs the lead's approval in the `production`
 environment and a tag signed by a key in `allowed_signers`. The checklist
-is in [docs/RELEASE.md](../docs/RELEASE.md). Today each promotion is a
+is in [docs/project/RELEASE.md](../docs/project/RELEASE.md). Today each promotion is a
 release step, which needs admin rights on the repository, so the lead
 runs it.
 

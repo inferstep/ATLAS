@@ -3,7 +3,7 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-PAGE = ROOT / "docs" / "quality" / "gates.md"
+PAGE = ROOT / "docs" / "project" / "gates.md"
 GUIDE = ROOT / ".github" / "CONTRIBUTING.md"
 HEADING = "## Rules learned from review and from failures"
 ANCHOR = "rules-learned-from-review-and-from-failures"
@@ -12,7 +12,7 @@ ANCHOR = "rules-learned-from-review-and-from-failures"
 def section() -> str:
     """The section of the rules: from its heading to the next heading of the same level."""
     text = PAGE.read_text(encoding="utf-8")
-    assert text.count(HEADING + "\n") == 1, f"docs/quality/gates.md must have the heading `{HEADING}` once"
+    assert text.count(HEADING + "\n") == 1, f"docs/project/gates.md must have the heading `{HEADING}` once"
     return re.split(r"^## ", text.split(HEADING + "\n", 1)[1], maxsplit=1, flags=re.M)[0]
 
 
@@ -28,20 +28,20 @@ def anchors_of(text: str) -> set:
 
 
 def test_the_rules_are_in_the_gates_page_and_in_no_file_of_their_own():
-    assert not (ROOT / "docs" / "quality" / "rules.md").exists(), (
-        "docs/quality/rules.md is back. The rules are one section of docs/quality/gates.md, so that nobody misses a "
+    assert not (ROOT / "docs" / "project" / "rules.md").exists(), (
+        "docs/project/rules.md is back. The rules are one section of docs/project/gates.md, so that nobody misses a "
         "rule because it stands in another file. Fix: move its rows into that section.")
     assert "rules.md" not in (ROOT / "docs" / "README.md").read_text(encoding="utf-8")
     page = PAGE.read_text(encoding="utf-8")
     assert f"(#{ANCHOR})" in page, "the gates page does not link to its section of the rules"
-    assert f"(../docs/quality/gates.md#{ANCHOR})" in GUIDE.read_text(encoding="utf-8"), (
+    assert f"(../docs/project/gates.md#{ANCHOR})" in GUIDE.read_text(encoding="utf-8"), (
         "CONTRIBUTING.md does not point to the rules on the gates page. Fix: one line in its Testing section.")
 
 
 def test_every_rule_names_the_pull_request_or_issue_it_came_from():
     without = [rule for rule, source, _held in rows() if not re.fullmatch(r"#\d+(?:, #\d+)*", source)]
     assert not without, (
-        "these rules of docs/quality/gates.md do not name where they came from:\n  " + "\n  ".join(without)
+        "these rules of docs/project/gates.md do not name where they came from:\n  " + "\n  ".join(without)
         + "\nFix: give the number of the pull request or issue in the second column, as `#123` or `#123, #456`.")
 
 
@@ -50,7 +50,7 @@ def test_every_file_that_the_section_names_as_holding_a_rule_is_there():
     assert named, "the section names no test and no script; the form of its third column has changed"
     gone = [path for path in named if not (ROOT / path).is_file()]
     assert not gone, (
-        f"docs/quality/gates.md says that {gone} hold a rule, and they are not in the repository. Fix: give the path "
+        f"docs/project/gates.md says that {gone} hold a rule, and they are not in the repository. Fix: give the path "
         "that the test or the script has now, or write `review` when nothing holds the rule any more.")
 
 

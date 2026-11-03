@@ -72,7 +72,7 @@ FIXES = {
     "shellcheck": "Fix the line shellcheck names. Its code (SCnnnn) is explained at https://www.shellcheck.net/wiki/.",
     "workflow-yaml": "Fix the YAML at the line shown.",
     "dockerfile-sources": "A Dockerfile copies a path that is not there. Fix the COPY line or add the file.",
-    "code-health": "Split the function or file it names (docs/CODE_STYLE.md). If something got smaller, run `python scripts/ci/code_health.py --update` and commit the baseline.",
+    "code-health": "Split the function or file it names (docs/project/CODE_STYLE.md). If something got smaller, run `python scripts/ci/code_health.py --update` and commit the baseline.",
 }
 FIXES.update(dict.fromkeys(COMPOSE_GATES, "Run `docker compose -f <files> config` and fix the key it rejects."))
 FAILING_LINE = re.compile(r"FAIL|[Ee]rror|panic:|\.(?:go|py|sh|yml|ts):\d+|^E {2}")

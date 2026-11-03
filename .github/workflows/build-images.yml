@@ -128,7 +128,7 @@ jobs:
 
       # This job builds or runs an image of Docker Hub. The Docker service
       # asks a mirror first, so a limit or a fault of Docker Hub does not turn
-      # the job red (docs/quality/gates.md, "Docker Hub and the checks").
+      # the job red (docs/project/gates.md, "Docker Hub and the checks").
       # zizmor asks for the `$/` form here. actionlint, in its newest version,
       # does not read that form yet, so the form both read is kept.
       - uses: ./.github/actions/docker-hub-mirror  # zizmor: ignore[self-repository]

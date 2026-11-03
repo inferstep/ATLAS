@@ -62,7 +62,7 @@ day, or else the tip of one branch `smoke/<name>`; else it does nothing and
 leaves no report. With --tick --look it says what is due and starts nothing
 (status 0: a run is due; 3: none). The rules of a look, the files of the
 timer (scripts/server/) and the steps on the server are on the gates page,
-docs/quality/gates.md, sections "The result on GitHub" and "The timer". The
+docs/project/gates.md, sections "The result on GitHub" and "The timer". The
 server only calls out: nothing of this listens.
 
 With --commit <id> it is the smoke run of one commit of a branch, for a pull
@@ -161,7 +161,7 @@ RESULT_LINE = ("Smoke run on {commit}: {good} of {tasks} sessions with no harnes
 # Three small tasks of the driver, one of each kind of work: a function is added, a fault is repaired, a question
 # is answered with no change to a file.
 TASKS = ("add_function", "offbyone", "ask_explain")
-# The tests of the seven files that carry the `integration` mark (docs/quality/gates.md).
+# The tests of the seven files that carry the `integration` mark (docs/project/gates.md).
 # Loopback ports of this stack's own, so that it stands beside a stack on the usual ports.
 PORTS = {"ATLAS_LLAMA_PORT": 18080, "ATLAS_LENS_PORT": 18099, "ATLAS_V3_PORT": 18070,
          "ATLAS_SANDBOX_PORT": 18020, "ATLAS_PROXY_PORT": 18090}
@@ -514,7 +514,7 @@ def check_lens_folder(args) -> None:
     if not Path(folder).is_absolute():
         raise StepFailed(f"the run's settings name no folder of lens files as a full path (ATLAS_LENS_MODELS in "
                          f"{args.dir / 'nightly.env'}), so the lens of the stack would have no model to score with. Fix: "
-                         "add the line with the folder that the usual lens mounts, as the page docs/quality/gates.md "
+                         "add the line with the folder that the usual lens mounts, as the page docs/project/gates.md "
                          "gives it in the steps on the server.")
 
 

@@ -3,7 +3,7 @@
 
 A job that builds or runs an image of Docker Hub is red when Docker Hub refuses the pull for its limit, or when its
 token service does not answer. The change under test is not at fault then. With a mirror in its settings the Docker
-service asks the mirror first and Docker Hub second (docs/quality/gates.md, section "Docker Hub and the checks").
+service asks the mirror first and Docker Hub second (docs/project/gates.md, section "Docker Hub and the checks").
 
 usage:
   docker_hub_mirror.py < the settings of the Docker service
