@@ -426,9 +426,22 @@ func TestCommandToolsCreateNoPathDebt(t *testing.T) {
 
 const debtRecoveryMark = "never reached a state this run could check"
 
-// The scripted model retires the mistaken path only after it is told what is
-// outstanding, so the recovery message is what makes the run complete.
-func TestDebtRecoveryRetiresAMistakenPathAndCompletes(t *testing.T) {
+// debtRecoveryRun is what a debt-recovery run leaves: the workspace, the
+// context with its ledger, the stream's event counts, the terminal event, and
+// how often the recovery message fired.
+type debtRecoveryRun struct {
+	dir        string
+	ctx        *AgentContext
+	census     map[string]int
+	terminal   map[string]string
+	recoveries int
+}
+
+// runDebtRecovery runs a scripted model that retires a mistaken path only
+// after it is told what is outstanding, so the recovery message is what makes
+// the run complete.
+func runDebtRecovery(t *testing.T) debtRecoveryRun {
+	t.Helper()
 	dir := t.TempDir()
 	const req = "Write a couple of small scripts."
 	var recoveries, step int
@@ -480,36 +493,55 @@ func TestDebtRecoveryRetiresAMistakenPathAndCompletes(t *testing.T) {
 	if err := runAgentLoop(ctx, req); err != nil {
 		t.Fatalf("loop error: %v", err)
 	}
-	bBytes, _ := os.ReadFile(filepath.Join(dir, "b.py"))
-	_, aErr := os.Stat(filepath.Join(dir, "a.py"))
-	t.Logf("recoveries=%d status=%q reason=%q a.py_absent=%v",
-		recoveries, terminal["status"], terminal["reason"], os.IsNotExist(aErr))
+	return debtRecoveryRun{dir: dir, ctx: ctx, census: census, terminal: terminal, recoveries: recoveries}
+}
 
-	if recoveries != 1 {
-		t.Fatalf("recovery fired %d times, want exactly 1", recoveries)
+// The recovery fires once, and the run completes with the mistaken path gone.
+func TestDebtRecoveryRetiresAMistakenPathAndCompletes(t *testing.T) {
+	run := runDebtRecovery(t)
+	_, aErr := os.Stat(filepath.Join(run.dir, "a.py"))
+	t.Logf("recoveries=%d status=%q reason=%q a.py_absent=%v",
+		run.recoveries, run.terminal["status"], run.terminal["reason"], os.IsNotExist(aErr))
+
+	if run.recoveries != 1 {
+		t.Fatalf("recovery fired %d times, want exactly 1", run.recoveries)
 	}
-	if terminal["status"] != string(wire.TerminalCompleted) {
+	if run.terminal["status"] != string(wire.TerminalCompleted) {
 		t.Fatalf("structured retirement did not complete: status=%q reason=%q summary=%.140s",
-			terminal["status"], terminal["reason"], terminal["summary"])
+			run.terminal["status"], run.terminal["reason"], run.terminal["summary"])
 	}
 	if !os.IsNotExist(aErr) {
 		t.Error("a.py was not confirmed absent")
 	}
+}
+
+// The run completes over the file that landed: its bytes on disk, its ledger
+// hash, and a passed syntax check.
+func TestDebtRecoveryCompletesOverTheValidatedFile(t *testing.T) {
+	run := runDebtRecovery(t)
+	bBytes, _ := os.ReadFile(filepath.Join(run.dir, "b.py"))
+
 	if string(bBytes) != debtGoodBody {
 		t.Errorf("b.py = %q", bBytes)
 	}
-	d := ctx.Ledger[ledgerKey(ctx, "b.py")]
+	d := run.ctx.Ledger[ledgerKey(run.ctx, "b.py")]
 	if d == nil || d.CurrentHash != hashBytes(bBytes) {
 		t.Error("b.py's ledger hash does not match disk")
 	}
 	if k, s := d.CurrentValidation(); s != wire.ValidationPassed || k != wire.ValidationKindSyntax {
 		t.Errorf("completion over %v/%v", k, s)
 	}
-	if census["done"] != 1 {
-		t.Errorf("%d terminal events", census["done"])
+}
+
+// The run streams one terminal event, and a result for every tool call.
+func TestDebtRecoveryStreamEndsOnceWithEveryCallAnswered(t *testing.T) {
+	run := runDebtRecovery(t)
+
+	if run.census["done"] != 1 {
+		t.Errorf("%d terminal events", run.census["done"])
 	}
-	if census["tool_call"] != census["tool_result"] {
-		t.Errorf("call/result balance: %d vs %d", census["tool_call"], census["tool_result"])
+	if run.census["tool_call"] != run.census["tool_result"] {
+		t.Errorf("call/result balance: %d vs %d", run.census["tool_call"], run.census["tool_result"])
 	}
 }
 
