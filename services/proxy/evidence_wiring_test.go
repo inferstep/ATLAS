@@ -350,13 +350,15 @@ func TestTheTelemetryRecordIsShapedAndFlaggedInert(t *testing.T) {
 	if start < 0 {
 		t.Fatal("the record builder is gone")
 	}
-	// The builder's own body, and no further: the file continues past it, and
-	// a scan that ran to the end would report the wiring above as if the
-	// record carried what the wiring reads.
+	// The builder's own body, up to its closing brace and no further: code
+	// added after it in the file is not the record, so it must neither state
+	// the record's flag for it nor be reported as a field the record carries.
 	fn := body[start:]
-	if next := strings.Index(fn[1:], "\nfunc "); next >= 0 {
-		fn = fn[:next+1]
+	end := strings.Index(fn, "\n}")
+	if end < 0 {
+		t.Fatal("func recordEvidenceObservation in evidence_wiring.go has no closing brace at the start of a line")
 	}
+	fn = fn[:end]
 	if !strings.Contains(fn, `"influences_live_decision": false`) {
 		t.Error("the record does not declare itself inert")
 	}
