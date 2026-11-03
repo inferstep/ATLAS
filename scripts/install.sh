@@ -419,7 +419,7 @@ build_images() {
 process_templates() {
     log_info "Processing manifest templates..."
 
-    local template_dir="$K8S_DIR/templates"
+    local template_dir="$K8S_DIR/deploy/k3s"
     local manifest_dir="$K8S_DIR/manifests"
 
     # Ensure manifests directory exists
@@ -470,9 +470,9 @@ deploy_manifests() {
             echo "  - $m" >&2
         done
         echo "" >&2
-        echo "process_templates renders these from \$K8S_DIR/templates/*.yaml.tmpl." >&2
-        echo "Templates should be present at \$K8S_DIR/templates/ — confirm the" >&2
-        echo "checkout includes that directory (\`ls \$K8S_DIR/templates/\`)." >&2
+        echo "process_templates renders these from \$K8S_DIR/deploy/k3s/*.yaml.tmpl." >&2
+        echo "Templates should be present at \$K8S_DIR/deploy/k3s/ — confirm the" >&2
+        echo "checkout includes that directory (\`ls \$K8S_DIR/deploy/k3s/\`)." >&2
         echo "" >&2
         exit 1
     fi

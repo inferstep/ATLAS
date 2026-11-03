@@ -107,3 +107,16 @@ esac
     assert done.returncode == 1, done.stdout + done.stderr
     assert "[STALE] atlas-proxy" in done.stdout
     assert "Fix:   docker compose up -d --force-recreate atlas-proxy --no-deps" in done.stdout
+
+
+# Both scripts render the K3s manifests from one folder of templates. With a
+# folder that is not there, generate-manifests.sh warns and exits 0, and
+# install.sh applies whatever manifests an earlier install left, so a wrong
+# path has to fail here.
+@pytest.mark.parametrize("script, setting", [("install.sh", "local template_dir="),
+                                             ("install/generate-manifests.sh", "TEMPLATES_DIR=")])
+def test_the_k3s_templates_are_in_the_folder_each_script_reads(script, setting):
+    text = (ROOT / "scripts" / script).read_text(encoding="utf-8")
+    (line,) = [line.strip() for line in text.splitlines() if line.strip().startswith(setting)]
+    folder = line.removeprefix(setting).strip('"').removeprefix("$K8S_DIR/")
+    assert sorted((ROOT / folder).glob("*.yaml.tmpl")), f"scripts/{script} reads K3s templates from {folder}/, which holds none"

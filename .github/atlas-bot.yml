@@ -107,7 +107,7 @@ areas:
   extensions/: area/extensions
   scripts/: area/install
   docker-compose: area/install
-  compose/: area/install
+  deploy/: area/install
   .github/: area/ci
   docs/: area/docs
   README.md: area/docs

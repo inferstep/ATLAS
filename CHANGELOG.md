@@ -20,15 +20,17 @@ come from your checkout, so run `git pull` first.
   A model folder that holds only `gx_xgboost.pkl` runs without G(x) and says so in
   the lens's log. Run `atlas lens build` to rebuild it.
 
-### Changed: the Compose overlays moved to `compose/`
+### Changed: the Compose overlays and the K3s templates moved to `deploy/`
 
 `docker-compose.{cpu,macos,rocm,vulkan}.yml` and
-`docker-compose.override.yml.example` are now in `compose/`. `docker-compose.yml`
-and your own `docker-compose.override.yml` stay at the root. `atlas` and the
-installers find the overlays themselves. If you run `docker compose -f` by hand
-or from a script of your own, add `compose/` to the overlay's path. Relative
-paths in the overlays are unchanged: Compose reads them from the folder of the
-first `-f` file.
+`docker-compose.override.yml.example` are now in `deploy/compose/`.
+`docker-compose.yml` and your own `docker-compose.override.yml` stay at the
+root. `atlas` and the installers find the overlays themselves. If you run
+`docker compose -f` by hand or from a script of your own, add `deploy/compose/`
+to the overlay's path. Relative paths in the overlays are unchanged: Compose
+reads them from the folder of the first `-f` file. The K3s manifest templates
+moved from `templates/` to `deploy/k3s/`; `scripts/install.sh` and
+`scripts/install/generate-manifests.sh` read them there.
 
 ### Changed: ruff catches swallowed exceptions and complex functions, and lints scripts/
 
