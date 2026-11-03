@@ -918,15 +918,18 @@ func shellScript(seg string) (string, bool) {
 	if len(words) == 0 || !isShellProgram(filepath.Base(words[0])) {
 		return "", false
 	}
-	args := words[1:]
+	return inlineScript(words[1:])
+}
+
+// inlineScript reads a shell's arguments up to the -c flag and returns the
+// script after it, with the options read on the way as its first lines.
+func inlineScript(args []string) (string, bool) {
 	pre := ""
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
 		case (a == "-o" || a == "+o") && i+1 < len(args):
-			if a == "-o" {
-				pre += "set -o " + args[i+1] + "\n"
-			}
+			pre += optionLine(a, args[i+1])
 			i++
 			continue
 		case strings.HasPrefix(a, "--"):
@@ -942,18 +945,32 @@ func shellScript(seg string) (string, bool) {
 			pre += "set -e\n"
 		}
 		if strings.HasSuffix(flags, "o") && i+1 < len(args) {
-			pre += "set -o " + args[i+1] + "\n" // bash -euo pipefail -c …
+			pre += optionLine("-o", args[i+1]) // bash -euo pipefail -c …
 			i++
 			continue
 		}
 		if strings.Contains(flags, "c") {
-			if i+1 >= len(args) {
-				return "", false
-			}
-			return pre + args[i+1], true
+			return commandOperand(pre, args, i)
 		}
 	}
 	return "", false
+}
+
+// optionLine is the `set -o NAME` line for `-o NAME`; `+o NAME` adds none.
+func optionLine(flag, name string) string {
+	if flag == "-o" {
+		return "set -o " + name + "\n"
+	}
+	return ""
+}
+
+// commandOperand is the script that the -c flag at i takes, after the
+// options' lines; false when the script is missing.
+func commandOperand(pre string, args []string, i int) (string, bool) {
+	if i+1 >= len(args) {
+		return "", false
+	}
+	return pre + args[i+1], true
 }
 
 // shellProgramKind: a shell started with inline code is judged by that code,
