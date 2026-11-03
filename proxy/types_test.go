@@ -551,7 +551,7 @@ func TestProvenancePresenceDoesNotChangeAuthorization(t *testing.T) {
 }
 
 func TestNoProductionCallerConsultsProvenanceYet(t *testing.T) {
-	for _, file := range append(append([]string{"v3_bridge.go", "gates.go",
+	for _, file := range append(append([]string{"internal/v3client/client.go", "contract_gate.go", "gates.go",
 		"gates_asset_lint.go", "gates_background_jobs.go", "shell_wrapper.go",
 		"gates_completion.go", "gates_edit_requests.go", "gates_ledger.go", "gates_plan.go",
 		"gates_syntax_rejection.go", "gates_workspace_alignment.go"}, agentFiles...), toolFiles...) {

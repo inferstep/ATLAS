@@ -28,6 +28,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // lensInvocationHeader is the invocation channel the Lens middleware binds.
@@ -90,7 +92,7 @@ func newLensRequest(ctx context.Context, method, url string, body []byte) (*http
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if rid := requestIDFromContext(ctx); rid != "" {
-		req.Header.Set(requestIDHeader, rid)
+		req.Header.Set(wire.RequestIDHeader, rid)
 		if inv, ok := lensInvocationID(rid); ok {
 			req.Header.Set(lensInvocationHeader, inv)
 		}

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/itigges22/atlas-proxy/internal/v3client"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -619,7 +620,7 @@ func TestEmptyCandidateIsNeverAuthorized(t *testing.T) {
 // Source-level proof that the legacy boolean cannot authorize anything: the
 // authorization path never reads it.
 func TestPassedNoLongerAuthorizesDelivery(t *testing.T) {
-	src, err := os.ReadFile("v3_bridge.go")
+	src, err := os.ReadFile("contract_gate.go")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -690,7 +691,7 @@ func TestEveryPhaseIsDeliverableOnTheSameTerms(t *testing.T) {
 // promote the service's evidence into a verified winner: the authorization
 // predicate takes a response and bytes, and calls no local checker.
 func TestLocalValidationCannotUpgradeServiceEvidence(t *testing.T) {
-	src, err := os.ReadFile("v3_bridge.go")
+	src, err := os.ReadFile("contract_gate.go")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -753,7 +754,7 @@ print(json.dumps({
 	}))
 	defer srv.Close()
 
-	got, err := callV3GenerateStreaming(context.Background(), srv.URL,
+	got, err := v3client.GenerateStreaming(context.Background(), srv.URL, "", v3CallTimeout(),
 		wire.V3GenerateRequest{FilePath: "theme.css", BaselineCode: "body {}\n"}, nil)
 	if err != nil {
 		t.Fatalf("bridge call failed: %v", err)

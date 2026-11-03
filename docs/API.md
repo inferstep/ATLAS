@@ -698,7 +698,7 @@ data: [DONE]
 
 Each progress event has the shape `{"stage": "<name>", "detail": "<human-readable>", "data": {...}}`. The `data` object carries structured fields specific to that stage (counts, indices, timings, strategy labels) — the proxy bridge fans these out into the dedicated `v3_*` events on `/v1/agent`. Stages the bridge has no dedicated event for flow through `v3_progress` as one `message` line.
 
-The proxy reads this stream in `v3_bridge.go`, and `tools.go` translates the stages into `v3_progress` / `v3_token` / `v3_llm_start` / `v3_llm_end` events on the `/v1/agent` stream — direct callers see the raw V3 stages.
+The proxy reads this stream in `internal/v3client/client.go`, and `tools.go` translates the stages into `v3_progress` / `v3_token` / `v3_llm_start` / `v3_llm_end` events on the `/v1/agent` stream — direct callers see the raw V3 stages.
 
 <details>
 <summary><b>All SSE stage values</b></summary>

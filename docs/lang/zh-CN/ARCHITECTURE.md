@@ -109,7 +109,7 @@ K3s 部署路径（`scripts/install.sh`，清单在 `templates/` 中）截至 V3
 | `guardrails*.go` | 按工具的引导防护（收缩、缺失命令/模块的引导、doctype 剥离） |
 | `shell_wrapper.go` | `validateShellCommand` 背后的命令策略：拆分复合命令，最多深入 16 层检查执行包装器（`sh -c`、`eval` 等），拒绝灾难性命令和无法检查的包装器 |
 | `events.go` | 类型化信封 broker（`/events`）与 SSE 管道 |
-| `v3_bridge.go` | 面向 v3-service `/v3/generate` + `/v3/plan` 的 SSE 客户端 |
+| `internal/v3client/client.go` | 面向 v3-service `/v3/generate` + `/v3/plan` 的 SSE 客户端；调用上限 `ATLAS_V3_TIMEOUT` 留在 `v3_bridge.go` |
 | `types.go` | 共享类型、层级、轮次上限 |
 
 ```mermaid
@@ -428,7 +428,7 @@ API 契约见 [API.md § POST /v3/plan](../../API.md#post-v3plan)。
 
 | 文件 | 作用 |
 |---|---|
-| `proxy/v3_bridge.go` | `callV3PlanStreaming(reqCtx, v3URL, req, onProgress)` — 打开 SSE 流，把进度事件转发给回调，并从 `event: result` 帧返回最终的 `Plan`。`reqCtx` 绑定 agent 的请求上下文，因此 `/cancel` 会中止进行中的计划。与 V3 流水线运行所用的 `callV3GenerateStreaming` 结构相同。 |
+| `proxy/internal/v3client/client.go` | `PlanStreaming(reqCtx, v3URL, requestID, req, onProgress)` — 打开 SSE 流，把进度事件转发给回调，并从 `event: result` 帧返回最终的 `Plan`。`reqCtx` 绑定 agent 的请求上下文，因此 `/cancel` 会中止进行中的计划。与 V3 流水线运行所用的 `GenerateStreaming` 结构相同。 |
 | `proxy/internal/wire/` | `V3PlanRequest`（`v3.go`）、`Plan` 与 `PlanStep`（`messages.go`）类型。 |
 | `proxy/types.go` | `AgentContext` 增加 `Plan`、`PlanStepsSatisfied[]`、`PlanOffStreak`、`PlanRevisions`。 |
 | `proxy/plan_generation.go` | `samplePlanContext()` 为规划器遍历优先文件（app.py、templates/index.html、package.json 等）。`shouldGeneratePlan()` 依据层级、消息长度以及是否为只读请求来判断。`generatePlan()` 运行桥接，丢弃逐 token 的噪声，并携带完整步骤列表发出 `plan_loaded`。 |
@@ -485,7 +485,7 @@ API 契约见 [API.md § POST /v3/plan](../../API.md#post-v3plan)。
 | 层 | 文件 | 覆盖内容 |
 |---|---|---|
 | v3-service 计划端点 | `tests/v3-service/pipeline/test_plan_scoring.py`（打分器）；解析器通过 `curl /v3/plan` 做冒烟测试 | 打分器为运行程序、其测试或探针的验证步骤加分，对静态检查（构建、解析、linter）和侦察调用都不加分；解析器的容错（围栏、前置说明文字、花括号嵌套）由 3 候选采样器验证 |
-| 代理桥接 | `proxy/v3_bridge_test.go` | SSE 解析、缺少结果时的错误、阶段路由 |
+| 代理桥接 | `proxy/internal/v3client/client_test.go`；阶段路由见 `proxy/v3_bridge_test.go` | SSE 解析、缺少结果时的错误、阶段路由 |
 | 代理钩子 | `proxy/agent_test.go` | 优先文件选取、截断阈值、回退遍历、层级与长度判断 |
 | 代理遵循 | `proxy/gates_plan_test.go`；系统提示见 `proxy/gates_test.go` | 匹配逻辑（工具名 + 路径后缀）、排除失败的调用、修订上限、系统提示渲染 |
 | TUI 渲染 | `tui/internal/pipelinestate/plan_test.go`；处理程序见 `tui/plan_test.go` | `PlanView` 状态转换、修订时由 plan_loaded 替换、偏离计划时静默 |

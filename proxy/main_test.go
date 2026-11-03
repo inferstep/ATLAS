@@ -516,9 +516,9 @@ func TestWithRequestIDGenerates(t *testing.T) {
 	if seen == "" || !strings.HasPrefix(seen, "req-") {
 		t.Fatalf("no generated request id in context: %q", seen)
 	}
-	if rec.Header().Get(requestIDHeader) != seen {
+	if rec.Header().Get(wire.RequestIDHeader) != seen {
 		t.Fatalf("response header %q != context %q",
-			rec.Header().Get(requestIDHeader), seen)
+			rec.Header().Get(wire.RequestIDHeader), seen)
 	}
 }
 
@@ -529,7 +529,7 @@ func TestWithRequestIDHonorsClientID(t *testing.T) {
 			seen = requestIDFromContext(r.Context())
 		}))
 	req := httptest.NewRequest("GET", "/health", nil)
-	req.Header.Set(requestIDHeader, "req-client-supplied")
+	req.Header.Set(wire.RequestIDHeader, "req-client-supplied")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if seen != "req-client-supplied" {
@@ -568,7 +568,7 @@ func TestTokenTransportForwardsRequestID(t *testing.T) {
 	var got string
 	srv := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
-			got = r.Header.Get(requestIDHeader)
+			got = r.Header.Get(wire.RequestIDHeader)
 		}))
 	defer srv.Close()
 	client := &http.Client{Transport: &tokenTransport{}}

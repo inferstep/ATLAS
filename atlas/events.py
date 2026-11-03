@@ -49,9 +49,9 @@ Legacy shape
 
 v3-service's own SSE endpoints (`/v3/generate`, `/v3/plan`) emit the
 legacy `{"stage": ..., "detail": ...}` shape (consumed by the Go proxy
-bridge, proxy/v3_bridge.go — not by this module). `parse_envelope` raises
-`LegacyEventError` on that shape so callers fall back explicitly rather
-than silently mis-parsing.
+client, proxy/internal/v3client/client.go — not by this module).
+`parse_envelope` raises `LegacyEventError` on that shape so callers fall
+back explicitly rather than silently mis-parsing.
 """
 
 from __future__ import annotations

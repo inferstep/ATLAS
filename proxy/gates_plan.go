@@ -15,6 +15,7 @@ import (
 	"log"
 	"strings"
 
+	"github.com/itigges22/atlas-proxy/internal/v3client"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -394,7 +395,7 @@ func revisePlan(ctx *AgentContext, originalUserMessage string, reason string) {
 		ProjectContext: pctx,
 		NCandidates:    3,
 	}
-	plan, err := callV3PlanStreaming(ctx.Ctx, ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
+	plan, err := v3client.PlanStreaming(ctx.Ctx, ctx.V3URL, requestIDOf(ctx), req, func(stage, detail string, data map[string]interface{}) {
 		switch stage {
 		case "token", "llm_start", "llm_end":
 			return

@@ -121,7 +121,7 @@ K3s デプロイパス（`scripts/install.sh`、`templates/` 内のマニフェ�
 | `guardrails*.go` | ツールごとのステアリングガード（縮約、コマンド/モジュール欠落のステア、doctype 除去）。`guardrails_reply.go` は序文のフレーズを正規化し、完了チェックが将来の作業を告知するだけの応答を認識できるようにする |
 | `shell_wrapper.go` | `validateShellCommand` の背後にあるコマンドポリシー: 複合コマンドを分割し、実行ラッパー（`sh -c`、`eval` など）の中を最大 16 層まで調べ、壊滅的なコマンドと検査できないラッパーを拒否 |
 | `events.go` | 型付きエンベロープのブローカー（`/events`）と SSE の配管 |
-| `v3_bridge.go` | v3-service の `/v3/generate` + `/v3/plan` 向け SSE クライアント |
+| `internal/v3client/client.go` | v3-service の `/v3/generate` + `/v3/plan` 向け SSE クライアント。呼び出しの上限 `ATLAS_V3_TIMEOUT` は `v3_bridge.go` に残ります |
 | `types.go` | 共有型、ティア、ターン上限 |
 | `internal/wire/messages.go` | モデルのメッセージ、ツール結果、計画など、境界を越える型 |
 | `internal/wire/v3.go` | V3 サービスのリクエスト、レスポンス、証拠エンベロープとその検証 |
@@ -451,7 +451,7 @@ API の契約は [API.md § POST /v3/plan](../../API.md#post-v3plan) に記載�
 
 | ファイル | 役割 |
 |---|---|
-| `proxy/v3_bridge.go` | `callV3PlanStreaming(reqCtx, v3URL, req, onProgress)` — SSE ストリームを開き、進捗イベントをコールバックに転送し、`event: result` フレームから最終的な `Plan` を返します。`reqCtx` がエージェントのリクエストコンテキストを結び付けるので、`/cancel` は実行中のプランを中止します。V3 パイプライン実行用の `callV3GenerateStreaming` と同じ形です。 |
+| `proxy/internal/v3client/client.go` | `PlanStreaming(reqCtx, v3URL, requestID, req, onProgress)` — SSE ストリームを開き、進捗イベントをコールバックに転送し、`event: result` フレームから最終的な `Plan` を返します。`reqCtx` がエージェントのリクエストコンテキストを結び付けるので、`/cancel` は実行中のプランを中止します。V3 パイプライン実行用の `GenerateStreaming` と同じ形です。 |
 | `proxy/internal/wire/` | `V3PlanRequest`（`v3.go`）、`Plan` と `PlanStep`（`messages.go`）の型。 |
 | `proxy/types.go` | `AgentContext` に `Plan`、`PlanStepsSatisfied[]`、`PlanOffStreak`、`PlanRevisions` が加わります。 |
 | `proxy/plan_generation.go` | `samplePlanContext()` はプランナーのために優先ファイル（app.py、templates/index.html、package.json など）をたどります。`shouldGeneratePlan()` はティア、メッセージ長、読み取り専用のリクエストかどうかで判定します。`generatePlan()` はブリッジを実行し、トークンごとのノイズを捨て、全ステップのリストを付けて `plan_loaded` を発行します。 |
@@ -508,7 +508,7 @@ API の契約は [API.md § POST /v3/plan](../../API.md#post-v3plan) に記載�
 | レイヤー | ファイル | カバー範囲 |
 |---|---|---|
 | v3-service のプランエンドポイント | `tests/v3-service/pipeline/test_plan_scoring.py`（スコアラー）。パーサーは `curl /v3/plan` でスモークテスト | スコアラーは、プログラムやそのテスト、プローブを実行する検証ステップに加点し、静的チェック（ビルド、解析、リンター）にも偵察コールにも加点しません。パーサーの許容範囲（フェンス、散文の前置き、波括弧のネスト）は 3 候補のサンプラーで確かめます |
-| プロキシのブリッジ | `proxy/v3_bridge_test.go` | SSE の解析、結果が欠けたときのエラー、ステージのルーティング |
+| プロキシのブリッジ | `proxy/internal/v3client/client_test.go`。ステージのルーティングは `proxy/v3_bridge_test.go` | SSE の解析、結果が欠けたときのエラー、ステージのルーティング |
 | プロキシのフック | `proxy/agent_test.go` | 優先ファイルの取得、切り詰めのしきい値、フォールバックの走査、ティアと長さの判定 |
 | プロキシの遵守 | `proxy/gates_plan_test.go`。システムプロンプトは `proxy/gates_test.go` | 一致ロジック（ツール名 + パス末尾）、失敗したコールの除外、修正回数の上限、システムプロンプトのレンダリング |
 | TUI のレンダリング | `tui/internal/pipelinestate/plan_test.go`。ハンドラーは `tui/plan_test.go` | `PlanView` の状態遷移、修正時の plan_loaded による置き換え、プラン外での無言 |

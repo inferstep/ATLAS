@@ -311,8 +311,8 @@ func TestNoNewConsumerInTheDeliveryGraph(t *testing.T) {
 		"v3DeliveryAuthorized"} {
 		for site := range callSites(files, fn) {
 			allowed := map[string]bool{
-				"v3_bridge.go:v3DeliveryAuthorized":          true,
-				"v3_bridge.go:EvidenceSupportsProvenanceFor": true,
+				"contract_gate.go:v3DeliveryAuthorized":          true,
+				"contract_gate.go:EvidenceSupportsProvenanceFor": true,
 				// The service's own verdict has exactly one reader and two
 				// callers: the contractless delivery rule, and the write and
 				// edit routes that apply it to a request which declared
