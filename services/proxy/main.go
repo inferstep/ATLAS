@@ -173,7 +173,8 @@ func handleModels(w http.ResponseWriter, r *http.Request) {
 }
 
 // healthPath is where a service of the stack, this proxy among them, answers
-// its health check.
+// its health check. The route table below names it as a literal, as
+// test_openapi_contract.py reads the routes from that table.
 const healthPath = "/health"
 
 // serviceHealthy is whether the service at base answers its health check
@@ -251,7 +252,7 @@ func newProxyMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/models", handleModels)
 	mux.HandleFunc("/models", handleModels)
-	mux.HandleFunc(healthPath, handleHealth)
+	mux.HandleFunc("/health", handleHealth)
 	mux.HandleFunc("/ready", handleReady)
 	mux.HandleFunc("/v1/agent", handleAgent)           // tool-based agent endpoint
 	mux.HandleFunc("/events", handleEvents)            // typed SSE event stream
