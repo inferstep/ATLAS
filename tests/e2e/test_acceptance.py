@@ -56,7 +56,7 @@ pytestmark = [
     pytest.mark.skipif(
         not sandbox_deps_available(),
         reason="sandbox runtime deps missing — "
-               "pip install -r sandbox/requirements-runtime.txt"),
+               "pip install -r services/sandbox/requirements-runtime.txt"),
 ]
 
 

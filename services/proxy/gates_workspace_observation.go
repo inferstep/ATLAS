@@ -133,6 +133,16 @@ func applyShellChanges(ctx *AgentContext, before, after workspaceSnapshot, sourc
 		// but completion cannot say it saw what the shell did.
 		ctx.ShellEffectsUnobserved = true
 	}
+	recordShellWrites(ctx, before, after, source)
+	if before.truncated || after.truncated {
+		return // an absence in a partial walk is not a removal
+	}
+	recordShellRemovals(ctx, before, after, source)
+}
+
+// recordShellWrites records each file the shell wrote between two walks that
+// the completion check can judge and the ledger does not track yet.
+func recordShellWrites(ctx *AgentContext, before, after workspaceSnapshot, source string) {
 	for rel, now := range after.files {
 		if was, existed := before.files[rel]; existed && was == now {
 			continue
@@ -144,9 +154,12 @@ func applyShellChanges(ctx *AgentContext, before, after workspaceSnapshot, sourc
 		log.Printf("[ledger] %s written by %s — now a deliverable of this session", rel, source)
 		observePathFromDisk(ctx, rel, wire.ValidationKindUnknown, wire.ValidationUnknown, source)
 	}
-	if before.truncated || after.truncated {
-		return // an absence in a partial walk is not a removal
-	}
+}
+
+// recordShellRemovals records each file that is gone between two complete
+// walks: a removal of the user's file is a deletion, and one of the session's
+// own file leaves nothing to deliver.
+func recordShellRemovals(ctx *AgentContext, before, after workspaceSnapshot, source string) {
 	for rel := range before.files {
 		if _, still := after.files[rel]; still {
 			continue

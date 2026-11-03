@@ -162,42 +162,8 @@ func decideInvocationFeasibility(in feasibilityInput) FeasibilityDecision {
 		if !o.Required {
 			continue
 		}
-		if taskcontract.Unsatisfiable(o.Kind) {
-			note(FeasibilityUnsupportedObligation, o.ID)
-			continue
-		}
-		if _, known := taskcontract.ObligationRole(o.Kind); !known {
-			note(FeasibilityUnsupportedObligation, o.ID)
-			continue
-		}
-		if o.Kind == taskcontract.ObligationBaselinePreserved {
-			// Preservation has no producer of its own and never will: it is
-			// derived from whatever else spoke for the candidate. So it is
-			// reachable exactly when something this build CAN produce reaches
-			// the strength the existing artifact already has.
-			//
-			// This asks whether closure is possible, not whether it will
-			// happen. Whether the behavioural evidence turns out to name the
-			// command that established the baseline is a fact about the run,
-			// and the authorization decision is where that is settled.
-			if !baselineFloorReachable(o.RequiredStrength, in.Producible) {
-				note(FeasibilityBaselineFloorUnreachable, o.ID)
-			}
-			continue
-		}
-		available, ok := in.Producible[o.Kind]
-		if !ok {
-			// A kind no adapter owns an evaluator for is a different failure
-			// from one whose evaluator exists but has no trusted source.
-			if !anyAdapterMeasures(o.Kind) {
-				note(FeasibilityAdapterCannotMeasure, o.ID)
-				continue
-			}
-			note(FeasibilityNoTrustedSource, o.ID)
-			continue
-		}
-		if wire.StrengthRank(available) < wire.StrengthRank(o.RequiredStrength) {
-			note(FeasibilityNoTrustedSource, o.ID)
+		if r, unreachable := unreachableReason(o, in.Producible); unreachable {
+			note(r, o.ID)
 		}
 	}
 
@@ -211,6 +177,45 @@ func decideInvocationFeasibility(in feasibilityInput) FeasibilityDecision {
 		d.Reason = FeasibilityNoTrustedSource
 	}
 	return d
+}
+
+// unreachableReason is why a required obligation has no closure path in this
+// build, and false when it has one.
+func unreachableReason(o taskcontract.TaskObligation, producible map[string]string) (FeasibilityReason, bool) {
+	if taskcontract.Unsatisfiable(o.Kind) {
+		return FeasibilityUnsupportedObligation, true
+	}
+	if _, known := taskcontract.ObligationRole(o.Kind); !known {
+		return FeasibilityUnsupportedObligation, true
+	}
+	if o.Kind == taskcontract.ObligationBaselinePreserved {
+		// Preservation has no producer of its own and never will: it is
+		// derived from whatever else spoke for the candidate. So it is
+		// reachable exactly when something this build CAN produce reaches
+		// the strength the existing artifact already has.
+		//
+		// This asks whether closure is possible, not whether it will
+		// happen. Whether the behavioural evidence turns out to name the
+		// command that established the baseline is a fact about the run,
+		// and the authorization decision is where that is settled.
+		if !baselineFloorReachable(o.RequiredStrength, producible) {
+			return FeasibilityBaselineFloorUnreachable, true
+		}
+		return "", false
+	}
+	available, ok := producible[o.Kind]
+	if !ok {
+		// A kind no adapter owns an evaluator for is a different failure
+		// from one whose evaluator exists but has no trusted source.
+		if !anyAdapterMeasures(o.Kind) {
+			return FeasibilityAdapterCannotMeasure, true
+		}
+		return FeasibilityNoTrustedSource, true
+	}
+	if wire.StrengthRank(available) < wire.StrengthRank(o.RequiredStrength) {
+		return FeasibilityNoTrustedSource, true
+	}
+	return "", false
 }
 
 // anyAdapterMeasures reports whether ANY verifier on either side owns an

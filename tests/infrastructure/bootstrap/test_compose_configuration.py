@@ -118,7 +118,7 @@ def test_the_lens_and_v3_have_a_home_that_their_user_can_write(service):
 
 
 @pytest.mark.parametrize("service, dockerfile, folder", [
-    ("v3-service", "v3-service/Dockerfile", "/data/telemetry"),
+    ("v3-service", "services/v3-service/Dockerfile", "/data/telemetry"),
 ])
 def test_a_folder_that_a_service_writes_on_a_named_volume_is_writable_for_any_user(service, dockerfile, folder):
     # A new named volume takes the owner and mode of the image's folder, and

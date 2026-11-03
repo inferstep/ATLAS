@@ -506,10 +506,10 @@ use.
 
 | Layer | Owns | Must not |
 | --- | --- | --- |
-| `v3-service/contract.py` | The domain: vocabulary, coverage arithmetic, comparability, ranking, closure policy, and the wire envelope that renders them | — |
-| `v3-service/pipeline.py` | Orchestration: runs verifiers, supplies the selected record | Decide wire shape |
-| `v3-service/adapters.py` | Adapter knowledge: which criteria an adapter can observe, what its grading means in contract terms, and the live-record → contract-record bridge | Decide closure, ranking or selection |
-| `v3-service/main.py` | Transport: calls `adapters.evidence_envelope`, writes its output | Hold any policy — pinned by `test_main_serialises_but_decides_nothing` |
+| `services/v3-service/contract.py` | The domain: vocabulary, coverage arithmetic, comparability, ranking, closure policy, and the wire envelope that renders them | — |
+| `services/v3-service/pipeline.py` | Orchestration: runs verifiers, supplies the selected record | Decide wire shape |
+| `services/v3-service/adapters.py` | Adapter knowledge: which criteria an adapter can observe, what its grading means in contract terms, and the live-record → contract-record bridge | Decide closure, ranking or selection |
+| `services/v3-service/main.py` | Transport: calls `adapters.evidence_envelope`, writes its output | Hold any policy — pinned by `test_main_serialises_but_decides_nothing` |
 | `services/proxy/internal/wire/v3.go` | The one Go wire representation, beside `V3GenerateResponse` | — |
 | `services/proxy/internal/v3client/client.go` | The response boundary: decode | Re-derive domain policy |
 | `services/proxy/candidate_contract_gate.go` | Strict validation and availability: `EvidenceSupportsProvenanceFor` and `v3DeliveryAuthorized` | Re-derive domain policy, or infer strength from `passed`/`phase_solved`/`winning_score`/`verification_evidence` |
@@ -593,7 +593,7 @@ provenance.
 
 ### Golden fixtures
 
-`v3-service/testdata/evidence_wire_cases.json` is one document holding all 13
+`services/v3-service/testdata/evidence_wire_cases.json` is one document holding all 13
 cases: id, description, the exact response body written by the real serialiser,
 and what both sides must conclude (availability, strength, selection status,
 whether the evidence describes the delivered bytes, and the reason an
@@ -983,7 +983,7 @@ from what is available then.
 | `services/proxy/candidate_authorization.go` | `decideAuthorization`, baseline-preservation derivation |
 | `services/proxy/delivery_settlement.go` | post-delivery existence settlement |
 | `services/proxy/candidate_feasibility.go` | `decideInvocationFeasibility` (observe-only) |
-| `sandbox/executor_server.py` | `/shell` observation — facts, no conclusions |
+| `services/sandbox/executor_server.py` | `/shell` observation — facts, no conclusions |
 
 ## Telemetry
 

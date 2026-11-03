@@ -412,10 +412,11 @@ func TestEveryProductionConsumerOfProvenanceIsEnumerated(t *testing.T) {
 		// a record reaches private telemetry.
 		"evidence_wiring.go:observeDeliveredCandidateSyntax": true,
 		"evidence_wiring.go:observeCandidateVerification":    true,
-		// The grant check re-checks declared-command coverage rather than
-		// taking the decision's word for it. It reads the answer and builds a
-		// grant or refuses; it reaches no delivery, which the guards below pin.
-		"candidate_grant.go:grantFor": true,
+		// The grant check's evidence step re-checks declared-command coverage
+		// rather than taking the decision's word for it. It reads the answer and
+		// lets grantFor build a grant or refuse; it reaches no delivery, which
+		// the guards below pin.
+		"candidate_grant.go:grantEvidenceHolds": true,
 		// THE live authorization owner, and THE consumer of the grant it
 		// mints. Exactly one of each, pinned by name below.
 		"delivery.go:authorizeCandidateDelivery": true,
@@ -450,6 +451,20 @@ func TestEveryProductionConsumerOfProvenanceIsEnumerated(t *testing.T) {
 			t.Errorf("%s calls %s: every production consumer of provenance must "+
 				"be enumerated here, and this one is not", site, fn)
 		}
+	}
+}
+
+// TestOnlyGrantForAsksTheGrantEvidence pins the one caller of the grant
+// check's evidence step. The allow-list above names grantEvidenceHolds as a
+// reader of provenance; with grantFor its only caller, the set of code that
+// reads provenance is the one it was before the step moved out of grantFor.
+func TestOnlyGrantForAsksTheGrantEvidence(t *testing.T) {
+	sites := callSites(proxyFiles(t), "grantEvidenceHolds")
+	if len(sites) != 1 {
+		t.Fatalf("grantEvidenceHolds is called from %d functions %v, want exactly one", len(sites), sites)
+	}
+	if sites["candidate_grant.go:grantFor"] != 1 {
+		t.Errorf("grantEvidenceHolds is called from %v, want once from candidate_grant.go:grantFor", sites)
 	}
 }
 

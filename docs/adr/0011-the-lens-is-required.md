@@ -36,7 +36,7 @@ path with a `layer`; elsewhere it is typed `internal`, and the run stops
 transport error, a non-200 answer, an unreadable body, and
 `enabled: false` mean the lens is down (`lensDownKinds` in
 `services/proxy/lens_required.go`, `scoreContentForAgent` in `services/proxy/lens.go`,
-`LENS_DOWN_KINDS` in `v3-service/scoring.py`).
+`LENS_DOWN_KINDS` in `services/v3-service/scoring.py`).
 
 **No off switch.** The lens ignores `GEOMETRIC_LENS_ENABLED`
 (`test_the_lens_has_no_off_switch` in
@@ -61,10 +61,10 @@ the reason and says whether earlier changes are on disk (`stopLensDown`
 and `lensUnavailableSummary` in `services/proxy/lens_required.go`).
 
 **Inside V3.** Scoring raises `LensUnavailable`
-(`v3-service/scoring.py`). The pipeline stages re-raise it; they do not
-log it as a stage failure (`v3-service/pipeline.py`). The service sends
+(`services/v3-service/scoring.py`). The pipeline stages re-raise it; they do not
+log it as a stage failure (`services/v3-service/pipeline.py`). The service sends
 a result with `lens_unavailable` and no code (`_handle_generate` in
-`v3-service/main.py`). The proxy's V3 client turns that into a typed error
+`services/v3-service/main.py`). The proxy's V3 client turns that into a typed error
 (`LensUnavailableError`, returned by `GenerateStreaming` in
 `services/proxy/internal/v3client/client.go`), and the write and
 edit routes do not apply the model's bytes as a fallback

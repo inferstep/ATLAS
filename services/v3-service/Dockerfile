@@ -20,35 +20,35 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf 
 # the tree-sitter layer during local image rebuilds. This service parses and
 # orchestrates; it never scores — all tensor work lives in geometric-lens,
 # so no torch here (it shipped ~900 MB of it unimported until 2026-08-01).
-COPY v3-service/requirements-lock.txt /tmp/v3-requirements.txt
+COPY services/v3-service/requirements-lock.txt /tmp/v3-requirements.txt
 RUN pip install --no-cache-dir --require-hashes --only-binary=:all: -r /tmp/v3-requirements.txt
 
 # V3 pipeline stages (candidate generation, selection, repair)
-COPY v3-service/stages/ /app/stages/
-COPY v3-service/main.py /app/main.py
-COPY v3-service/adapters.py /app/adapters.py
-COPY v3-service/scoring.py /app/scoring.py
-COPY v3-service/symbols.py /app/symbols.py
-COPY v3-service/grammars.py /app/grammars.py
-COPY v3-service/edit_checks.py /app/edit_checks.py
-COPY v3-service/embedded_script.py /app/embedded_script.py
-COPY v3-service/node_splice.py /app/node_splice.py
-COPY v3-service/planning.py /app/planning.py
-COPY v3-service/pipeline.py /app/pipeline.py
-COPY v3-service/stage_telemetry.py /app/stage_telemetry.py
-COPY v3-service/candidate_records.py /app/candidate_records.py
-COPY v3-service/vetoes.py /app/vetoes.py
-COPY v3-service/runtime_verification.py /app/runtime_verification.py
+COPY services/v3-service/stages/ /app/stages/
+COPY services/v3-service/main.py /app/main.py
+COPY services/v3-service/adapters.py /app/adapters.py
+COPY services/v3-service/scoring.py /app/scoring.py
+COPY services/v3-service/symbols.py /app/symbols.py
+COPY services/v3-service/grammars.py /app/grammars.py
+COPY services/v3-service/edit_checks.py /app/edit_checks.py
+COPY services/v3-service/embedded_script.py /app/embedded_script.py
+COPY services/v3-service/node_splice.py /app/node_splice.py
+COPY services/v3-service/planning.py /app/planning.py
+COPY services/v3-service/pipeline.py /app/pipeline.py
+COPY services/v3-service/stage_telemetry.py /app/stage_telemetry.py
+COPY services/v3-service/candidate_records.py /app/candidate_records.py
+COPY services/v3-service/vetoes.py /app/vetoes.py
+COPY services/v3-service/runtime_verification.py /app/runtime_verification.py
 # contract.py was added and the image kept building without it: this COPY
 # list enumerates modules, so a new one is silently excluded and the service
 # dies at import with the whole suite green. A DELETED one breaks the build
 # instead, which is how evidence.py's retirement surfaced here.
-COPY v3-service/contract.py /app/contract.py
-COPY v3-service/private_values.py /app/private_values.py
-COPY v3-service/structured_log.py /app/structured_log.py
+COPY services/v3-service/contract.py /app/contract.py
+COPY services/v3-service/private_values.py /app/private_values.py
+COPY services/v3-service/structured_log.py /app/structured_log.py
 # Structural call-graph reasoning (issue #39): tree-sitter-backed call graph.
 # Pure stdlib + the tree-sitter grammars installed above; no extra deps.
-COPY v3-service/graph/ /app/graph/
+COPY services/v3-service/graph/ /app/graph/
 
 # Prove the image can import what it ships. A missing module is a build
 # failure here rather than a service that starts, fails at import and is

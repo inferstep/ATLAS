@@ -408,7 +408,7 @@ TASKS["ask_bug"] = Task(
 # one look, and where the failure that matters is not "did it work" but "did
 # it break the twelve things that already worked".
 
-_EXECUTOR = REPO / "sandbox" / "executor_server.py"
+_EXECUTOR = REPO / "services" / "sandbox" / "executor_server.py"
 _EXISTING_LANGS = ("python", "javascript", "typescript", "go", "java",
                    "kotlin", "rust", "ruby", "php", "bash", "json", "yaml")
 
@@ -604,7 +604,7 @@ _BUGFIND_SRCS = ("planning.py", "scoring.py", "adapters.py")
 def _bugfind_files() -> dict:
     out = {}
     for name in _BUGFIND_SRCS:
-        text = (REPO / "v3-service" / name).read_text()
+        text = (REPO / "services" / "v3-service" / name).read_text()
         if name == "planning.py":
             # The tie-break: highest score wins, ties go to the SHORTER plan.
             # Flipped so ties go to the longer one — one character, and the

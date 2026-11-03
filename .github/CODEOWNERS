@@ -9,7 +9,7 @@
 # Security- and release-critical (require review even with more owners)
 /.github/workflows/     @itigges22
 /.github/SECURITY.md    @itigges22
-/sandbox/               @itigges22
+/services/sandbox/      @itigges22
 /scripts/               @itigges22
 /atlas/commands/model_registry.py  @itigges22
 /docs/project/RELEASE.md        @itigges22
@@ -19,7 +19,7 @@
 /services/proxy/                 @itigges22
 /clients/tui/           @itigges22
 /atlas/                 @itigges22
-/v3-service/            @itigges22
+/services/v3-service/   @itigges22
 /geometric-lens/        @itigges22
 /services/inference/    @itigges22
 /benchmark/             @itigges22

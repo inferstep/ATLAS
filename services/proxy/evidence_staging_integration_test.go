@@ -16,7 +16,7 @@ import (
 //
 // Everything else about staging is pinned against a stub: faithful, fast, and
 // unable to tell us whether the actual executor honours the contract. This
-// runs the same `stageCandidate` against a live `sandbox/executor_server.py`,
+// runs the same `stageCandidate` against a live `services/sandbox/executor_server.py`,
 // which is the only way to learn that its snapshot really is isolated, its
 // `finally` really does delete, and its observation really does describe the
 // tree either side.

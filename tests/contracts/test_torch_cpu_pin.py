@@ -88,15 +88,15 @@ def test_v3_service_ships_no_torch():
     llama-server. If a stage ever genuinely needs torch, call the lens
     rather than re-adding a second copy of it here.
     """
-    for path in (REPO / "v3-service" / "requirements.txt",
-                 REPO / "v3-service" / "Dockerfile"):
+    for path in (REPO / "services" / "v3-service" / "requirements.txt",
+                 REPO / "services" / "v3-service" / "Dockerfile"):
         assert not re.search(r"(?m)^\s*torch[=<>~ ]|pip install[^&\n]*torch",
                              path.read_text()), (
             f"{path.name} reintroduces torch into v3-service. No module "
-            f"under v3-service/ imports it; route tensor work to the lens.")
+            f"under services/v3-service/ imports it; route tensor work to the lens.")
 
     src = " ".join(
-        p.read_text() for p in (REPO / "v3-service").rglob("*.py")
+        p.read_text() for p in (REPO / "services" / "v3-service").rglob("*.py")
         if "__pycache__" not in str(p))
     assert not re.search(r"(?m)^\s*(import torch|from torch\b)", src), (
         "a v3-service module imports torch — either route the work to "

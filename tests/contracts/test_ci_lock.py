@@ -71,9 +71,9 @@ def _workflow_lines():
 
 # The pins of ci.in that are copies, and the product file each one is a copy of.
 COPIED = (
-    ("sandbox/requirements-runtime.txt", None),   # every pin of the file
-    ("sandbox/requirements-verify.txt", ("jinja2", "ruff", "mypy")),
-    ("v3-service/requirements.txt", None),
+    ("services/sandbox/requirements-runtime.txt", None),   # every pin of the file
+    ("services/sandbox/requirements-verify.txt", ("jinja2", "ruff", "mypy")),
+    ("services/v3-service/requirements.txt", None),
     ("geometric-lens/requirements.txt", ("httpx",)),
 )
 

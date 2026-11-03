@@ -27,8 +27,8 @@ PYTHON_TARGETS = (
     "atlas",
     "tests",
     "geometric-lens",
-    "v3-service",
-    "sandbox",
+    "services/v3-service",
+    "services/sandbox",
 )
 # Mirrors the CI python-tests matrix (.github/workflows/test.yml) plus the
 # e2e-acceptance suite, so the documented local gate runs what CI gates on.
@@ -39,7 +39,7 @@ PYTEST_PATHS = ("tests/v3-service", "tests/atlas",
                 "tests/infrastructure", "tests/concurrency", "tests/perf",
                 "tests/contracts", "tests/e2e")
 # geometric-lens/tests runs as its own gate (python-tests-lens), matching
-# its dedicated CI matrix leg: geometric-lens/ and v3-service/ both define
+# its dedicated CI matrix leg: geometric-lens/ and services/v3-service/ both define
 # top-level modules named `pipeline`/`main`, so the two trees cannot share
 # one pytest process.
 LENS_PYTEST_PATH = "geometric-lens/tests"
@@ -278,7 +278,7 @@ def _python_test_gates(python: str, pytest_paths: Sequence[str], go_env: dict[st
                                and _module_available("uvicorn")
                                and _module_available("fastapi")),
             unavailable_reason="Go, uvicorn or fastapi is not installed "
-                               "(pip install -r sandbox/requirements.txt)",
+                               "(pip install -r services/sandbox/requirements-runtime.txt)",
             env=go_env,
         ),
     }

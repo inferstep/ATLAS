@@ -31,7 +31,7 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "v3-service"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "services" / "v3-service"))
 
 import adapters as A
 import contract as C
@@ -169,7 +169,7 @@ def test_repair_candidates_carry_a_contract_record():
     """The sealed run captured three repair candidates with `record=None`:
     adapter None, an empty record, and no way to say what was measured."""
     import ast
-    src = (Path(__file__).resolve().parents[3] / "v3-service" / "pipeline.py").read_text()
+    src = (Path(__file__).resolve().parents[3] / "services" / "v3-service" / "pipeline.py").read_text()
     tree = ast.parse(src)
     offenders = []
     for node in ast.walk(tree):
@@ -191,7 +191,7 @@ def test_repair_candidates_carry_a_contract_record():
 def test_late_generated_candidates_carry_lens_evidence_into_capture():
     """Repair/refinement candidates must not bypass diagnostic Lens capture."""
     import ast
-    src = (Path(__file__).resolve().parents[3] / "v3-service" / "pipeline.py").read_text()
+    src = (Path(__file__).resolve().parents[3] / "services" / "v3-service" / "pipeline.py").read_text()
     tree = ast.parse(src)
     missing = []
     for node in ast.walk(tree):

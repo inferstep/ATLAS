@@ -85,6 +85,26 @@ func (a deliveryAuthorization) holds(b grantBasis) bool {
 	return a.Typed && a.Basis == b && (a.Grant != nil || a.WouldAuthorize)
 }
 
+// candidateAuthorizationRequest is what the authorization owner is asked about
+// one candidate: the route it arrived on, its target and bytes, the evidence
+// that speaks for it, and why any of that came up short.
+type candidateAuthorizationRequest struct {
+	Entry    routeEntry
+	Path     string
+	Code     string
+	Identity candidateEvidenceIdentity
+	Envelope *wire.V3EvidenceEnvelope
+	// Evidence is the pool the selected candidate's evidence is drawn from.
+	Evidence            []proxyEvidence
+	SelectedCandidateID string
+	// Unmet says why an obligation went unsatisfied, as the caller knows it.
+	Unmet map[string]AuthorizationReason
+	// Observed is the syntax outcome observed for these bytes.
+	Observed  checkOutcome
+	Scope     mutationScope
+	Automatic automaticIntent
+}
+
 // authorizeCandidateDelivery is THE live authorization owner for a candidate.
 //
 // It runs at the final-byte observation, where the bytes are fixed and both
@@ -96,32 +116,28 @@ func (a deliveryAuthorization) holds(b grantBasis) bool {
 // refused, another timed out. Reporting all of that as "evidence missing" says
 // the candidate had nothing to show for itself, when in truth nothing was
 // checked -- and that is the wrong thing to go and fix.
-func authorizeCandidateDelivery(ctx *AgentContext, entry routeEntry, path, code string,
-	id candidateEvidenceIdentity, envelope *wire.V3EvidenceEnvelope,
-	evidence []proxyEvidence, selectedCandidateID string,
-	unmet map[string]AuthorizationReason, observed checkOutcome,
-	scope mutationScope, automatic automaticIntent) deliveryAuthorization {
-	resolved := resolveAgentPath(ctx, path)
-	hash := contentSHA256(code)
+func authorizeCandidateDelivery(ctx *AgentContext, req candidateAuthorizationRequest) deliveryAuthorization {
+	resolved := resolveAgentPath(ctx, req.Path)
+	hash := contentSHA256(req.Code)
 
-	asked := liveEvidenceIdentity(ctx, id, hash, resolved)
+	asked := liveEvidenceIdentity(ctx, req.Identity, hash, resolved)
 	_, witness := baselineWitness(ctx, resolved)
-	declared, structured, obligations, targetGrounded := deliveryOwnership(ctx, scope, resolved)
-	unmet = classifyStructuralUnmet(ctx, resolved, observed, unmet)
+	declared, structured, obligations, targetGrounded := deliveryOwnership(ctx, req.Scope, resolved)
+	unmet := classifyStructuralUnmet(ctx, resolved, req.Observed, req.Unmet)
 	in := authorizationInput{
 		Obligations:              obligations,
 		TargetPath:               resolved,
 		CandidateHash:            hash,
 		Identity:                 asked,
-		Evidence:                 evidence,
-		Envelope:                 envelope,
+		Evidence:                 req.Evidence,
+		Envelope:                 req.Envelope,
 		BaselineWitnessCommand:   witness,
 		Unmet:                    unmet,
 		OutputKnowledgeDeclared:  declared,
 		StructuredTargetGrounded: structured,
-		RouteEntry:               entry,
-		Scope:                    scope,
-		CandidateBytes:           code,
+		RouteEntry:               req.Entry,
+		Scope:                    req.Scope,
+		CandidateBytes:           req.Code,
 	}
 	d := decideAuthorization(ctx, in)
 	recordAuthorizationDecision(ctx, in, d)
@@ -130,7 +146,7 @@ func authorizeCandidateDelivery(ctx *AgentContext, entry routeEntry, path, code 
 	// (weaker than the baseline, stale identity, missing evidence) and a
 	// syntax check that never ran could not fire, and an automatic delivery
 	// landed on a declared output whose check never ran.
-	vetoIn := automatic.VetoInput
+	vetoIn := req.Automatic.VetoInput
 	vetoIn.Unmet, vetoIn.Decision = unmet, d
 	vetoes := advisoryVetoes(vetoIn)
 	// A work request whose tool call named no usable target, or, only under a
@@ -141,7 +157,7 @@ func authorizeCandidateDelivery(ctx *AgentContext, entry routeEntry, path, code 
 		return deliveryAuthorization{Typed: false, Decision: d, Vetoes: vetoes, Unmet: unmet}
 	}
 
-	met, _ := declaredVerificationCoverage(in.Obligations, evidence)
+	met, _ := declaredVerificationCoverage(in.Obligations, req.Evidence)
 	auth := deliveryAuthorization{
 		Typed: true, Decision: d, MetCommands: met,
 		BaselinePreserved: baselineObligationsSatisfied(in.Obligations, d),
@@ -154,13 +170,13 @@ func authorizeCandidateDelivery(ctx *AgentContext, entry routeEntry, path, code 
 	auth.AutomaticEligible, auth.AutomaticRefusal = automaticDeliveryAllowed(
 		automaticEligibilityInput{
 			Vetoes:              vetoes,
-			SelectedCandidateID: selectedCandidateID,
+			SelectedCandidateID: req.SelectedCandidateID,
 			CandidateHash:       hash,
 			Identity:            asked,
-			Scope:               scope,
+			Scope:               req.Scope,
 			TargetGrounded:      targetGrounded,
 		})
-	basis, holds := grantBasisThatHolds(ctx, &auth, in, d, selectedCandidateID)
+	basis, holds := grantBasisThatHolds(ctx, &auth, in, d, req.SelectedCandidateID)
 	if !holds {
 		return auth
 	}
@@ -172,10 +188,10 @@ func authorizeCandidateDelivery(ctx *AgentContext, entry routeEntry, path, code 
 	if candidateCaptureOnly() {
 		auth.CaptureOnly, auth.WouldAuthorize = true, true
 		auth.Refusal = CaptureSuppressedDelivery
-		recordCaptureOnlySuppression(ctx, entry, hash, d)
+		recordCaptureOnlySuppression(ctx, req.Entry, hash, d)
 		return auth
 	}
-	g, ok, why := mintAuthorizationGrant(ctx, in, d, selectedCandidateID, basis)
+	g, ok, why := mintAuthorizationGrant(ctx, in, d, req.SelectedCandidateID, basis)
 	if !ok {
 		auth.Refusal = why
 		return auth

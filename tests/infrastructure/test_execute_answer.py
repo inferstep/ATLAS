@@ -21,7 +21,7 @@ import pytest
 from tests.infrastructure.bounded_commands import OWN_LIMIT, REACHED_OWN_LIMIT, allocator, flood
 from tests.infrastructure.proc_files import needs_proc
 
-SANDBOX = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "sandbox")
+SANDBOX = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "services", "sandbox")
 sys.path.insert(0, SANDBOX)
 
 import executor_server as ex

@@ -666,7 +666,7 @@ For K3s deployment only. Copy `atlas.conf.example` to `atlas.conf` and edit. The
 
 ### 8.7 V3 ablation knobs (benchmark-only)
 
-Consumed by `atlas/bench/v3_runner.py:_load_v3_config` for ablation studies. The production `v3-service` reads its own constants from the `v3-service/stages/*.py` config dataclasses and does NOT pick these up at runtime.
+Consumed by `atlas/bench/v3_runner.py:_load_v3_config` for ablation studies. The production `v3-service` reads its own constants from the `services/v3-service/stages/*.py` config dataclasses and does NOT pick these up at runtime.
 
 | Variable | Default | Description |
 |----------|---------|-------------|

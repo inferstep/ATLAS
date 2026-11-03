@@ -7,7 +7,7 @@ must pass against every implementation:
     assert the file exists and pins the same placeholder so drift is
     caught even in Python-only runs)
   - Python x4: geometric-lens/geometric_lens/private_values.py and its
-    byte-identical copies in sandbox/, v3-service/, and the CLI
+    byte-identical copies in services/sandbox/, services/v3-service/, and the CLI
     (atlas/redact.py) — four separate containers and one pip package,
     no shared module, so byte identity IS the parity mechanism
 

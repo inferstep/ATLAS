@@ -113,13 +113,13 @@ jobs:
             dockerfile: ./services/proxy/Dockerfile
           - name: v3
             context: .
-            dockerfile: ./v3-service/Dockerfile
+            dockerfile: ./services/v3-service/Dockerfile
           - name: lens
             context: ./geometric-lens
             dockerfile: ./geometric-lens/Dockerfile
           - name: sandbox
-            context: ./sandbox
-            dockerfile: ./sandbox/Dockerfile
+            context: ./services/sandbox
+            dockerfile: ./services/sandbox/Dockerfile
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -252,15 +252,15 @@ jobs:
             context: ./services/proxy
             dockerfile: ./services/proxy/Dockerfile
           - name: v3
-            # Root context: v3-service/Dockerfile reads sibling dirs at build time.
+            # Root context: services/v3-service/Dockerfile reads sibling dirs at build time.
             context: .
-            dockerfile: ./v3-service/Dockerfile
+            dockerfile: ./services/v3-service/Dockerfile
           - name: lens
             context: ./geometric-lens
             dockerfile: ./geometric-lens/Dockerfile
           - name: sandbox
-            context: ./sandbox
-            dockerfile: ./sandbox/Dockerfile
+            context: ./services/sandbox
+            dockerfile: ./services/sandbox/Dockerfile
           - name: llama
             context: ./services/inference
             dockerfile: ./services/inference/Dockerfile.v31

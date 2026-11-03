@@ -23,17 +23,17 @@ REPO = Path(__file__).resolve().parents[3]
 # Production Python requirements — every entry must be == pinned.
 REQUIREMENTS_FILES = [
     "geometric-lens/requirements.txt",
-    "sandbox/requirements-runtime.txt",
-    "sandbox/requirements-verify.txt",
-    "v3-service/requirements.txt",
+    "services/sandbox/requirements-runtime.txt",
+    "services/sandbox/requirements-verify.txt",
+    "services/v3-service/requirements.txt",
 ]
 
 # Production Dockerfiles scanned for inline `pip install <pkg>`.
 DOCKERFILES = [
     "services/proxy/Dockerfile",
-    "v3-service/Dockerfile",
+    "services/v3-service/Dockerfile",
     "geometric-lens/Dockerfile",
-    "sandbox/Dockerfile",
+    "services/sandbox/Dockerfile",
 ]
 
 def _requirement_lines(path: Path):
@@ -169,7 +169,7 @@ def test_v3_judges_python_with_the_interpreter_the_sandbox_runs():
                 return line.split()[1]
         raise AssertionError(f"{rel} has no python base image")
 
-    assert base("v3-service/Dockerfile") == base("sandbox/Dockerfile")
+    assert base("services/v3-service/Dockerfile") == base("services/sandbox/Dockerfile")
 
 
 # The ROCm and Vulkan images take their base tag from a build argument that a user may

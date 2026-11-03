@@ -18,7 +18,7 @@ candidate on it.
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "v3-service"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "services" / "v3-service"))
 
 import pipeline
 import stage_telemetry
@@ -44,7 +44,7 @@ import sys as _sys
 from pathlib import Path as _Path
 from types import SimpleNamespace as _NS
 
-_sys.path.insert(0, str(_Path(__file__).resolve().parents[3] / "v3-service"))
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[3] / "services" / "v3-service"))
 
 from stages import self_test_gen as _stg
 

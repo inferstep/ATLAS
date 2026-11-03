@@ -49,6 +49,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/itigges22/atlas-proxy/internal/shellcmd"
 	"github.com/itigges22/atlas-proxy/internal/taskcontract"
@@ -158,30 +159,44 @@ func commandNamesPath(command, path string) bool {
 		class = strings.TrimSuffix(base, ".java")
 	}
 	for _, segment := range splitShellSegments(command) {
-		fields := strings.Fields(segment)
-		javaRun := false
-		for i, tok := range fields {
-			tok = strings.Trim(tok, "\"'()`{};")
-			if tok == "" {
-				continue
-			}
-			if tok == path || tok == base || strings.HasSuffix(tok, "/"+base) {
-				return true
-			}
-			if strings.ContainsAny(tok, "*?[") && globNamesPath(tok, path) {
-				return true
-			}
-			if i == 0 || (!javaRun && filepath.Base(tok) == "java") {
-				javaRun = filepath.Base(tok) == "java"
-				continue
-			}
-			if javaRun && class != "" && !strings.HasPrefix(tok, "-") &&
-				(tok == class || strings.HasSuffix(tok, "."+class)) {
-				return true
-			}
+		if segmentNamesPath(segment, path, base, class) {
+			return true
 		}
 	}
 	return false
+}
+
+// segmentNamesPath reports whether one shell segment names the file: as a
+// token, through a glob, or, after `java`, by its class.
+func segmentNamesPath(segment, path, base, class string) bool {
+	javaRun := false
+	for i, tok := range strings.Fields(segment) {
+		tok = strings.Trim(tok, "\"'()`{};")
+		if tok == "" {
+			continue
+		}
+		if tokenNamesFile(tok, path, base) {
+			return true
+		}
+		if i == 0 || (!javaRun && filepath.Base(tok) == "java") {
+			javaRun = filepath.Base(tok) == "java"
+			continue
+		}
+		if javaRun && class != "" && !strings.HasPrefix(tok, "-") &&
+			(tok == class || strings.HasSuffix(tok, "."+class)) {
+			return true
+		}
+	}
+	return false
+}
+
+// tokenNamesFile reports whether one command-line token names the file: the
+// path, its basename, */basename, or a glob that would expand to it.
+func tokenNamesFile(tok, path, base string) bool {
+	if tok == path || tok == base || strings.HasSuffix(tok, "/"+base) {
+		return true
+	}
+	return strings.ContainsAny(tok, "*?[") && globNamesPath(tok, path)
 }
 
 // globNamesPath reports whether a shell glob from a command line would expand
@@ -230,20 +245,26 @@ func coverageFromLiveServer(ctx *AgentContext, command string) map[string]string
 		if !ok {
 			continue
 		}
-		for _, p := range changedPathsForCoverage(ctx) {
-			if _, already := covered[p]; already || !commandNamesPath(jobCmd, p) {
-				continue
-			}
-			info, err := os.Stat(p)
-			if err != nil || info.ModTime().After(started) {
-				continue // the file changed after this process started
-			}
-			if h := fileSHA256(ctx, p); h != "" {
-				covered[p] = h
-			}
-		}
+		creditJobFiles(ctx, covered, jobCmd, started)
 	}
 	return covered
+}
+
+// creditJobFiles credits a probe with each changed file that a running job
+// names and has not seen change since it started: those bytes are answering.
+func creditJobFiles(ctx *AgentContext, covered map[string]string, jobCmd string, started time.Time) {
+	for _, p := range changedPathsForCoverage(ctx) {
+		if _, already := covered[p]; already || !commandNamesPath(jobCmd, p) {
+			continue
+		}
+		info, err := os.Stat(p)
+		if err != nil || info.ModTime().After(started) {
+			continue // the file changed after this process started
+		}
+		if h := fileSHA256(ctx, p); h != "" {
+			covered[p] = h
+		}
+	}
 }
 
 // isHTTPProbe matches a request made against a local service — the shape the
@@ -316,19 +337,33 @@ func coverageForGreenCommand(ctx *AgentContext, command string) map[string]strin
 	// a bare `pytest` could never meet its contract: nothing named the module
 	// or its tests.
 	if ctx != nil {
-		for _, p := range shellcmd.RunnerEntries(command, ctx.WorkingDir, candidates) {
-			if _, already := covered[p]; already {
-				continue
-			}
-			if h := fileSHA256(ctx, p); h != "" {
-				covered[p] = h
-				entries = append(entries, p)
-			}
+		entries = append(entries, coverRunnerEntries(ctx, command, candidates, covered)...)
+	}
+	coverReferencedFiles(ctx, candidates, covered, entries)
+	return covered
+}
+
+// coverRunnerEntries covers the candidate files a test runner finds on its
+// own, and returns the ones it newly covered.
+func coverRunnerEntries(ctx *AgentContext, command string, candidates []string, covered map[string]string) []string {
+	var added []string
+	for _, p := range shellcmd.RunnerEntries(command, ctx.WorkingDir, candidates) {
+		if _, already := covered[p]; already {
+			continue
+		}
+		if h := fileSHA256(ctx, p); h != "" {
+			covered[p] = h
+			added = append(added, p)
 		}
 	}
-	// Breadth-first, bounded by the candidate set: each file is admitted at
-	// most once, so an import cycle terminates and nothing outside the set of
-	// files this session already tracks can be pulled in.
+	return added
+}
+
+// coverReferencedFiles follows the entry points into the candidate files their
+// source references. Breadth-first, bounded by the candidate set: each file is
+// admitted at most once, so an import cycle terminates and nothing outside the
+// set of files this session already tracks can be pulled in.
+func coverReferencedFiles(ctx *AgentContext, candidates []string, covered map[string]string, entries []string) {
 	for i := 0; i < len(entries); i++ {
 		src, err := os.ReadFile(entries[i])
 		if err != nil {
@@ -347,7 +382,6 @@ func coverageForGreenCommand(ctx *AgentContext, command string) map[string]strin
 			}
 		}
 	}
-	return covered
 }
 
 // sourceReferencesPath reports whether running src would load q: it names the
@@ -697,33 +731,7 @@ func unshownSymbolCitations(ctx *AgentContext, text string) []unshownSymbol {
 			continue
 		}
 		seen[name] = true
-		var gap *unshownSymbol
-		shown := false
-		for _, p := range paths {
-			src, ok := sources[p]
-			if !ok {
-				data, err := os.ReadFile(p)
-				if err != nil {
-					continue
-				}
-				src = string(data)
-				sources[p] = src
-			}
-			for _, line := range definitionLines(src, name) {
-				if ctx.LineWasShown(p, line) {
-					shown = true
-					break
-				}
-				if gap == nil {
-					gap = &unshownSymbol{Name: name, File: workspaceName(ctx, p), Line: line,
-						Spans: ctx.ShownSpans(p)}
-				}
-			}
-			if shown {
-				break
-			}
-		}
-		if gap != nil && !shown {
+		if gap := unshownDefinition(ctx, paths, sources, name); gap != nil {
 			out = append(out, *gap)
 			if len(out) == maxCitedPaths {
 				break
@@ -731,6 +739,43 @@ func unshownSymbolCitations(ctx *AgentContext, text string) []unshownSymbol {
 		}
 	}
 	return out
+}
+
+// unshownDefinition is the first place name is defined at a line no read
+// showed, or nil when a read showed one of its definitions anywhere, or when
+// none of the files defines it.
+func unshownDefinition(ctx *AgentContext, paths []string, sources map[string]string, name string) *unshownSymbol {
+	var gap *unshownSymbol
+	for _, p := range paths {
+		src, ok := cachedSource(sources, p)
+		if !ok {
+			continue
+		}
+		for _, line := range definitionLines(src, name) {
+			if ctx.LineWasShown(p, line) {
+				return nil
+			}
+			if gap == nil {
+				gap = &unshownSymbol{Name: name, File: workspaceName(ctx, p), Line: line,
+					Spans: ctx.ShownSpans(p)}
+			}
+		}
+	}
+	return gap
+}
+
+// cachedSource is the text of file p, read once and kept in sources. A file
+// that cannot be read is not kept, and is tried again on the next call.
+func cachedSource(sources map[string]string, p string) (string, bool) {
+	if src, ok := sources[p]; ok {
+		return src, true
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return "", false
+	}
+	sources[p] = string(data)
+	return sources[p], true
 }
 
 // anyReadInPart reports whether a read of one of paths showed only part of
@@ -873,6 +918,17 @@ var reMustProduce = regexp.MustCompile(`(?i)^\s*(must (exist|contain|include|be 
 // name, so "Write the parse results to out.json" still names an output.
 var reReadsTheFile = regexp.MustCompile(`(?i)\b(read|reads|reading|load|loads|loading|parse|parses|parsing|open|opens|opening)\s+((the|a|an|its|file|data|contents?|of)\s+){0,3}$`)
 
+// filenameIsOutput reports whether the filename token at m reads as an output
+// of the task: a write verb within ~70 chars before it that is not a read of
+// the file, OR "must exist/contain" requirement phrasing right after it.
+func filenameIsOutput(msg string, m []int) bool {
+	before := msg[max(m[0]-70, 0):m[0]]
+	if reOutputWriteVerb.MatchString(before) && !reReadsTheFile.MatchString(before) {
+		return true
+	}
+	return reMustProduce.MatchString(msg[m[1]:min(m[1]+40, len(msg))])
+}
+
 // expectedOutputPaths extracts the file(s) a task prompt explicitly asks
 // the model to produce: a filename token preceded within ~70 chars by a
 // write/save/create/output verb. Grounded in the task text (many bench and
@@ -887,18 +943,7 @@ func expectedOutputPaths(msg string) []string {
 		if path == "" || strings.Count(path, ".") == len(path) {
 			continue
 		}
-		start := m[0] - 70
-		if start < 0 {
-			start = 0
-		}
-		afterEnd := m[1] + 40
-		if afterEnd > len(msg) {
-			afterEnd = len(msg)
-		}
-		// Output signal: a write verb within ~70 chars before the filename,
-		// OR "must exist/contain" requirement phrasing right after it.
-		if (!reOutputWriteVerb.MatchString(msg[start:m[0]]) || reReadsTheFile.MatchString(msg[start:m[0]])) &&
-			!reMustProduce.MatchString(msg[m[1]:afterEnd]) {
+		if !filenameIsOutput(msg, m) {
 			continue // input/incidental filename
 		}
 		if !seen[path] {

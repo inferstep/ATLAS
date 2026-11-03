@@ -194,7 +194,7 @@ def make_event(type: str, stage: str, payload: Optional[Dict[str, Any]] = None,
 
 _REQUIRED = ("event_id", "timestamp", "type", "stage", "payload")
 # v3-service legacy frames are {stage, detail} plus an optional "data" key
-# when structured data rides along (v3-service/pipeline.py emit()).
+# when structured data rides along (services/v3-service/pipeline.py emit()).
 _LEGACY_KEYS = {"stage", "detail", "data"}
 
 

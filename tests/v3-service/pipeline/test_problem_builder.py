@@ -15,7 +15,7 @@ task directly wrote file readers 12 times out of 12.
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "v3-service"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "services" / "v3-service"))
 
 from pipeline import _build_problem_from_request
 from stages.llm_client import extract_code_for_problem

@@ -14,8 +14,8 @@ issue.
 
 ATLAS is a local coding agent made of a few services: the Go agent loop
 (`services/proxy/`), the terminal client (`clients/tui/`), the Python CLI (`atlas/`), the V3
-candidate pipeline (`v3-service/`), the Geometric Lens (`geometric-lens/`),
-the sandbox (`sandbox/`) and the llama.cpp images (`services/inference/`).
+candidate pipeline (`services/v3-service/`), the Geometric Lens (`geometric-lens/`),
+the sandbox (`services/sandbox/`) and the llama.cpp images (`services/inference/`).
 [The repository map](../docs/README.md#repository-map) says what every directory owns, and
 [ARCHITECTURE.md](../docs/reference/ARCHITECTURE.md) explains how the pieces work
 together.
@@ -395,7 +395,7 @@ pytest tests/v3-service/stages/test_plan_search.py -v
 # End-to-end acceptance: real proxy + sandbox executor + fake
 # llama-server. No GPU or model needed. Build the proxy binary first.
 cd services/proxy && go build -o /tmp/test-atlas-proxy . && cd ../..
-pip install -r sandbox/requirements-runtime.txt
+pip install -r services/sandbox/requirements-runtime.txt
 pytest tests/e2e -v
 ```
 
@@ -443,7 +443,7 @@ rebuild loop.
 ### When to use dev mode
 
 Use it when you are actively editing Python in `geometric-lens/` or
-`v3-service/`, or Go in `services/proxy/`. Skip it for one-off
+`services/v3-service/`, or Go in `services/proxy/`. Skip it for one-off
 contributions where a single rebuild is acceptable.
 
 Dev mode does not change image behavior in production-like ways —
@@ -481,8 +481,8 @@ docker compose logs geometric-lens | grep -i reload
 
 #### v3-service
 
-The override bind-mounts the `./v3-service/*.py` modules
-into the container (edit `v3-service/stages/` with a targeted rebuild —
+The override bind-mounts the `./services/v3-service/*.py` modules
+into the container (edit `services/v3-service/stages/` with a targeted rebuild —
 the stage package is COPY'd, not mounted). The service runs on Python's stdlib
 `http.server`, which has no built-in reloader, so after editing you
 need to restart the container — but no rebuild:

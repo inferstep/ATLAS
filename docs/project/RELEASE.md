@@ -97,7 +97,7 @@ python scripts/ci/staging-integration.py          # the same thing, directly
 python scripts/ci/staging-integration.py --keep   # leave the executor running
 ```
 
-The runner starts `sandbox/executor_server.py` on a free port against a
+The runner starts `services/sandbox/executor_server.py` on a free port against a
 throwaway workspace, points the proxy at the same directory (the alignment
 production requires), runs `services/proxy/evidence_staging_integration_test.go`, and tears it
 down. Without `ATLAS_STAGING_SANDBOX_URL` and `ATLAS_STAGING_SANDBOX_WORKSPACE`

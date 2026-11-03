@@ -2,8 +2,8 @@
 reach a serialized sink (logs, error details, diagnostics).
 
 CANONICAL COPY NOTICE: this file exists byte-identically in four
-places — atlas/redact.py, geometric-lens/geometric_lens/, sandbox/,
-and v3-service/ — because each service ships as a separate container
+places — atlas/redact.py, geometric-lens/geometric_lens/, services/sandbox/,
+and services/v3-service/ — because each service ships as a separate container
 without a shared package, and the CLI ships as a pip package no
 service image installs. tests/contracts/test_private_value_filtering.py
 enforces that the copies stay identical and that each passes the

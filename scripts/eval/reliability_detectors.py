@@ -198,7 +198,7 @@ def h5_corrupt_write(s: Session, task: Task) -> list[str]:
         if not p.is_file() or p.suffix not in (".py", ".html", ".htm", ".js"):
             continue
         # A file the session never touched cannot be a corrupt WRITE. Measured:
-        # bugfind_tiebreak is seeded with ATLAS's own v3-service/adapters.py,
+        # bugfind_tiebreak is seeded with ATLAS's own services/v3-service/adapters.py,
         # which contains a regex literal for stripping script tags. The
         # extractor's own `<script>` pattern matches inside that literal,
         # pulls out `]*\bsrc=)[^>]*>(.*?)`, hands that to `node --check`, and
