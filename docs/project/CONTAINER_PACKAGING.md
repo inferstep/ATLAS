@@ -63,7 +63,7 @@ hashed lock beside them (`requirements-lock.txt`, made by
 | File | Scope |
 |---|---|
 | `geometric-lens/requirements.txt` | Lens runtime (all entries pinned) |
-| `v3-service/requirements.txt` | V3 runtime — tree-sitter grammars only; the file states it carries no torch, since the service parses and orchestrates rather than scoring |
+| `services/v3-service/requirements.txt` | V3 runtime — tree-sitter grammars only; the file states it carries no torch, since the service parses and orchestrates rather than scoring |
 | `services/sandbox/requirements-runtime.txt` | Sandbox executor API |
 | `services/sandbox/requirements-verify.txt` | In-sandbox verify/lint tools (pytest, ruff, mypy, requests) and the executor's YAML and Jinja checkers (pyyaml, jinja2) |
 

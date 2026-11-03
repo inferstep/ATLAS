@@ -49,7 +49,7 @@ for svc in "${SERVICES[@]}"; do
         src_dir=""
         case "$svc" in
             atlas-proxy)     src_dir="services/proxy" ;;
-            v3-service)      src_dir="v3-service" ;;
+            v3-service)      src_dir="services/v3-service" ;;
             geometric-lens)  src_dir="geometric-lens" ;;
             sandbox)         src_dir="services/sandbox" ;;
             *) ;;

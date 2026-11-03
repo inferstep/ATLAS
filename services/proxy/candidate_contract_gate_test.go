@@ -79,7 +79,7 @@ func TestTheRejectionSaysWhatToDoInstead(t *testing.T) {
 // bytes; nothing here rebuilds an equivalent struct by hand, because two
 // hand-written shapes agreeing with each other proves nothing about the wire.
 
-const evidenceCaseFile = "../../v3-service/testdata/evidence_wire_cases.json"
+const evidenceCaseFile = "../v3-service/testdata/evidence_wire_cases.json"
 
 // evidenceCase is one cross-language case: the exact response bytes the
 // service produces, and what BOTH sides must conclude from them. The
@@ -717,7 +717,7 @@ func TestLivePythonEnvelopeAuthorizesDelivery(t *testing.T) {
 	code := "body { color: red; }\n"
 	script := `
 import json, sys
-sys.path.insert(0, "../../v3-service")
+sys.path.insert(0, "../v3-service")
 import adapters, contract
 code = json.loads(sys.stdin.read())["code"]
 record = adapters.contract_record(

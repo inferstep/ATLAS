@@ -134,9 +134,9 @@ def test_dockerfile_gate_detects_a_missing_source(tmp_path, monkeypatch):
     import sys
     from pathlib import Path
     root = Path(__file__).resolve().parents[3]
-    df = root / "v3-service" / "Dockerfile"
+    df = root / "services" / "v3-service" / "Dockerfile"
     original = df.read_text()
-    df.write_text(original + "\nCOPY v3-service/definitely_not_here.py /app/x.py\n")
+    df.write_text(original + "\nCOPY services/v3-service/definitely_not_here.py /app/x.py\n")
     try:
         proc = subprocess.run(
             [sys.executable, str(root / "scripts" / "ci" / "check_dockerfile_sources.py")],

@@ -113,7 +113,7 @@ jobs:
             dockerfile: ./services/proxy/Dockerfile
           - name: v3
             context: .
-            dockerfile: ./v3-service/Dockerfile
+            dockerfile: ./services/v3-service/Dockerfile
           - name: lens
             context: ./geometric-lens
             dockerfile: ./geometric-lens/Dockerfile
@@ -252,9 +252,9 @@ jobs:
             context: ./services/proxy
             dockerfile: ./services/proxy/Dockerfile
           - name: v3
-            # Root context: v3-service/Dockerfile reads sibling dirs at build time.
+            # Root context: services/v3-service/Dockerfile reads sibling dirs at build time.
             context: .
-            dockerfile: ./v3-service/Dockerfile
+            dockerfile: ./services/v3-service/Dockerfile
           - name: lens
             context: ./geometric-lens
             dockerfile: ./geometric-lens/Dockerfile

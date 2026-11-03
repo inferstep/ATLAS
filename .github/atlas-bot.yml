@@ -85,24 +85,24 @@ pull_requests:
   # label is what names it. An entry has the forms of core_paths. A test
   # holds that the list is each such file of v3-service and no other.
   model_text_paths:
-    v3-service/planning.py: a prompt of v3-service
-    v3-service/adapters.py: the request that v3-service sends to the model
-    v3-service/stages/budget_forcing.py: a prompt of v3-service
-    v3-service/stages/constraint_refinement.py: a prompt of v3-service
-    v3-service/stages/div_sampling.py: a prompt of v3-service
-    v3-service/stages/failure_analysis.py: a prompt of v3-service
-    v3-service/stages/llm_client.py: a prompt of v3-service
-    v3-service/stages/plan_search.py: a prompt of v3-service
-    v3-service/stages/pr_cot.py: a prompt of v3-service
-    v3-service/stages/refinement_loop.py: a prompt of v3-service
-    v3-service/stages/self_test_gen.py: a prompt of v3-service
+    services/v3-service/planning.py: a prompt of v3-service
+    services/v3-service/adapters.py: the request that v3-service sends to the model
+    services/v3-service/stages/budget_forcing.py: a prompt of v3-service
+    services/v3-service/stages/constraint_refinement.py: a prompt of v3-service
+    services/v3-service/stages/div_sampling.py: a prompt of v3-service
+    services/v3-service/stages/failure_analysis.py: a prompt of v3-service
+    services/v3-service/stages/llm_client.py: a prompt of v3-service
+    services/v3-service/stages/plan_search.py: a prompt of v3-service
+    services/v3-service/stages/pr_cot.py: a prompt of v3-service
+    services/v3-service/stages/refinement_loop.py: a prompt of v3-service
+    services/v3-service/stages/self_test_gen.py: a prompt of v3-service
 
 # Path prefix -> area label, for pull requests. A file can match several.
 areas:
   services/proxy/: area/proxy
   clients/tui/: area/tui
   atlas/: area/cli
-  v3-service/: area/v3
+  services/v3-service/: area/v3
   geometric-lens/: area/lens
   services/inference/: area/inference
   services/sandbox/: area/sandbox

@@ -12,10 +12,10 @@ Covers:
 import sys
 from pathlib import Path
 
-# v3-service/main.py imports from project root, so we add it the same way
+# services/v3-service/main.py imports from project root, so we add it the same way
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(PROJECT_ROOT))
-sys.path.insert(0, str(PROJECT_ROOT / "v3-service"))
+sys.path.insert(0, str(PROJECT_ROOT / "services" / "v3-service"))
 
 import main as v3main
 

@@ -11,7 +11,7 @@ second one reached CI, where `tests` was green and only the image job failed.
 Each Dockerfile is checked against its build context as declared in
 docker-compose.yml, because the context determines what a relative source
 resolves against: v3-service builds from the repo root, so its sources read
-`v3-service/main.py`, while geometric-lens builds from its own directory and
+`services/v3-service/main.py`, while geometric-lens builds from its own directory and
 its sources read `main.py`. Getting that wrong in either direction produces
 false results, so contexts are read from compose rather than guessed.
 

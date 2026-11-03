@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
-SERVICES = ["v3-service", "geometric-lens", "sandbox-service"]
+SERVICES = ["services/v3-service", "geometric-lens", "sandbox-service"]
 
 # Constructs that start work somewhere the current context does not follow by
 # itself. asyncio.create_task is deliberately NOT here: it copies the current
@@ -43,13 +43,13 @@ BACKGROUND_CALLS = {
 # Adding a background call without adding it here fails this test. That is the
 # point: the entry is where you say which case you are in.
 CLASSIFIED = {
-    "v3-service/stages/plan_search.py::_fan_out::ThreadPoolExecutor":
+    "services/v3-service/stages/plan_search.py::_fan_out::ThreadPoolExecutor":
         ("propagates",
          "Captures the request ID on the owning thread and re-establishes it "
          "in each worker for log correlation. The identity the outbound call "
          "is sent under does not travel this way at all: it lives on the "
          "request-scoped LLMAdapter, which the worker already holds."),
-    "v3-service/main.py::_watch_parent_for::Thread":
+    "services/v3-service/main.py::_watch_parent_for::Thread":
         ("propagates",
          "Watches the parent socket for EOF and cancels a scope it was handed "
          "directly. It sends no outbound request, but it DOES log the "
@@ -155,7 +155,7 @@ def test_inference_path_takes_no_contextvar_fallback():
     answers it. Asserted structurally because the behavioural test can only
     show the value that arrived, not where it was allowed to come from.
     """
-    src = ast.parse((ROOT / "v3-service" / "adapters.py").read_text())
+    src = ast.parse((ROOT / "services" / "v3-service" / "adapters.py").read_text())
     resolver = next(
         (n for n in ast.walk(src)
          if isinstance(n, ast.FunctionDef) and n.name == "_inference_headers"),
@@ -172,7 +172,7 @@ def test_inference_path_takes_no_contextvar_fallback():
 
 def test_missing_identity_under_a_request_raises(monkeypatch):
     """Fail closed: serving a request with no identity is a wiring error."""
-    monkeypatch.syspath_prepend(str(ROOT / "v3-service"))
+    monkeypatch.syspath_prepend(str(ROOT / "services" / "v3-service"))
     import adapters
 
     llm = adapters.LLMAdapter()

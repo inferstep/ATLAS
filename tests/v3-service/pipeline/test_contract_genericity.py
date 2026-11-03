@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "v3-service"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "services" / "v3-service"))
 
 import adapters as A
 import contract as C
@@ -317,7 +317,7 @@ def test_records_with_incomplete_identity_are_incomparable(field):
 # to answer before anything consumes it, and deliberately assert that NO
 # decision changed: this phase moves evidence across the boundary losslessly.
 
-V3DIR = Path(__file__).resolve().parents[3] / "v3-service"
+V3DIR = Path(__file__).resolve().parents[3] / "services" / "v3-service"
 FIXTURES = V3DIR / "testdata" / "evidence_wire_cases.json"
 
 C1, C2, OPT = "criterion_a", "criterion_b", "criterion_c"

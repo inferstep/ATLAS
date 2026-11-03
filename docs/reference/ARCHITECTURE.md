@@ -599,7 +599,7 @@ flowchart TD
 
 ##### v3-service: `/v3/plan` (Python)
 
-Defined in `v3-service/planning.py`; `v3-service/main.py` serves the route. The handler:
+Defined in `services/v3-service/planning.py`; `services/v3-service/main.py` serves the route. The handler:
 
 1. Renders `PLAN_PROMPT_TEMPLATE` with the user message + working dir + truncated project files.
 2. Calls the LLM 3 times with seed offsets and temperatures `[0.3, 0.5, 0.7]`. By default it sends the optional `chat_template_kwargs: {enable_thinking: false}` control and reserves 2,048 output tokens for plan JSON. Supporting templates disable their reasoning channel; other templates ignore the flag. `ATLAS_PLAN_THINKING=1` requests reasoning and raises the budget to 8,192. No model-family prompt directive is injected.
@@ -650,7 +650,7 @@ Defined in `services/proxy/plan_gates.go`:
 | `planAutoReviseThreshold` | 5 | Non-recon off-plan tool calls before auto-revise fires (recon tools never extend the streak, so natural exploration doesn't count). Tight enough to catch a wrong plan early; loose enough that a few stray off-plan calls don't trigger thrashing. |
 | `planMaxRevisions` | 2 | Cap on auto-revisions per loop. Past this, the last plan stays and only revising stops. A revision that returns the same steps drops the plan. Prevents pathological off-plan inputs from looping `/v3/plan` forever. |
 
-`v3-service/planning.py` constants:
+`services/v3-service/planning.py` constants:
 
 | Constant | Default | Rationale |
 |---|---|---|
@@ -772,13 +772,13 @@ When the incumbent holds, `phase_solved` is `incumbent`, and the proxy writes th
 
 The floor is the difference between this and the C(x)-only allocator removed earlier: that one had no floor, so it handed k=1 to tasks whose probe had *just failed*. Whether lens-driven allocation beats fixed or randomly assigned tiers is unmeasured. An earlier four-arm comparison (gated, fixed k=3, the same tier mix shuffled across tasks, and k=8, at n=175 per arm) is not evidence either way: it ran on Qwen3.5-9B with a patched runner that is not in this repository, with thinking enabled on escalation, which the live gate cannot apply, on LiveCodeBench tasks the G(x) head was trained on, and at that sample size its arms are within noise of each other.
 
-Live-path difference: the proxy's V3 bridge abandons a pipeline call after `ATLAS_V3_TIMEOUT` (default 300s), a cap the bench never had, so an unbounded escalation to k=8 would spend the budget on generation and return a timeout fallback instead of the k=3 answer the clock could have produced. The live orchestrator therefore passes its remaining wall-clock and the per-call latency observed on that task, and the gate lowers the tier to what the budget can actually generate — reserving one refinement iteration so the escalation cannot starve Phase 3 — never below the floor. The bench runner passes no budget and allocates exactly what was measured. `v3-service/stages/cxgx_gate.py`, shared by both orchestrators.
+Live-path difference: the proxy's V3 bridge abandons a pipeline call after `ATLAS_V3_TIMEOUT` (default 300s), a cap the bench never had, so an unbounded escalation to k=8 would spend the budget on generation and return a timeout fallback instead of the k=3 answer the clock could have produced. The live orchestrator therefore passes its remaining wall-clock and the per-call latency observed on that task, and the gate lowers the tier to what the budget can actually generate — reserving one refinement iteration so the escalation cannot starve Phase 3 — never below the floor. The bench runner passes no budget and allocates exactly what was measured. `services/v3-service/stages/cxgx_gate.py`, shared by both orchestrators.
 
 **Phase 1: Constraint-Driven Generation**
 
 **V3 always runs.** Planning and candidate generation run on every request the routing rules send to them: a file of Tier 2 or above, a V3 service configured, and a session not iterating on a file it just watched fail. No request field turns either off. `bypass_v3`, `v3_mode` and `feasibility_mode` were removed, and a request that asks for V3 off, planner-only or `enforce` is a 400, never a quiet run under another system. A measurement without V3 takes a research build.
 
-- **PlanSearch** generates structurally different implementation plans by extracting distinct constraint sets — one per allocated candidate slot the probe did not already fill (k-1). Its plan-construction and code-generation steps fan out across worker threads (`_fan_out` in `v3-service/stages/plan_search.py`), which makes it the only V3 stage that dispatches inference off the request thread. A worker inherits no ContextVar and no local from its parent, so request-scoped state reaches it on the request-scoped `LLMAdapter` — the same carrier as the cancellation scope. That is where the identity each inference call is sent under lives (`LLMAdapter.request_identity`); the header resolver takes no ContextVar fallback, because in a worker a fallback reads as "no request" and silently strips attribution. A PlanSearch call that cannot reach the model at all raises `PlanSearchInfrastructureError` rather than returning a short candidate list: DivSampling still backfills the slots below, and an empty batch and a refused one are otherwise indistinguishable downstream.
+- **PlanSearch** generates structurally different implementation plans by extracting distinct constraint sets — one per allocated candidate slot the probe did not already fill (k-1). Its plan-construction and code-generation steps fan out across worker threads (`_fan_out` in `services/v3-service/stages/plan_search.py`), which makes it the only V3 stage that dispatches inference off the request thread. A worker inherits no ContextVar and no local from its parent, so request-scoped state reaches it on the request-scoped `LLMAdapter` — the same carrier as the cancellation scope. That is where the identity each inference call is sent under lives (`LLMAdapter.request_identity`); the header resolver takes no ContextVar fallback, because in a worker a fallback reads as "no request" and silently strips attribution. A PlanSearch call that cannot reach the model at all raises `PlanSearchInfrastructureError` rather than returning a short candidate list: DivSampling still backfills the slots below, and an empty batch and a refused one are otherwise indistinguishable downstream.
 - **DivSampling** applies perturbation diversity: 4 roles (competitive_programmer, systems_engineer, mathematician, pragmatist) + 4 instructions (step_by_step, edge_case_first, complexity_aware, constraint_driven) + 4 styles (functional, pythonic, optimize_iteratively, structured)
 - **Budget Forcing** controls thinking token allocation:
 
@@ -808,7 +808,7 @@ Each tier maps to a system prompt (direct vs. think-step-by-step) and a max-toke
 
 ### Module Map
 
-The pipeline stages are 12 Python modules in `v3-service/stages/`. `v3-service/pipeline.py` orchestrates 11 of them (10 directly; `constraint_refinement` via the refinement loop); `embedding_store` runs only under the offline bench runner (`atlas/bench/v3_runner.py`, which puts the checkout's `v3-service/` on its path so both callers share one stage implementation):
+The pipeline stages are 12 Python modules in `services/v3-service/stages/`. `services/v3-service/pipeline.py` orchestrates 11 of them (10 directly; `constraint_refinement` via the refinement loop); `embedding_store` runs only under the offline bench runner (`atlas/bench/v3_runner.py`, which puts the checkout's `services/v3-service/` on its path so both callers share one stage implementation):
 
 ```mermaid
 graph LR

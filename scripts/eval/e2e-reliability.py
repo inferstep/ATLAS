@@ -604,7 +604,7 @@ _BUGFIND_SRCS = ("planning.py", "scoring.py", "adapters.py")
 def _bugfind_files() -> dict:
     out = {}
     for name in _BUGFIND_SRCS:
-        text = (REPO / "v3-service" / name).read_text()
+        text = (REPO / "services" / "v3-service" / name).read_text()
         if name == "planning.py":
             # The tie-break: highest score wins, ties go to the SHORTER plan.
             # Flipped so ties go to the longer one — one character, and the

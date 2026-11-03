@@ -17,7 +17,7 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(PROJECT_ROOT))
-sys.path.insert(0, str(PROJECT_ROOT / "v3-service"))
+sys.path.insert(0, str(PROJECT_ROOT / "services" / "v3-service"))
 
 import adapters
 import symbols
@@ -444,7 +444,7 @@ def test_every_successful_exit_is_covered():
     Counted from the source rather than from a list someone maintains, so a
     seventh success site fails this immediately.
     """
-    src = (Path(__file__).resolve().parents[3] / "v3-service" / "pipeline.py").read_text()
+    src = (Path(__file__).resolve().parents[3] / "services" / "v3-service" / "pipeline.py").read_text()
     sites = src.count('result["passed"] = True')
     assert sites == len(SUCCESS_PHASES), (
         f"{sites} successful-return sites, {len(SUCCESS_PHASES)} covered phases: "
@@ -627,7 +627,7 @@ def test_generated_evidence_never_reaches_closure_or_a_verified_winner(monkeypat
 
 def test_k_counts_the_probe_and_the_generated_alternatives():
     """Naming check: whatever the argument is called, this is the quantity."""
-    src = (Path(__file__).resolve().parents[3] / "v3-service" / "pipeline.py").read_text()
+    src = (Path(__file__).resolve().parents[3] / "services" / "v3-service" / "pipeline.py").read_text()
     assert "remaining_k = max(0, k - len(candidates))" in src
 
 
@@ -684,7 +684,7 @@ def test_the_diagnostic_floor_never_lowers_the_allocation(monkeypatch):
 def test_the_generate_endpoint_cannot_activate_it():
     """No request field, no env read, no server-side mode: the only way in
     is an in-process argument the HTTP handler never supplies."""
-    v3dir = Path(__file__).resolve().parents[3] / "v3-service"
+    v3dir = Path(__file__).resolve().parents[3] / "services" / "v3-service"
     main_src = (v3dir / "main.py").read_text()
     assert "diagnostic_total_candidates" not in main_src
     assert "min_candidates" not in main_src

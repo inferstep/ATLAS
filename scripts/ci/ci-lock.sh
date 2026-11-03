@@ -2,10 +2,10 @@
 # Make .github/requirements/ci.txt again: the hashed lock of what the CI jobs
 # install (the tools, and the packages of the product that the tests need),
 # lens.txt (the lock of the lens tests), and the service image locks
-# (geometric-lens/requirements-lock.txt, v3-service/requirements-lock.txt and
+# (geometric-lens/requirements-lock.txt, services/v3-service/requirements-lock.txt and
 # services/sandbox/requirements-lock.txt).
 # Run it after a change to ci.in, lens.in, geometric-lens/requirements.txt,
-# v3-service/requirements.txt or the sandbox's two requirement files. Needs
+# services/v3-service/requirements.txt or the sandbox's two requirement files. Needs
 # uv, which gets Python 3.12 and pip-tools for the run.
 #
 # The lock is made by pip-compile, under the Python version of the CI jobs,
@@ -29,7 +29,7 @@ uv pip compile --quiet --python-version 3.12 --python-platform x86_64-unknown-li
 
 # Lock v3-service (Python 3.13) and geometric-lens (Python 3.11) Dockerfile requirements
 uv pip compile --quiet --python-version 3.13 --python-platform x86_64-unknown-linux-gnu --generate-hashes \
-    --output-file=../../v3-service/requirements-lock.txt ../../v3-service/requirements.txt
+    --output-file=../../services/v3-service/requirements-lock.txt ../../services/v3-service/requirements.txt
 # The sandbox (Python 3.13): its service and its check tools, in one lock.
 uv pip compile --quiet --python-version 3.13 --python-platform x86_64-unknown-linux-gnu --generate-hashes \
     --output-file=../../services/sandbox/requirements-lock.txt ../../services/sandbox/requirements-runtime.txt ../../services/sandbox/requirements-verify.txt

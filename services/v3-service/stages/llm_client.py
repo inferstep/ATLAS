@@ -25,12 +25,12 @@ from typing import Dict, List, Optional
 def _service_token() -> str:
     """Internal-auth token (empty = auth disabled). Resolution: explicit
     ATLAS_SERVICE_TOKEN_FILE, the container secret mount, then the repo
-    checkout's secrets/ file (stages/ lives under v3-service/, so
-    parents[2] is the repo root)."""
+    checkout's secrets/ file (stages/ lives under services/v3-service/, so
+    parents[3] is the repo root)."""
     explicit = os.environ.get("ATLAS_SERVICE_TOKEN_FILE")
     candidates = [explicit] if explicit else [
         "/run/atlas-secrets/service-token",
-        str(Path(__file__).resolve().parents[2] / "secrets" / "service-token"),
+        str(Path(__file__).resolve().parents[3] / "secrets" / "service-token"),
     ]
     for path in candidates:
         try:
