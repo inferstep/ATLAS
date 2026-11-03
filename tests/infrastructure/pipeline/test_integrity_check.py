@@ -228,6 +228,28 @@ def test_a_change_to_the_runner_does_not_change_the_verdict(tmp_path):
     assert not (tmp_path / "written-by-the-runner").exists()
 
 
+def test_a_base_that_cannot_be_archived_stops_the_check(ic, tmp_path):
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, capture_output=True)
+
+    with pytest.raises(RuntimeError, match="git archive no-such-ref failed"):
+        ic.task_names(tmp_path, "no-such-ref")
+
+
+def test_a_runner_that_fails_stops_the_check_with_its_message(ic, tmp_path):
+    def git(*args):
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
+                       cwd=tmp_path, check=True, capture_output=True)
+    runner = tmp_path / "scripts" / "eval" / "e2e-reliability.py"
+    runner.parent.mkdir(parents=True)
+    runner.write_text('raise ValueError("the runner cannot load")\n')
+    git("init", "-q")
+    git("add", ".")
+    git("commit", "-q", "-m", "base")
+
+    with pytest.raises(RuntimeError, match="(?s)the runner exited with 1: .*the runner cannot load"):
+        ic.task_names(tmp_path, "HEAD")
+
+
 def test_a_base_with_no_runner_reads_the_changes_copy_and_says_so(ic, tmp_path, capsys):
     def git(*args):
         subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *args],

@@ -360,14 +360,15 @@ def task_names(root: Path, base: str) -> set[str]:
     with tempfile.TemporaryDirectory() as folder:
         archive = subprocess.run(["git", "archive", "--format=tar", "--end-of-options", base],
                                  cwd=root, capture_output=True, check=False)
-        if archive.returncode == 0:
-            with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
-                tar.extractall(folder, filter="data")
+        if archive.returncode != 0:
+            raise RuntimeError(f"git archive {base} failed: {archive.stderr.decode(errors='replace').strip()}")
+        with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
+            tar.extractall(folder, filter="data")
         source = Path(folder) / TASK_SOURCE
         if not source.is_file():
             print(f"integrity check: the base has no {TASK_SOURCE}; this run reads the task names from the "
                   "change's copy.", file=sys.stderr)
-            source = root / TASK_SOURCE
+            source = root.resolve() / TASK_SOURCE
         child = subprocess.run([sys.executable, "-I", "-c", READ_TASKS, str(source)], cwd=folder,
                                capture_output=True, text=True, check=False, timeout=120)
     if child.returncode != 0:
