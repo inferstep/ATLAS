@@ -7,7 +7,7 @@ ran with no input at all.
 
 These tests mock the HTTP layer and assert the input lands in the
 ``/execute`` request payload under the field name the sandbox schema
-declares (``ExecuteRequest.stdin`` in sandbox/executor_models.py), the
+declares (``ExecuteRequest.stdin`` in services/sandbox/executor_models.py), the
 same stdin contract the bench implements via execute_code_stdio.
 """
 
@@ -21,7 +21,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "v3-service"))
 
 import adapters
 
-SANDBOX_DIR = PROJECT_ROOT / "sandbox"
+SANDBOX_DIR = PROJECT_ROOT / "services" / "sandbox"
 
 
 class _FakeResponse:

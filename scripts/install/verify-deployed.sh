@@ -51,7 +51,7 @@ for svc in "${SERVICES[@]}"; do
             atlas-proxy)     src_dir="services/proxy" ;;
             v3-service)      src_dir="v3-service" ;;
             geometric-lens)  src_dir="geometric-lens" ;;
-            sandbox)         src_dir="sandbox" ;;
+            sandbox)         src_dir="services/sandbox" ;;
             *) ;;
         esac
         built_at=$(docker inspect "$newest_image" --format '{{.Created}}' 2>/dev/null)

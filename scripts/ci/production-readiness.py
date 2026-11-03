@@ -28,7 +28,7 @@ PYTHON_TARGETS = (
     "tests",
     "geometric-lens",
     "v3-service",
-    "sandbox",
+    "services/sandbox",
 )
 # Mirrors the CI python-tests matrix (.github/workflows/test.yml) plus the
 # e2e-acceptance suite, so the documented local gate runs what CI gates on.
@@ -278,7 +278,7 @@ def _python_test_gates(python: str, pytest_paths: Sequence[str], go_env: dict[st
                                and _module_available("uvicorn")
                                and _module_available("fastapi")),
             unavailable_reason="Go, uvicorn or fastapi is not installed "
-                               "(pip install -r sandbox/requirements.txt)",
+                               "(pip install -r services/sandbox/requirements-runtime.txt)",
             env=go_env,
         ),
     }

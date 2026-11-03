@@ -57,7 +57,7 @@ pytestmark = [
     pytest.mark.skipif(
         not sandbox_deps_available(),
         reason="sandbox runtime deps missing — "
-               "pip install -r sandbox/requirements-runtime.txt"),
+               "pip install -r services/sandbox/requirements-runtime.txt"),
 ]
 
 # The model's write_file content: 12 lines of .py with >=2 logic

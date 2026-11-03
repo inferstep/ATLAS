@@ -983,7 +983,7 @@ from what is available then.
 | `services/proxy/candidate_authorization.go` | `decideAuthorization`, baseline-preservation derivation |
 | `services/proxy/delivery_settlement.go` | post-delivery existence settlement |
 | `services/proxy/candidate_feasibility.go` | `decideInvocationFeasibility` (observe-only) |
-| `sandbox/executor_server.py` | `/shell` observation — facts, no conclusions |
+| `services/sandbox/executor_server.py` | `/shell` observation — facts, no conclusions |
 
 ## Telemetry
 

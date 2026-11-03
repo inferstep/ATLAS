@@ -254,7 +254,7 @@ services:
     image: ghcr.io/${ATLAS_GHCR_OWNER:-inferstep}/atlas-sandbox:${ATLAS_IMAGE_TAG:-latest}
     restart: unless-stopped
     build:
-      context: ./sandbox
+      context: ./services/sandbox
     environment:
       # Per-call execution ceiling inside the executor (executor_server.py
       # clamps request timeouts to MAX_EXECUTION_TIME). Default matches the

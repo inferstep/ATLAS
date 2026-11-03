@@ -177,7 +177,7 @@ from resource_contract import (
     contract_from_env, outcome_is_complete, run_bounded, stopped_words, why_it_failed,
     EXEC_TOKEN_VAR, _apply_child_limits, check_process_supervision)
 
-# The parts of the executor that live in modules beside it (sandbox/Dockerfile copies each one).
+# The parts of the executor that live in modules beside it (services/sandbox/Dockerfile copies each one).
 from executor_models import (
     ExecuteRequest, ExecuteResponse, ShellObservation, ShellRequest, ShellResponse,
     SyntaxCheckRequest, SyntaxCheckResponse)

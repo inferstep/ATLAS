@@ -174,7 +174,7 @@ jobs:
           #   image ships: an unpinned install once pulled a newer
           #   tree-sitter whose API change made extraction return empty.
           # - the sandbox's runtime packages: the boundary-regression suite
-          #   under tests/infrastructure boots sandbox/executor_server.py,
+          #   under tests/infrastructure boots services/sandbox/executor_server.py,
           #   which imports fastapi and pydantic.
           # - jinja2, at the pin the image ships: the sandbox's template
           #   check passes everything without it.
@@ -587,7 +587,7 @@ jobs:
             fi
             sleep 2
           done
-          echo "::error::The sandbox gave no health answer in 120 seconds, so no test was run. Fix: read its log below for why the service did not start; it is the sandbox service of docker-compose.yml, with the image built from ./sandbox of this commit."
+          echo "::error::The sandbox gave no health answer in 120 seconds, so no test was run. Fix: read its log below for why the service did not start; it is the sandbox service of docker-compose.yml, with the image built from ./services/sandbox of this commit."
           docker compose --env-file "$RUNNER_TEMP/sandbox.env" logs --tail 80 sandbox
           exit 1
 

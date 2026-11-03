@@ -41,7 +41,7 @@ TASK_SOURCE = Path("scripts") / "eval" / "e2e-reliability.py"
 
 CODE_EXTENSIONS = (".go", ".py", ".ts", ".js", ".mjs", ".sh")
 PRODUCT_DIRS = ("services/proxy/", "tui/", "atlas/", "v3-service/", "geometric-lens/",
-                "sandbox/", "inference/", "extensions/vscode/src/")
+                "services/sandbox/", "inference/", "extensions/vscode/src/")
 DOC_DIRS_ALLOWED = (".github/",)
 # Files that decide what a check accepts: workflows, settings, baselines,
 # expected values, and the scripts whose result is a check's result.

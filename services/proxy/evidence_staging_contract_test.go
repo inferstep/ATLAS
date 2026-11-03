@@ -336,11 +336,11 @@ func TestTheCommandTextIsNeverSerialised(t *testing.T) {
 // may not name a provenance source, decide a mutation was permitted, or say
 // anything about a client contract it cannot see.
 func TestTheExecutorReportsFactsAndNotConclusions(t *testing.T) {
-	src, err := os.ReadFile("../../sandbox/executor_server.py")
+	src, err := os.ReadFile("../sandbox/executor_server.py")
 	if err != nil {
 		t.Fatal(err)
 	}
-	models, err := os.ReadFile("../../sandbox/executor_models.py")
+	models, err := os.ReadFile("../sandbox/executor_models.py")
 	if err != nil {
 		t.Fatal(err)
 	}

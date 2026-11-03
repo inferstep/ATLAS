@@ -104,7 +104,7 @@ def sandbox_executor(tmp_path_factory, workspace_root, service_token_file):
     proc = subprocess.Popen(
         ["python", "-m", "uvicorn", "executor_server:app",
          "--host", "127.0.0.1", "--port", str(port), "--log-level", "error"],
-        cwd=str(REPO / "sandbox"), env=env,
+        cwd=str(REPO / "services" / "sandbox"), env=env,
         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     try:
         wait_for_port(port)

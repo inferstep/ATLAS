@@ -168,7 +168,7 @@ def test_a_new_document_needs_approval_outside_the_allowed_folders(ic):
 def test_new_dependencies_are_listed_as_notes(ic):
     change = (diff("services/proxy/go.mod", added=["\tgithub.com/example/retry v1.2.0"])
               + diff("extensions/vscode/package.json", added=['    "left-pad": "^1.3.0",', '  "version": "0.0.2",'])
-              + diff("sandbox/requirements-runtime.txt", added=["fastapi==0.200.0"]))
+              + diff("services/sandbox/requirements-runtime.txt", added=["fastapi==0.200.0"]))
     findings = ic.check(change, TASKS)
     assert [f.level for f in findings] == ["note", "note", "note"]
     assert [f.what.split(": ")[1] for f in findings] == ["github.com/example/retry", "left-pad", "fastapi"]
@@ -366,9 +366,9 @@ MARKED = [
     (".github/workflows/test.yml", f"          persist-credentials: false  {HASH} zizmor: ignore[artipacked]"),
     (".github/workflows/test.yml", f"      {HASH} yamllint disable-line rule:line-length"),
     (".github/workflows/test.yml", f"        run: curl \"$URL\"  {HASH} NOSONAR"),
-    ("sandbox/Dockerfile", f"{HASH} hadolint ignore=DL3008"),
+    ("services/sandbox/Dockerfile", f"{HASH} hadolint ignore=DL3008"),
     ("inference/Dockerfile.vulkan", f"{HASH} hadolint global ignore=DL3003"),
-    ("sandbox/Dockerfile", f"RUN curl -fsSL \"$URL\" | sh  {HASH} NOSONAR"),
+    ("services/sandbox/Dockerfile", f"RUN curl -fsSL \"$URL\" | sh  {HASH} NOSONAR"),
 ]
 
 
@@ -390,8 +390,8 @@ def test_a_marker_in_a_file_of_its_kind_needs_approval(ic, path, line):
     ("scripts/install.sh", f"{HASH} hadolint ignore=DL3008"),
     (".github/workflows/test.yml", f"      {HASH} noqa"),
     (".github/workflows/test.yml", f"      {HASH} shellcheck disable=SC2086"),
-    ("sandbox/Dockerfile", f"{HASH} zizmor: ignore[artipacked]"),
-    ("sandbox/Dockerfile", f"{HASH} noqa"),
+    ("services/sandbox/Dockerfile", f"{HASH} zizmor: ignore[artipacked]"),
+    ("services/sandbox/Dockerfile", f"{HASH} noqa"),
     ("docker-compose.yml", f"  {HASH} zizmor: ignore[artipacked]"),
     ("docs/SETUP.md", f"{HASH} hadolint ignore=DL3008"),
     pytest.param("atlas/cli.py", 'MARKERS = ("noqa", "nolint")', id="the words in code, not in a comment"),

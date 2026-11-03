@@ -531,7 +531,7 @@ pip install -r geometric-lens/requirements.txt
 pip install -r v3-service/requirements.txt
 
 # 6. Install sandbox dependencies
-pip install -r sandbox/requirements-runtime.txt -r sandbox/requirements-verify.txt
+pip install -r services/sandbox/requirements-runtime.txt -r services/sandbox/requirements-verify.txt
 ```
 
 ### 서비스 시작

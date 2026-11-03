@@ -396,7 +396,7 @@ def test_the_settings_file_of_the_sandbox_job_holds_what_an_install_gives_and_no
 def test_the_service_that_the_sandbox_job_starts_is_built_from_the_change_and_has_no_dependency():
     service = sandbox_service()
     # The compose file builds the image from the folder of the change, so the job's build is a build of this commit.
-    assert service["build"] == {"context": "./sandbox"}
+    assert service["build"] == {"context": "./services/sandbox"}
     # With a dependency the job would have to start more than the sandbox, or `--no-deps` would hide a part of the stack.
     assert "depends_on" not in service
 

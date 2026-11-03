@@ -7,10 +7,10 @@
   "geometric-lens/geometric_lens/training.py:train_gx": 132,
   "services/proxy/loop.go:runAgentLoop": 151,
   "services/proxy/delivery.go:deliverCandidateBytes": 128,
-  "sandbox/executor_server.py:_syntax_check_impl": 123
+  "services/sandbox/executor_server.py:_syntax_check_impl": 123
  },
  "files": {
-  "sandbox/executor_server.py": 2028,
+  "services/sandbox/executor_server.py": 2028,
   "v3-service/pipeline.py": 2700
  },
  "proxy_main": {

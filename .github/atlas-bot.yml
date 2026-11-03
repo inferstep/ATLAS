@@ -74,10 +74,10 @@ pull_requests:
     services/proxy/internal/workspacefs/*: the guards
     services/proxy/internal/logsafe/*: the guards
     services/proxy/internal/assetlint/*: the guards
-    sandbox/executor_server.py: the guards
-    sandbox/executor_models.py: the guards
-    sandbox/executor_parsers.py: the guards
-    sandbox/resource_contract.py: the guards
+    services/sandbox/executor_server.py: the guards
+    services/sandbox/executor_models.py: the guards
+    services/sandbox/executor_parsers.py: the guards
+    services/sandbox/resource_contract.py: the guards
   # Path -> what it is. A pull request that changes one is high risk too.
   # These files of v3-service hold a prompt, or shape the request that
   # carries it. No recorded request shows a change of that text, so this
@@ -104,7 +104,7 @@ areas:
   v3-service/: area/v3
   geometric-lens/: area/lens
   inference/: area/inference
-  sandbox/: area/sandbox
+  services/sandbox/: area/sandbox
   extensions/: area/extensions
   scripts/: area/install
   docker-compose: area/install

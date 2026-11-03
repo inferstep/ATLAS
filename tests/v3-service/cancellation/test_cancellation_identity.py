@@ -184,7 +184,7 @@ def test_governed_logger_copies_remain_byte_identical():
     root = os.path.join(os.path.dirname(__file__), "..", "..", "..")
     copies = [
         os.path.join(root, "geometric-lens", "geometric_lens", "structured_log.py"),
-        os.path.join(root, "sandbox", "structured_log.py"),
+        os.path.join(root, "services", "sandbox", "structured_log.py"),
         os.path.join(root, "v3-service", "structured_log.py"),
     ]
     digests = {p: hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in copies}

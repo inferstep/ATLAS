@@ -19,8 +19,8 @@ REPO = Path(__file__).resolve().parents[3]
 REQUIREMENTS = [
     "geometric-lens/requirements.txt",
     "v3-service/requirements.txt",
-    "sandbox/requirements-runtime.txt",
-    "sandbox/requirements-verify.txt",
+    "services/sandbox/requirements-runtime.txt",
+    "services/sandbox/requirements-verify.txt",
 ]
 
 # Licenses considered compatible with AGPL-3.0-or-later distribution.
