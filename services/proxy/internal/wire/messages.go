@@ -264,7 +264,7 @@ func StrengthRank(s string) int {
 	return -1
 }
 
-// PlanStep is a single step in a Plan. Mirrors v3-service/planning.py's
+// PlanStep is a single step in a Plan. Mirrors services/v3-service/planning.py's
 // PLAN_PROMPT_TEMPLATE shape: id, action, target, why.
 type PlanStep struct {
 	ID     string `json:"id"`

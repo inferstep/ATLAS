@@ -26,9 +26,9 @@ NO_GO = "Go is not installed"
 PYTHON_TARGETS = (
     "atlas",
     "tests",
-    "geometric-lens",
-    "v3-service",
-    "sandbox",
+    "services/geometric-lens",
+    "services/v3-service",
+    "services/sandbox",
 )
 # Mirrors the CI python-tests matrix (.github/workflows/test.yml) plus the
 # e2e-acceptance suite, so the documented local gate runs what CI gates on.
@@ -38,11 +38,11 @@ PYTHON_TARGETS = (
 PYTEST_PATHS = ("tests/v3-service", "tests/atlas",
                 "tests/infrastructure", "tests/concurrency", "tests/perf",
                 "tests/contracts", "tests/e2e")
-# geometric-lens/tests runs as its own gate (python-tests-lens), matching
-# its dedicated CI matrix leg: geometric-lens/ and v3-service/ both define
+# services/geometric-lens/tests runs as its own gate (python-tests-lens), matching
+# its dedicated CI matrix leg: services/geometric-lens/ and services/v3-service/ both define
 # top-level modules named `pipeline`/`main`, so the two trees cannot share
 # one pytest process.
-LENS_PYTEST_PATH = "geometric-lens/tests"
+LENS_PYTEST_PATH = "services/geometric-lens/tests"
 
 
 @dataclass(frozen=True)
@@ -261,7 +261,7 @@ def _python_test_gates(python: str, pytest_paths: Sequence[str], go_env: dict[st
             available=lambda: (_module_available("pytest")
                                and _module_available("torch")),
             unavailable_reason="pytest/torch not installed "
-                               "(pip install -r geometric-lens/requirements.txt)",
+                               "(pip install -r services/geometric-lens/requirements.txt)",
         ),
         # Candidate staging against a REAL executor process, not a stub.
         # Isolation, `finally` teardown and the before/after observation are
@@ -278,7 +278,7 @@ def _python_test_gates(python: str, pytest_paths: Sequence[str], go_env: dict[st
                                and _module_available("uvicorn")
                                and _module_available("fastapi")),
             unavailable_reason="Go, uvicorn or fastapi is not installed "
-                               "(pip install -r sandbox/requirements.txt)",
+                               "(pip install -r services/sandbox/requirements-runtime.txt)",
             env=go_env,
         ),
     }
@@ -355,7 +355,7 @@ def _static_check_gates(python: str, go_env: dict[str, str]) -> dict[str, Gate]:
                 "atlas/upgrade_engine.py",
                 "atlas/artifact_manifest.py",
                 "tests/perf/harness.py",
-                "geometric-lens/geometric_lens/provenance.py",
+                "services/geometric-lens/geometric_lens/provenance.py",
             ),
             cwd=ROOT,
             available=lambda: _module_available("mypy"),

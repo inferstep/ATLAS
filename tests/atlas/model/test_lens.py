@@ -514,7 +514,7 @@ def test_build_without_the_training_module_says_what_the_host_needs(
     out = capsys.readouterr().out
     assert rc == 1
     assert "Could not import training module" in out
-    assert "must point at an ATLAS checkout containing geometric-lens/" in out
+    assert "must point at an ATLAS checkout containing services/geometric-lens/" in out
 
 
 # ---------------------------------------------------------------------------
@@ -911,7 +911,7 @@ _REPO = Path(__file__).resolve().parents[3]
 @pytest.fixture
 def lens_drift(monkeypatch):
     """geometric_lens, importable the way the build imports it on a host."""
-    monkeypatch.syspath_prepend(str(_REPO / "geometric-lens"))
+    monkeypatch.syspath_prepend(str(_REPO / "services" / "geometric-lens"))
     import geometric_lens.drift as drift
     return drift
 

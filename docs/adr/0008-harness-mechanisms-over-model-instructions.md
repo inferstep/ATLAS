@@ -65,7 +65,7 @@ Three changes follow from it directly, all model-agnostic:
    in `services/proxy/loop_end.go`).
 
 3. **`outline_file` reports embedded-language regions**
-   (`embedded_region_outline` in `v3-service/symbols.py`), reusing the
+   (`embedded_region_outline` in `services/v3-service/symbols.py`), reusing the
    block extraction the embedded-script gate already performs. The host
    grammar cannot see into a string literal, so the outline of a Flask
    app whose UI is one template would name `function:index` and nothing

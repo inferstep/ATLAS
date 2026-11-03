@@ -4,7 +4,7 @@ Parallels `atlas lens` for the BiasBusters #4 steering vectors. Same
 model-coupling problem the Lens had before PC-057/058: a steering vector
 trained against one model's residual-stream geometry doesn't transfer to
 a different model. This module wraps the
-existing `geometric-lens/asa_calibration/build_steering_vector.py`
+existing `services/geometric-lens/asa_calibration/build_steering_vector.py`
 workflow into one CLI so swap-in models can be calibrated end-to-end.
 
 Subcommands:
@@ -398,7 +398,7 @@ def _check_docker(color: bool) -> Optional[int]:
         _safe_print(f"  {RED if color else ''}docker not on PATH. "
                     f"`atlas asa build` shells into the lens container; "
                     f"install Docker or use the legacy direct invocation "
-                    f"(geometric-lens/asa_calibration/README.md)."
+                    f"(services/geometric-lens/asa_calibration/README.md)."
                     f"{RESET if color else ''}")
         return 1
     return None
@@ -560,7 +560,7 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
     Container needs to be running (operator hasn't `docker compose down`).
     Script + pairs are docker-cp'd in for the run; output .gguf is
     docker-cp'd back. This keeps the source of truth at one path
-    (`geometric-lens/asa_calibration/`) instead of forking the workflow.
+    (`services/geometric-lens/asa_calibration/`) instead of forking the workflow.
     """
     atlas_root = _atlas_root()
 
@@ -593,7 +593,7 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
         return rc
 
     # 2. Resolve script + pairs paths on the host
-    asa_dir = os.path.join(atlas_root, "geometric-lens", "asa_calibration")
+    asa_dir = os.path.join(atlas_root, "services", "geometric-lens", "asa_calibration")
     script_host = os.path.join(asa_dir, "build_steering_vector.py")
     pairs_host = args.pairs or os.path.join(asa_dir, "contrast_pairs.jsonl")
     rc = _check_script_and_pairs(args, asa_dir, script_host, pairs_host, color)
@@ -1106,7 +1106,7 @@ def main(argv=None):
         help="registry name (default: whatever llama-server has loaded)")
     p_build.add_argument("--pairs", default=None,
         help="contrast pairs JSONL (default: generate "
-             "geometric-lens/asa_calibration/contrast_pairs.jsonl on demand)")
+             "services/geometric-lens/asa_calibration/contrast_pairs.jsonl on demand)")
     p_build.add_argument("--layer", type=int, default=None,
         help="layer to extract residuals from (default: 75%% of loaded model depth)")
     p_build.add_argument("--limit", type=int, default=0,

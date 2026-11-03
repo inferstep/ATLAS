@@ -234,7 +234,7 @@ def start_sandbox(root: Path, workspace_root: Path):
     env = {"PATH": path, "HOME": str(root / "sandbox-home"), "WORKSPACE_BASE": str(root / "sandbox-scratch"), "MAX_EXECUTION_TIME": "60",
            "ATLAS_SANDBOX_WORKSPACE_ROOT": str(workspace_root), "ATLAS_SERVICE_TOKEN_FILE": str(token)}
     process = subprocess.Popen([sys.executable, "-m", "uvicorn", "executor_server:app", "--host", "127.0.0.1",
-                                "--port", str(port), "--log-level", "error"], cwd=stage.REPO / "sandbox", env=env,
+                                "--port", str(port), "--log-level", "error"], cwd=stage.REPO / "services" / "sandbox", env=env,
                                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     deadline = time.time() + 30
     while time.time() < deadline:

@@ -3,7 +3,7 @@
 
 `pyproject.toml` sets `requires-python`, but CI runs the test matrix on
 3.11/3.12 only, so nothing was comparing the two. They drifted:
-`sandbox/executor_server.py` carried `def f(...) -> str | None`, a PEP 604
+`services/sandbox/executor_server.py` carried `def f(...) -> str | None`, a PEP 604
 union evaluated at definition time, which raises TypeError on 3.9 while the
 package advertised `>=3.9`. It surfaced as 29 fixture errors for anyone on
 the floor version, including RHEL 9 hosts where 3.9 is the system Python.
@@ -36,7 +36,7 @@ ROOT = Path(__file__).resolve().parents[2]
 # interpreter — `atlas bench` and `atlas lens build` are driven from the
 # host, not a container, so the floor applies the same way (the bench
 # harness itself lives under atlas/).
-DEFAULT_TARGETS = ("atlas", "geometric-lens", "v3-service", "sandbox",
+DEFAULT_TARGETS = ("atlas", "services/geometric-lens", "services/v3-service", "services/sandbox",
                    "scripts", "tests")
 
 # Directories that never ship to a user's interpreter.

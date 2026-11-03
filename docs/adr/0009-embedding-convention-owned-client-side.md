@@ -10,7 +10,7 @@ Status: accepted 2026-08
 - the per-step path (`/internal/lens/score-per-step`), which scores every
   token of a candidate and needs per-token vectors (`extract_per_token`).
 
-Both functions are in `geometric-lens/geometric_lens/embedding_extractor.py`.
+Both functions are in `services/geometric-lens/geometric_lens/embedding_extractor.py`.
 `--pooling` is server-global in llama.cpp, so one setting has to serve
 both consumers, and only `--pooling none` returns per-token vectors
 (`extract_per_token` refuses a pooled answer).
@@ -19,7 +19,7 @@ Scale carries the signal. The shipped cost field is fitted on
 unnormalized mean-pooled vectors, so the lens keeps each vector's scale
 unless the artifact's contract says it was trained normalized
 (`extract_embedding`; `test_vector_scale_is_preserved` in
-`geometric-lens/tests/test_embedding_contract.py`). Normalization does not
+`services/geometric-lens/tests/test_embedding_contract.py`). Normalization does not
 commute with pooling either: the mean of per-token unit vectors is not the
 normalized mean of the raw vectors (`extract_embedding`).
 
@@ -28,7 +28,7 @@ ready, and C(x) returns a number in a plausible-looking range
 (`_reject_prenormalized` in `embedding_extractor.py`). The drift check,
 which re-scores fixed reference texts, is what catches a shift in every
 energy, for a bundle that carries a `drift_fingerprint.json`
-(`check_fingerprint` in `geometric-lens/geometric_lens/drift.py`).
+(`check_fingerprint` in `services/geometric-lens/geometric_lens/drift.py`).
 
 ## Decision
 The lens derives the convention it needs from the most informative
@@ -57,7 +57,7 @@ whole-text vector is the same under `--pooling none` and `--pooling mean`
 one server running `--pooling none`. Normalization does not rescale the
 input to a fitted model unless the artifact's contract says it was trained
 normalized (`test_normalized_contract_still_normalizes`; both tests are in
-`geometric-lens/tests/test_embedding_contract.py`).
+`services/geometric-lens/tests/test_embedding_contract.py`).
 
 A fail-soft default must not be indistinguishable from a real answer:
 `0.500` from a scorer that never ran reads exactly like `0.500` from one

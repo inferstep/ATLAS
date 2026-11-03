@@ -204,7 +204,7 @@ def files_with_text_for_the_model():
     """The files of v3-service, without its tests, that hold a prompt: a text that starts with "You are a", or the
     marks of a ChatML prompt."""
     found = []
-    for path in sorted((ROOT / "v3-service").rglob("*.py")):
+    for path in sorted((ROOT / "services" / "v3-service").rglob("*.py")):
         if "tests" in path.parts:
             continue
         texts = [node.value for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
@@ -227,13 +227,13 @@ def test_the_list_of_files_with_text_for_the_model_is_each_such_file_of_v3_servi
 
 
 def test_a_change_to_a_prompt_of_v3_service_in_this_repository_is_high_risk_and_another_file_of_it_is_not():
-    prompt = rules.labels_for([changed("v3-service/stages/pr_cot.py", 2, 1)], False, SETTINGS)
-    assert prompt == rules.Labels("size/S", 3, ("it changes a prompt of v3-service (v3-service/stages/pr_cot.py)",))
-    request = rules.labels_for([changed("v3-service/adapters.py", 2, 1), changed("v3-service/planning.py", 1)], False, SETTINGS)
-    assert request.reasons == ("it changes a prompt of v3-service (v3-service/planning.py)",
-                               "it changes the request that v3-service sends to the model (v3-service/adapters.py)")
-    for path in ("v3-service/pipeline.py", "v3-service/stages/candidate_selection.py", "tests/v3-service/test_planning.py",
-                 "v3-service/stages/__init__.py", "v3-service/planning.md"):
+    prompt = rules.labels_for([changed("services/v3-service/stages/pr_cot.py", 2, 1)], False, SETTINGS)
+    assert prompt == rules.Labels("size/S", 3, ("it changes a prompt of v3-service (services/v3-service/stages/pr_cot.py)",))
+    request = rules.labels_for([changed("services/v3-service/adapters.py", 2, 1), changed("services/v3-service/planning.py", 1)], False, SETTINGS)
+    assert request.reasons == ("it changes a prompt of v3-service (services/v3-service/planning.py)",
+                               "it changes the request that v3-service sends to the model (services/v3-service/adapters.py)")
+    for path in ("services/v3-service/pipeline.py", "services/v3-service/stages/candidate_selection.py", "tests/v3-service/test_planning.py",
+                 "services/v3-service/stages/__init__.py", "services/v3-service/planning.md"):
         assert rules.labels_for([changed(path, 2, 1)], False, SETTINGS).reasons == (), path
 
 
@@ -245,7 +245,7 @@ def test_a_change_to_a_workflow_is_not_high_risk_by_the_label_and_the_integrity_
     assert ".github/workflows/" in integrity.GATE_FILES
 
 
-@pytest.mark.parametrize("path", ["tests/infrastructure/test_x.py", "geometric-lens/tests/test_y.py", "clients/extensions/vscode/test/z.test.ts",
+@pytest.mark.parametrize("path", ["tests/infrastructure/test_x.py", "services/geometric-lens/tests/test_y.py", "clients/extensions/vscode/test/z.test.ts",
                                   "services/proxy/main_test.go", "docs/SETUP.md", "docs/images/a.svg", "README.md", "services/proxy/go.sum"])
 def test_the_tests_the_documents_and_the_lock_files_of_this_repository_do_not_count(path):
     assert rules.labels_for([changed(path, 700, 600), changed("atlas/env.py", 5, 1)], False, SETTINGS) == rules.Labels("size/S", 6, ())

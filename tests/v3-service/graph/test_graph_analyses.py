@@ -8,7 +8,7 @@ the identical graph via `npx tsx`. Divergence flags a behavioral fork.
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "v3-service"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "services" / "v3-service"))
 
 from graph.types import (
     CallsFact, CodeGraph, DefinesFact, ExportsFact,

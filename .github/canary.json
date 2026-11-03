@@ -83,10 +83,10 @@
       "red": [
         "pytest (geometric-lens/tests)"
       ],
-      "what": "a failing test in geometric-lens/tests/test_canary_lens.py",
+      "what": "a failing test in services/geometric-lens/tests/test_canary_lens.py",
       "shows": "canary: this test fails on purpose",
       "action": "write",
-      "path": "geometric-lens/tests/test_canary_lens.py",
+      "path": "services/geometric-lens/tests/test_canary_lens.py",
       "lines": [
         "\"\"\"Planted by scripts/canary.py for the canary pull request. Never merge it.\"\"\"",
         "",

@@ -85,7 +85,7 @@ earning maintainer trust, so every rung also has hard technical limits.
 - Every path has a code owner, whose approval a pull request into
   `staging` or `main` needs. The security- and
   release-critical paths stay with the lead even when subsystems gain
-  owners: `.github/workflows/`, `scripts/`, `sandbox/`, `.github/SECURITY.md`,
+  owners: `.github/workflows/`, `scripts/`, `services/sandbox/`, `.github/SECURITY.md`,
   `docs/project/RELEASE.md`, `docs/project/PUBLISHING.md` and
   `atlas/commands/model_registry.py` (see
   [CODEOWNERS](CODEOWNERS)).

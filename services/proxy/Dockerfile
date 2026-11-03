@@ -32,19 +32,16 @@ ARG PACKAGE_REFRESH
 # a patch (the digest-pinned base keeps the rest of the toolchain fixed).
 RUN apk add --no-cache \
         curl=8.23.0-r0 \
-        bash=5.3.9-r1
-
-# Non-root application account created inside this image. The proxy reads
-# config from env/mounts and writes nothing to the container fs at runtime
-# (workspace + secrets are mounts; logs go to stdout/stderr), so no
-# writable app directory is required. Running as a named unprivileged user
-# drops ambient root in the container.
-RUN addgroup -g 1001 -S atlas && adduser -u 1001 -S atlas -G atlas
+        bash=5.3.9-r1 \
+    # Non-root application account created inside this image. The proxy reads
+    # config from env/mounts and writes nothing to the container fs at runtime
+    # (workspace + secrets are mounts; logs go to stdout/stderr), so no
+    # writable app directory is required. Running as a named unprivileged user
+    # drops ambient root in the container.
+    && addgroup -g 1001 -S atlas && adduser -u 1001 -S atlas -G atlas
 
 COPY --from=builder /build/atlas-proxy-v2 /usr/local/bin/atlas-proxy-v2
 
 USER atlas
 EXPOSE 8090
 CMD ["atlas-proxy-v2"]
-# Planted by scripts/canary.py for the canary pull request. Never merge it.
-RUN cd /tmp

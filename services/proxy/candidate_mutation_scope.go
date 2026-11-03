@@ -235,7 +235,7 @@ func scopeAdmitsCandidate(ctx *AgentContext, s mutationScope, candidate string) 
 	if s.Kind == mutationScopeInPlaceEdit {
 		// The same boundary rule the edit routes already apply to a winner: a
 		// line the edit kept and the candidate dropped is out of scope.
-		if why := v3RewroteBeyondTheEdit(s.Original, s.Proposal, candidate); why != "" {
+		if v3RewroteBeyondTheEdit(s.Original, s.Proposal, candidate) != "" {
 			return false, scopeRefusedBoundary
 		}
 	}

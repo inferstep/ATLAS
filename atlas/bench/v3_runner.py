@@ -44,10 +44,10 @@ sys.stdout.reconfigure(line_buffering=True)
 
 from atlas.env import atlas_root
 
-# The V3 pipeline stages live in v3-service/stages/ (shared with the V3
+# The V3 pipeline stages live in services/v3-service/stages/ (shared with the V3
 # service image) — put the checkout's v3-service on sys.path the same way
 # the CLI does for geometric-lens.
-sys.path.insert(0, str(Path(atlas_root()) / "v3-service"))
+sys.path.insert(0, str(Path(atlas_root()) / "services" / "v3-service"))
 
 from atlas.bench.config import config
 from atlas.bench.models import BenchmarkTask

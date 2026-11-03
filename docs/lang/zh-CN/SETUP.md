@@ -526,13 +526,13 @@ go build -o ~/.local/bin/atlas-proxy-v2 .
 cd ../..
 
 # 4. Install geometric-lens Python dependencies
-pip install -r geometric-lens/requirements.txt
+pip install -r services/geometric-lens/requirements.txt
 
 # 5. Install V3 service dependencies
-pip install -r v3-service/requirements.txt
+pip install -r services/v3-service/requirements.txt
 
 # 6. Install sandbox dependencies
-pip install -r sandbox/requirements-runtime.txt -r sandbox/requirements-verify.txt
+pip install -r services/sandbox/requirements-runtime.txt -r services/sandbox/requirements-verify.txt
 ```
 
 ### 启动服务
@@ -552,24 +552,26 @@ llama-server \
 
 # Terminal 2: Geometric Lens (required: the proxy refuses requests while it
 # cannot score)
-cd geometric-lens
+cd services/geometric-lens
 LLAMA_URL=http://localhost:8080 \
 LLAMA_EMBED_URL=http://localhost:8080 \
 python -m uvicorn main:app --host 0.0.0.0 --port 8099
 
 # Terminal 3: V3 Pipeline
-cd v3-service
+cd services/v3-service
 ATLAS_INFERENCE_URL=http://localhost:8080 \
 ATLAS_LENS_URL=http://localhost:8099 \
 ATLAS_SANDBOX_URL=http://localhost:8020 \
 python main.py
 
 # Terminal 4: Sandbox
-cd sandbox
+cd services/sandbox
 python executor_server.py
 # 沙箱在启动时检查能否通过 /proc 管理子进程。
 # 在没有可读 /proc 的主机上（例如 macOS），它以降级的限制启动，
 # 并在 /health 和执行结果中报告 "resource limits not enforced"。
+# 它只在 127.0.0.1:8020 上监听（地址由 ATLAS_SANDBOX_HOST 设置）；
+# 若工作区根目录（/tmp/sandbox）是链接或属于其他用户，它不会启动。
 
 # Terminal 5: atlas-proxy
 ATLAS_PROXY_PORT=8090 \
@@ -815,7 +817,7 @@ ATLAS 的每一个请求都需要 Geometric Lens（[ADR 0011](../../adr/0011-the
 
 **[ATLAS 数据集（HuggingFace）](https://huggingface.co/datasets/itigges22/ATLAS)** —— 包含嵌入向量、训练数据和权重文件。
 
-将权重文件放在 `geometric-lens/geometric_lens/models/` 目录中（或通过 Docker Compose 中的 `ATLAS_LENS_MODELS` 挂载）。服务启动时会自动加载。
+将权重文件放在 `services/geometric-lens/geometric_lens/models/` 目录中（或通过 Docker Compose 中的 `ATLAS_LENS_MODELS` 挂载）。服务启动时会自动加载。
 
 对于没有权重的模型，用你自己的基准数据构建它们。`atlas bench` 直接运行 V3 各阶段而不经过代理，因此在 lens 拥有权重之前它也能工作。整个流程都由 CLI 驱动：
 
@@ -873,7 +875,7 @@ mkdir -p secrets     # or set ATLAS_SECRETS_DIR
 
 `atlas-bootstrap.sh` 会在服务启动后自动构建它。流水线是：
 
-1. `build_cvector_prompts.py` 把已提交的 `geometric-lens/asa_calibration/contrast_pairs.jsonl`（1000 对）转成正/负提示词文件。
+1. `build_cvector_prompts.py` 把已提交的 `services/geometric-lens/asa_calibration/contrast_pairs.jsonl`（1000 对）转成正/负提示词文件。
 2. bootstrap 短暂停下 `llama-server`，以 `--method mean -ngl 99` 把 `llama-cvector-generator` 作为一次性容器运行，写出 `models/ast_edit_steering.gguf`，外加一个 `models/ast_edit_steering.gguf.model` 侧车标记，记录该向量是针对哪个模型构建的，然后重启 `llama-server`。
 3. `services/inference/entrypoint-v3.1.sh` 在下次启动时看到该文件，检查 `.model` 侧车标记与所选模型匹配后，把 `--control-vector-scaled /models/ast_edit_steering.gguf:0.5` 附加到 `llama-server` 的命令行。标记缺失或指向不同模型的向量将保持**禁用**（启动横幅会说明原因）—— 向量是绑定于单个模型的残差空间工件。
 
@@ -892,7 +894,7 @@ mkdir -p secrets     # or set ATLAS_SECRETS_DIR
 
 要完全跳过构建，在运行安装器前设置 `ATLAS_BOOTSTRAP_SKIP_ASA=1`。
 
-要手动重建（重新筛选的对比对、不同的 `--method`、不同的基础模型），见 [`geometric-lens/asa_calibration/README.md`](../../../geometric-lens/asa_calibration/README.md)。
+要手动重建（重新筛选的对比对、不同的 `--method`、不同的基础模型），见 [`services/geometric-lens/asa_calibration/README.md`](../../../services/geometric-lens/asa_calibration/README.md)。
 
 ---
 

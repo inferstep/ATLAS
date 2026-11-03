@@ -55,7 +55,7 @@ llama-server は GPU を使用する唯一のサービスです。それ以外�
 
 **バックエンドの選択は実行時ではなくインストール時に行われます。** `atlas init` は `tier.detect_gpu()`（`atlas/commands/tier.py` を参照）を実行し、検出されたすべてのベンダーの中から VRAM が最大の GPU を選び（`ATLAS_GPU_VENDOR` / `ATLAS_GPU_INDEX` でオーバーライド可能）、`.env` に `ATLAS_BACKEND={cuda|rocm|metal|vulkan}` を書き込みます。パッケージ済みのネイティブバックエンドが存在する場合、検出はそれに解決されます: NVIDIA には CUDA、x86_64 上の AMD には ROCm、macOS にはハイブリッド Metal パス。ホスト向けのネイティブバックエンドがパッケージされていない場合（Intel Arc、arm64 上の AMD、未認識のベンダー）、ウィザードは Vulkan ユニバーサルフォールバックを提案します（デフォルトは yes）: 1 つのイメージで AMD、Intel、Adreno、MoltenVK、lavapipe CPU ラスタライザをカバーし、性能はチューニング済みのネイティブバックエンドよりおおよそ 20〜40% 低くなります。起動しない `.env` を書き込む代わりに拒否するのは、使えるものが何も存在しない場合だけです。各バックエンドにはそれぞれ事前ビルド済みのイメージがあります。ユーザーがすべてのバックエンドのライブラリを同梱した肥大化したイメージを実行することはありません。
 
-**持ち込みモデルの対応面 (V3.1.1)。** `atlas lens check` は、稼働中の llama-server に対する安価な事前チェックで、ロード済みモデルが Lens 互換かどうかを報告します。`atlas lens build --samples <path>` は `geometric-lens/geometric_lens/training.py` をラップし、モデルのネイティブ埋め込み次元で新しい C(x)（`cost_field.pt`）**と** G(x)（XGBoost）のアーティファクトをトレーニングします。この2つを組み合わせることで、ユーザーは Lens コードをフォークすることなくデフォルト以外の GGUF を差し込めます — C(x) コンストラクタは任意の `input_dim` を受け付けるため、モデルごとに変わるのはトレーニング済み重みだけです。ユーザー向けのフローは [CLI.md § atlas lens](../../reference/CLI.md#atlas-lens) を参照してください。`atlas lens publish`（または統合コマンドの `atlas publish`）がアーティファクトを HuggingFace にアップロードし、そのハッシュを固定するレジストリ PR を開きます。
+**持ち込みモデルの対応面 (V3.1.1)。** `atlas lens check` は、稼働中の llama-server に対する安価な事前チェックで、ロード済みモデルが Lens 互換かどうかを報告します。`atlas lens build --samples <path>` は `services/geometric-lens/geometric_lens/training.py` をラップし、モデルのネイティブ埋め込み次元で新しい C(x)（`cost_field.pt`）**と** G(x)（XGBoost）のアーティファクトをトレーニングします。この2つを組み合わせることで、ユーザーは Lens コードをフォークすることなくデフォルト以外の GGUF を差し込めます — C(x) コンストラクタは任意の `input_dim` を受け付けるため、モデルごとに変わるのはトレーニング済み重みだけです。ユーザー向けのフローは [CLI.md § atlas lens](../../reference/CLI.md#atlas-lens) を参照してください。`atlas lens publish`（または統合コマンドの `atlas publish`）がアーティファクトを HuggingFace にアップロードし、そのハッシュを固定するレジストリ PR を開きます。
 
 **ベンダー非依存な要素**（すべてのバックエンドで動作）: 文法制約付き JSON、セルフ埋め込み（`/embedding`）、レイヤーごとの隠れ状態、ASA 制御ベクトル（バックエンドを問わず llama.cpp の `control_vector_load` でロードされる）、KV キャッシュ量子化、外側のエージェントループ全体、V3 パイプライン、Geometric Lens、サンドボックス。
 
@@ -315,7 +315,7 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 1. **説明文の書き換え**（`services/proxy/tool_edit.go`、`services/proxy/tool_structural_edit.go`）。edit_file の説明はファイル全体/関数全体での使用を警告し、structural_edit の説明は >10 行 / ノード全体の差し替えには必須と述べ、write_file の説明は新規ファイル専用と述べる。
 2. **条件付き GBNF 文法**（`services/proxy/tool_schema.go`、`services/proxy/model_call.go:stepExclusions`）。既存の5行超 .py/.html/.htm ファイルに対する write_file が拒否されると、次の LLM 呼び出しはツール名のプロダクションから edit_file と write_file を禁止する GBNF 文法で制約される。モデルは物理的にそれらを発行できない。この制限は1回の判断後に失効する。
 3. **ステップごとのツールリストフィルタ**（同じトリガー）。一時的な `[system note]` のユーザーメッセージが注入され、このステップでは structural_edit が唯一の構造的編集ツールであることをモデルに思い出させる。
-4. **ASA ステアリングベクトル**（`geometric-lens/asa_calibration/`）。活性化ステアリングが残差ストリームの分布を上流でシフトさせ、いかなる拒否が発火する前の初回の判断でも structural_edit が優先される。`services/inference/entrypoint-v3.1.sh` が `/models/ast_edit_steering.gguf` から自動ロードするのは、その `.model` サイドカーが選択中のモデルと一致する場合のみ — `geometric-lens/asa_calibration/README.md` のワークフローで互換性のあるビルドを行えば、以降は常時オン。パス/スケール/レイヤー範囲は `ATLAS_CONTROL_VECTOR*` 環境変数でオーバーライドする。
+4. **ASA ステアリングベクトル**（`services/geometric-lens/asa_calibration/`）。活性化ステアリングが残差ストリームの分布を上流でシフトさせ、いかなる拒否が発火する前の初回の判断でも structural_edit が優先される。`services/inference/entrypoint-v3.1.sh` が `/models/ast_edit_steering.gguf` から自動ロードするのは、その `.model` サイドカーが選択中のモデルと一致する場合のみ — `services/geometric-lens/asa_calibration/README.md` のワークフローで互換性のあるビルドを行えば、以降は常時オン。パス/スケール/レイヤー範囲は `ATLAS_CONTROL_VECTOR*` 環境変数でオーバーライドする。
 
    **モデル別の結合。** 各 ASA ベクトルは特定モデルの残差ストリーム幾何に対してトレーニングされます。モデルをまたぐフォールバックに安全なものはありません。`atlas asa check` は `.model` サイドカーを検証し、ロード済みの埋め込み次元をプローブし、GGUF のレイヤーメタデータをパースして、`compat` / `needs-build` / `incompatible` を報告します。`atlas asa build` はロード済みモデルから抽出レイヤーを導出し、ベクトルとマーカーを書き込み、lens コンテナ内で実行されます。`atlas asa publish` はアップロード前に、マーカーの欠落や不一致を拒否します。[CLI.md § atlas asa](../../reference/CLI.md#atlas-asa) を参照。
 
@@ -430,7 +430,7 @@ flowchart TD
 
 ##### v3-service: `/v3/plan` (Python)
 
-`v3-service/planning.py` で定義され、`v3-service/main.py` がルートを提供します。ハンドラーの処理:
+`services/v3-service/planning.py` で定義され、`services/v3-service/main.py` がルートを提供します。ハンドラーの処理:
 
 1. ユーザーメッセージ、作業ディレクトリ、切り詰めたプロジェクトファイルで `PLAN_PROMPT_TEMPLATE` をレンダリングします。
 2. シードオフセットと温度 `[0.3, 0.5, 0.7]` で LLM を 3 回呼び出します。デフォルトではオプションの `chat_template_kwargs: {enable_thinking: false}` 制御を送り、プラン JSON 用に 2,048 出力トークンを確保します。対応するテンプレートは推論チャンネルを無効にし、それ以外のテンプレートはこのフラグを無視します。`ATLAS_PLAN_THINKING=1` は推論を要求し、予算を 8,192 に引き上げます。モデルファミリー固有のプロンプト指示は注入しません。
@@ -481,7 +481,7 @@ API の契約は [API.md § POST /v3/plan](../../reference/API.md#post-v3plan) �
 | `planAutoReviseThreshold` | 5 | 自動修正が発動するまでの、偵察以外のプラン外ツールコールの数（偵察ツールは連続回数を延ばさないので、自然な探索は数えられません）。誤ったプランを早く捕まえられる程度に厳しく、はぐれたコールが少しあった程度では空回りと判定しない程度に緩い値です。 |
 | `planMaxRevisions` | 2 | ループごとの自動修正の上限。これを超えると、最後のプランが残り、修正だけが止まります。修正が同じステップを返した場合は、プランを破棄します。プランから外れ続ける異常な入力で `/v3/plan` が永遠に繰り返されるのを防ぎます。 |
 
-`v3-service/planning.py` の定数:
+`services/v3-service/planning.py` の定数:
 
 | 定数 | デフォルト | 理由 |
 |---|---|---|
@@ -604,13 +604,13 @@ flowchart LR
 
 このフロアが、以前に削除された C(x) のみのアロケータとの違いです: あちらにはフロアがなく、プローブが*ちょうど失敗した*タスクに k=1 を渡してしまいました。レンズ駆動の割り当てが固定またはランダムなティア割り当てより優れているかは未測定です。以前の4アーム比較（ゲートあり、固定 k=3、同じティア構成をタスク間でシャッフル、k=8、各アーム n=175）はどちらの根拠にもなりません。この比較は Qwen3.5-9B 上で、このリポジトリにないパッチ済みランナーを使い、ライブのゲートでは適用できないエスカレーション時の思考を有効にし、G(x) ヘッドの学習に使った LiveCodeBench タスクで実行されたもので、そのサンプルサイズでは各アームの差はノイズの範囲内です。
 
-ライブパスとの違い: プロキシの V3 ブリッジは `ATLAS_V3_TIMEOUT`（デフォルト 300s）でパイプライン呼び出しを打ち切ります。これはベンチには存在しなかった上限で、k=8 への無制限なエスカレーションは予算を生成に使い切り、時間内に出せたはずの k=3 の答えではなくタイムアウトのフォールバックを返すことになります。そのためライブのオーケストレータは、残りの実時間とそのタスクで観測された呼び出しごとのレイテンシを渡し、ゲートは予算内で実際に生成できる水準までティアを下げます — エスカレーションがフェーズ3を枯渇させないようリファインメント1回分を確保しつつ、フロアを下回ることはありません。ベンチランナーは予算を渡さず、測定されたとおりに割り当てます。実装は `v3-service/stages/cxgx_gate.py` で、両方のオーケストレータが共有します。
+ライブパスとの違い: プロキシの V3 ブリッジは `ATLAS_V3_TIMEOUT`（デフォルト 300s）でパイプライン呼び出しを打ち切ります。これはベンチには存在しなかった上限で、k=8 への無制限なエスカレーションは予算を生成に使い切り、時間内に出せたはずの k=3 の答えではなくタイムアウトのフォールバックを返すことになります。そのためライブのオーケストレータは、残りの実時間とそのタスクで観測された呼び出しごとのレイテンシを渡し、ゲートは予算内で実際に生成できる水準までティアを下げます — エスカレーションがフェーズ3を枯渇させないようリファインメント1回分を確保しつつ、フロアを下回ることはありません。ベンチランナーは予算を渡さず、測定されたとおりに割り当てます。実装は `services/v3-service/stages/cxgx_gate.py` で、両方のオーケストレータが共有します。
 
 **フェーズ1: 制約駆動の生成**
 
 **V3 は常に実行されます。** プランニングと候補生成は、ルーティングルールがそれらへ送るすべてのリクエストで走ります: ティア2以上のファイル、設定された V3 サービス、そしてちょうど失敗を見たばかりのファイルを反復していないセッション。どのリクエストフィールドも両者をオフにできません。`bypass_v3`、`v3_mode`、`feasibility_mode` は削除されており、V3 オフ・プランナーのみ・`enforce` を要求するリクエストは 400 となり、別のシステムの下で静かに走ることは決してありません。V3 なしの計測にはリサーチビルドが必要です。
 
-- **PlanSearch** は、異なる制約セットを抽出することで構造的に異なる実装プランを生成します — プローブが既に埋めなかった割り当て済み候補スロットごとに1つ（k-1）。そのプラン構築とコード生成のステップはワーカースレッドにファンアウトします（`v3-service/stages/plan_search.py` の `_fan_out`）。これにより、リクエストスレッドから推論をディスパッチする唯一の V3 ステージとなっています。ワーカーは親から ContextVar もローカルも継承しないため、リクエストスコープの状態は、キャンセルスコープと同じ運び屋であるリクエストスコープの `LLMAdapter` 経由で届きます。各推論呼び出しの身元が存在するのはそこです（`LLMAdapter.request_identity`）。ヘッダーリゾルバは ContextVar フォールバックを取りません — ワーカー内ではフォールバックが「リクエストなし」と読まれ、帰属を黙って剥ぎ取るためです。モデルにまったく到達できない PlanSearch 呼び出しは、短い候補リストを返すのではなく `PlanSearchInfrastructureError` を送出します: DivSampling が下位のスロットを埋め直すためであり、そうでなければ空のバッチと拒否されたバッチは下流で区別がつかなくなるためです。
+- **PlanSearch** は、異なる制約セットを抽出することで構造的に異なる実装プランを生成します — プローブが既に埋めなかった割り当て済み候補スロットごとに1つ（k-1）。そのプラン構築とコード生成のステップはワーカースレッドにファンアウトします（`services/v3-service/stages/plan_search.py` の `_fan_out`）。これにより、リクエストスレッドから推論をディスパッチする唯一の V3 ステージとなっています。ワーカーは親から ContextVar もローカルも継承しないため、リクエストスコープの状態は、キャンセルスコープと同じ運び屋であるリクエストスコープの `LLMAdapter` 経由で届きます。各推論呼び出しの身元が存在するのはそこです（`LLMAdapter.request_identity`）。ヘッダーリゾルバは ContextVar フォールバックを取りません — ワーカー内ではフォールバックが「リクエストなし」と読まれ、帰属を黙って剥ぎ取るためです。モデルにまったく到達できない PlanSearch 呼び出しは、短い候補リストを返すのではなく `PlanSearchInfrastructureError` を送出します: DivSampling が下位のスロットを埋め直すためであり、そうでなければ空のバッチと拒否されたバッチは下流で区別がつかなくなるためです。
 - **DivSampling** は摂動の多様性を適用します: 4つのロール（competitive_programmer、systems_engineer、mathematician、pragmatist）+ 4つの指示（step_by_step、edge_case_first、complexity_aware、constraint_driven）+ 4つのスタイル（functional、pythonic、optimize_iteratively、structured）
 - **Budget Forcing** は思考トークンの割り当てを制御します:
 
@@ -641,7 +641,7 @@ flowchart LR
 
 ### モジュールマップ
 
-`v3-service/stages/` 内の12個の Python モジュールがパイプラインステージです。`v3-service/pipeline.py` はそのうち11個をオーケストレーションします（10個は直接、`constraint_refinement` はリファインメントループ経由）; `embedding_store` はオフラインのベンチランナー（`atlas/bench/v3_runner.py`）の下でのみ動作します。ベンチランナーはチェックアウトの `v3-service/` を自身のパスに載せるため、両方の呼び出し元が単一のステージ実装を共有します:
+`services/v3-service/stages/` 内の12個の Python モジュールがパイプラインステージです。`services/v3-service/pipeline.py` はそのうち11個をオーケストレーションします（10個は直接、`constraint_refinement` はリファインメントループ経由）; `embedding_store` はオフラインのベンチランナー（`atlas/bench/v3_runner.py`）の下でのみ動作します。ベンチランナーはチェックアウトの `services/v3-service/` を自身のパスに載せるため、両方の呼び出し元が単一のステージ実装を共有します:
 
 ```mermaid
 graph LR

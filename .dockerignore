@@ -1,9 +1,9 @@
 # Root-level dockerignore. Applies to any build that uses the repo root as
 # context — currently just `v3-service` (per docker-compose.yml). Per-service
-# Dockerfiles in services/proxy/, geometric-lens/, sandbox/, services/inference/ use
+# Dockerfiles in services/proxy/, services/geometric-lens/, services/sandbox/, services/inference/ use
 # their own subdirectory as context and are unaffected by this file.
 #
-# Goal: keep the v3 build context to just the `v3-service/` Python modules
+# Goal: keep the v3 build context to just the `services/v3-service/` Python modules
 # (what its Dockerfile actually COPYs), so CI doesn't ship docs/ + tests/ +
 # proxy sources / etc. across the wire on every build.
 
@@ -14,8 +14,8 @@
 # Other services' source trees (v3 doesn't need them)
 services/proxy/
 clients/tui/
-geometric-lens/
-sandbox/
+services/geometric-lens/
+services/sandbox/
 services/inference/
 deploy/
 docs/
@@ -34,7 +34,7 @@ models/
 data/
 projects/
 docs/reports/ablation/
-# Not COPY'd by the v3 image (stages/ ships from v3-service/); also holds
+# Not COPY'd by the v3 image (stages/ ships from services/v3-service/); also holds
 # heavy runtime output (results/, datasets/.cache/).
 benchmark/
 

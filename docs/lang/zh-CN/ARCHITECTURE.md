@@ -55,7 +55,7 @@ llama-server 是唯一使用 GPU 的服务；其余每个 ATLAS 服务都跑在 
 
 **后端选择发生在安装时，而非运行时。** `atlas init` 运行 `tier.detect_gpu()`（见 `atlas/commands/tier.py`），在所有检测到的厂商中挑选显存最大的 GPU（可用 `ATLAS_GPU_VENDOR` / `ATLAS_GPU_INDEX` 覆盖），并把 `ATLAS_BACKEND={cuda|rocm|metal|vulkan}` 写入 `.env`。当主机存在打包好的原生后端时，检测会解析到它：NVIDIA 用 CUDA，x86_64 上的 AMD 用 ROCm，macOS 用混合 Metal 路径。当主机没有打包好的原生后端时（Intel Arc、arm64 上的 AMD、无法识别的厂商），向导会提供 Vulkan 通用回退（默认选是）：一个镜像覆盖 AMD、Intel、Adreno、MoltenVK 和 lavapipe CPU 光栅化器，性能比调优过的原生后端低大约 20–40%。只有当完全不存在可用的后端时，它才会拒绝 —— 而不是写出一个无法启动的 `.env`。每个后端都有自己预构建的镜像；用户不会运行一个打包了所有后端库的臃肿镜像。
 
-**自带模型的表面（V3.1.1）。** `atlas lens check` 是针对运行中的 llama-server 的一次廉价预检，用于报告当前加载的模型是否与 Lens 兼容。`atlas lens build --samples <path>` 封装了 `geometric-lens/geometric_lens/training.py`，按模型原生的嵌入维度训练全新的 C(x)（`cost_field.pt`）**和** G(x)（XGBoost）工件。二者结合让用户无需 fork lens 代码即可换入非默认的 GGUF —— C(x) 构造函数接受任意 `input_dim`，因此逐模型变化的只有训练出来的权重。面向用户的流程见 [CLI.md § atlas lens](../../reference/CLI.md#atlas-lens)；`atlas lens publish`（或合并的 `atlas publish`）会把工件上传到 HuggingFace，并开出固定其哈希的注册表 PR。
+**自带模型的表面（V3.1.1）。** `atlas lens check` 是针对运行中的 llama-server 的一次廉价预检，用于报告当前加载的模型是否与 Lens 兼容。`atlas lens build --samples <path>` 封装了 `services/geometric-lens/geometric_lens/training.py`，按模型原生的嵌入维度训练全新的 C(x)（`cost_field.pt`）**和** G(x)（XGBoost）工件。二者结合让用户无需 fork lens 代码即可换入非默认的 GGUF —— C(x) 构造函数接受任意 `input_dim`，因此逐模型变化的只有训练出来的权重。面向用户的流程见 [CLI.md § atlas lens](../../reference/CLI.md#atlas-lens)；`atlas lens publish`（或合并的 `atlas publish`）会把工件上传到 HuggingFace，并开出固定其哈希的注册表 PR。
 
 **与厂商无关的部分**（在每个后端上都可用）：语法约束的 JSON、自嵌入（`/embedding`）、逐层隐藏状态、ASA 控制向量（由 llama.cpp 的 `control_vector_load` 加载，与后端无关）、KV 缓存量化、整个外层 agent 循环、V3 pipeline、Geometric Lens 以及 sandbox。
 
@@ -296,12 +296,12 @@ run-first 门本身引用一条指令，`runFirstInstruction`：运行该扩展�
 3. **逐步工具列表过滤**（同一触发条件）。注入一条临时的
    `[system note]` 用户消息，提醒模型在这一步
    structural_edit 是唯一的结构性编辑工具。
-4. **ASA 操控向量**（`geometric-lens/asa_calibration/`）。
+4. **ASA 操控向量**（`services/geometric-lens/asa_calibration/`）。
    激活操控在上游移动残差流分布，因此即使在任何拒绝
    触发之前的首次尝试决策中，也会偏好 structural_edit。仅当
    `/models/ast_edit_steering.gguf` 的 `.model` 侧车标记与所选模型
    匹配时，才由 `services/inference/entrypoint-v3.1.sh` 自动加载 —— 一旦通过
-   `geometric-lens/asa_calibration/README.md` 中的工作流构建出兼容的
+   `services/geometric-lens/asa_calibration/README.md` 中的工作流构建出兼容的
    向量，它就始终生效。可通过 `ATLAS_CONTROL_VECTOR*` 环境变量
    覆盖路径/缩放/层范围。
 
@@ -406,7 +406,7 @@ flowchart TD
 
 ##### v3-service：`/v3/plan`（Python）
 
-定义在 `v3-service/planning.py`，由 `v3-service/main.py` 提供路由。处理程序：
+定义在 `services/v3-service/planning.py`，由 `services/v3-service/main.py` 提供路由。处理程序：
 
 1. 用用户消息、工作目录和截断后的项目文件渲染 `PLAN_PROMPT_TEMPLATE`。
 2. 以种子偏移和温度 `[0.3, 0.5, 0.7]` 调用 LLM 3 次。默认发送可选的 `chat_template_kwargs: {enable_thinking: false}` 控制项，并为计划 JSON 预留 2,048 个输出 token。支持的模板会关闭其推理通道，其他模板忽略该标志。`ATLAS_PLAN_THINKING=1` 请求推理，并把预算提高到 8,192。不注入任何针对模型系列的提示指令。
@@ -457,7 +457,7 @@ API 契约见 [API.md § POST /v3/plan](../../reference/API.md#post-v3plan)。
 | `planAutoReviseThreshold` | 5 | 触发自动修订前，非侦察的偏离计划工具调用次数（侦察工具绝不延长连续计数，因此自然的探索不算在内）。足够严格，能及早发现错误的计划；又足够宽松，几次零星的偏离调用不会被判为折腾。 |
 | `planMaxRevisions` | 2 | 每个循环的自动修订上限。超过之后，最后的计划保留，只是不再修订。如果一次修订返回相同的步骤，则丢弃计划。防止偏离计划的异常输入让 `/v3/plan` 无休止地循环。 |
 
-`v3-service/planning.py` 常量：
+`services/v3-service/planning.py` 常量：
 
 | 常量 | 默认值 | 理由 |
 |---|---|---|
@@ -562,7 +562,7 @@ flowchart LR
 
 这条下限正是它与此前被移除的纯 C(x) 分配器的区别：那一版没有下限，会把 k=1 交给探测*刚刚失败*的任务。由 lens 驱动的分配是否优于固定或随机分配的层级，目前尚未测量。此前的四臂比较（带闸门、固定 k=3、把同样的层级组合在任务间打乱、k=8，每臂 n=175）无法作为任何一方的证据：它在 Qwen3.5-9B 上、使用不在本仓库中的打过补丁的运行器、开启了线上闸门无法使用的升级思考模式、并在训练 G(x) 头所用的 LiveCodeBench 任务上运行，而在该样本量下各臂的差异都在噪声范围之内。
 
-线上路径的差异：代理的 V3 桥接会在 `ATLAS_V3_TIMEOUT`（默认 180s）后放弃一次 pipeline 调用，这是 bench 从未有过的上限；因此无限制地升级到 k=8 会把预算全花在生成上，最终返回超时兜底，而不是时钟本可以产出的 k=3 答案。为此线上编排器会把剩余的实际时间以及在该任务上观测到的单次调用延迟一并传入，闸门则把 tier 降到预算真正能生成的水平 —— 同时保留一次精化迭代，使升级不会饿死 Phase 3 —— 但绝不会低于下限。bench 运行器不传预算，严格按测得的结果分配。实现位于 `v3-service/stages/cxgx_gate.py`，由两个编排器共享。
+线上路径的差异：代理的 V3 桥接会在 `ATLAS_V3_TIMEOUT`（默认 180s）后放弃一次 pipeline 调用，这是 bench 从未有过的上限；因此无限制地升级到 k=8 会把预算全花在生成上，最终返回超时兜底，而不是时钟本可以产出的 k=3 答案。为此线上编排器会把剩余的实际时间以及在该任务上观测到的单次调用延迟一并传入，闸门则把 tier 降到预算真正能生成的水平 —— 同时保留一次精化迭代，使升级不会饿死 Phase 3 —— 但绝不会低于下限。bench 运行器不传预算，严格按测得的结果分配。实现位于 `services/v3-service/stages/cxgx_gate.py`，由两个编排器共享。
 
 **Phase 1: 约束驱动的生成**
 
@@ -595,7 +595,7 @@ Wait 注入会追加 "Wait, let me reconsider.\n" 以请求更长的一轮推理
 
 ### 模块图
 
-pipeline 阶段是 `v3-service/stages/` 中的 12 个 Python 模块。`v3-service/pipeline.py` 编排其中 11 个（10 个直接调用，`constraint_refinement` 通过精化循环）；`embedding_store` 只在离线 bench 运行器（`atlas/bench/v3_runner.py`）下运行，该运行器会把 checkout 中的 `v3-service/` 加入自身路径，因此两个调用方共享同一份阶段实现：
+pipeline 阶段是 `services/v3-service/stages/` 中的 12 个 Python 模块。`services/v3-service/pipeline.py` 编排其中 11 个（10 个直接调用，`constraint_refinement` 通过精化循环）；`embedding_store` 只在离线 bench 运行器（`atlas/bench/v3_runner.py`）下运行，该运行器会把 checkout 中的 `services/v3-service/` 加入自身路径，因此两个调用方共享同一份阶段实现：
 
 ```mermaid
 graph LR

@@ -108,11 +108,7 @@ func (s *runState) observeRepairAt(ctx *AgentContext, turn int, name, rel string
 		s.recordRepairAttempt(ctx, r, turn, name, true, result.ValidationDetail)
 	case result.MutationStatus == wire.MutationApplied:
 		if open {
-			how := "parses"
-			if result.ValidationStatus != wire.ValidationPassed {
-				how = "not checked"
-			}
-			s.closeRepair(ctx, r, turn, name, how)
+			s.closeRepair(ctx, r, turn, name, repairCloseReason(result.ValidationStatus))
 		}
 	case open:
 		s.recordRepairAttempt(ctx, r, turn, name, false, result.Error)
@@ -144,12 +140,17 @@ func (s *runState) refreshRepairs(ctx *AgentContext, turn int, tool string) {
 			s.recordRepairAttempt(ctx, r, turn, tool, true, o.Detail)
 			continue
 		}
-		how := "parses"
-		if o.Status != wire.ValidationPassed {
-			how = "not checked"
-		}
-		s.closeRepair(ctx, r, turn, tool, how)
+		s.closeRepair(ctx, r, turn, tool, repairCloseReason(o.Status))
 	}
+}
+
+// repairCloseReason is how a repair closes on a check that did not fail: the
+// file parses, or no check could say.
+func repairCloseReason(status wire.ValidationStatus) string {
+	if status == wire.ValidationPassed {
+		return "parses"
+	}
+	return "not checked"
 }
 
 func (s *runState) openRepair(ctx *AgentContext, key, rel string, turn int, tool string) *repairState {

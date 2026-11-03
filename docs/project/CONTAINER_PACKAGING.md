@@ -49,25 +49,26 @@ Each account can write only where the service actually needs to.
 | Service | Writable at runtime | Why |
 |---|---|---|
 | atlas-proxy | *(none in the container fs)*; the `/workspace` mount (file tools) and the `/data/diagnostics` mount (only when `ATLAS_SHADOW_CAPTURE` is set) | Reads config from env/mounts; secrets are a read-only mount; logs go to stdout/stderr. Bytecode caching is irrelevant (Go binary). |
-| v3-service | `/data/telemetry` (the `v3-telemetry` volume, mode 1777 in the image), `$HOME` (`/tmp` under compose) | Stage telemetry JSONL (fail-soft when the path is unwritable, with one line at start that names the repair) plus library caches; everything else the pipeline does is proxied to llama/lens/sandbox. `PYTHONDONTWRITEBYTECODE=1` avoids `.pyc` writes into read-only `/app`. |
+| v3-service | `/data/telemetry` (the `v3-telemetry` volume; mode 770 and group 1001 in the image, a group compose adds to the service), `$HOME` (`/tmp` under compose) | Stage telemetry JSONL (fail-soft when the path is unwritable, with one line at start that names the repair) plus library caches; everything else the pipeline does is proxied to llama/lens/sandbox. `PYTHONDONTWRITEBYTECODE=1` avoids `.pyc` writes into read-only `/app`. |
 | geometric-lens | `$HOME` (`/tmp` under compose) | Library caches. The models dir, config, and secrets are read-only mounts. `PYTHONDONTWRITEBYTECODE=1` set. |
 | sandbox | `/workspace` (mount), the per-language tmpfs set (`/home/sandbox/*`, `/tmp`) | Executes untrusted build/test commands; the tmpfs set is where toolchains install per the universal-tmpfs pattern (see docker-compose.yml). |
 
 ## Dependency version recording
 
 Production Python dependencies are pinned with exact `==` versions for
-every package the files list; the packages those depend on are not
-pinned, so a rebuild can resolve newer ones:
+every package the files list. Each service image installs them from a
+hashed lock beside them (`requirements-lock.txt`, made by
+`scripts/ci/ci-lock.sh`), which pins the packages those depend on too:
 
 | File | Scope |
 |---|---|
-| `geometric-lens/requirements.txt` | Lens runtime (all entries pinned) |
-| `v3-service/requirements.txt` | V3 runtime — tree-sitter grammars only; the file states it carries no torch, since the service parses and orchestrates rather than scoring |
-| `sandbox/requirements-runtime.txt` | Sandbox executor API |
-| `sandbox/requirements-verify.txt` | In-sandbox verify/lint tools (pytest, ruff, mypy, requests) and the executor's YAML and Jinja checkers (pyyaml, jinja2) |
+| `services/geometric-lens/requirements.txt` | Lens runtime (all entries pinned) |
+| `services/v3-service/requirements.txt` | V3 runtime — tree-sitter grammars only; the file states it carries no torch, since the service parses and orchestrates rather than scoring |
+| `services/sandbox/requirements-runtime.txt` | Sandbox executor API |
+| `services/sandbox/requirements-verify.txt` | In-sandbox verify/lint tools (pytest, ruff, mypy, requests) and the executor's YAML and Jinja checkers (pyyaml, jinja2) |
 
 The proxy's two Alpine packages are pinned in `services/proxy/Dockerfile`
-(`curl=8.22.0-r0`, `bash=5.3.9-r1`).
+(`curl=8.23.0-r0`, `bash=5.3.9-r1`).
 
 `tests/infrastructure/supply/test_dependency_pinning.py` asserts the pinning
 policy: requirements files carry `==` pins on every entry, inline

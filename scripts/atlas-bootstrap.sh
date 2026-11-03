@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Planted by scripts/canary.py for the canary pull request. Never merge it.
-echo "canary: the bootstrap stops here on purpose" >&2; exit 97
 #
 # atlas-bootstrap.sh — one-shot installer for ATLAS on a fresh Linux host.
 #
@@ -1599,7 +1597,7 @@ wait_for_healthy() {
 # ---------------------------------------------------------------------------
 # Builds /models/ast_edit_steering.gguf so llama-server's
 # entrypoint-v3.1.sh appends --control-vector-scaled on every start.
-# Pipeline (per geometric-lens/asa_calibration/README.md):
+# Pipeline (per services/geometric-lens/asa_calibration/README.md):
 #   1. build_cvector_prompts.py turns contrast_pairs.jsonl into
 #      positive/negative .txt files
 #   2. llama-cvector-generator (shipped in atlas-llama runtime image since
@@ -1672,7 +1670,7 @@ build_asa_steering_vector() {
     local vector_build_path="$models_dir/_ast_edit_steering.new.gguf"
     local quarantined_vector=""
 
-    local asa_dir="$ATLAS_INSTALL_DIR/geometric-lens/asa_calibration"
+    local asa_dir="$ATLAS_INSTALL_DIR/services/geometric-lens/asa_calibration"
     if [[ ! -f "$asa_dir/build_cvector_prompts.py" ]] || [[ ! -f "$asa_dir/generate_pairs.py" ]]; then
         log_warn "ASA calibration scripts missing at $asa_dir — steering remains disabled"
         return
@@ -1767,7 +1765,7 @@ build_asa_steering_vector() {
         $DC restart llama-server >> "$ATLAS_RUN_DIR/atlas-asa-build.log" 2>&1 || true
     else
         rm -f "$vector_build_path"
-        log_warn "Local ASA build failed (exit $rc). ATLAS will run without steering rather than applying a vector trained for another model. Recovery: geometric-lens/asa_calibration/README.md or rerun bootstrap. Log: $ATLAS_RUN_DIR/atlas-asa-build.log. Suppress with ATLAS_BOOTSTRAP_SKIP_ASA=1.${quarantined_vector:+ Prior vector preserved at $quarantined_vector.}"
+        log_warn "Local ASA build failed (exit $rc). ATLAS will run without steering rather than applying a vector trained for another model. Recovery: services/geometric-lens/asa_calibration/README.md or rerun bootstrap. Log: $ATLAS_RUN_DIR/atlas-asa-build.log. Suppress with ATLAS_BOOTSTRAP_SKIP_ASA=1.${quarantined_vector:+ Prior vector preserved at $quarantined_vector.}"
     fi
 }
 

@@ -16,22 +16,24 @@ reaches no network.
 import re
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[3]
 
 # Production Python requirements — every entry must be == pinned.
 REQUIREMENTS_FILES = [
-    "geometric-lens/requirements.txt",
-    "sandbox/requirements-runtime.txt",
-    "sandbox/requirements-verify.txt",
-    "v3-service/requirements.txt",
+    "services/geometric-lens/requirements.txt",
+    "services/sandbox/requirements-runtime.txt",
+    "services/sandbox/requirements-verify.txt",
+    "services/v3-service/requirements.txt",
 ]
 
 # Production Dockerfiles scanned for inline `pip install <pkg>`.
 DOCKERFILES = [
     "services/proxy/Dockerfile",
-    "v3-service/Dockerfile",
-    "geometric-lens/Dockerfile",
-    "sandbox/Dockerfile",
+    "services/v3-service/Dockerfile",
+    "services/geometric-lens/Dockerfile",
+    "services/sandbox/Dockerfile",
 ]
 
 def _requirement_lines(path: Path):
@@ -142,8 +144,11 @@ def test_production_bases_are_digest_pinned():
 def test_proxy_apk_packages_are_pinned():
     """The proxy's alpine packages support `=version` pinning; enforce it
     (the two runtime packages, curl + bash)."""
-    text = (REPO / "services" / "proxy" / "Dockerfile").read_text().replace("\\\n", " ")
-    m = re.search(r"apk add[^\n]*", text)
+    lines = (REPO / "services" / "proxy" / "Dockerfile").read_text().splitlines(keepends=True)
+    # Docker drops the comment lines inside a RUN, so this test does too. The
+    # packages end where the next command of the RUN starts.
+    text = "".join(line for line in lines if not line.lstrip().startswith("#")).replace("\\\n", " ")
+    m = re.search(r"apk add[^\n&;|]*", text)
     assert m, "proxy Dockerfile no longer uses apk add — update this test"
     for tok in m.group(0).split():
         if tok in ("RUN", "apk", "add", "--no-cache"):
@@ -164,4 +169,20 @@ def test_v3_judges_python_with_the_interpreter_the_sandbox_runs():
                 return line.split()[1]
         raise AssertionError(f"{rel} has no python base image")
 
-    assert base("v3-service/Dockerfile") == base("sandbox/Dockerfile")
+    assert base("services/v3-service/Dockerfile") == base("services/sandbox/Dockerfile")
+
+
+# The ROCm and Vulkan images take their base tag from a build argument that a user may
+# set (ATLAS_ROCM_TAG, ATLAS_UBUNTU_TAG). Its default carries the digest, and the compose
+# overlay passes the same default, so a build that sets no tag gets the pinned base.
+@pytest.mark.parametrize("dockerfile, arg, overlay, setting", [
+    pytest.param("services/inference/Dockerfile.rocm", "ROCM_TAG", "deploy/compose/docker-compose.rocm.yml",
+                 "ATLAS_ROCM_TAG", id="rocm"),
+    pytest.param("services/inference/Dockerfile.vulkan", "UBUNTU_TAG", "deploy/compose/docker-compose.vulkan.yml",
+                 "ATLAS_UBUNTU_TAG", id="vulkan"),
+])
+def test_a_base_tag_a_user_may_set_defaults_to_a_digest(dockerfile, arg, overlay, setting):
+    default = re.search(rf"^ARG {arg}=(\S+)$", (REPO / dockerfile).read_text(), re.M).group(1)
+    assert "@sha256:" in default
+    passed = re.search(rf"^\s+{arg}: \$\{{{setting}:-(\S+)\}}$", (REPO / overlay).read_text(), re.M).group(1)
+    assert passed == default

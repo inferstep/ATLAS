@@ -72,82 +72,112 @@ type recoveredCall struct {
 // values that arrived whole. A string still open at the cut is not a token and
 // is never returned.
 func recoverCutCall(raw string) recoveredCall {
-	rc := recoveredCall{Args: map[string]string{}}
+	r := cutCallReader{rc: recoveredCall{Args: map[string]string{}}, expectKey: map[int]bool{}}
 	dec := json.NewDecoder(strings.NewReader(strings.TrimSpace(raw)))
-	depth := 0
-	var key string
-	inArgs := false
-	expectKey := map[int]bool{}
-	lastArgKey := ""
 	for {
 		tok, err := dec.Token()
 		if err != nil {
 			break
 		}
-		switch v := tok.(type) {
-		case json.Delim:
-			switch v {
-			case '{':
-				depth++
-				expectKey[depth] = true
-				if depth == 2 && key == "args" {
-					inArgs = true
-				}
-			case '}':
-				if depth == 2 {
-					inArgs = false
-				}
-				depth--
-				if depth >= 1 {
-					expectKey[depth] = true
-				}
-			case '[':
-				depth++
-			case ']':
-				depth--
-				if depth >= 1 {
-					expectKey[depth] = true
-				}
-			}
+		if v, isDelim := tok.(json.Delim); isDelim {
+			r.delim(v)
 			continue
-		case string:
-			if expectKey[depth] {
-				key = v
-				expectKey[depth] = false
-				if inArgs && depth == 2 {
-					lastArgKey = v
-				}
-				continue
-			}
-			if depth == 1 && key == "name" {
-				rc.Tool = v
-			}
-			if inArgs && depth == 2 {
-				rc.Args[key] = v
-			}
-		default:
-			if inArgs && depth == 2 && key != "" {
-				rc.Args[key] = fmt.Sprint(v)
-			}
 		}
-		expectKey[depth] = true
+		if v, isString := tok.(string); isString && r.expectKey[r.depth] {
+			r.takeKey(v)
+			continue
+		}
+		r.takeValue(tok)
+		r.expectKey[r.depth] = true
 	}
-	if lastArgKey != "" {
-		if _, done := rc.Args[lastArgKey]; !done {
-			rc.CutField = lastArgKey
-			// The key as the raw JSON writes it: a quote or a backslash in it is
-			// escaped, and an HTML character is not.
-			var key strings.Builder
-			enc := json.NewEncoder(&key)
-			enc.SetEscapeHTML(false)
-			_ = enc.Encode(lastArgKey) // a string always encodes
-			marker := strings.TrimSuffix(key.String(), "\n") + `:"`
-			if i := strings.LastIndex(raw, marker); i >= 0 {
-				rc.CutLines = strings.Count(raw[i+len(marker):], `\n`) + 1
-			}
+	r.markCutField(raw)
+	return r.rc
+}
+
+// cutCallReader is where recoverCutCall stands in the token stream: how deep,
+// under which key, whether inside "args", and which keys it expects next.
+type cutCallReader struct {
+	rc         recoveredCall
+	depth      int
+	key        string
+	inArgs     bool
+	expectKey  map[int]bool
+	lastArgKey string
+}
+
+// delim follows an opening or closing brace or bracket.
+func (r *cutCallReader) delim(v json.Delim) {
+	switch v {
+	case '{':
+		r.depth++
+		r.expectKey[r.depth] = true
+		if r.depth == 2 && r.key == "args" {
+			r.inArgs = true
+		}
+	case '}':
+		if r.depth == 2 {
+			r.inArgs = false
+		}
+		r.depth--
+		if r.depth >= 1 {
+			r.expectKey[r.depth] = true
+		}
+	case '[':
+		r.depth++
+	case ']':
+		r.depth--
+		if r.depth >= 1 {
+			r.expectKey[r.depth] = true
 		}
 	}
-	return rc
+}
+
+// takeKey reads an object key, and remembers the last key of "args".
+func (r *cutCallReader) takeKey(v string) {
+	r.key = v
+	r.expectKey[r.depth] = false
+	if r.inArgs && r.depth == 2 {
+		r.lastArgKey = v
+	}
+}
+
+// takeValue keeps a value that arrived whole: the tool's name, or an argument.
+func (r *cutCallReader) takeValue(tok json.Token) {
+	switch v := tok.(type) {
+	case string:
+		if r.depth == 1 && r.key == "name" {
+			r.rc.Tool = v
+		}
+		if r.inArgs && r.depth == 2 {
+			r.rc.Args[r.key] = v
+		}
+	default:
+		if r.inArgs && r.depth == 2 && r.key != "" {
+			r.rc.Args[r.key] = fmt.Sprint(v)
+		}
+	}
+}
+
+// markCutField names the argument whose value was cut, and counts the lines of
+// it that arrived: the last argument key whose value never closed.
+func (r *cutCallReader) markCutField(raw string) {
+	if r.lastArgKey == "" {
+		return
+	}
+	if _, done := r.rc.Args[r.lastArgKey]; done {
+		return
+	}
+	r.rc.CutField = r.lastArgKey
+	// The key as the raw JSON writes it: a quote or a backslash in it is
+	// escaped, and an HTML character is not.
+	var key strings.Builder
+	enc := json.NewEncoder(&key)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(r.lastArgKey) // a string always encodes
+	marker := strings.TrimSuffix(key.String(), "\n") + `:"`
+	if i := strings.LastIndex(raw, marker); i >= 0 {
+		r.rc.CutLines = strings.Count(raw[i+len(marker):], `\n`) + 1
+	}
 }
 
 var writeToolNames = map[string]bool{"write_file": true, "edit_file": true, "structural_edit": true,
@@ -165,7 +195,7 @@ func cutCallDiagnostic(ctx *AgentContext, raw string) string {
 	source, readable := "", false
 	if path != "" && ctx != nil {
 		args, _ := json.Marshal(map[string]string{"path": path})
-		if reason := validateToolWorkspacePaths(rc.Tool, args, ctx); reason != "" {
+		if validateToolWorkspacePaths(rc.Tool, args, ctx) != "" {
 			fmt.Fprintf(&sb, "What arrived was an unfinished %s call whose path is outside the workspace; nothing was executed.", rc.Tool)
 			return sb.String()
 		}
@@ -173,6 +203,30 @@ func cutCallDiagnostic(ctx *AgentContext, raw string) string {
 			source, readable = string(b), true
 		}
 	}
+	sb.WriteString(cutCallSummary(rc, path, readable))
+	if !readable {
+		if rc.Tool == "write_file" && path != "" {
+			sb.WriteString(" To write it without one long call: " + writeFileAdvice(ctx, path))
+		}
+		return sb.String()
+	}
+	constants := largeStringConstants(path, source)
+	describeCutTarget(&sb, ctx, rc, path, source, constants)
+	sb.WriteString(" To change this code without one long call: ")
+	if len(constants) > 0 || rc.Tool != "write_file" {
+		sb.WriteString("use replace_lines with the line numbers read_file printed (up to 60 lines per call; for more, " +
+			"several calls from the bottom of the range up), edit_file with old_str set to one unique line, or " +
+			"insert_after to add lines at a line number.")
+	} else {
+		sb.WriteString(writeFileAdvice(ctx, path))
+	}
+	return sb.String()
+}
+
+// cutCallSummary says what arrived of a cut call: its tool, its target as far
+// as it is known, and how far into its cut argument it got.
+func cutCallSummary(rc recoveredCall, path string, readable bool) string {
+	var sb strings.Builder
 	switch {
 	case path == "":
 		fmt.Fprintf(&sb, "What arrived was an unfinished %s call, cut before its path was complete, so which file it "+
@@ -186,20 +240,14 @@ func cutCallDiagnostic(ctx *AgentContext, raw string) string {
 	if rc.CutField != "" && rc.CutLines > 1 {
 		fmt.Fprintf(&sb, " It was cut inside `%s` after about %d lines.", rc.CutField, rc.CutLines)
 	}
-	if !readable {
-		if rc.Tool == "write_file" && path != "" {
-			sb.WriteString(" To write it without one long call: ")
-			if fencedChannelDisabledForSession(ctx) {
-				sb.WriteString("write the first part with write_file and add the rest with insert_after in parts.")
-			} else {
-				fmt.Fprintf(&sb, "send write_file for %s with \"content\": \"@fenced\" so the file arrives as one "+
-					"fenced block, or write it in parts with write_file and insert_after.", path)
-			}
-		}
-		return sb.String()
-	}
+	return sb.String()
+}
+
+// describeCutTarget says what the file holds where the cut call aimed: the
+// selected node and its size, the module-level string constants no selector
+// reaches, and the embedded functions that are not selectable either.
+func describeCutTarget(sb *strings.Builder, ctx *AgentContext, rc recoveredCall, path, source string, constants []string) {
 	name := filepath.Base(path)
-	constants := largeStringConstants(path, source)
 	selector := rc.Args["selector"]
 	var regions []wire.EmbeddedRegion
 	if strings.HasSuffix(path, ".py") {
@@ -207,37 +255,35 @@ func cutCallDiagnostic(ctx *AgentContext, raw string) string {
 	}
 	if rc.Tool == "structural_edit" && selector != "" {
 		if span, ok := selectorSpan(ctx, path, source, selector); ok {
-			fmt.Fprintf(&sb, " In %s, `%s` is %s.", name, selector, span.describe())
+			fmt.Fprintf(sb, " In %s, `%s` is %s.", name, selector, span.describe())
 			if rc.CutField == "content" && rc.CutLines >= 5*span.lines() && rc.CutLines-span.lines() >= 30 {
 				sb.WriteString(" The replacement was already many times that size, so it was not that node's code.")
 			}
 		} else {
-			fmt.Fprintf(&sb, " %s has no node `%s` (%s).", name, selector, selectorGuidanceOrOutline(path, source))
+			fmt.Fprintf(sb, " %s has no node `%s` (%s).", name, selector, selectorGuidanceOrOutline(path, source))
 		}
 	}
 	if len(constants) > 0 {
-		fmt.Fprintf(&sb, " Most of %s is %s, a module-level string; no selector reaches inside a string literal.",
+		fmt.Fprintf(sb, " Most of %s is %s, a module-level string; no selector reaches inside a string literal.",
 			name, strings.Join(constants, " and "))
 	}
 	for _, r := range regions {
 		if len(r.Symbols) == 0 {
 			continue
 		}
-		fmt.Fprintf(&sb, " The %s functions %s are at lines %d-%d, in %s; they are not selectable either.",
+		fmt.Fprintf(sb, " The %s functions %s are at lines %d-%d, in %s; they are not selectable either.",
 			r.Kind, strings.Join(r.Symbols, ", "), r.StartLine, r.EndLine, r.Where)
 	}
-	sb.WriteString(" To change this code without one long call: ")
-	if len(constants) > 0 || rc.Tool != "write_file" {
-		sb.WriteString("use replace_lines with the line numbers read_file printed (up to 60 lines per call; for more, " +
-			"several calls from the bottom of the range up), edit_file with old_str set to one unique line, or " +
-			"insert_after to add lines at a line number.")
-	} else if fencedChannelDisabledForSession(ctx) {
-		sb.WriteString("write the first part with write_file and add the rest with insert_after in parts.")
-	} else {
-		fmt.Fprintf(&sb, "send write_file for %s with \"content\": \"@fenced\" so the file arrives as one fenced block, "+
-			"or write it in parts with write_file and insert_after.", path)
+}
+
+// writeFileAdvice is how to write path without one long call: as one fenced
+// block, or in parts when the fenced channel is off for this session.
+func writeFileAdvice(ctx *AgentContext, path string) string {
+	if fencedChannelDisabledForSession(ctx) {
+		return "write the first part with write_file and add the rest with insert_after in parts."
 	}
-	return sb.String()
+	return fmt.Sprintf("send write_file for %s with \"content\": \"@fenced\" so the file arrives as one "+
+		"fenced block, or write it in parts with write_file and insert_after.", path)
 }
 
 type lineSpan struct{ first, last int }
@@ -277,6 +323,17 @@ func selectorSpan(ctx *AgentContext, path, source, selector string) (lineSpan, b
 
 var pyStringConstantOpen = regexp.MustCompile(`^([A-Za-z_]\w*)\s*=\s*[rRbBuUfF]{0,2}("""|''')`)
 
+// closingLine is the index of the first line from start on that holds delim,
+// or -1 when none does.
+func closingLine(lines []string, start int, delim string) int {
+	for j := start; j < len(lines); j++ {
+		if strings.Contains(lines[j], delim) {
+			return j
+		}
+	}
+	return -1
+}
+
 // largeStringConstants names module-level triple-quoted string constants of
 // 20+ lines in a Python file: where a template, and the code inside it, lives.
 func largeStringConstants(path, source string) []string {
@@ -295,14 +352,11 @@ func largeStringConstants(path, source string) []string {
 		if strings.Contains(rest, delim) {
 			continue
 		}
-		for j := i + 1; j < len(lines); j++ {
-			if strings.Contains(lines[j], delim) {
-				if j-i+1 >= 20 {
-					out = append(out, fmt.Sprintf("`%s` (lines %d-%d)", m[1], i+1, j+1))
-				}
-				i = j
-				break
+		if j := closingLine(lines, i+1, delim); j >= 0 {
+			if j-i+1 >= 20 {
+				out = append(out, fmt.Sprintf("`%s` (lines %d-%d)", m[1], i+1, j+1))
 			}
+			i = j
 		}
 		if len(out) == 2 {
 			break

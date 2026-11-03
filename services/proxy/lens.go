@@ -225,14 +225,7 @@ func extractFailurePath(toolName string, args json.RawMessage) string {
 	// either returned "" and the path-aware 3-strike breaker read three
 	// identical failures as three different paths and never fired.
 	case "read_file", "write_file", "edit_file", "structural_edit", "delete_file", "find_file",
-		"insert_after", "replace_lines":
-		var p struct {
-			Path string `json:"path"`
-		}
-		if err := json.Unmarshal(args, &p); err == nil {
-			return p.Path
-		}
-	case "list_directory", "search_files":
+		"insert_after", "replace_lines", "list_directory", "search_files":
 		var p struct {
 			Path string `json:"path"`
 		}
@@ -528,34 +521,40 @@ type ASAStatus struct {
 	Hint          string `json:"hint"`
 }
 
+// lensLlamaServerHealth is the llama_server part of the lens /health JSON.
+type lensLlamaServerHealth struct {
+	// Pointer: an older lens that omits the field is not read as down.
+	Reachable *bool  `json:"reachable"`
+	Error     string `json:"error"`
+}
+
+// lensSubsystemHealth is the lens part of the lens /health JSON.
+type lensSubsystemHealth struct {
+	CostFieldLoaded bool   `json:"cost_field_loaded"`
+	CostFieldDim    int    `json:"cost_field_dim"`
+	EmbedDim        int    `json:"embed_dim"`
+	GxLoaded        bool   `json:"gx_loaded"`
+	CxCalibrated    bool   `json:"cx_calibrated"`
+	GxCalibrated    bool   `json:"gx_calibrated"`
+	SelfTestPass    bool   `json:"self_test_pass"`
+	SelfTestError   string `json:"self_test_error"`
+	// Null while no fingerprint file exists, so only an explicit
+	// false means drift.
+	FingerprintOK    *bool  `json:"fingerprint_ok"`
+	FingerprintError string `json:"fingerprint_error"`
+	// Pointer: the lens reports null while the capacity is unknown.
+	EmbedCapacityTokens *int   `json:"embed_capacity_tokens"`
+	EmbedCapacitySource string `json:"embed_capacity_source"`
+}
+
 // lensHealthShape mirrors the lens /health JSON we read. Defensive — the
 // service can be reachable but mid-startup with partial fields. We treat
 // missing fields as zero values rather than failing the whole probe.
 type lensHealthShape struct {
 	Status     string `json:"status"`
 	Subsystems struct {
-		// Pointer: an older lens that omits the field is not read as down.
-		LlamaServer struct {
-			Reachable *bool  `json:"reachable"`
-			Error     string `json:"error"`
-		} `json:"llama_server"`
-		Lens struct {
-			CostFieldLoaded bool   `json:"cost_field_loaded"`
-			CostFieldDim    int    `json:"cost_field_dim"`
-			EmbedDim        int    `json:"embed_dim"`
-			GxLoaded        bool   `json:"gx_loaded"`
-			CxCalibrated    bool   `json:"cx_calibrated"`
-			GxCalibrated    bool   `json:"gx_calibrated"`
-			SelfTestPass    bool   `json:"self_test_pass"`
-			SelfTestError   string `json:"self_test_error"`
-			// Null while no fingerprint file exists, so only an explicit
-			// false means drift.
-			FingerprintOK    *bool  `json:"fingerprint_ok"`
-			FingerprintError string `json:"fingerprint_error"`
-			// Pointer: the lens reports null while the capacity is unknown.
-			EmbedCapacityTokens *int   `json:"embed_capacity_tokens"`
-			EmbedCapacitySource string `json:"embed_capacity_source"`
-		} `json:"lens"`
+		LlamaServer lensLlamaServerHealth `json:"llama_server"`
+		Lens        lensSubsystemHealth   `json:"lens"`
 	} `json:"subsystems"`
 }
 
@@ -647,6 +646,10 @@ func lensVerdictCanScore(verdict string) bool {
 	return verdict == "supported" || verdict == "uncalibrated"
 }
 
+// modelsDir is the models folder: at the root inside the containers, and in
+// the workspace on the host.
+const modelsDir = "/models/"
+
 // probeASAStatus checks for the configured ASA control-vector file on disk.
 // The configured path is container-relative (e.g.
 // /models/ast_edit_steering.gguf as llama-server sees it). The proxy
@@ -671,11 +674,11 @@ func probeASAStatus() ASAStatus {
 
 	// Candidate paths to probe, in order.
 	candidates := []vectorCandidate{{path: configured}}
-	if strings.HasPrefix(configured, "/models/") {
-		base := strings.TrimPrefix(configured, "/models/")
+	if strings.HasPrefix(configured, modelsDir) {
+		base := strings.TrimPrefix(configured, modelsDir)
 		workspace := envOr("ATLAS_WORKSPACE_DIR", "/workspace")
 		candidates = append(candidates, vectorCandidate{
-			path: workspace + "/models/" + base, root: workspace, rel: filepath.Join("models", base)})
+			path: workspace + modelsDir + base, root: workspace, rel: filepath.Join("models", base)})
 		if mdir := os.Getenv("ATLAS_MODELS_DIR"); mdir != "" {
 			candidates = append(candidates, vectorCandidate{path: mdir + "/" + base})
 		}
@@ -713,7 +716,7 @@ func probeASAStatus() ASAStatus {
 	out.Hint = "no control vector at " + configured +
 		" (also tried workspace/models/ + ATLAS_MODELS_DIR) — " +
 		"build one via `atlas asa build` " +
-		"or see geometric-lens/asa_calibration/README.md"
+		"or see services/geometric-lens/asa_calibration/README.md"
 	return out
 }
 

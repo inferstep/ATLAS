@@ -1,6 +1,6 @@
 """The service Dockerfiles install Python dependencies from hashed locks.
 
-geometric-lens and v3-service must install requirements using --require-hashes
+geometric-lens, v3-service and the sandbox must install requirements using --require-hashes
 and --only-binary=:all: (issue #333, refs #202).
 
 Each pin in a service's requirements.txt must match the version in its
@@ -14,8 +14,10 @@ import pytest
 ROOT = Path(__file__).resolve().parents[3]
 
 SERVICE_CONFIGS = [
-    ("geometric-lens/Dockerfile", "geometric-lens/requirements.txt", "geometric-lens/requirements-lock.txt"),
-    ("v3-service/Dockerfile", "v3-service/requirements.txt", "v3-service/requirements-lock.txt"),
+    ("services/geometric-lens/Dockerfile", "services/geometric-lens/requirements.txt", "services/geometric-lens/requirements-lock.txt"),
+    ("services/v3-service/Dockerfile", "services/v3-service/requirements.txt", "services/v3-service/requirements-lock.txt"),
+    ("services/sandbox/Dockerfile", "services/sandbox/requirements-runtime.txt", "services/sandbox/requirements-lock.txt"),
+    ("services/sandbox/Dockerfile", "services/sandbox/requirements-verify.txt", "services/sandbox/requirements-lock.txt"),
 ]
 
 

@@ -32,19 +32,19 @@
 services:
   geometric-lens:
     volumes:
-      - ./geometric-lens:/app
-      - ${ATLAS_LENS_MODELS:-./geometric-lens/geometric_lens/models}:/app/geometric_lens/models:ro
+      - ./services/geometric-lens:/app
+      - ${ATLAS_LENS_MODELS:-./services/geometric-lens/geometric_lens/models}:/app/geometric_lens/models:ro
     command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8099", "--reload"]
 
   v3-service:
     volumes:
-      - ./v3-service/main.py:/app/main.py
-      - ./v3-service/adapters.py:/app/adapters.py
-      - ./v3-service/scoring.py:/app/scoring.py
-      - ./v3-service/symbols.py:/app/symbols.py
-      - ./v3-service/grammars.py:/app/grammars.py
-      - ./v3-service/edit_checks.py:/app/edit_checks.py
-      - ./v3-service/embedded_script.py:/app/embedded_script.py
-      - ./v3-service/planning.py:/app/planning.py
-      - ./v3-service/pipeline.py:/app/pipeline.py
-      - ./v3-service/stages:/app/stages
+      - ./services/v3-service/main.py:/app/main.py
+      - ./services/v3-service/adapters.py:/app/adapters.py
+      - ./services/v3-service/scoring.py:/app/scoring.py
+      - ./services/v3-service/symbols.py:/app/symbols.py
+      - ./services/v3-service/grammars.py:/app/grammars.py
+      - ./services/v3-service/edit_checks.py:/app/edit_checks.py
+      - ./services/v3-service/embedded_script.py:/app/embedded_script.py
+      - ./services/v3-service/planning.py:/app/planning.py
+      - ./services/v3-service/pipeline.py:/app/pipeline.py
+      - ./services/v3-service/stages:/app/stages

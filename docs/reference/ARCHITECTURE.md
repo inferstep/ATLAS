@@ -54,7 +54,7 @@ llama-server is the only GPU-using service; every other ATLAS service runs on CP
 
 **Backend selection happens at install time, not runtime.** `atlas init` runs `tier.detect_gpu()` (see `atlas/commands/tier.py`), picks the largest-VRAM GPU across all detected vendors (override with `ATLAS_GPU_VENDOR` / `ATLAS_GPU_INDEX`), and writes `ATLAS_BACKEND={cuda|rocm|metal|vulkan}` into `.env`. Detection resolves to the packaged native backend when one exists: CUDA for NVIDIA, ROCm for AMD on x86_64, the hybrid Metal path on macOS. When no native backend is packaged for the host (Intel Arc, AMD on arm64, unrecognized vendors), the wizard offers the Vulkan universal fallback (default-yes): one image covers AMD, Intel, Adreno, MoltenVK, and the lavapipe CPU rasterizer, at roughly 20–40% below a tuned native backend. It refuses — rather than writing a `.env` that won't boot — only when nothing usable exists. Each backend has its own image — CUDA and Vulkan prebuilt on GHCR, ROCm compiled on the AMD host at first `up` — so users don't run a fat image that ships every backend's libraries.
 
-**Bring-your-own-model surface (V3.1.1).** `atlas lens check` is a cheap pre-flight against a running llama-server that reports whether the loaded model is Lens-compatible. `atlas lens build --samples <path>` wraps `geometric-lens/geometric_lens/training.py` to train fresh C(x) (`cost_field.pt`) **and** G(x) (XGBoost) artifacts at the model's native embedding dim. Together they let users swap in non-default GGUFs without forking the lens code — the C(x) constructor accepts arbitrary `input_dim`, so the only thing that changes per-model is the trained weights. See [CLI.md § atlas lens](CLI.md#atlas-lens) for the user-facing flow; `atlas lens publish` (or the combined `atlas publish`) uploads the artifacts to HuggingFace and opens the registry PR that pins their hashes.
+**Bring-your-own-model surface (V3.1.1).** `atlas lens check` is a cheap pre-flight against a running llama-server that reports whether the loaded model is Lens-compatible. `atlas lens build --samples <path>` wraps `services/geometric-lens/geometric_lens/training.py` to train fresh C(x) (`cost_field.pt`) **and** G(x) (XGBoost) artifacts at the model's native embedding dim. Together they let users swap in non-default GGUFs without forking the lens code — the C(x) constructor accepts arbitrary `input_dim`, so the only thing that changes per-model is the trained weights. See [CLI.md § atlas lens](CLI.md#atlas-lens) for the user-facing flow; `atlas lens publish` (or the combined `atlas publish`) uploads the artifacts to HuggingFace and opens the registry PR that pins their hashes.
 
 **What's vendor-agnostic** (works on every backend): grammar-constrained JSON, self-embeddings (`/embedding`), per-layer hidden states, ASA control vectors (loaded by llama.cpp's `control_vector_load` regardless of backend), KV cache quantization, the entire outer agent loop, V3 pipeline, Geometric Lens, and sandbox.
 
@@ -449,13 +449,13 @@ Four model-independent defenses compose in the proxy:
 3. **Per-step tool-list filter** (same trigger). An ephemeral
    `[system note]` user message is injected reminding the model that
    structural_edit is the only structural-edit tool for this step.
-4. **ASA steering vectors** (`geometric-lens/asa_calibration/`).
+4. **ASA steering vectors** (`services/geometric-lens/asa_calibration/`).
    Activation steering shifts the residual-stream distribution upstream
    so structural_edit is preferred even on first-attempt decisions before any
    rejection has fired. Auto-loaded by `services/inference/entrypoint-v3.1.sh`
    from `/models/ast_edit_steering.gguf` only when its `.model` sidecar
    matches the selected model—always-on after a compatible build via the workflow
-   in `geometric-lens/asa_calibration/README.md`. Override path/scale/
+   in `services/geometric-lens/asa_calibration/README.md`. Override path/scale/
    layer-range via `ATLAS_CONTROL_VECTOR*` env vars.
 
    **Per-model coupling.** Each ASA vector is trained
@@ -599,7 +599,7 @@ flowchart TD
 
 ##### v3-service: `/v3/plan` (Python)
 
-Defined in `v3-service/planning.py`; `v3-service/main.py` serves the route. The handler:
+Defined in `services/v3-service/planning.py`; `services/v3-service/main.py` serves the route. The handler:
 
 1. Renders `PLAN_PROMPT_TEMPLATE` with the user message + working dir + truncated project files.
 2. Calls the LLM 3 times with seed offsets and temperatures `[0.3, 0.5, 0.7]`. By default it sends the optional `chat_template_kwargs: {enable_thinking: false}` control and reserves 2,048 output tokens for plan JSON. Supporting templates disable their reasoning channel; other templates ignore the flag. `ATLAS_PLAN_THINKING=1` requests reasoning and raises the budget to 8,192. No model-family prompt directive is injected.
@@ -650,7 +650,7 @@ Defined in `services/proxy/plan_gates.go`:
 | `planAutoReviseThreshold` | 5 | Non-recon off-plan tool calls before auto-revise fires (recon tools never extend the streak, so natural exploration doesn't count). Tight enough to catch a wrong plan early; loose enough that a few stray off-plan calls don't trigger thrashing. |
 | `planMaxRevisions` | 2 | Cap on auto-revisions per loop. Past this, the last plan stays and only revising stops. A revision that returns the same steps drops the plan. Prevents pathological off-plan inputs from looping `/v3/plan` forever. |
 
-`v3-service/planning.py` constants:
+`services/v3-service/planning.py` constants:
 
 | Constant | Default | Rationale |
 |---|---|---|
@@ -772,13 +772,13 @@ When the incumbent holds, `phase_solved` is `incumbent`, and the proxy writes th
 
 The floor is the difference between this and the C(x)-only allocator removed earlier: that one had no floor, so it handed k=1 to tasks whose probe had *just failed*. Whether lens-driven allocation beats fixed or randomly assigned tiers is unmeasured. An earlier four-arm comparison (gated, fixed k=3, the same tier mix shuffled across tasks, and k=8, at n=175 per arm) is not evidence either way: it ran on Qwen3.5-9B with a patched runner that is not in this repository, with thinking enabled on escalation, which the live gate cannot apply, on LiveCodeBench tasks the G(x) head was trained on, and at that sample size its arms are within noise of each other.
 
-Live-path difference: the proxy's V3 bridge abandons a pipeline call after `ATLAS_V3_TIMEOUT` (default 300s), a cap the bench never had, so an unbounded escalation to k=8 would spend the budget on generation and return a timeout fallback instead of the k=3 answer the clock could have produced. The live orchestrator therefore passes its remaining wall-clock and the per-call latency observed on that task, and the gate lowers the tier to what the budget can actually generate — reserving one refinement iteration so the escalation cannot starve Phase 3 — never below the floor. The bench runner passes no budget and allocates exactly what was measured. `v3-service/stages/cxgx_gate.py`, shared by both orchestrators.
+Live-path difference: the proxy's V3 bridge abandons a pipeline call after `ATLAS_V3_TIMEOUT` (default 300s), a cap the bench never had, so an unbounded escalation to k=8 would spend the budget on generation and return a timeout fallback instead of the k=3 answer the clock could have produced. The live orchestrator therefore passes its remaining wall-clock and the per-call latency observed on that task, and the gate lowers the tier to what the budget can actually generate — reserving one refinement iteration so the escalation cannot starve Phase 3 — never below the floor. The bench runner passes no budget and allocates exactly what was measured. `services/v3-service/stages/cxgx_gate.py`, shared by both orchestrators.
 
 **Phase 1: Constraint-Driven Generation**
 
 **V3 always runs.** Planning and candidate generation run on every request the routing rules send to them: a file of Tier 2 or above, a V3 service configured, and a session not iterating on a file it just watched fail. No request field turns either off. `bypass_v3`, `v3_mode` and `feasibility_mode` were removed, and a request that asks for V3 off, planner-only or `enforce` is a 400, never a quiet run under another system. A measurement without V3 takes a research build.
 
-- **PlanSearch** generates structurally different implementation plans by extracting distinct constraint sets — one per allocated candidate slot the probe did not already fill (k-1). Its plan-construction and code-generation steps fan out across worker threads (`_fan_out` in `v3-service/stages/plan_search.py`), which makes it the only V3 stage that dispatches inference off the request thread. A worker inherits no ContextVar and no local from its parent, so request-scoped state reaches it on the request-scoped `LLMAdapter` — the same carrier as the cancellation scope. That is where the identity each inference call is sent under lives (`LLMAdapter.request_identity`); the header resolver takes no ContextVar fallback, because in a worker a fallback reads as "no request" and silently strips attribution. A PlanSearch call that cannot reach the model at all raises `PlanSearchInfrastructureError` rather than returning a short candidate list: DivSampling still backfills the slots below, and an empty batch and a refused one are otherwise indistinguishable downstream.
+- **PlanSearch** generates structurally different implementation plans by extracting distinct constraint sets — one per allocated candidate slot the probe did not already fill (k-1). Its plan-construction and code-generation steps fan out across worker threads (`_fan_out` in `services/v3-service/stages/plan_search.py`), which makes it the only V3 stage that dispatches inference off the request thread. A worker inherits no ContextVar and no local from its parent, so request-scoped state reaches it on the request-scoped `LLMAdapter` — the same carrier as the cancellation scope. That is where the identity each inference call is sent under lives (`LLMAdapter.request_identity`); the header resolver takes no ContextVar fallback, because in a worker a fallback reads as "no request" and silently strips attribution. A PlanSearch call that cannot reach the model at all raises `PlanSearchInfrastructureError` rather than returning a short candidate list: DivSampling still backfills the slots below, and an empty batch and a refused one are otherwise indistinguishable downstream.
 - **DivSampling** applies perturbation diversity: 4 roles (competitive_programmer, systems_engineer, mathematician, pragmatist) + 4 instructions (step_by_step, edge_case_first, complexity_aware, constraint_driven) + 4 styles (functional, pythonic, optimize_iteratively, structured)
 - **Budget Forcing** controls thinking token allocation:
 
@@ -808,7 +808,7 @@ Each tier maps to a system prompt (direct vs. think-step-by-step) and a max-toke
 
 ### Module Map
 
-The pipeline stages are 12 Python modules in `v3-service/stages/`. `v3-service/pipeline.py` orchestrates 11 of them (10 directly; `constraint_refinement` via the refinement loop); `embedding_store` runs only under the offline bench runner (`atlas/bench/v3_runner.py`, which puts the checkout's `v3-service/` on its path so both callers share one stage implementation):
+The pipeline stages are 12 Python modules in `services/v3-service/stages/`. `services/v3-service/pipeline.py` orchestrates 11 of them (10 directly; `constraint_refinement` via the refinement loop); `embedding_store` runs only under the offline bench runner (`atlas/bench/v3_runner.py`, which puts the checkout's `services/v3-service/` on its path so both callers share one stage implementation):
 
 ```mermaid
 graph LR
@@ -963,7 +963,7 @@ between two different models.
 
 > **Note:** Model weights (.pt, .pkl files) are not committed to the repository — they are built during training and baked into the container image or mounted at runtime. When model files are absent, its scoring endpoints answer `enabled: false` (with placeholder numbers: C(x) 0.0, G(x) `gx_score: 0.5`, `verdict: "unavailable"`). The proxy and V3 treat that answer as a lens that cannot score, and ATLAS refuses requests until the files exist ([ADR 0011](../adr/0011-the-lens-is-required.md)). A score the Lens attempted and could not compute is answered `scored: false` with a typed `failure` and no number: a failure of the lens or its model server stops the run, and an input the lens declines (too long, empty, non-finite) is reported unscored. Training data and weights are available on [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS).
 
-> **Nothing is kept between runs.** The lens keeps nothing of the code it scores: it holds no project index and no store of past sessions, so nothing from one run reaches a later one through it. It serves the health and readiness checks and three `/internal/lens/*` scoring calls (`geometric-lens/main.py`).
+> **Nothing is kept between runs.** The lens keeps nothing of the code it scores: it holds no project index and no store of past sessions, so nothing from one run reaches a later one through it. It serves the health and readiness checks and three `/internal/lens/*` scoring calls (`services/geometric-lens/main.py`).
 
 ---
 

@@ -27,7 +27,7 @@ train = [
     # A lower bound that default PyPI can satisfy: plain `pip install
     # atlas[train]` never consults the pytorch CPU index (a >=2.13.0 floor
     # was once unsatisfiable there). The lens image pins its own torch in
-    # geometric-lens/requirements.txt; keep this floor at or below it.
+    # services/geometric-lens/requirements.txt; keep this floor at or below it.
     "torch>=2.12",
     "numpy>=1.24",
     "gguf",
@@ -54,8 +54,8 @@ addopts = "-m 'not integration'"
 # The Python code the suites are measured against. A file no test imports
 # still counts, at 0%. Paths are stored relative to the repo root, so a
 # report reads the same on any machine.
-source = ["atlas", "v3-service", "geometric-lens", "sandbox", "scripts"]
-omit = ["geometric-lens/tests/*"]
+source = ["atlas", "services/v3-service", "services/geometric-lens", "services/sandbox", "scripts"]
+omit = ["services/geometric-lens/tests/*"]
 relative_files = true
 
 [tool.ruff.lint]

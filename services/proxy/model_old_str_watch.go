@@ -87,23 +87,7 @@ func (w *oldStrWatch) runaway(stream string) bool {
 		w.goodLen = len(partial)
 		return false
 	}
-	// Monotone: once a prefix cannot match, no longer one can. Search between
-	// the last length that could and this one for where matching stopped.
-	lo, hi := w.goodLen, len(partial)
-	for hi-lo > 1 {
-		mid := lo + (hi-lo)/2
-		for mid > lo && !utf8.RuneStart(partial[mid]) {
-			mid--
-		}
-		if mid == lo {
-			break
-		}
-		if oldStrCanMatch(w.content, w.lines, partial[:mid]) {
-			lo = mid
-		} else {
-			hi = mid
-		}
-	}
+	lo := w.matchingPrefixLen(partial)
 	w.goodLen = lo
 	if len(partial)-lo < oldStrRunOn {
 		return false
@@ -119,6 +103,29 @@ func (w *oldStrWatch) runaway(stream string) bool {
 	}
 	w.FirstBadLine = strings.TrimSpace(partial[lineStart:lineEnd])
 	return true
+}
+
+// matchingPrefixLen is the length of the longest prefix of partial that can
+// still match, cut on a rune boundary. Monotone: once a prefix cannot match, no
+// longer one can. So it searches between the last length that could and this
+// one for where matching stopped.
+func (w *oldStrWatch) matchingPrefixLen(partial string) int {
+	lo, hi := w.goodLen, len(partial)
+	for hi-lo > 1 {
+		mid := lo + (hi-lo)/2
+		for mid > lo && !utf8.RuneStart(partial[mid]) {
+			mid--
+		}
+		if mid == lo {
+			break
+		}
+		if oldStrCanMatch(w.content, w.lines, partial[:mid]) {
+			lo = mid
+		} else {
+			hi = mid
+		}
+	}
+	return lo
 }
 
 func (w *oldStrWatch) load(path string) bool {

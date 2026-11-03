@@ -26,7 +26,7 @@ def _load_telemetry_embeddings(emb_path: str,
     """
     # stages/ (the V3 pipeline stages) lives in v3-service — same pattern
     # as the geometric-lens sys.path setup above.
-    v3_dir = os.path.join(cli_env.atlas_root(), "v3-service")
+    v3_dir = os.path.join(cli_env.atlas_root(), "services", "v3-service")
     if v3_dir not in sys.path:
         sys.path.insert(0, v3_dir)
     from stages.embedding_store import EmbeddingReader

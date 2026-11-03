@@ -71,10 +71,10 @@ def _workflow_lines():
 
 # The pins of ci.in that are copies, and the product file each one is a copy of.
 COPIED = (
-    ("sandbox/requirements-runtime.txt", None),   # every pin of the file
-    ("sandbox/requirements-verify.txt", ("jinja2", "ruff", "mypy")),
-    ("v3-service/requirements.txt", None),
-    ("geometric-lens/requirements.txt", ("httpx",)),
+    ("services/sandbox/requirements-runtime.txt", None),   # every pin of the file
+    ("services/sandbox/requirements-verify.txt", ("jinja2", "ruff", "mypy")),
+    ("services/v3-service/requirements.txt", None),
+    ("services/geometric-lens/requirements.txt", ("httpx",)),
 )
 
 
@@ -171,16 +171,16 @@ def test_no_workflow_installs_a_copied_pin_from_its_product_file():
 
 
 def test_the_lens_lock_holds_every_linux_pin_of_the_lens_requirements():
-    """lens.txt is made from geometric-lens/requirements.txt for the Linux runners. A pin there that the lock does not
+    """lens.txt is made from services/geometric-lens/requirements.txt for the Linux runners. A pin there that the lock does not
     hold at the same version means the lock was not made again after a change. The lock's torch carries the local
     version of PyTorch's CPU index (2.14.0+cpu)."""
     locked = _locked("lens.txt")
-    for line in _read("geometric-lens", "requirements.txt").splitlines():
+    for line in _read("services", "geometric-lens", "requirements.txt").splitlines():
         line = line.split("#", 1)[0].strip()
         if not line or 'sys_platform != "linux"' in line:
             continue
         name, version = re.match(r"([A-Za-z0-9._-]+)==([^;\s]+)", line).groups()
-        why = (f"geometric-lens/requirements.txt has {name}=={version} and lens.txt holds "
+        why = (f"services/geometric-lens/requirements.txt has {name}=={version} and lens.txt holds "
                f"{locked.get(name.lower(), ('nothing',))[0]}. Fix: run scripts/ci/ci-lock.sh.")
         assert name.lower() in locked, why
         assert locked[name.lower()][0].split("+")[0] == version, why

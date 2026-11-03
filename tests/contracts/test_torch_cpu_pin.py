@@ -18,8 +18,8 @@ REPO = Path(__file__).resolve().parents[2]
 # scoring. v3-service parses and orchestrates and imports no torch — see
 # test_v3_service_ships_no_torch below, which keeps it that way.
 SERVICES = [
-    ("geometric-lens", REPO / "geometric-lens" / "requirements-lock.txt",
-     REPO / "geometric-lens" / "requirements.txt"),
+    ("geometric-lens", REPO / "services" / "geometric-lens" / "requirements-lock.txt",
+     REPO / "services" / "geometric-lens" / "requirements.txt"),
 ]
 
 LOCK_TORCH = re.compile(r"^torch==([^+\s\\]+)", re.MULTILINE)
@@ -63,7 +63,7 @@ def test_ci_lens_job_installs_the_cpu_torch():
 
     It installs .github/requirements/lens.txt, whose torch comes from PyTorch's
     CPU index (a version that ends in "+cpu"); tests/contracts/test_ci_lock.py
-    holds the version to geometric-lens/requirements.txt. It drifted once: CI
+    holds the version to services/geometric-lens/requirements.txt. It drifted once: CI
     pre-installed 2.12.1 while requirements.txt pinned 2.13.0, so the
     requirements install replaced the CPU wheel with PyPI's build on every
     run, the failure this file exists to prevent in images.
@@ -88,15 +88,15 @@ def test_v3_service_ships_no_torch():
     llama-server. If a stage ever genuinely needs torch, call the lens
     rather than re-adding a second copy of it here.
     """
-    for path in (REPO / "v3-service" / "requirements.txt",
-                 REPO / "v3-service" / "Dockerfile"):
+    for path in (REPO / "services" / "v3-service" / "requirements.txt",
+                 REPO / "services" / "v3-service" / "Dockerfile"):
         assert not re.search(r"(?m)^\s*torch[=<>~ ]|pip install[^&\n]*torch",
                              path.read_text()), (
             f"{path.name} reintroduces torch into v3-service. No module "
-            f"under v3-service/ imports it; route tensor work to the lens.")
+            f"under services/v3-service/ imports it; route tensor work to the lens.")
 
     src = " ".join(
-        p.read_text() for p in (REPO / "v3-service").rglob("*.py")
+        p.read_text() for p in (REPO / "services" / "v3-service").rglob("*.py")
         if "__pycache__" not in str(p))
     assert not re.search(r"(?m)^\s*(import torch|from torch\b)", src), (
         "a v3-service module imports torch — either route the work to "

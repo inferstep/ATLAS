@@ -127,7 +127,7 @@ services:
     # Part of the memory envelope; measured peak 1.56 GiB.
     mem_limit: ${ATLAS_LENS_MEM:-1792m}
     build:
-      context: ./geometric-lens
+      context: ./services/geometric-lens
     # The installing user's ids, written by `atlas init`; all five services run as that user.
     user: "${ATLAS_PROXY_UID:-1000}:${ATLAS_PROXY_GID:-1000}"
     environment:
@@ -145,7 +145,7 @@ services:
       - ATLAS_LOG_FORMAT=${ATLAS_LOG_FORMAT:-}
       - ATLAS_SERVICE_TOKEN_FILE=/run/atlas-secrets/service-token
     volumes:
-      - ${ATLAS_LENS_MODELS:-./geometric-lens/geometric_lens/models}:/app/geometric_lens/models:ro
+      - ${ATLAS_LENS_MODELS:-./services/geometric-lens/geometric_lens/models}:/app/geometric_lens/models:ro
       - ${ATLAS_SECRETS_DIR:-./secrets}:/run/atlas-secrets:ro
     ports:
       - "127.0.0.1:${ATLAS_LENS_PORT:-8099}:8099"
@@ -196,7 +196,7 @@ services:
     mem_limit: ${ATLAS_V3_MEM:-512m}
     build:
       context: .
-      dockerfile: v3-service/Dockerfile
+      dockerfile: services/v3-service/Dockerfile
     # The installing user's ids, written by `atlas init`; all five services run as that user.
     user: "${ATLAS_PROXY_UID:-1000}:${ATLAS_PROXY_GID:-1000}"
     environment:
@@ -222,6 +222,10 @@ services:
       # refinement budget gate, so both sides must see one value.
       - ATLAS_V3_TIMEOUT=${ATLAS_V3_TIMEOUT:-}
       - ATLAS_SERVICE_TOKEN_FILE=/run/atlas-secrets/service-token
+    # The image's telemetry folder belongs to group 1001 (mode 770), so the
+    # installing user writes the v3-telemetry volume through that group.
+    group_add:
+      - "1001"
     volumes:
       - ${ATLAS_SECRETS_DIR:-./secrets}:/run/atlas-secrets:ro
       - v3-telemetry:/data/telemetry
@@ -254,7 +258,7 @@ services:
     image: ghcr.io/${ATLAS_GHCR_OWNER:-inferstep}/atlas-sandbox:${ATLAS_IMAGE_TAG:-latest}
     restart: unless-stopped
     build:
-      context: ./sandbox
+      context: ./services/sandbox
     environment:
       # Per-call execution ceiling inside the executor (executor_server.py
       # clamps request timeouts to MAX_EXECUTION_TIME). Default matches the

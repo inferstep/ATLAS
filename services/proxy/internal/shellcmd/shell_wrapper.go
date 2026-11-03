@@ -12,6 +12,8 @@ const (
 	shellWrapperQuotingRefusal = "refused: the command's quoting could not be checked; simplify it."
 	shellWrapperMissingRefusal = "refused: the execution wrapper is incomplete; simplify it."
 	shellWrapperDepthRefusal   = "refused: the command exceeds 16 execution wrapper layers; simplify it."
+	// env's long option that splits one argument into words.
+	envSplitStringOption = "--split-string"
 )
 
 type shellInspection struct {
@@ -85,52 +87,67 @@ func shellCommandWords(seg string) ([]string, bool) {
 		if i == len(seg) {
 			break
 		}
-		var word strings.Builder
-		quote := byte(0)
-		for i < len(seg) {
-			c := seg[i]
-			if quote == 0 && strings.ContainsRune(" \t\r\n", rune(c)) {
-				break
-			}
-			switch {
-			case c == '$' && quote == 0 && i+1 < len(seg) && (seg[i+1] == '\'' || seg[i+1] == '"'):
-				// ANSI-C and locale quotes need expansions this lexer does not model.
-				return append(words, word.String()), false
-			case c == '\'' && quote != '"':
-				if quote == '\'' {
-					quote = 0
-				} else {
-					quote = '\''
-				}
-			case c == '"' && quote != '\'':
-				if quote == '"' {
-					quote = 0
-				} else {
-					quote = '"'
-				}
-			case c == '\\' && quote != '\'':
-				if i+1 == len(seg) {
-					return append(words, word.String()), false
-				}
-				i++
-				next := seg[i]
-				if quote == '"' && !strings.ContainsRune("$`\"\\\n", rune(next)) {
-					word.WriteByte('\\')
-				}
-				if next != '\n' {
-					word.WriteByte(next)
-				}
-			default:
-				word.WriteByte(c)
-			}
-			i++
-		}
-		words = append(words, word.String())
-		if quote != 0 {
+		word, next, quote, supported := readShellWord(seg, i)
+		words = append(words, word)
+		if !supported || quote != 0 {
 			return words, false
 		}
+		i = next
 	}
 	return words, true
+}
+
+// readShellWord reads the shell word that starts at i, up to the first
+// whitespace outside quotes. It returns the word, the index after it, and the
+// quote still open at its end. supported is false when the word needs an
+// expansion this lexer does not model; the word read so far comes with it.
+func readShellWord(seg string, i int) (word string, next int, quote byte, supported bool) {
+	var b strings.Builder
+	for i < len(seg) {
+		c := seg[i]
+		if quote == 0 && strings.ContainsRune(" \t\r\n", rune(c)) {
+			break
+		}
+		switch {
+		case c == '$' && quote == 0 && i+1 < len(seg) && (seg[i+1] == '\'' || seg[i+1] == '"'):
+			// ANSI-C and locale quotes need expansions this lexer does not model.
+			return b.String(), i, quote, false
+		case c == '\'' && quote != '"':
+			quote = toggleQuote(quote, '\'')
+		case c == '"' && quote != '\'':
+			quote = toggleQuote(quote, '"')
+		case c == '\\' && quote != '\'':
+			if i+1 == len(seg) {
+				return b.String(), i, quote, false
+			}
+			i++
+			writeEscaped(&b, seg[i], quote)
+		default:
+			b.WriteByte(c)
+		}
+		i++
+	}
+	return b.String(), i, quote, true
+}
+
+// toggleQuote opens quote q, or closes it when it is the one open.
+func toggleQuote(open, q byte) byte {
+	if open == q {
+		return 0
+	}
+	return q
+}
+
+// writeEscaped writes what a backslash escapes. Inside double quotes a
+// backslash escapes only $ ` " \ and a newline, and stays before anything
+// else; an escaped newline joins two lines and writes nothing.
+func writeEscaped(b *strings.Builder, next, quote byte) {
+	if quote == '"' && !strings.ContainsRune("$`\"\\\n", rune(next)) {
+		b.WriteByte('\\')
+	}
+	if next != '\n' {
+		b.WriteByte(next)
+	}
 }
 
 // unwrapShellWrapper locates execution layers after supported command prefixes.
@@ -153,20 +170,27 @@ func unwrapShellWrapper(seg string, depth int) shellWrapperResult {
 			return shellWrapperResult{refusal: refusal}
 		}
 		if wrapped {
-			if env.depth >= maxShellWrapperDepth {
-				return shellWrapperResult{refusal: shellWrapperDepthRefusal}
-			}
-			// The extracted code is another shell input, not an opaque argument.
-			if _, ok := shellCommandWords(command); !ok {
-				return shellWrapperResult{refusal: shellWrapperQuotingRefusal}
-			}
-			return shellWrapperResult{command: command, depth: env.depth + 1, unwrapped: true}
+			return wrappedLayer(command, env.depth)
 		}
 	}
 	if env.expanded {
 		return shellWrapperResult{command: quoteShellWords(env.words[i:]), depth: env.depth, unwrapped: true}
 	}
 	return shellWrapperResult{}
+}
+
+// wrappedLayer is the result for code a wrapper hands to another shell: one
+// layer deeper, unless the depth budget is spent or its quoting cannot be
+// checked.
+func wrappedLayer(command string, depth int) shellWrapperResult {
+	if depth >= maxShellWrapperDepth {
+		return shellWrapperResult{refusal: shellWrapperDepthRefusal}
+	}
+	// The extracted code is another shell input, not an opaque argument.
+	if _, ok := shellCommandWords(command); !ok {
+		return shellWrapperResult{refusal: shellWrapperQuotingRefusal}
+	}
+	return shellWrapperResult{command: command, depth: depth + 1, unwrapped: true}
 }
 
 type envSplitExpansion struct {
@@ -184,13 +208,9 @@ func expandEnvSplitStrings(words []string, valid bool, depth int) envSplitExpans
 		switch {
 		case commandPrefixWords[head]:
 			prefixed = true
-			if head == "env" {
-				result = expandEnvOptions(result, i, valid)
-				if result.refusal != "" {
-					return result
-				}
+			if result, i = expandPrefix(result, i, head, valid); result.refusal != "" {
+				return result
 			}
-			i = skipCommandPrefix(result.words, i)
 		case strings.Contains(result.words[i], "=") && !strings.HasPrefix(result.words[i], "-"):
 			i++
 		default:
@@ -206,50 +226,82 @@ func expandEnvSplitStrings(words []string, valid bool, depth int) envSplitExpans
 	return result
 }
 
+// expandPrefix steps over the command prefix at i (env, nice, timeout and the
+// like), expanding env's split-string options first. On a refusal it does not
+// step.
+func expandPrefix(result envSplitExpansion, i int, head string, valid bool) (envSplitExpansion, int) {
+	if head == "env" {
+		result = expandEnvOptions(result, i, valid)
+		if result.refusal != "" {
+			return result, i
+		}
+	}
+	return result, skipCommandPrefix(result.words, i)
+}
+
 func expandEnvOptions(result envSplitExpansion, index int, valid bool) envSplitExpansion {
 	for k := index + 1; k < len(result.words); {
 		option := normalizeEnvSplitOption(result.words[k])
 		text, end, split := envSplitString(result.words, k, option)
 		if split {
-			if !valid {
-				result.refusal = shellWrapperQuotingRefusal
+			if result = spliceEnvSplit(result, k, text, end, valid); result.refusal != "" {
 				return result
 			}
-			if end > len(result.words) {
-				result.refusal = shellWrapperMissingRefusal
-				return result
-			}
-			if result.depth >= maxShellWrapperDepth {
-				result.refusal = shellWrapperDepthRefusal
-				return result
-			}
-			words, ok := shellCommandWords(text)
-			if !ok {
-				result.refusal = shellWrapperQuotingRefusal
-				return result
-			}
-			result.words = append(append(append([]string{}, result.words[:k]...), words...), result.words[end:]...)
-			result.depth++
-			result.expanded = true
 			continue // A split may expose another -S at this same position.
 		}
-		if option == "--" {
+		next, more := envOptionEnd(option, k)
+		if !more {
 			break
 		}
-		if strings.HasPrefix(option, "-") {
-			k++
-			if wrapperOptionTakesValue("env", option) {
-				k++
-			}
-			continue
-		}
-		if strings.Contains(option, "=") {
-			k++
-			continue
-		}
-		break
+		k = next
 	}
 	return result
+}
+
+// spliceEnvSplit puts the words of an env split-string's text in place of the
+// option at k and its text, one layer deeper. It refuses text whose quoting
+// cannot be checked, a missing text, and a spent depth budget.
+func spliceEnvSplit(result envSplitExpansion, k int, text string, end int, valid bool) envSplitExpansion {
+	if !valid {
+		result.refusal = shellWrapperQuotingRefusal
+		return result
+	}
+	if end > len(result.words) {
+		result.refusal = shellWrapperMissingRefusal
+		return result
+	}
+	if result.depth >= maxShellWrapperDepth {
+		result.refusal = shellWrapperDepthRefusal
+		return result
+	}
+	words, ok := shellCommandWords(text)
+	if !ok {
+		result.refusal = shellWrapperQuotingRefusal
+		return result
+	}
+	result.words = append(append(append([]string{}, result.words[:k]...), words...), result.words[end:]...)
+	result.depth++
+	result.expanded = true
+	return result
+}
+
+// envOptionEnd is where the env option at k ends: after it, after it and its
+// value, or after an assignment. False at "--" and at the first word that is
+// none of these, where the command begins.
+func envOptionEnd(option string, k int) (int, bool) {
+	if option == "--" {
+		return k, false
+	}
+	if strings.HasPrefix(option, "-") {
+		if wrapperOptionTakesValue("env", option) {
+			return k + 2, true
+		}
+		return k + 1, true
+	}
+	if strings.Contains(option, "=") {
+		return k + 1, true
+	}
+	return k, false
 }
 
 // Normalize GNU env's combined flags and unambiguous split-string abbreviations.
@@ -261,8 +313,8 @@ func normalizeEnvSplitOption(option string) string {
 		}
 	}
 	if name, value, attached := strings.Cut(option, "="); len(name) > 2 &&
-		strings.HasPrefix(name, "--") && strings.HasPrefix("--split-string", name) {
-		option = "--split-string"
+		strings.HasPrefix(name, "--") && strings.HasPrefix(envSplitStringOption, name) {
+		option = envSplitStringOption
 		if attached {
 			option += "=" + value
 		}
@@ -272,7 +324,7 @@ func normalizeEnvSplitOption(option string) string {
 
 func envSplitString(words []string, index int, option string) (string, int, bool) {
 	switch {
-	case option == "-S" || option == "--split-string":
+	case option == "-S" || option == envSplitStringOption:
 		if index+1 >= len(words) {
 			return "", index + 2, true
 		}
@@ -321,22 +373,30 @@ func shellCommandOperand(words []string) (int, bool) {
 		if len(option) < 2 || (option[0] != '-' && option[0] != '+') {
 			break
 		}
-		if option == "--rcfile" || option == "--init-file" {
-			j += 2
-			continue
+		width, selectsCommand := shellOptionWidth(option)
+		if selectsCommand {
+			commandString = true
 		}
-		if !strings.HasPrefix(option, "--") {
-			if option[0] == '-' && strings.Contains(option[1:], "c") {
-				commandString = true
-			}
-			if strings.ContainsAny(option[1:], "oO") {
-				j += 2
-				continue
-			}
-		}
-		j++
+		j += width
 	}
 	return j, commandString
+}
+
+// shellOptionWidth is how many words a shell option takes: two for --rcfile,
+// --init-file and an option with o or O, which names a setting next; else one.
+// It also says whether the option selects -c.
+func shellOptionWidth(option string) (int, bool) {
+	if option == "--rcfile" || option == "--init-file" {
+		return 2, false
+	}
+	if strings.HasPrefix(option, "--") {
+		return 1, false
+	}
+	selectsCommand := option[0] == '-' && strings.Contains(option[1:], "c")
+	if strings.ContainsAny(option[1:], "oO") {
+		return 2, selectsCommand
+	}
+	return 1, selectsCommand
 }
 
 func extractEvalCommand(words []string) string {
@@ -383,7 +443,7 @@ func wrapperOptionTakesValue(wrapper, option string) bool {
 		return option == "-u"
 	case "env":
 		switch option {
-		case "-u", "--unset", "-C", "--chdir", "-S", "--split-string":
+		case "-u", "--unset", "-C", "--chdir", "-S", envSplitStringOption:
 			return true
 		}
 	case "nice":

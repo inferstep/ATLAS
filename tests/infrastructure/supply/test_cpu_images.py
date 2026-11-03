@@ -8,8 +8,8 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_lens_image_installs_torch_from_cpu_only_index():
-    requirements = (ROOT / "geometric-lens" / "requirements.txt").read_text()
-    lockfile = (ROOT / "geometric-lens" / "requirements-lock.txt").read_text()
+    requirements = (ROOT / "services" / "geometric-lens" / "requirements.txt").read_text()
+    lockfile = (ROOT / "services" / "geometric-lens" / "requirements-lock.txt").read_text()
     assert "--index-url https://download.pytorch.org/whl/cpu" in lockfile
     # The lockfile must pin the SAME version requirements pins — a
     # hardcoded version previously let the two drift, which made the install
@@ -17,7 +17,7 @@ def test_lens_image_installs_torch_from_cpu_only_index():
     # deps in a CPU-only image). tests/contracts/test_torch_cpu_pin.py
     # guards both services; this keeps the lens files self-consistent.
     req_torch = re.search(r"^torch==(\S+)\s*$", requirements, re.MULTILINE)
-    assert req_torch, "no torch pin in geometric-lens/requirements.txt"
+    assert req_torch, "no torch pin in services/geometric-lens/requirements.txt"
     assert f"torch=={req_torch.group(1)}" in lockfile
     assert "--extra-index-url" not in requirements
     # The form and the marker of the pin, not its version: Linux takes the CPU-only distribution.
@@ -29,7 +29,7 @@ def test_lens_image_installs_torch_from_cpu_only_index():
 def test_min_python_gate_passes_on_current_tree():
     """The shipped tree must not use syntax newer than requires-python.
 
-    Guards the drift that produced 29 fixture errors: sandbox/executor_server.py
+    Guards the drift that produced 29 fixture errors: services/sandbox/executor_server.py
     carried a PEP 604 annotation while pyproject declared >=3.9, and the CI
     matrix (3.11/3.12 only) could not see it.
     """
@@ -134,9 +134,9 @@ def test_dockerfile_gate_detects_a_missing_source(tmp_path, monkeypatch):
     import sys
     from pathlib import Path
     root = Path(__file__).resolve().parents[3]
-    df = root / "v3-service" / "Dockerfile"
+    df = root / "services" / "v3-service" / "Dockerfile"
     original = df.read_text()
-    df.write_text(original + "\nCOPY v3-service/definitely_not_here.py /app/x.py\n")
+    df.write_text(original + "\nCOPY services/v3-service/definitely_not_here.py /app/x.py\n")
     try:
         proc = subprocess.run(
             [sys.executable, str(root / "scripts" / "ci" / "check_dockerfile_sources.py")],

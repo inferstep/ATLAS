@@ -34,8 +34,8 @@ The pass@1 summary printed at the end is the secondary product.
 | `datasets/` | Dataset loaders — LiveCodeBench v5 (`livecodebench.py`) over the `base.py` download/cache contract. Caches under repo-root `benchmark/datasets/.cache/`. |
 
 The V3 pipeline **stages** the runner exercises are not in this package:
-they live in `v3-service/stages/` (shared with the deployed service — one
-implementation, two callers). The runner puts the checkout's `v3-service/`
+they live in `services/v3-service/stages/` (shared with the deployed service — one
+implementation, two callers). The runner puts the checkout's `services/v3-service/`
 on `sys.path` at startup.
 
 Repo-root `benchmark/` holds only data: dataset caches and

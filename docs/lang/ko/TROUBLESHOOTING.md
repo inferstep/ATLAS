@@ -734,11 +734,11 @@ except curses.error:
 
 **증상:** ATLAS에 HTML/CSS/JSON 파일 작성을 요청하면 PR-CoT 수리 시도와 LLM 타임아웃을 동반한 ~5분의 정지가 발생합니다. 파일은 결국 직접 쓰기 폴백으로 저장됩니다.
 
-**무슨 일인가:** V3 스모크 체크는 언어 인식입니다 — 대상 파일의 확장자에서 언어를 도출해 알맞은 검사기로 라우팅합니다(`.py` → Python compile, `.js` → `node --check`, `.ts` → `tsc --noEmit`, `.go` → `gofmt -e`, `.rs` → `rustc`, `.sh` → `bash -n`, `.html` → `html.parser`, `.xml` → `ElementTree`, `.json` → `json.loads`, `.yaml` → `yaml.safe_load`). 인식되지 않는 확장자는 Python으로 폴백해 실패하고, 이것이 수리로 연쇄됩니다. `.c`/`.cpp`/`.h`는 확장자 맵(`v3-service/pipeline.py`의 `_ext_to_lang`)에 없으므로, 샌드박스 자체에는 C/C++ 검사기가 있음에도 C/C++ 파일은 Python 폴백을 탑니다.
+**무슨 일인가:** V3 스모크 체크는 언어 인식입니다 — 대상 파일의 확장자에서 언어를 도출해 알맞은 검사기로 라우팅합니다(`.py` → Python compile, `.js` → `node --check`, `.ts` → `tsc --noEmit`, `.go` → `gofmt -e`, `.rs` → `rustc`, `.sh` → `bash -n`, `.html` → `html.parser`, `.xml` → `ElementTree`, `.json` → `json.loads`, `.yaml` → `yaml.safe_load`). 인식되지 않는 확장자는 Python으로 폴백해 실패하고, 이것이 수리로 연쇄됩니다. `.c`/`.cpp`/`.h`는 확장자 맵(`services/v3-service/pipeline.py`의 `_ext_to_lang`)에 없으므로, 샌드박스 자체에는 C/C++ 검사기가 있음에도 C/C++ 파일은 Python 폴백을 탑니다.
 
 `/v3/generate`가 승인된 프로젝트 빌드 명령을 받으면, V3는 구문/셀프 테스트 검증 후에 `build_verify` 이벤트를 내보냅니다. 명령은 후보를 프로젝트에 겹쳐 얹은 일시적 샌드박스 워크스페이스에서 실행되므로, 실패한 빌드 증거가 실제 체크아웃에 후보를 쓰지 않은 채 `passed=true`를 차단합니다. 오버레이 스냅샷은 의존성 캐시, 시크릿, 모델/데이터 아티팩트, 심링크, 대용량 파일을 건너뛰며 파일 수와 바이트 제한을 강제합니다. 프로젝트 빌드에 무거운 의존성이 필요하면, 명시적 검증 워크플로의 일부로 샌드박스 워크스페이스 안에 설치하세요.
 
-**할 일:** 인식되지 않는 확장자는 `v3-service/pipeline.py`의 `_ext_to_lang`에 추가하고 `v3-service` 이미지를 재빌드하세요. V3가 오류로 끝나면 프록시가 직접 쓰기로 폴백하므로 파일은 어쨌든 저장됩니다 — 느릴 뿐입니다. `docker compose logs v3-service | grep smoke_check`로 올바른 언어가 라우팅되었는지 확인하세요.
+**할 일:** 인식되지 않는 확장자는 `services/v3-service/pipeline.py`의 `_ext_to_lang`에 추가하고 `v3-service` 이미지를 재빌드하세요. V3가 오류로 끝나면 프록시가 직접 쓰기로 폴백하므로 파일은 어쨌든 저장됩니다 — 느릴 뿐입니다. `docker compose logs v3-service | grep smoke_check`로 올바른 언어가 라우팅되었는지 확인하세요.
 
 ### "다시 고쳐줘" 프롬프트에서 V3 파이프라인이 실행되지 않음
 
