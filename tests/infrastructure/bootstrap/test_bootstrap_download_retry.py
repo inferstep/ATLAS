@@ -205,7 +205,7 @@ def test_the_command_is_run_as_it_is_written_with_its_arguments(tmp_path):
 def test_the_tui_build_tries_only_the_module_download_again(tmp_path, download_fails, download_says, build_fails, asked,
                                                             says, last_line):
     # The script's own build step, with a stand-in `go` that writes down what it was asked to do.
-    (tmp_path / "tui").mkdir()
+    (tmp_path / "clients" / "tui").mkdir(parents=True)
     (tmp_path / "home").mkdir()
     (tmp_path / "go").write_text(f"""#!/bin/bash
 echo "$*" >> "{tmp_path}/go.asked"

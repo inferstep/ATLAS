@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Planted by scripts/canary.py for the canary pull request. Never merge it.
-echo "canary: the bootstrap stops here on purpose" >&2; exit 97
 #
 # atlas-bootstrap.sh — one-shot installer for ATLAS on a fresh Linux host.
 #
@@ -1273,7 +1271,7 @@ install_atlas_cli() {
 }
 
 install_go() {
-    # The TUI is a Go binary. services/proxy/go.mod requires 1.24+, tui/go.mod
+    # The TUI is a Go binary. services/proxy/go.mod requires 1.24+, clients/tui/go.mod
     # requires 1.26+. With Go 1.21+ auto-toolchain (default), installing
     # any 1.24+ is enough — Go transparently downloads the newer
     # toolchain when building tui. We pick 1.24 as the install target
@@ -1359,7 +1357,7 @@ build_atlas_tui() {
     fi
     if [[ -z "$go_cmd" ]]; then
         log_warn "Go not available — skipping atlas-tui build."
-        log_warn "  Recovery: cd $ATLAS_INSTALL_DIR/tui && go build -o ~/.local/bin/atlas-tui ."
+        log_warn "  Recovery: cd $ATLAS_INSTALL_DIR/clients/tui && go build -o ~/.local/bin/atlas-tui ."
         return 1
     fi
 
@@ -1385,10 +1383,10 @@ build_atlas_tui() {
     # gets sudo's own PATH, which may not hold the Go found above.
     set +e
     retry_download "The Go module download" --not-if "$GO_NOT_A_NETWORK_ERROR" -- \
-        run_as_target sh -c "cd '$ATLAS_INSTALL_DIR/tui' && '$go_cmd' mod download" | tee "$ATLAS_RUN_DIR/atlas-tui-build.log"
+        run_as_target sh -c "cd '$ATLAS_INSTALL_DIR/clients/tui' && '$go_cmd' mod download" | tee "$ATLAS_RUN_DIR/atlas-tui-build.log"
     local rc=${PIPESTATUS[0]}
     if [[ $rc -eq 0 ]]; then
-        run_as_target sh -c "cd '$ATLAS_INSTALL_DIR/tui' && '$go_cmd' build -o '$out' ." 2>&1 | tee -a "$ATLAS_RUN_DIR/atlas-tui-build.log"
+        run_as_target sh -c "cd '$ATLAS_INSTALL_DIR/clients/tui' && '$go_cmd' build -o '$out' ." 2>&1 | tee -a "$ATLAS_RUN_DIR/atlas-tui-build.log"
         rc=${PIPESTATUS[0]}
     fi
     set -e
@@ -1398,7 +1396,7 @@ build_atlas_tui() {
         return 0
     else
         log_warn "atlas-tui build failed (exit $rc). Log: $ATLAS_RUN_DIR/atlas-tui-build.log"
-        log_warn "  Recovery: cd $ATLAS_INSTALL_DIR/tui && go build -o $out ."
+        log_warn "  Recovery: cd $ATLAS_INSTALL_DIR/clients/tui && go build -o $out ."
         return 1
     fi
 }

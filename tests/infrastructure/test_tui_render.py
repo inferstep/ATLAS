@@ -9,7 +9,7 @@ it exits.
 This allocates a pty, runs the real binary against the running proxy, and reads
 the painted frames back. Live-stack test: deselected by the default
 `-m 'not integration'`, run it with `-m integration` on a host with the stack up
-and `tui/atlas-tui` built.
+and `clients/tui/atlas-tui` built.
 """
 import errno
 import fcntl
@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
-BINARY = REPO / "tui" / "atlas-tui"
+BINARY = REPO / "clients" / "tui" / "atlas-tui"
 PROXY = os.environ.get("ATLAS_PROXY_URL", "http://127.0.0.1:8090")
 
 # CSI/OSC/charset-select/keypad-mode. Frames are mostly escapes, and asserting
@@ -42,7 +42,7 @@ def _strip(s: str) -> str:
 def painted() -> str:
     """Run the TUI under a pty for a few seconds and return the stripped output."""
     if not BINARY.exists():
-        pytest.skip(f"{BINARY} not built (cd tui && go build -o atlas-tui .)")
+        pytest.skip(f"{BINARY} not built (cd clients/tui && go build -o atlas-tui .)")
 
     master, slave = pty.openpty()
     # The files pane only renders at >=90 columns, so a default 80x24 would

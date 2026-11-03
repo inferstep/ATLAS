@@ -52,7 +52,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 MODULES = ("proxy", "tui")
 # The folder of each module. A piece is named by the module ("go/proxy/rangeint"), and its files are in the folder.
-FOLDERS = {"proxy": "services/proxy", "tui": "tui"}
+FOLDERS = {"proxy": "services/proxy", "tui": "clients/tui"}
 # The fixers of `go fix` that the job runs, by name. Each rewrites code to a newer form.
 GO_FIXERS = ("any", "fmtappendf", "forvar", "inline", "mapsloop", "minmax", "newexpr", "plusbuild", "rangeint",
              "reflecttypefor", "slicescontains", "slicessort", "stditerators", "stringsbuilder", "stringscut",

@@ -3,7 +3,7 @@
 // Node 18+ global fetch + AbortController. No vscode imports so the
 // mock-proxy integration tests run under plain vitest.
 //
-// Conventions mirrored from tui/internal/proxyclient/chat.go:
+// Conventions mirrored from clients/tui/internal/proxyclient/chat.go:
 //   - Authorization: Bearer <token> on every request when a token is set.
 //   - /v1/permission 404 = request already resolved = success.
 //   - /cancel is best-effort defense-in-depth; aborting the SSE request

@@ -9,7 +9,7 @@ Within that model:
 - **In scope:** command injection or path traversal that lets model output escape the workspace or sandbox; container escapes from the sandbox; unverified downloads of model artifacts; secrets written to disk or logs; vulnerabilities in the install scripts.
 - **Out of scope:** attacks that require the ATLAS ports to be exposed to an untrusted network (the compose files bind to localhost by default), multi-tenant isolation between users on the same machine, and prompt-injection making the model produce bad *code* (the sandbox and diff review exist so the operator can catch that before it lands).
 
-Model-generated tool calls are treated as untrusted input: file edits are constrained to the workspace and shell commands run in the sandbox container (read-only rootfs, no-new-privileges, pids limit, `/workspace` as the only writable host mount). If you find a way around either boundary, that is exactly the kind of report we want.
+Model-generated tool calls are treated as untrusted input: file edits are constrained to the workspace and, in container setups (Methods 0, 1, and 3), shell commands run in the sandbox container (read-only rootfs, no-new-privileges, pids limit, `/workspace` as the only writable host mount). On bare metal (Method 2), services run as local processes, so commands execute directly as the host user without a container boundary. If you find a way around either boundary, that is exactly the kind of report we want.
 
 Three current limits of that boundary, so reports can be calibrated against what is actually enforced: the sandbox has outbound network access by default (toolchains need to fetch dependencies) — `ATLAS_SANDBOX_NET_INTERNAL=true` cuts all egress from executed code; and the resource caps are host-sized only when `atlas init` writes them — a raw `docker compose up` without the wizard falls back to conservative caps (`1536m` memory, `2` CPUs, `1024` PIDs), never unlimited. Third, execution is permitted from the bind-mounted `/workspace` and from one 512M tmpfs (`/home/sandbox/gobuild`, the Go toolchain's link-and-run directory); every other writable tmpfs, `/tmp` included, is mounted `noexec`. That scoped grant adds no capability the sandbox lacked, since `/workspace` already permitted exec, but it is where compiled output can run.
 
@@ -31,8 +31,9 @@ it in `.env`; compose forwards it to the proxy container:
 
 - `untrusted` — command execution is refused (`run_command` and
   `run_background`); no repository commands run.
-- `trusted` (default) — commands run only in the isolated sandbox
-  container (non-root, cap_drop ALL, resource-capped).
+- `trusted` (default) — in container setups, commands run only in the
+  isolated sandbox container (non-root, cap_drop ALL, resource-capped); on
+  bare metal, commands run locally as the host user.
 - `fully-trusted` — additionally permits host execution
   (`ATLAS_VERIFY_IN=host`), dropping the container backstop; for working
   codebases that depend on host state, chosen deliberately.

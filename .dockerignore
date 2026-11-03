@@ -13,7 +13,7 @@
 
 # Other services' source trees (v3 doesn't need them)
 services/proxy/
-tui/
+clients/tui/
 geometric-lens/
 sandbox/
 inference/

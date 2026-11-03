@@ -252,7 +252,7 @@ run-first 门本身引用一条指令，`runFirstInstruction`：运行该扩展�
 
 #### 终端契约与会话预算
 
-每个会话恰好以一个终端事件结束，来自一个发射器。它携带原样的遗留 `summary` 加一个增量的 `status`——`completed`、`incomplete`、`stopped`、`timed_out`、`failed`——以及一个稳定的机器可读 `reason`。客户端把缺失的 status 读作 `incomplete`，无法识别的词按原样显示，绝不读作完成（`tui/internal/app/events.go` 的 `onDone`，VS Code 与 JetBrains 扩展的 `doneOutcome`）。broker 的 `done`/`stage_end` 信封报告同一结果，而不是断言 `success: true`。
+每个会话恰好以一个终端事件结束，来自一个发射器。它携带原样的遗留 `summary` 加一个增量的 `status`——`completed`、`incomplete`、`stopped`、`timed_out`、`failed`——以及一个稳定的机器可读 `reason`。客户端把缺失的 status 读作 `incomplete`，无法识别的词按原样显示，绝不读作完成（`clients/tui/internal/app/events.go` 的 `onDone`，VS Code 与 JetBrains 扩展的 `doneOutcome`）。broker 的 `done`/`stage_end` 信封报告同一结果，而不是断言 `success: true`。
 
 对除 `completed` 之外的任何状态，句子与字段都归服务器所有。模型自己的陈述只在完成门授权之处被放行；一个没有 summary 的非完成终端会得到一句服务器撰写的陈述，点名结果、磁盘上是否有东西、它是否被证明有效；而在非完成状态上抵达发射器的完成主张会被整个替换，而非围绕其编辑。这关闭了 Phase 2B 留下的缺口：一个只读 `summary` 的客户端——`status` 存在之前的所有客户端——现在读到与同时读两者者相同的真相。
 
@@ -438,7 +438,7 @@ API 契约见 [API.md § POST /v3/plan](../../reference/API.md#post-v3plan)。
 
 ##### tui：渲染（Go）
 
-`tui/internal/pipelinestate/plan.go` 定义了 `PlanView`（模型上的状态），`tui/internal/app/state.go` 定义了接入 `tui/internal/app/events.go` 聊天分发器的三个 `applyPlan*` 处理程序：
+`clients/tui/internal/pipelinestate/plan.go` 定义了 `PlanView`（模型上的状态），`clients/tui/internal/app/state.go` 定义了接入 `clients/tui/internal/app/events.go` 聊天分发器的三个 `applyPlan*` 处理程序：
 
 | 事件 | 处理程序 | UI 效果 |
 |---|---|---|
@@ -488,7 +488,7 @@ API 契约见 [API.md § POST /v3/plan](../../reference/API.md#post-v3plan)。
 | 代理桥接 | `services/proxy/internal/v3client/client_test.go`；阶段路由见 `services/proxy/tool_write_v3_bridge_test.go` | SSE 解析、缺少结果时的错误、阶段路由 |
 | 代理钩子 | `services/proxy/loop_test.go` | 优先文件选取、截断阈值、回退遍历、层级与长度判断 |
 | 代理遵循 | `services/proxy/plan_gates_test.go`；系统提示见 `services/proxy/gates_test.go` | 匹配逻辑（工具名 + 路径后缀）、排除失败的调用、修订上限、系统提示渲染 |
-| TUI 渲染 | `tui/internal/pipelinestate/plan_test.go`；处理程序见 `tui/internal/app/state_plan_test.go` | `PlanView` 状态转换、修订时由 plan_loaded 替换、偏离计划时静默 |
+| TUI 渲染 | `clients/tui/internal/pipelinestate/plan_test.go`；处理程序见 `clients/tui/internal/app/state_plan_test.go` | `PlanView` 状态转换、修订时由 plan_loaded 替换、偏离计划时静默 |
 
 ### 安全限制
 

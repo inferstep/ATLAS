@@ -378,16 +378,16 @@ step "8/8" "Building atlas-tui (Go Bubbletea client)"
 TUI_OUT="$HOME/.local/bin/atlas-tui"
 mkdir -p "$(dirname "$TUI_OUT")"
 
-if [[ ! -d "$ATLAS_ROOT/tui" ]]; then
-  red "tui/ directory not found at $ATLAS_ROOT/tui"
+if [[ ! -d "$ATLAS_ROOT/clients/tui" ]]; then
+  red "clients/tui/ directory not found at $ATLAS_ROOT/clients/tui"
   red "  Are you running this from inside a complete ATLAS checkout?"
   exit 1
 fi
 
 # go build is idempotent and fast (~10s on M-series). No need to
 # skip when --rebuild is unset; the cost is negligible vs the llama
-# rebuild, and it picks up any tui/ code changes on git pull.
-(cd "$ATLAS_ROOT/tui" && go build -o "$TUI_OUT" .)
+# rebuild, and it picks up any clients/tui/ code changes on git pull.
+(cd "$ATLAS_ROOT/clients/tui" && go build -o "$TUI_OUT" .)
 green "  Built and installed: $TUI_OUT"
 
 # ---------------------------------------------------------------------------

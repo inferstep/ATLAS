@@ -3,7 +3,7 @@
 This module is the canonical Python definition of the event envelope
 and the consumer helpers. atlas-proxy's `/events` broker emits JSON in
 this shape; the Go TUI consumes it via its own implementation of the
-same contract (tui/consumer.go), and the tests here consume it via
+same contract (clients/tui/consumer.go), and the tests here consume it via
 `iter_events(url)`.
 
 The schema is also documented in docs/reference/API.md; this docstring is

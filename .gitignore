@@ -161,7 +161,7 @@ benchmark/results/
 
 # ----- Go build artifacts -----
 services/proxy/atlas-proxy
-tui/atlas-tui
+clients/tui/atlas-tui
 
 # ----- Geometric Lens large files (on HuggingFace, not in git) -----
 geometric-lens/geometric_lens/models/training_embeddings_*.json

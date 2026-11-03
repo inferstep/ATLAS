@@ -1,14 +1,14 @@
 """atlas tui — Bubbletea TUI client (PC-062).
 
 Replaces the Aider-based chat UI with a native Bubbletea TUI built into
-the tui/ directory. Three panes (pipeline, events, chat) feed off
+the clients/tui/ directory. Three panes (pipeline, events, chat) feed off
 two SSE streams from atlas-proxy: /events (typed envelope visibility)
 and /v1/agent (per-turn chat protocol). See docs/reference/CLI.md for the full
 keymap and slash-command reference.
 
 Launch strategy:
   1. Locate the `atlas-tui` binary on PATH or in ~/.local/bin
-  2. If missing or older than checkout source, build from tui/
+  2. If missing or older than checkout source, build from clients/tui/
   3. If still missing → print install instructions and exit
   4. Otherwise → ensure atlas-proxy is running, then exec the TUI
 
@@ -29,10 +29,10 @@ def _find_atlas_dir() -> str:
     """Walk up from this file looking for the ATLAS repo root."""
     d = os.path.dirname(os.path.abspath(__file__))
     for _ in range(5):
-        if os.path.exists(os.path.join(d, "tui", "go.mod")):
+        if os.path.exists(os.path.join(d, "clients", "tui", "go.mod")):
             return d
         d = os.path.dirname(d)
-    if os.path.exists(os.path.join(os.getcwd(), "tui", "go.mod")):
+    if os.path.exists(os.path.join(os.getcwd(), "clients", "tui", "go.mod")):
         return os.getcwd()
     return ""
 
@@ -44,7 +44,7 @@ def _find_tui_binary(atlas_dir: str) -> Optional[str]:
         return on_path
     for cand in (
         os.path.expanduser("~/.local/bin/atlas-tui"),
-        os.path.join(atlas_dir, "tui", "atlas-tui") if atlas_dir else None,
+        os.path.join(atlas_dir, "clients", "tui", "atlas-tui") if atlas_dir else None,
     ):
         if cand and os.path.isfile(cand) and os.access(cand, os.X_OK):
             return cand
@@ -56,7 +56,7 @@ def _build_tui(atlas_dir: str) -> Optional[str]:
     go_bin = shutil.which("go")
     if not go_bin or not atlas_dir:
         return None
-    src = os.path.join(atlas_dir, "tui")
+    src = os.path.join(atlas_dir, "clients", "tui")
     if not os.path.isfile(os.path.join(src, "go.mod")):
         return None
     output = os.path.expanduser("~/.local/bin/atlas-tui")
@@ -79,7 +79,7 @@ def _build_tui(atlas_dir: str) -> Optional[str]:
 def _select_tui_binary(atlas_dir: str) -> Optional[str]:
     """Select a TUI binary whose behavior matches the current checkout."""
     binary = _find_tui_binary(atlas_dir)
-    source_dir = os.path.join(atlas_dir, "tui") if atlas_dir else ""
+    source_dir = os.path.join(atlas_dir, "clients", "tui") if atlas_dir else ""
     if binary and go_binary_is_current(
         binary,
         source_dir,
@@ -101,7 +101,7 @@ def main(argv: List[str]) -> int:
             "atlas tui: atlas-tui binary not found and Go is not "
             "available to build it.\n"
             "Install Go 1.26.10+ (https://go.dev/dl/) or build manually:\n"
-            "  cd tui && go build -o ~/.local/bin/atlas-tui .\n"
+            "  cd clients/tui && go build -o ~/.local/bin/atlas-tui .\n"
         )
         return 1
 
