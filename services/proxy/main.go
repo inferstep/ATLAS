@@ -152,7 +152,7 @@ func handleModels(w http.ResponseWriter, r *http.Request) {
 						ID string `json:"id"`
 					} `json:"data"`
 				}
-				if decodeErr := json.NewDecoder(io.LimitReader(upstream.Body, 1<<20)).Decode(&loaded); decodeErr == nil {
+				if json.NewDecoder(io.LimitReader(upstream.Body, 1<<20)).Decode(&loaded) == nil {
 					for _, candidate := range loaded.Data {
 						if candidate.ID = strings.TrimSpace(candidate.ID); candidate.ID != "" {
 							id = candidate.ID

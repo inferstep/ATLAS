@@ -596,7 +596,7 @@ func (c *AgentContext) Stream(eventType string, data interface{}) {
 }
 
 // RecordFileRead tracks when a file was last read (for staleness detection).
-func (c *AgentContext) RecordFileRead(path string, content string) {
+func (c *AgentContext) RecordFileRead(path, content string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.FileReadTimes[path] = time.Now()
