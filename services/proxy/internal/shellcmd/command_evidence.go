@@ -235,22 +235,34 @@ func shellOptions(segs []string) (errexit, pipefail bool) {
 		if len(f) == 0 || f[0] != "set" {
 			continue
 		}
-		for i, a := range f[1:] {
-			switch {
-			case a == "-o" && i+2 < len(f):
-				switch f[i+2] {
-				case "errexit":
-					errexit = true
-				case "pipefail":
-					pipefail = true
-				}
-			case strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--"):
-				if strings.Contains(a, "e") {
-					errexit = true
-				}
-				if strings.Contains(a, "o") && i+2 < len(f) && f[i+2] == "pipefail" {
-					pipefail = true
-				}
+		e, p := setOptions(f)
+		if e {
+			errexit = true
+		}
+		if p {
+			pipefail = true
+		}
+	}
+	return errexit, pipefail
+}
+
+// setOptions reads errexit and pipefail from the words of one `set` command.
+func setOptions(f []string) (errexit, pipefail bool) {
+	for i, a := range f[1:] {
+		switch {
+		case a == "-o" && i+2 < len(f):
+			switch f[i+2] {
+			case "errexit":
+				errexit = true
+			case "pipefail":
+				pipefail = true
+			}
+		case strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--"):
+			if strings.Contains(a, "e") {
+				errexit = true
+			}
+			if strings.Contains(a, "o") && i+2 < len(f) && f[i+2] == "pipefail" {
+				pipefail = true
 			}
 		}
 	}
@@ -489,6 +501,13 @@ func readHereDocOperator(cmd string, i int) (int, hereDoc) {
 	for j < len(cmd) && (cmd[j] == ' ' || cmd[j] == '\t') {
 		j++
 	}
+	doc.delim, j = readHereDocDelim(cmd, j)
+	return j, doc
+}
+
+// readHereDocDelim reads the delimiter word of a here-document starting at j,
+// with its quotes and backslashes removed, and returns the index just past it.
+func readHereDocDelim(cmd string, j int) (string, int) {
 	var delim strings.Builder
 	for j < len(cmd) {
 		d := cmd[j]
@@ -513,8 +532,7 @@ func readHereDocOperator(cmd string, i int) (int, hereDoc) {
 		delim.WriteByte(d)
 		j++
 	}
-	doc.delim = delim.String()
-	return j, doc
+	return delim.String(), j
 }
 
 // readHereDocBodies consumes, in order, the bodies of the pending
@@ -527,26 +545,33 @@ func readHereDocBodies(cmd string, p int, docs []hereDoc, bodyAt map[int]*string
 			b = &strings.Builder{}
 			bodyAt[doc.seg] = b
 		}
-		for p < len(cmd) {
-			line, next := cmd[p:], len(cmd)
-			if end := strings.IndexByte(line, '\n'); end >= 0 {
-				line, next = line[:end], p+end+1
-			}
-			p = next
-			check := strings.TrimRight(line, "\r")
-			if doc.stripTabs {
-				check = strings.TrimLeft(check, "\t")
-			}
-			if check == doc.delim {
-				break
-			}
-			if b.Len() > 0 {
-				b.WriteByte('\n')
-			}
-			b.WriteString(line)
-		}
+		p = readHereDocBody(cmd, p, doc, b)
 	}
 	return p - 1
+}
+
+// readHereDocBody adds to b the lines of one here-document body that starts at
+// p, up to and with its delimiter line, and returns the index after it.
+func readHereDocBody(cmd string, p int, doc hereDoc, b *strings.Builder) int {
+	for p < len(cmd) {
+		line, next := cmd[p:], len(cmd)
+		if end := strings.IndexByte(line, '\n'); end >= 0 {
+			line, next = line[:end], p+end+1
+		}
+		p = next
+		check := strings.TrimRight(line, "\r")
+		if doc.stripTabs {
+			check = strings.TrimLeft(check, "\t")
+		}
+		if check == doc.delim {
+			break
+		}
+		if b.Len() > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(line)
+	}
+	return p
 }
 
 // dropEmptyTrailingSegments removes the empty segments at the end of a split.
@@ -868,13 +893,19 @@ func leadingSubshell(t string) (string, bool) {
 		case c == ')':
 			depth--
 			if depth == 0 {
-				rest := strings.TrimLeft(strings.TrimSpace(t[i+1:]), "0123456789&")
-				if rest == "" || strings.HasPrefix(rest, ">") || strings.HasPrefix(rest, "<") {
-					return t[1:i], true
-				}
-				return "", false
+				return subshellBody(t, i)
 			}
 		}
+	}
+	return "", false
+}
+
+// subshellBody is what the subshell that closes at i runs, when nothing but
+// redirections follows its closing parenthesis.
+func subshellBody(t string, i int) (string, bool) {
+	rest := strings.TrimLeft(strings.TrimSpace(t[i+1:]), "0123456789&")
+	if rest == "" || strings.HasPrefix(rest, ">") || strings.HasPrefix(rest, "<") {
+		return t[1:i], true
 	}
 	return "", false
 }
@@ -887,15 +918,18 @@ func shellScript(seg string) (string, bool) {
 	if len(words) == 0 || !isShellProgram(filepath.Base(words[0])) {
 		return "", false
 	}
-	args := words[1:]
+	return inlineScript(words[1:])
+}
+
+// inlineScript reads a shell's arguments up to the -c flag and returns the
+// script after it, with the options read on the way as its first lines.
+func inlineScript(args []string) (string, bool) {
 	pre := ""
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
 		case (a == "-o" || a == "+o") && i+1 < len(args):
-			if a == "-o" {
-				pre += "set -o " + args[i+1] + "\n"
-			}
+			pre += optionLine(a, args[i+1])
 			i++
 			continue
 		case strings.HasPrefix(a, "--"):
@@ -911,18 +945,32 @@ func shellScript(seg string) (string, bool) {
 			pre += "set -e\n"
 		}
 		if strings.HasSuffix(flags, "o") && i+1 < len(args) {
-			pre += "set -o " + args[i+1] + "\n" // bash -euo pipefail -c …
+			pre += optionLine("-o", args[i+1]) // bash -euo pipefail -c …
 			i++
 			continue
 		}
 		if strings.Contains(flags, "c") {
-			if i+1 >= len(args) {
-				return "", false
-			}
-			return pre + args[i+1], true
+			return commandOperand(pre, args, i)
 		}
 	}
 	return "", false
+}
+
+// optionLine is the `set -o NAME` line for `-o NAME`; `+o NAME` adds none.
+func optionLine(flag, name string) string {
+	if flag == "-o" {
+		return "set -o " + name + "\n"
+	}
+	return ""
+}
+
+// commandOperand is the script that the -c flag at i takes, after the
+// options' lines; false when the script is missing.
+func commandOperand(pre string, args []string, i int) (string, bool) {
+	if i+1 >= len(args) {
+		return "", false
+	}
+	return pre + args[i+1], true
 }
 
 // shellProgramKind: a shell started with inline code is judged by that code,
