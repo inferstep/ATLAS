@@ -66,9 +66,10 @@ pull_requests:
     services/proxy/task_tier.go: the agent loop
     services/proxy/tool*: the tool handlers
     services/proxy/gates*: the guards
+    services/proxy/plan_gates*: the guards
     services/proxy/guardrails*: the guards
-    services/proxy/candidate_authorization.go: the guards
-    services/proxy/candidate_grant.go: the guards
+    services/proxy/candidate_authorization*: the guards
+    services/proxy/candidate_grant*: the guards
     services/proxy/internal/shellcmd/*: the guards
     services/proxy/internal/workspacefs/*: the guards
     services/proxy/internal/logsafe/*: the guards

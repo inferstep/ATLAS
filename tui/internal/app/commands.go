@@ -653,7 +653,7 @@ func (m *tuiModel) contextSuffix() string {
 // renders a compact badge next to the Pipeline pane title so users
 // immediately see whether the loaded model has supported Lens artifacts
 // and whether an ASA control vector is in play. Verdict comes from the
-// proxy's CalibrationStatus (proxy/lens.go).
+// proxy's CalibrationStatus (services/proxy/lens.go).
 //
 // Why the TUI does this: when a user swaps in a non-default GGUF, the
 // lens silently no-ops and the agent loop still "works" — but without

@@ -24,7 +24,7 @@ llama-server (`lensHealthVerdict` in `services/proxy/lens_required.go`). An
 uncalibrated lens can score: it returns raw energies, and only the
 calibrated uses (normalized routing, veto and correction thresholds)
 wait for calibration, as its status says (`lensVerdictCanScore` in
-`proxy/lens.go`).
+`services/proxy/lens.go`).
 
 **An input the lens declines is not a lens that is down.** Failure
 kinds `embed_capacity`, `empty_input` and `nonfinite_score` mean this
@@ -35,7 +35,7 @@ path with a `layer`; elsewhere it is typed `internal`, and the run stops
 `model_server_unreachable`, `embedding_contract` and `internal`, a
 transport error, a non-200 answer, an unreadable body, and
 `enabled: false` mean the lens is down (`lensDownKinds` in
-`services/proxy/lens_required.go`, `scoreContentForAgent` in `proxy/lens.go`,
+`services/proxy/lens_required.go`, `scoreContentForAgent` in `services/proxy/lens.go`,
 `LENS_DOWN_KINDS` in `v3-service/scoring.py`).
 
 **No off switch.** The lens ignores `GEOMETRIC_LENS_ENABLED`
@@ -43,7 +43,7 @@ transport error, a non-200 answer, an unreadable body, and
 `geometric-lens/tests/test_nonfinite_scores.py`). Its scoring answers
 say `enabled: false` only when no model is loaded
 (`geometric-lens/geometric_lens/service.py`), and such a lens reports
-`no-artifacts` (`probeLensStatus` in `proxy/lens.go`).
+`no-artifacts` (`probeLensStatus` in `services/proxy/lens.go`).
 
 **Before a request.** The proxy asks the lens `/ready`, then `/health`,
 because `/ready` answers 200 for a lens with no G(x) model. The answer
@@ -76,9 +76,9 @@ the request path (`lens_ready`, with `lens_reason` when false;
 `/v1/calibration/status` carries `can_score`, which is true only for
 the verdicts `supported` and `uncalibrated`, and the verdicts `drifted`,
 `self-test-failed` and `model-server-unreachable` beside the artifact
-verdicts (`LensStatus` and `probeLensStatus` in `proxy/lens.go`). The
+verdicts (`LensStatus` and `probeLensStatus` in `services/proxy/lens.go`). The
 `direct_agent` dimension is `blocked` while the lens cannot score
-(`buildDimensions` in `proxy/lens.go`). `atlas doctor` fails on a
+(`buildDimensions` in `services/proxy/lens.go`). `atlas doctor` fails on a
 blocked dimension (`check_status_dimensions` in
 `atlas/commands/doctor.py`). The TUI badge shows a failure and names the
 command to run: `atlas doctor`, or `atlas lens build` when artifacts are

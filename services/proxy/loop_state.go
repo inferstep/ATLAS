@@ -360,7 +360,7 @@ type loopWatch struct {
 	// from lens scoring of write_file/edit_file tool calls. When the
 	// recent N values all fall below the selected model's calibrated threshold the loop
 	// injects a corrective system message before the next LLM call.
-	// See proxy/lens.go for the pattern detection.
+	// See lens.go for the pattern detection.
 	LensScoreHistory []float64
 }
 

@@ -75,7 +75,7 @@ interventions are firing. These are **separate** dimensions and every
 status surface (the proxy `/v1/calibration/status` endpoint, the TUI
 badge, `atlas doctor`, `atlas lens check`) reports the same seven so
 they cannot disagree — the CLI/TUI/doctor all read the endpoint, which
-computes them in one place (`proxy/lens.go`).
+computes them in one place (`services/proxy/lens.go`).
 
 | Dimension | Meaning | Statuses |
 |---|---|---|
