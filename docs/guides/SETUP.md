@@ -607,7 +607,7 @@ ATLAS_SANDBOX_URL=http://localhost:8020 \
 python main.py
 
 # Terminal 4: Sandbox
-cd sandbox
+cd services/sandbox
 python executor_server.py
 # The sandbox checks on startup whether it can govern child processes via /proc.
 # On hosts without a readable /proc (e.g. macOS), it starts with degraded limits

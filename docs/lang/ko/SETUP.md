@@ -564,7 +564,7 @@ ATLAS_SANDBOX_URL=http://localhost:8020 \
 python main.py
 
 # Terminal 4: Sandbox
-cd sandbox
+cd services/sandbox
 python executor_server.py
 # 샌드박스는 시작할 때 /proc로 자식 프로세스를 관리할 수 있는지 확인합니다.
 # 읽을 수 있는 /proc가 없는 호스트(예: macOS)에서는 제한이 약해진 상태로 시작하고,
