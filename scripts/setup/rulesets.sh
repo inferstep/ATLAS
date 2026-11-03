@@ -78,7 +78,7 @@ ADMIN_ROLE_ID=5  # the built-in repository "admin" role
 
 # Required on dev, staging and main.
 CHECKS=(
-    "go test (proxy)" "go test (tui)" "pytest (tests/v3)" "pytest (tests/cli)"
+    "go test (proxy)" "go test (tui)" "pytest (tests/atlas)"
     "shellcheck" "docker compose config" "yamllint (workflows)"
     "bootstrap on ubuntu-22.04" "bootstrap on ubuntu-24.04" "bootstrap on debian-12"
     "bootstrap on rockylinux-9" "ruff (python lint)" "codeql (python)" "codeql (go)"

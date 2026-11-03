@@ -4,6 +4,7 @@ The two tools run in their own jobs. These tests hold what does not need the
 tools: each tool is a download held against a recorded checksum, and every
 checkout step drops the job's token unless its line says why it keeps it.
 """
+import json
 import re
 from pathlib import Path
 
@@ -113,3 +114,15 @@ def test_the_lint_jobs_have_a_read_only_token():
     workflow = yaml.safe_load(LINT.read_text(encoding="utf-8"))
     assert workflow["permissions"] == {"contents": "read"}
     assert all("permissions" not in job for job in workflow["jobs"].values())
+
+
+# A step that runs only for one value of the matrix never runs once the matrix
+# loses that value, and nothing fails: the job stays green without the step.
+@pytest.mark.parametrize("path", WORKFLOWS, ids=lambda path: path.name)
+def test_a_comparison_with_a_matrix_value_names_a_value_the_matrix_has(path):
+    jobs = (yaml.safe_load(path.read_text(encoding="utf-8")) or {}).get("jobs") or {}
+    for job_id, job in jobs.items():
+        matrix = (job.get("strategy") or {}).get("matrix") or {}
+        for key, value in re.findall(r"matrix\.(\w+) [=!]= '([^']*)'", json.dumps(job)):
+            assert value in matrix.get(key, []), (
+                f"{path.name}, job {job_id}: matrix.{key} is compared with {value!r}, which its matrix does not have")

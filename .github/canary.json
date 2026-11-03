@@ -11,23 +11,6 @@
   },
   "plants": [
     {
-      "id": "pytest (tests/v3)",
-      "red": [
-        "pytest (tests/v3)"
-      ],
-      "what": "a failing test in tests/v3/test_canary_v3.py",
-      "shows": "canary: this test fails on purpose",
-      "action": "write",
-      "path": "tests/v3/test_canary_v3.py",
-      "lines": [
-        "\"\"\"Planted by scripts/canary.py for the canary pull request. Never merge it.\"\"\"",
-        "",
-        "",
-        "def test_canary_must_fail():",
-        "    assert 1 == 2, \"canary: this test fails on purpose\""
-      ]
-    },
-    {
       "id": "pytest (tests/v3-service)",
       "red": [
         "pytest (tests/v3-service)"
@@ -45,14 +28,14 @@
       ]
     },
     {
-      "id": "pytest (tests/cli)",
+      "id": "pytest (tests/atlas)",
       "red": [
-        "pytest (tests/cli)"
+        "pytest (tests/atlas)"
       ],
-      "what": "a failing test in tests/cli/test_canary_cli.py",
+      "what": "a failing test in tests/atlas/test_canary_atlas.py",
       "shows": "canary: this test fails on purpose",
       "action": "write",
-      "path": "tests/cli/test_canary_cli.py",
+      "path": "tests/atlas/test_canary_atlas.py",
       "lines": [
         "\"\"\"Planted by scripts/canary.py for the canary pull request. Never merge it.\"\"\"",
         "",

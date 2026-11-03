@@ -61,8 +61,8 @@ echo "=== go test (proxy) ==="
 ( cd proxy && go test ./... > "$RECORD/deployed/gotest-$STAMP.txt" 2>&1 ) ||
   { tail -20 "$RECORD/deployed/gotest-$STAMP.txt"; fail "go test failed (deployed/gotest-$STAMP.txt)"; }
 tail -3 "$RECORD/deployed/gotest-$STAMP.txt"
-echo "=== pytest tests/v3 tests/v3-service tests/cli ==="
-python3 -m pytest -q tests/v3 tests/v3-service tests/cli > "$RECORD/deployed/pytest-$STAMP.txt" 2>&1 ||
+echo "=== pytest tests/v3-service tests/atlas ==="
+python3 -m pytest -q tests/v3-service tests/atlas > "$RECORD/deployed/pytest-$STAMP.txt" 2>&1 ||
   { tail -20 "$RECORD/deployed/pytest-$STAMP.txt"; fail "pytest failed (deployed/pytest-$STAMP.txt)"; }
 tail -2 "$RECORD/deployed/pytest-$STAMP.txt"
 

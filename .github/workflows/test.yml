@@ -122,7 +122,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # tests/v3/, tests/v3-service/, tests/cli/, and geometric-lens/tests/
+        # tests/v3-service/, tests/atlas/, and geometric-lens/tests/
         # are pure unit tests — no services needed. tests/infrastructure/ is
         # mixed: test_llm.py + test_sandbox.py carry the `integration` marker
         # (they need a live llama-server / sandbox stack, so they are
@@ -131,9 +131,8 @@ jobs:
         # compose and CPU-image checks are static file assertions that run
         # anywhere.
         subset:
-          - tests/v3
           - tests/v3-service
-          - tests/cli
+          - tests/atlas
           - tests/infrastructure
           - tests/contracts
           - tests/concurrency
@@ -179,7 +178,7 @@ jobs:
           pip install --no-deps -e .
 
       - name: install lens dependencies (CPU torch)
-        if: matrix.subset == 'geometric-lens/tests' || matrix.subset == 'tests/cli'
+        if: matrix.subset == 'geometric-lens/tests' || matrix.subset == 'tests/atlas'
         # Mirrors geometric-lens/Dockerfile: CPU-only torch wheel (the
         # CUDA default is ~2 GB and pointless on a CPU runner), then the
         # service requirements, from a hashed lock (see lens.in). xgboost
