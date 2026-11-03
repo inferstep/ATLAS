@@ -396,76 +396,61 @@ func TestHandleEventsReturnsOnDrain(t *testing.T) {
 // /events is a documented contract with a permanently connected TUI subscriber.
 // The shadow capture writes to a private file and must not appear here, and
 // enabling it must not change a byte the subscriber sees.
-//
-// Two envelope fields are removed before comparing: event_id is random by
-// construction (NewEventID) and timestamp is wall clock. Nothing else is
-// normalised — payloads, types, stages and ordering are compared as they arrive.
-func TestEventsStreamIsUnchangedByShadowCapture(t *testing.T) {
-	// collect connects to /events, emits three envelopes and returns what the
-	// stream carried.
-	collect := func() []string {
-		srv := httptest.NewServer(http.HandlerFunc(handleEvents))
-		defer srv.Close()
-		resp, err := http.Get(srv.URL)
-		if err != nil {
-			t.Fatalf("GET /events: %v", err)
-		}
-		defer resp.Body.Close()
-		r := bufio.NewReader(resp.Body)
-		_, _ = r.ReadString('\n') // : connected
-		_, _ = r.ReadString('\n')
 
-		lines := make(chan string, 8)
-		go func() {
-			for {
-				line, err := r.ReadString('\n')
-				if err != nil {
-					close(lines)
-					return
-				}
-				if strings.HasPrefix(line, "data:") {
-					lines <- strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-				}
-			}
-		}()
-
-		time.Sleep(50 * time.Millisecond) // the handler's select loop is parked
-		// The same envelopes the agent loop emits, in the same order.
-		Emit(wire.NewEnvelope(wire.EvtStageStart, "agent", map[string]interface{}{"tier": "T2:medium"}))
-		Emit(wire.NewEnvelope(wire.EvtToolCall, "tool", map[string]interface{}{"name": "write_file"}))
-		Emit(wire.NewEnvelope(wire.EvtMetric, "llm", map[string]interface{}{"name": "turn", "value": 1.0}))
-
-		var got []string
-		deadline := time.After(3 * time.Second)
-		for len(got) < 3 {
-			select {
-			case line, ok := <-lines:
-				if !ok {
-					t.Fatalf("stream closed after %d of 3 envelopes", len(got))
-				}
-				var m map[string]interface{}
-				if err := json.Unmarshal([]byte(line), &m); err != nil {
-					t.Fatalf("not envelope JSON: %v", err)
-				}
-				if strings.Contains(line, "shadow") || strings.Contains(line, "task_contract") {
-					t.Errorf("a shadow record reached the public stream: %s", line)
-				}
-				delete(m, "event_id")
-				delete(m, "timestamp")
-				b, _ := json.Marshal(m)
-				got = append(got, string(b))
-			case <-deadline:
-				t.Fatalf("only %d of 3 envelopes arrived", len(got))
-			}
-		}
-		return got
+// collectThreeEvents connects to /events, emits the three envelopes the agent
+// loop emits, in its order, and returns the data lines the stream carried.
+func collectThreeEvents(t *testing.T) []string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(handleEvents))
+	defer srv.Close()
+	resp, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("GET /events: %v", err)
 	}
+	defer resp.Body.Close()
+	r := bufio.NewReader(resp.Body)
+	_, _ = r.ReadString('\n') // : connected
+	_, _ = r.ReadString('\n')
 
-	// Capture off.
-	shadowcapture.SetActive(nil)
-	off := collect()
+	lines := make(chan string, 8)
+	go func() {
+		for {
+			line, err := r.ReadString('\n')
+			if err != nil {
+				close(lines)
+				return
+			}
+			if strings.HasPrefix(line, "data:") {
+				lines <- strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			}
+		}
+	}()
 
-	// Capture on: a live sink writing to a private file.
+	time.Sleep(50 * time.Millisecond) // the handler's select loop is parked
+	Emit(wire.NewEnvelope(wire.EvtStageStart, "agent", map[string]interface{}{"tier": "T2:medium"}))
+	Emit(wire.NewEnvelope(wire.EvtToolCall, "tool", map[string]interface{}{"name": "write_file"}))
+	Emit(wire.NewEnvelope(wire.EvtMetric, "llm", map[string]interface{}{"name": "turn", "value": 1.0}))
+
+	var got []string
+	deadline := time.After(3 * time.Second)
+	for len(got) < 3 {
+		select {
+		case line, ok := <-lines:
+			if !ok {
+				t.Fatalf("stream closed after %d of 3 envelopes", len(got))
+			}
+			got = append(got, line)
+		case <-deadline:
+			t.Fatalf("only %d of 3 envelopes arrived", len(got))
+		}
+	}
+	return got
+}
+
+// startShadowCapture turns the shadow capture on, writing to a private file,
+// until the test ends.
+func startShadowCapture(t *testing.T) {
+	t.Helper()
 	t.Setenv("ATLAS_DIAGNOSTIC_DIR", t.TempDir())
 	t.Setenv("ATLAS_SHADOW_CAPTURE", "events.jsonl")
 	sink, err := openShadowCapture()
@@ -473,18 +458,52 @@ func TestEventsStreamIsUnchangedByShadowCapture(t *testing.T) {
 		t.Fatalf("sink: %v", err)
 	}
 	shadowcapture.SetActive(sink)
-	defer func() {
+	t.Cleanup(func() {
 		sink.Close(context.Background(), 5*time.Second)
 		shadowcapture.SetActive(nil)
-	}()
-	on := collect()
+	})
+}
+
+func TestNoShadowRecordReachesTheEventsStream(t *testing.T) {
+	startShadowCapture(t)
+	for _, line := range collectThreeEvents(t) {
+		if strings.Contains(line, "shadow") {
+			t.Errorf("a shadow record reached the public stream: %s", line)
+		}
+		if strings.Contains(line, "task_contract") {
+			t.Errorf("a task contract reached the public stream: %s", line)
+		}
+	}
+}
+
+// Two envelope fields are removed before comparing: event_id is random by
+// construction (NewEventID) and timestamp is wall clock. Nothing else is
+// normalised — payloads, types, stages and ordering are compared as they arrive.
+func TestEventsStreamIsUnchangedByShadowCapture(t *testing.T) {
+	shadowcapture.SetActive(nil)
+	off := collectThreeEvents(t)
+	startShadowCapture(t)
+	on := collectThreeEvents(t)
 
 	if len(off) != len(on) {
 		t.Fatalf("%d events with capture off, %d with it on", len(off), len(on))
 	}
 	for i := range off {
-		if off[i] != on[i] {
-			t.Errorf("event %d differs:\n  off: %s\n  on:  %s", i, off[i], on[i])
+		var o, n map[string]interface{}
+		if err := json.Unmarshal([]byte(off[i]), &o); err != nil {
+			t.Fatalf("not envelope JSON: %v", err)
+		}
+		if err := json.Unmarshal([]byte(on[i]), &n); err != nil {
+			t.Fatalf("not envelope JSON: %v", err)
+		}
+		for _, m := range []map[string]interface{}{o, n} {
+			delete(m, "event_id")
+			delete(m, "timestamp")
+		}
+		ob, _ := json.Marshal(o)
+		nb, _ := json.Marshal(n)
+		if string(ob) != string(nb) {
+			t.Errorf("event %d differs:\n  off: %s\n  on:  %s", i, ob, nb)
 		}
 	}
 }
