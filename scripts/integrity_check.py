@@ -24,13 +24,14 @@ from __future__ import annotations
 
 import argparse
 import ast
-import importlib.util
 import io
 import json
 import os
 import re
 import subprocess
 import sys
+import tarfile
+import tempfile
 import tokenize
 from collections import Counter
 from dataclasses import dataclass, field
@@ -58,6 +59,8 @@ GATE_FILES = (
     "tests/perf/budgets.json", "tests/replay/recordings/",
     "tests/infrastructure/gradle_wrapper_jar_sums.txt",
     "scripts/integrity_check.py", "scripts/ci/code_health.py", "scripts/ci/production-readiness.py", "scripts/fix_tests.py",
+    # The runner the evaluation task names are read from.
+    str(TASK_SOURCE),
     "scripts/checks_ran.py", "scripts/change_base.py", "scripts/ci/queue_run.py", "scripts/ci/go_test_build.py",
     "scripts/ci/verify.py", "scripts/canary.py", "scripts/smoke_result.py",
     "scripts/ci/dockerfile_lint.py", "scripts/ci/check_dockerfile_sources.py", "scripts/ci/check_min_python.py",
@@ -331,19 +334,46 @@ def test_name(line: str) -> str:
     return next((group for group in match.groups() if group), "") if match else ""
 
 
-def task_names(root: Path = ROOT) -> set[str]:
+# Run in a child process: load the runner, and print its task names as JSON,
+# alone on stdout.
+READ_TASKS = """
+import contextlib, importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("atlas_task_source", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module  # its dataclasses resolve annotations through it
+with contextlib.redirect_stdout(sys.stderr):
+    spec.loader.exec_module(module)
+print(json.dumps(sorted(module.TASKS)))
+"""
+
+
+def task_names(root: Path, base: str) -> set[str]:
     """The evaluation suite's task names, read from the runner that defines them.
 
-    The runner builds some names in a loop, so it is loaded, not searched.
+    The runner builds some names in a loop, so it is run, not searched. It
+    reads files across the tree as it loads, so the base's whole tree is
+    written to a folder of its own and the base's runner runs there, in a
+    child process, as the base's copy of this script is the judge. Nothing in
+    the change runs, so it cannot reach this process or the files it reads.
+    The change's copy runs only while the base has no runner.
     """
-    spec = importlib.util.spec_from_file_location("atlas_task_source", root / TASK_SOURCE)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module  # its dataclasses resolve annotations through it
-    try:
-        spec.loader.exec_module(module)
-        return set(module.TASKS)
-    finally:
-        sys.modules.pop(spec.name, None)
+    with tempfile.TemporaryDirectory() as folder:
+        archive = subprocess.run(["git", "archive", "--format=tar", "--end-of-options", base],
+                                 cwd=root, capture_output=True, check=False)
+        if archive.returncode != 0:
+            raise RuntimeError(f"git archive {base} failed: {archive.stderr.decode(errors='replace').strip()}")
+        with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
+            tar.extractall(folder, filter="data")
+        source = Path(folder) / TASK_SOURCE
+        if not source.is_file():
+            print(f"integrity check: the base has no {TASK_SOURCE}; this run reads the task names from the "
+                  "change's copy.", file=sys.stderr)
+            source = root.resolve() / TASK_SOURCE
+        child = subprocess.run([sys.executable, "-I", "-c", READ_TASKS, str(source)], cwd=folder,
+                               capture_output=True, text=True, check=False, timeout=120)
+    if child.returncode != 0:
+        raise RuntimeError(f"the runner exited with {child.returncode}: {child.stderr.strip()[-400:]}")
+    return set(json.loads(child.stdout))
 
 
 TEST_WHY = ("A test that is removed, skipped or loosened in the same change as the code it "
@@ -1251,7 +1281,7 @@ def main() -> int:
               "  fix: fetch the base branch (git fetch origin) or pass --base <commit>.", file=sys.stderr)
         return 2
     try:
-        tasks = task_names(args.root)
+        tasks = task_names(args.root, args.base)
     except Exception as error:  # the runner is a script: anything can go wrong loading it
         print(f"integrity check: cannot read the evaluation task names from {TASK_SOURCE}: {error!r}\n"
               "  why: without them, a task name in product code would pass unseen.\n"

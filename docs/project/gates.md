@@ -441,6 +441,7 @@ made twice.
 | A check that stops checking must be seen ([The canary](#the-canary)) | #350, #396 | `scripts/canary.py check` |
 | A change whose checks did not run fails. A job that was skipped behind a failed job is not counted twice | #303, #403 | `checks ran` |
 | The script that judges a change is the base branch's copy, so a change cannot rewrite its own judge | #390 | review |
+| The evaluation task names that judge reads come from the base branch's runner, run in a child process in a copy of the base's tree, so nothing in a change runs while it is judged, except while the base has no runner. The runner is a file that configures the checks | #864 | `tests/infrastructure/pipeline/test_integrity_check.py` |
 | A check that compares with the base uses the base branch as it is now, and stops when the base is not in the checkout | #390, #392 | `scripts/change_base.py`, `tests/infrastructure/pipeline/test_change_base.py` |
 | Every job names its runner image, so the image changes in a pull request and not on the day the label moves | #299 | review |
 | The guide's rule for a checkout step and for a value from the event ([Code style](../../.github/CONTRIBUTING.md#code-style), Workflows). The one exception has its reason on its line | #377 | `workflow lint` (zizmor), `tests/infrastructure/pipeline/test_workflow_lint.py` |
