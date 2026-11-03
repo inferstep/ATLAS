@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/itigges22/atlas-proxy/internal/assetlint"
+	"github.com/itigges22/atlas-proxy/internal/projectcontext"
 )
 
 // outsideMarker is the content of the file outside the workspace. A read
@@ -56,8 +57,8 @@ func TestPlanContextStaysInsideTheWorkspace(t *testing.T) {
 		workspace := t.TempDir()
 		linkOutOfWorkspace(t, workspace, "README.md", outsideMarker)
 		writeInWorkspace(t, workspace, "main.py", "print('inside')\n")
-		got := samplePlanContext(workspace, 6, 2000)
-		assertNoOutsideContent(t, "samplePlanContext", got)
+		got := projectcontext.Sample(workspace, 6, 2000)
+		assertNoOutsideContent(t, "projectcontext.Sample", got)
 		if !strings.Contains(got["main.py"], "inside") {
 			t.Errorf("the regular file was not read: %v", got)
 		}
@@ -66,8 +67,8 @@ func TestPlanContextStaysInsideTheWorkspace(t *testing.T) {
 		workspace := t.TempDir()
 		linkOutOfWorkspace(t, workspace, "app/README.md", outsideMarker)
 		writeInWorkspace(t, workspace, "app/main.py", "print('inside')\n")
-		got := samplePlanContext(workspace, 6, 2000)
-		assertNoOutsideContent(t, "samplePlanContext", got)
+		got := projectcontext.Sample(workspace, 6, 2000)
+		assertNoOutsideContent(t, "projectcontext.Sample", got)
 		if !strings.Contains(got[filepath.Join("app", "main.py")], "inside") {
 			t.Errorf("the regular file was not read: %v", got)
 		}
@@ -76,8 +77,8 @@ func TestPlanContextStaysInsideTheWorkspace(t *testing.T) {
 		workspace := t.TempDir()
 		linkOutOfWorkspace(t, workspace, "notes.py", outsideMarker)
 		writeInWorkspace(t, workspace, "tool.py", "print('inside')\n")
-		got := samplePlanContext(workspace, 6, 2000)
-		assertNoOutsideContent(t, "samplePlanContext", got)
+		got := projectcontext.Sample(workspace, 6, 2000)
+		assertNoOutsideContent(t, "projectcontext.Sample", got)
 		if !strings.Contains(got["tool.py"], "inside") {
 			t.Errorf("the regular file was not read: %v", got)
 		}

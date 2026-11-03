@@ -97,7 +97,7 @@ K3s 部署路径（`scripts/install.sh`，清单在 `templates/` 中）截至 V3
 | `agent.go` | `runAgentLoop`、围栏获取、工具链检测 |
 | `gates_exit.go` | 退出门控，以及它们读取的运行状态 |
 | `loop_turn.go`, `loop_checks.go`, `loop_results.go` | 循环的一轮：模型调用与回复、工具运行前的检查、结果与卡死循环断路器 |
-| `plan_generation.go`, `task_intake.go` | 请求是否需要计划以及给规划器看的样本；请求声明的任务契约 |
+| `plan_generation.go`, `task_intake.go` | 请求是否需要计划以及对规划器的调用；请求声明的任务契约 |
 | `run_end.go`, `recovery.go` | 运行如何结束（终止事件、时间预算、摘要）；给卡住的模型看的内容以及尚欠的工作 |
 | `fenced_channel.go` | 获取文件正文的子调用及其预算 |
 | `tools.go`, `tool_*.go` | 16 个工具定义与执行器、层级分类、工具调用语法 |
@@ -382,7 +382,7 @@ Plan 模式是一个预检式的规划步骤，在每个 agent 轮次、模型�
 flowchart TD
     User["User msg"] --> Tier{T0?}
     Tier -->|Yes| Skip["Skip planning"] --> Loop["Agent loop"]
-    Tier -->|No| Sample["samplePlanContext\n(read priority files)"]
+    Tier -->|No| Sample["projectcontext.Sample\n(read priority files)"]
     Sample --> Plan["POST /v3/plan\n(3 candidates × different T)"]
     Plan --> Score["Heuristic score\n(verify? steps in [2,6]? rationale?)"]
     Score --> Best["Pick winner"]
@@ -431,7 +431,7 @@ API 契约见 [API.md § POST /v3/plan](../../reference/API.md#post-v3plan)。
 | `proxy/internal/v3client/client.go` | `PlanStreaming(reqCtx, v3URL, requestID, req, onProgress)` — 打开 SSE 流，把进度事件转发给回调，并从 `event: result` 帧返回最终的 `Plan`。`reqCtx` 绑定 agent 的请求上下文，因此 `/cancel` 会中止进行中的计划。与 V3 流水线运行所用的 `GenerateStreaming` 结构相同。 |
 | `proxy/internal/wire/` | `V3PlanRequest`（`v3.go`）、`Plan` 与 `PlanStep`（`messages.go`）类型。 |
 | `proxy/types.go` | `AgentContext` 增加 `Plan`、`PlanStepsSatisfied[]`、`PlanOffStreak`、`PlanRevisions`。 |
-| `proxy/plan_generation.go` | `samplePlanContext()` 为规划器遍历优先文件（app.py、templates/index.html、package.json 等）。`shouldGeneratePlan()` 依据层级、消息长度以及是否为只读请求来判断。`generatePlan()` 运行桥接，丢弃逐 token 的噪声，并携带完整步骤列表发出 `plan_loaded`。 |
+| `proxy/plan_generation.go`, `proxy/internal/projectcontext/sample.go` | `projectcontext.Sample()` 为规划器遍历优先文件（app.py、templates/index.html、package.json 等）。`shouldGeneratePlan()` 依据层级、消息长度以及是否为只读请求来判断。`generatePlan()` 运行桥接，丢弃逐 token 的噪声，并携带完整步骤列表发出 `plan_loaded`。 |
 | `proxy/gates_plan.go` | `matchPlanStep()`（工具名加路径后缀的宽松匹配）、`recordPlanAdherence()`（按工具调用记账；不匹配任何步骤的侦察调用 — `read_file`/`list_directory`/`find_file`/`search_files` — 是中性的：绝不延长 `off_streak`）、`revisePlan()`（把 `FilesRead` 作为额外上下文带入并重新生成）。 |
 
 系统提示的渲染在 `buildSystemPrompt` 中完成。计划步骤渲染为编号列表，`✓` 标记只出现在验证步骤上，并把验证步骤标明为验证门控针对 `done` 所守护的“修复证据”步骤。（逐步骤的 ☐/✓/⚐ 字形属于 TUI 渲染，见下文。）

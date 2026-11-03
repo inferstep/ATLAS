@@ -51,6 +51,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/projectcontext"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
@@ -252,7 +253,7 @@ func structuralProjectContext(ctx *AgentContext, path string) map[string]string 
 		if strings.ToLower(filepath.Ext(r)) != ".py" {
 			return
 		}
-		rel[r] = contextEntry(c, 4000)
+		rel[r] = projectcontext.Entry(c, 4000)
 	}
 	for p, c := range ctx.SnapshotFilesRead() {
 		addContext(p, c)

@@ -97,7 +97,7 @@ K3s 배포 경로(`scripts/install.sh`, `templates/`의 매니페스트)는 V3.1
 | `agent.go` | `runAgentLoop`, 펜스 가져오기, 툴체인 감지 |
 | `gates_exit.go` | 종료 게이트와 그 게이트가 읽는 실행 상태 |
 | `loop_turn.go`, `loop_checks.go`, `loop_results.go` | 루프의 한 턴: 모델 호출과 응답, 도구 실행 전 검사, 결과와 스턱 루프 차단기 |
-| `plan_generation.go`, `task_intake.go` | 요청에 플랜이 필요한지 판단과 플래너에 보여 줄 샘플, 요청이 선언한 태스크 계약 |
+| `plan_generation.go`, `task_intake.go` | 요청에 플랜이 필요한지 판단과 플래너 호출, 요청이 선언한 태스크 계약 |
 | `run_end.go`, `recovery.go` | 실행 종료(터미널, 시간 예산, 요약), 막힌 모델에게 보여 줄 내용과 남은 작업 |
 | `fenced_channel.go` | 파일 본문을 가져오는 서브콜과 그 예산 |
 | `tools.go`, `tool_*.go` | 16개 도구 정의와 실행기, 티어 분류, 도구 호출 문법 |
@@ -258,7 +258,7 @@ Plan 모드는 모델이 도구를 호출하기 시작하기 전에 에이전트
 flowchart TD
     User["User msg"] --> Tier{T0?}
     Tier -->|Yes| Skip["Skip planning"] --> Loop["Agent loop"]
-    Tier -->|No| Sample["samplePlanContext\n(read priority files)"]
+    Tier -->|No| Sample["projectcontext.Sample\n(read priority files)"]
     Sample --> Plan["POST /v3/plan\n(3 candidates × different T)"]
     Plan --> Score["Heuristic score\n(verify? steps in [2,6]? rationale?)"]
     Score --> Best["Pick winner"]
@@ -307,7 +307,7 @@ API 계약은 [API.md § POST /v3/plan](../../reference/API.md#post-v3plan)에 �
 | `proxy/internal/v3client/client.go` | `PlanStreaming(reqCtx, v3URL, requestID, req, onProgress)` — SSE 스트림을 열고, 진행 이벤트를 콜백으로 전달하며, `event: result` 프레임에서 최종 `Plan`을 반환합니다. `reqCtx`가 에이전트의 요청 컨텍스트를 묶으므로 `/cancel`은 진행 중인 계획을 중단합니다. V3 파이프라인 실행용 `GenerateStreaming`과 같은 구조입니다. |
 | `proxy/internal/wire/` | `V3PlanRequest`(`v3.go`), `Plan`, `PlanStep`(`messages.go`) 타입. |
 | `proxy/types.go` | `AgentContext`에 `Plan`, `PlanStepsSatisfied[]`, `PlanOffStreak`, `PlanRevisions`가 추가됩니다. |
-| `proxy/plan_generation.go` | `samplePlanContext()`는 플래너를 위해 우선 파일(app.py, templates/index.html, package.json, …)을 순회합니다. `shouldGeneratePlan()`은 티어, 메시지 길이, 읽기 전용 요청 여부로 판단합니다. `generatePlan()`은 브리지를 실행하고, 토큰별 잡음을 버리며, 전체 단계 목록과 함께 `plan_loaded`를 내보냅니다. |
+| `proxy/plan_generation.go`, `proxy/internal/projectcontext/sample.go` | `projectcontext.Sample()`는 플래너를 위해 우선 파일(app.py, templates/index.html, package.json, …)을 순회합니다. `shouldGeneratePlan()`은 티어, 메시지 길이, 읽기 전용 요청 여부로 판단합니다. `generatePlan()`은 브리지를 실행하고, 토큰별 잡음을 버리며, 전체 단계 목록과 함께 `plan_loaded`를 내보냅니다. |
 | `proxy/gates_plan.go` | `matchPlanStep()`(도구 이름과 경로 접미사의 느슨한 일치), `recordPlanAdherence()`(도구 호출별 집계. 어떤 단계와도 일치하지 않는 정찰 호출 — `read_file`/`list_directory`/`find_file`/`search_files` — 은 중립이며 `off_streak`를 늘리지 않습니다), `revisePlan()`(`FilesRead`를 추가 컨텍스트로 넘겨 다시 생성). |
 
 시스템 프롬프트 렌더링은 `buildSystemPrompt`에서 이루어집니다. 계획 단계는 번호 목록으로 렌더링되고 `✓` 표시는 verify 단계에만 붙으며, verify 단계는 검증 게이트가 `done`에 대해 지키는 "수정 증거" 단계로 명시됩니다. (단계별 ☐/✓/⚐ 글리프는 TUI 렌더링에 속합니다. 아래를 참고하세요.)
