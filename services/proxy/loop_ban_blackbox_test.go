@@ -128,6 +128,38 @@ func banLoopStubs(t *testing.T, path string, calls *int) *httptest.Server {
 	}))
 }
 
+// banLoopStream counts what a ban-loop run streams: its tool calls, its
+// terminal events and summary, and the gate events of the ban branch and of the
+// refused-replacement recovery.
+type banLoopStream struct {
+	toolCalls   int
+	doneEvents  int
+	banEntries  int
+	recoveries  int
+	doneSummary string
+}
+
+func (s *banLoopStream) observe(eventType string, data interface{}) {
+	switch eventType {
+	case "tool_call":
+		s.toolCalls++
+	case "gate":
+		// Proves the ban branch specifically, not merely that some
+		// breaker stopped the session.
+		b, _ := json.Marshal(data)
+		if strings.Contains(string(b), "no longer available") {
+			s.banEntries++
+		}
+		if strings.Contains(string(b), "The working version is still there") {
+			s.recoveries++
+		}
+	case "done":
+		s.doneEvents++
+		b, _ := json.Marshal(data)
+		s.doneSummary = string(b)
+	}
+}
+
 func TestBannedWriteLoopTerminatesAtTheFailureCeiling(t *testing.T) {
 	dir := t.TempDir()
 	rel := "mod.py"
@@ -141,28 +173,8 @@ func TestBannedWriteLoopTerminatesAtTheFailureCeiling(t *testing.T) {
 	ctx.V3URL = srv.URL
 	ctx.PermissionMode = PermissionYolo
 
-	toolCalls, doneEvents, banEntries, recoveries := 0, 0, 0, 0
-	var doneSummary string
-	ctx.StreamFn = func(eventType string, data interface{}) {
-		switch eventType {
-		case "tool_call":
-			toolCalls++
-		case "gate":
-			// Proves the ban branch specifically, not merely that some
-			// breaker stopped the session.
-			b, _ := json.Marshal(data)
-			if strings.Contains(string(b), "no longer available") {
-				banEntries++
-			}
-			if strings.Contains(string(b), "The working version is still there") {
-				recoveries++
-			}
-		case "done":
-			doneEvents++
-			b, _ := json.Marshal(data)
-			doneSummary = string(b)
-		}
-	}
+	var stream banLoopStream
+	ctx.StreamFn = stream.observe
 
 	// A hard stop far above the ceiling. If the loop is unbounded this is
 	// what ends the test instead of hanging; exceeding it IS the failure.
@@ -174,7 +186,7 @@ func TestBannedWriteLoopTerminatesAtTheFailureCeiling(t *testing.T) {
 	}
 
 	t.Logf("tool_calls=%d ban_entries=%d recoveries=%d done_events=%d inference_calls=%d ceiling=%d summary=%s",
-		toolCalls, banEntries, recoveries, doneEvents, inferenceCalls, maxTotalFailures, doneSummary)
+		stream.toolCalls, stream.banEntries, stream.recoveries, stream.doneEvents, inferenceCalls, maxTotalFailures, stream.doneSummary)
 
 	// Routing precondition. If a future tier threshold or V3 setup routes
 	// around the intended branch this fails loudly instead of silently
@@ -189,23 +201,23 @@ func TestBannedWriteLoopTerminatesAtTheFailureCeiling(t *testing.T) {
 	// withdraws the tool. Either may answer; the property here is that the
 	// loop stops. TestBannedEditLoopEntersTheBanBranch covers the ban branch
 	// itself, on a shape the recovery does not own.
-	if recoveries == 0 && banEntries == 0 {
+	if stream.recoveries == 0 && stream.banEntries == 0 {
 		t.Fatal("neither the refused-replacement recovery nor the ban branch " +
 			"answered the re-send, so this run measured some other breaker")
 	}
 
-	if toolCalls >= hardStop {
+	if stream.toolCalls >= hardStop {
 		t.Fatalf("loop never terminated on its own: %d tool calls (hard stop %d); "+
 			"the ban branch is counting failures without reading the ceiling",
-			toolCalls, hardStop)
+			stream.toolCalls, hardStop)
 	}
 	// One accepted write plus at most `maxTotalFailures` rejected ones, with a
 	// small margin for the turn that emits the terminal event.
-	if limit := maxTotalFailures + 3; toolCalls > limit {
+	if limit := maxTotalFailures + 3; stream.toolCalls > limit {
 		t.Fatalf("loop ran %d tool calls, past the failure ceiling %d (limit %d)",
-			toolCalls, maxTotalFailures, limit)
+			stream.toolCalls, maxTotalFailures, limit)
 	}
-	if doneEvents == 0 {
+	if stream.doneEvents == 0 {
 		t.Fatal("loop ended without streaming a terminal done event")
 	}
 
@@ -278,43 +290,31 @@ func TestBannedEditLoopEntersTheBanBranch(t *testing.T) {
 	ctx := NewAgentContext(dir, Tier2Medium)
 	ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
 	ctx.PermissionMode = PermissionYolo
-	toolCalls, banEntries, doneEvents := 0, 0, 0
-	ctx.StreamFn = func(eventType string, data interface{}) {
-		switch eventType {
-		case "tool_call":
-			toolCalls++
-		case "gate":
-			if b, err := json.Marshal(data); err == nil &&
-				strings.Contains(string(b), "no longer available") {
-				banEntries++
-			}
-		case "done":
-			doneEvents++
-		}
-	}
+	var stream banLoopStream
+	ctx.StreamFn = stream.observe
 	const hardStop = 60
 	ctx.MaxTurns = hardStop
 	if err := runAgentLoop(ctx, "Rename gamma's parameter in mod.py."); err != nil {
 		t.Fatalf("agent loop returned an error: %v", err)
 	}
 	t.Logf("tool_calls=%d ban_entries=%d done_events=%d ceiling=%d",
-		toolCalls, banEntries, doneEvents, maxTotalFailures)
+		stream.toolCalls, stream.banEntries, stream.doneEvents, maxTotalFailures)
 
-	if banEntries == 0 {
+	if stream.banEntries == 0 {
 		t.Fatal("never entered the ban branch: no gate event said the tool was " +
 			"no longer available, so this run measured some other breaker")
 	}
-	if toolCalls >= hardStop {
+	if stream.toolCalls >= hardStop {
 		t.Fatalf("loop never terminated on its own: %d tool calls (hard stop %d); "+
 			"the ban branch is counting failures without reading the ceiling",
-			toolCalls, hardStop)
+			stream.toolCalls, hardStop)
 	}
-	if limit := maxTotalFailures + 3; toolCalls > limit {
+	if limit := maxTotalFailures + 3; stream.toolCalls > limit {
 		t.Errorf("%d tool calls for a ceiling of %d (limit %d)",
-			toolCalls, maxTotalFailures, limit)
+			stream.toolCalls, maxTotalFailures, limit)
 	}
-	if doneEvents != 1 {
-		t.Errorf("%d terminal events", doneEvents)
+	if stream.doneEvents != 1 {
+		t.Errorf("%d terminal events", stream.doneEvents)
 	}
 	// The file is untouched: every edit was refused before disk.
 	if got, _ := os.ReadFile(filepath.Join(dir, "mod.py")); string(got) != banLoopValidBody {
