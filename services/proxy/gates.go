@@ -1224,7 +1224,7 @@ func backgroundStartDispatched(ctx *AgentContext, args json.RawMessage) bool {
 	if strings.TrimSpace(in.Command) == "" {
 		return false
 	}
-	if reason := validateShellCommand(in.Command); reason != "" {
+	if validateShellCommand(in.Command) != "" {
 		return false
 	}
 	// Host verification runs nothing in the sandbox.
