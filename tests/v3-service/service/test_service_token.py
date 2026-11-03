@@ -1,7 +1,9 @@
 """The V3 service's check of the service token. With a token configured, a request with no token or another token is
 refused, and a request with the token reaches its route. /health stays open for the stack's probes."""
 import json
+import socket
 import threading
+import time
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
@@ -39,3 +41,23 @@ def test_with_a_token_configured_only_a_request_with_the_token_reaches_a_route(m
     assert (got, says in text) == (status, True), text
     # An answer never holds the token.
     assert TOKEN not in text
+
+
+def test_a_refused_request_is_answered_whole_though_its_body_was_never_read(monkeypatch):
+    monkeypatch.setattr(adapters, "SERVICE_TOKEN", TOKEN)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), main.V3Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    body = b"x" * 32_000
+    request = b"POST /internal/outline HTTP/1.1\r\nHost: v3\r\nContent-Length: %d\r\n\r\n" % len(body)
+    answer = b""
+    try:
+        with socket.create_connection(("127.0.0.1", server.server_port), timeout=10) as client:
+            client.sendall(request + body)
+            time.sleep(0.5)  # the service has answered and closed by now
+            while chunk := client.recv(65536):
+                answer += chunk
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert answer.startswith(b"HTTP/1.0 401 "), answer[:80]
+    assert b"Connection: close" in answer

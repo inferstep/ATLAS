@@ -31,6 +31,13 @@ REQUEST_ID_HEADER = "X-ATLAS-Request-ID"
 # its project context, a few MiB; 64 MiB is far above that, and keeps a
 # request without end from filling the service's memory.
 MAX_REQUEST_BODY_BYTES = 64 << 20
+# A request refused before its body is read: after the answer, the body is
+# read and dropped, up to this many bytes and for this long. A socket that
+# closes on unread bytes resets the connection, and the reset can reach the
+# client before it reads the answer. A larger body is not read: the
+# connection is closed on it.
+REFUSED_BODY_DRAIN_BYTES = 64 << 10
+REFUSED_BODY_DRAIN_SECONDS = 1.0
 import os
 import sys
 from pathlib import Path
@@ -217,7 +224,7 @@ class V3Handler(BaseHTTPRequestHandler):
         want = f"Bearer {adapters.SERVICE_TOKEN}"
         if hmac.compare_digest(got, want):
             return True
-        self._json_response(401, {
+        self._refuse(401, {
             "error": "unauthorized",
             "detail": "internal service auth is enabled; send "
                       "Authorization: Bearer <service-token> "
@@ -235,10 +242,10 @@ class V3Handler(BaseHTTPRequestHandler):
         except ValueError:
             self.body_length = -1
         if self.body_length < 0:
-            self._json_response(400, {"error": "Content-Length is not a whole number of 0 or more"})
+            self._refuse(400, {"error": "Content-Length is not a whole number of 0 or more"})
             return
         if self.body_length > MAX_REQUEST_BODY_BYTES:
-            self._json_response(413, {"error": f"request body over {MAX_REQUEST_BODY_BYTES} bytes"})
+            self._refuse(413, {"error": f"request body over {MAX_REQUEST_BODY_BYTES} bytes"})
             return
         if self.path == "/v3/generate":
             self._handle_generate()
@@ -261,7 +268,7 @@ class V3Handler(BaseHTTPRequestHandler):
         elif self.path == "/health":
             self._json_response(200, {"status": "ok"})
         else:
-            self._json_response(404, {"error": "not found"})
+            self._refuse(404, {"error": "not found"})
 
     def do_GET(self):
         from structured_log import set_request_id as _set_rid
@@ -926,6 +933,32 @@ class V3Handler(BaseHTTPRequestHandler):
             )
         # Don't log the not-supported case — it'd flood the log on every HTML/JSON write.
         self._json_response(200, result)
+
+    def _refuse(self, code, data):
+        """Answer a request refused before its body is read, then close the
+        connection, after reading what fits in REFUSED_BODY_DRAIN_BYTES."""
+        self.close_connection = True
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(json.dumps(data).encode())
+            try:
+                declared = int(self.headers.get("Content-Length", 0))
+            except ValueError:
+                declared = REFUSED_BODY_DRAIN_BYTES
+            left = min(max(declared, 0), REFUSED_BODY_DRAIN_BYTES)
+            self.connection.settimeout(REFUSED_BODY_DRAIN_SECONDS)
+            while left > 0:
+                chunk = self.rfile.read1(left)
+                if not chunk:
+                    break
+                left -= len(chunk)
+        except OSError:
+            # The client left, reset, or sent less than it said in time: the
+            # connection is closed either way.
+            pass
 
     def _json_response(self, code, data):
         try:
