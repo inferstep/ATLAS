@@ -3,7 +3,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 BOOTSTRAP = ROOT / "scripts" / "atlas-bootstrap.sh"
-SETUP = ROOT / "docs" / "SETUP.md"
+SETUP = ROOT / "docs" / "guides" / "SETUP.md"
 
 
 def test_docker_group_warning():

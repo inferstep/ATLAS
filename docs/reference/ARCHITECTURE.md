@@ -46,7 +46,7 @@ llama-server is the only GPU-using service; every other ATLAS service runs on CP
 
 | Backend | Status (V3.1.x) | Image / build path | Compose override | Tested cards |
 |---|---|---|---|---|
-| **CUDA** (NVIDIA) | Supported (since V3.1.0) | `inference/Dockerfile.v31` → `atlas-llama` | (default) | RTX 5060 Ti 16GB (canonical). The published image is compiled for Blackwell (compute capability 12.0/12.1) only; earlier generations need a local rebuild — see [SETUP.md](../SETUP.md) |
+| **CUDA** (NVIDIA) | Supported (since V3.1.0) | `inference/Dockerfile.v31` → `atlas-llama` | (default) | RTX 5060 Ti 16GB (canonical). The published image is compiled for Blackwell (compute capability 12.0/12.1) only; earlier generations need a local rebuild — see [SETUP.md](../guides/SETUP.md) |
 | **ROCm / HIP** (AMD) | Community-tested (since V3.1.1) | `inference/Dockerfile.rocm` → `atlas-llama-rocm`, built on the host (`pull_policy: build`; no GHCR image) | `compose/docker-compose.rocm.yml` | RX 7900 XTX (community smoke-test, GH #26) |
 | **Metal** (Apple Silicon) | Supported ([#32](https://github.com/inferstep/ATLAS/issues/32)) | Hybrid: native llama-server (Metal) + Docker for the rest (macOS can't passthrough GPU to containers) | `compose/docker-compose.macos.yml` | M-series; Q4_K_M on ≤16 GB, Q6_K on ≥24 GB unified |
 | **Vulkan** (cross-vendor fallback) | Preview | `inference/Dockerfile.vulkan` → `atlas-llama-vulkan` | `compose/docker-compose.vulkan.yml` | lavapipe CPU boot path (smoke-tested); no real-GPU validation yet |
@@ -515,7 +515,7 @@ A request may carry `task_contract.task_mode`, validated at the request boundary
   question.
 
 Shadow diagnostic records (private, observational, off by default — see
-[OPERATIONS.md](../OPERATIONS.md#private-diagnostics-task-contract-shadow-capture)) version **per
+[OPERATIONS.md](../guides/OPERATIONS.md#private-diagnostics-task-contract-shadow-capture)) version **per
 record kind**, because adding a field to one must not silently redefine another:
 
 | Record | Version | Contract |
@@ -1052,7 +1052,7 @@ graph LR
 
 `llama-server` and `sandbox` start independently. `geometric-lens` waits for `llama-server` to be healthy; `v3-service` waits for `llama-server` and `geometric-lens`; `atlas-proxy` waits for `llama-server`, `geometric-lens`, `v3-service`, and `sandbox`. The same `inference/entrypoint-v3.1.sh` drives Docker Compose, bare metal, and K3s, so context size, KV cache quantization, flash attention, and mlock are env-var-controlled and behavior is identical across those modes; the macOS hybrid path launches native llama-server via `scripts/install/atlas-llama-macos.sh`, which mirrors the entrypoint's flags.
 
-Install and per-mode bring-up steps (NVIDIA / ROCm overrides, bare metal, macOS hybrid Metal, K3s manifests) are in [SETUP.md](../SETUP.md); the macOS native path is in [SETUP_MACOS.md](../SETUP_MACOS.md).
+Install and per-mode bring-up steps (NVIDIA / ROCm overrides, bare metal, macOS hybrid Metal, K3s manifests) are in [SETUP.md](../guides/SETUP.md); the macOS native path is in [SETUP_MACOS.md](../guides/SETUP_MACOS.md).
 
 ---
 

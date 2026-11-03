@@ -2,7 +2,7 @@
 
 API endpoints for each ATLAS service. All services communicate over HTTP/JSON. Streaming endpoints use Server-Sent Events (SSE).
 
-> **Ports listed are defaults.** Most are configurable through environment variables (see [CONFIGURATION.md](../CONFIGURATION.md)); the lens port is set by uvicorn's `--port`, and the sandbox's is fixed at 8020. The HTTP contracts below are deployment-mode-agnostic — only the host:port differs. Quick reference:
+> **Ports listed are defaults.** Most are configurable through environment variables (see [CONFIGURATION.md](../guides/CONFIGURATION.md)); the lens port is set by uvicorn's `--port`, and the sandbox's is fixed at 8020. The HTTP contracts below are deployment-mode-agnostic — only the host:port differs. Quick reference:
 >
 > | Service | Docker Compose (host=container) | Bare metal | K3s NodePort (`atlas.conf.example`) |
 > |---|---|---|---|
@@ -12,7 +12,7 @@ API endpoints for each ATLAS service. All services communicate over HTTP/JSON. S
 > | sandbox | host `30820` → container `8020` | fixed `8020` (clients take `ATLAS_SANDBOX_URL`) | `ATLAS_SANDBOX_NODEPORT` (default 30820) |
 > | llama-server | `8080` | `ATLAS_LLAMA_PORT` (default 8080) | `ATLAS_LLAMA_NODEPORT` (default 32735) |
 >
-> The K3s manifests are rendered from `templates/*.yaml.tmpl` into `$K8S_DIR/manifests/` by `scripts/install.sh` at install time. See [SETUP.md Method 3](../SETUP.md) for the full K3s deployment.
+> The K3s manifests are rendered from `templates/*.yaml.tmpl` into `$K8S_DIR/manifests/` by `scripts/install.sh` at install time. See [SETUP.md Method 3](../guides/SETUP.md) for the full K3s deployment.
 
 ---
 
@@ -50,7 +50,7 @@ The main entry point. Wraps llama-server with an agent loop, grammar-constrained
 
 **Catch-all:** any unmatched path is proxied directly to llama-server.
 
-**Requests:** send each POST body with `Content-Type: application/json`; a POST of another type gets 415. A request that carries an `Origin` header gets 403 unless its origin is on `ATLAS_ALLOWED_ORIGINS` (see [Configuration](../CONFIGURATION.md)).
+**Requests:** send each POST body with `Content-Type: application/json`; a POST of another type gets 415. A request that carries an `Origin` header gets 403 unless its origin is on `ATLAS_ALLOWED_ORIGINS` (see [Configuration](../guides/CONFIGURATION.md)).
 
 ---
 

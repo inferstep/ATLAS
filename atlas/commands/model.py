@@ -319,7 +319,7 @@ def _model_from_url(args: argparse.Namespace, color: bool) -> Optional[Tuple[Mod
     # registry entry with no SHA pin and no lens artifacts; the lens-status
     # gate and registry lookup below are bypassed. The download path handles
     # sha256=None (skips verification) and model_size_gb=0.0 (uses the
-    # Content-Length header for progress). See docs/CONFIGURATION.md
+    # Content-Length header for progress). See docs/guides/CONFIGURATION.md
     # "Adding your own model".
     from urllib.parse import urlparse, unquote
     fname = args.file or unquote(os.path.basename(urlparse(args.url).path))
@@ -337,7 +337,7 @@ def _model_from_url(args: argparse.Namespace, color: bool) -> Optional[Tuple[Mod
                 f"SHA pin, no bundled Lens artifacts.{RESET if color else ''}")
     _safe_print("  After download: set ATLAS_MODEL_FILE + ATLAS_MODEL_NAME "
                 "in .env, then run `atlas onboard` to finish (rebuild check "
-                "+ Lens retrain). See docs/CONFIGURATION.md \"Adding your "
+                "+ Lens retrain). See docs/guides/CONFIGURATION.md \"Adding your "
                 "own model\".")
     _safe_print()
     return m, models_dir
@@ -1246,7 +1246,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_inst.add_argument("--url", default=None,
         help="direct download URL for an UNREGISTERED model (e.g. a HuggingFace "
              "resolve/main/*.gguf link). Skips the registry + SHA pin; pair with "
-             "--file to set the on-disk name. See docs/CONFIGURATION.md "
+             "--file to set the on-disk name. See docs/guides/CONFIGURATION.md "
              "\"Adding your own model\".")
     p_inst.add_argument("--file", default=None,
         help="on-disk filename for --url installs (default: basename of the URL)")

@@ -1,7 +1,7 @@
-<!-- source: docs/GETTING_STARTED.md synced-through: 5610fde5ba546c1b0f7c7cb0c1e5b6b4339083b7 -->
-> **[English](../../GETTING_STARTED.md)** | **简体中文**
+<!-- source: docs/guides/GETTING_STARTED.md synced-through: 5610fde5ba546c1b0f7c7cb0c1e5b6b4339083b7 -->
+> **[English](../../guides/GETTING_STARTED.md)** | **简体中文**
 
-> ℹ️ **译者注：** 若本译文与英文原版 ([GETTING_STARTED.md](../../GETTING_STARTED.md)) 有出入，以英文原版为准。
+> ℹ️ **译者注：** 若本译文与英文原版 ([GETTING_STARTED.md](../../guides/GETTING_STARTED.md)) 有出入，以英文原版为准。
 
 
 # ATLAS 快速上手
@@ -36,7 +36,7 @@ ATLAS 是一个本地编程 agent：模型跑在你自己的 GPU 上，外面裹
 
 ## 安装
 
-按 [SETUP.md](SETUP.md)（Linux）或 [SETUP_MACOS.md](../../SETUP_MACOS.md)（Apple Silicon）操作。对大多数 Linux + GPU 机器来说就是一条命令：
+按 [SETUP.md](SETUP.md)（Linux）或 [SETUP_MACOS.md](../../guides/SETUP_MACOS.md)（Apple Silicon）操作。对大多数 Linux + GPU 机器来说就是一条命令：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-bootstrap.sh | bash
@@ -75,6 +75,6 @@ atlas doctor
 ## 接下来去哪
 
 - [CLI.md](../../reference/CLI.md) —— TUI 与 `atlas` 子命令能做的一切
-- [OPERATIONS.md](../../OPERATIONS.md) —— 第二天：升级、备份、运维手册
+- [OPERATIONS.md](../../guides/OPERATIONS.md) —— 第二天：升级、备份、运维手册
 - [ARCHITECTURE.md](../../reference/ARCHITECTURE.md) —— 各组件如何拼在一起
 - [docs/README.md](../../README.md) —— 完整的文档索引

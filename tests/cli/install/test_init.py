@@ -440,4 +440,4 @@ def test_probe_names_the_architecture_only_off_x86_64(
     assert rc == 0  # CUDA on DGX Spark (aarch64) is supported
     out = capsys.readouterr().out
     assert ("Architecture:" in out) is arch_line_shown
-    assert ("Architecture: aarch64 (see docs/SETUP.md#arm64" in out) is arch_line_shown
+    assert ("Architecture: aarch64 (see docs/guides/SETUP.md#arm64" in out) is arch_line_shown

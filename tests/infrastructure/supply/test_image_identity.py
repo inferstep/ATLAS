@@ -23,7 +23,7 @@ def _read(path):
 
 
 def test_the_runbook_names_the_unsafe_tag():
-    ops = _read(os.path.join(ROOT, "docs", "OPERATIONS.md"))
+    ops = _read(os.path.join(ROOT, "docs", "guides", "OPERATIONS.md"))
     assert "Building for verification" in ops
     assert "ATLAS_IMAGE_TAG" in ops
     # And says plainly that a tag is not an identity.

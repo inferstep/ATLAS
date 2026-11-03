@@ -1,5 +1,5 @@
-<!-- source: docs/SETUP.md synced-through: 7d90cbee05ec5196e2ed3f72ffc52735ce8ce245 -->
-> **[English](../../SETUP.md)** | **[简体中文](../zh-CN/SETUP.md)** | **日本語** | **[한국어](../ko/SETUP.md)**
+<!-- source: docs/guides/SETUP.md synced-through: 7d90cbee05ec5196e2ed3f72ffc52735ce8ce245 -->
+> **[English](../../guides/SETUP.md)** | **[简体中文](../zh-CN/SETUP.md)** | **日本語** | **[한국어](../ko/SETUP.md)**
 
 # ATLAS セットアップガイド
 
@@ -11,13 +11,13 @@
 
 インストール手順はハードウェアと OS に依存します。お使いの構成に合う行を探して、リンク先のセクションに進んでください。
 
-| ハードウェア | OS | 推奨パス | サポートレベル ([マトリクス](../../SUPPORT_MATRIX.md)) |
+| ハードウェア | OS | 推奨パス | サポートレベル ([マトリクス](../../guides/SUPPORT_MATRIX.md)) |
 |---|---|---|---|
 | NVIDIA RTX 50 シリーズ / Blackwell (B100、GB10) | Linux | [方法 0: ブートストラップ](#方法-0-ワンショットブートストラップ) または [方法 1: Docker](#方法-1-docker-compose-推奨) | サポート対象 (Supported) — 公開されている CUDA イメージは Blackwell を対象 |
 | NVIDIA RTX 20/30/40、GTX 10xx、データセンター (V100/A100/H100/T4/L4) | Linux | [方法 1: Docker](#方法-1-docker-compose-推奨) + 一度だけの[ローカル再ビルド](#cuda-compute-capability-dockerfilev31) | プレビュー (Preview) — ローカル再ビルドが必要 |
 | NVIDIA GPU | Windows (WSL2) | [方法 1: Docker — NVIDIA セクション](#方法-1-docker-compose-推奨) | サポート対象外 (Unsupported) — 未テスト、動作の主張はなし。報告歓迎 |
 | AMD GPU (RX 6000/7000、MI200+) | Linux | [方法 1: Docker — AMD ROCm](#amd-rocm--相違点) | コミュニティ検証済み (Community-tested) ([GH #26](https://github.com/inferstep/ATLAS/issues/26)) |
-| **Apple Silicon (M1/M2/M3/M4)** | **macOS** | **[SETUP_MACOS.md](../../SETUP_MACOS.md)**（専用ガイド — ハイブリッドのネイティブ Metal + Docker） | サポート対象（メンテナー検証済み、M2 Pro） |
+| **Apple Silicon (M1/M2/M3/M4)** | **macOS** | **[SETUP_MACOS.md](../../guides/SETUP_MACOS.md)**（専用ガイド — ハイブリッドのネイティブ Metal + Docker） | サポート対象（メンテナー検証済み、M2 Pro） |
 | Intel Arc / Iris Xe | Linux | [方法 1: Docker — Vulkan](#vulkan--クロスベンダーフォールバック) | プレビュー — Vulkan は lavapipe 上でのスモークテストのみ。実 GPU での検証はまだなし |
 | Snapdragon X Elite（ラップトップ） | Linux | [Vulkan](#vulkan--クロスベンダーフォールバック) + [arm64 セクション](#arm64) | プレビュー（Linux arm64）。Windows on ARM はサポート対象外 |
 | 古い AMD GPU (Vega、RDNA1、ROCm 6.x 非対応) | Linux | [方法 1: Docker — Vulkan](#vulkan--クロスベンダーフォールバック) | プレビュー |
@@ -155,7 +155,7 @@ curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-
 
 | 要件 | 詳細 |
 |-------------|---------|
-| **GPU** | VRAM 16 GB 以上。NVIDIA (CUDA、サポート対象 (Supported) — 公開イメージは Blackwell を対象。より古いカードは一度だけの[ローカル再ビルド](#cuda-compute-capability-dockerfilev31)が必要)。AMD (ROCm、コミュニティ検証済み (Community-tested))。Apple Silicon (Metal、macOS ハイブリッド、サポート対象 — [SETUP_MACOS.md](../../SETUP_MACOS.md) を参照)。Vulkan (プレビュー (Preview)) はクロスベンダーのフォールバック。Intel Arc (SYCL) はロードマップ (Roadmap)。[§ 対応 GPU](#対応-gpu) を参照。 |
+| **GPU** | VRAM 16 GB 以上。NVIDIA (CUDA、サポート対象 (Supported) — 公開イメージは Blackwell を対象。より古いカードは一度だけの[ローカル再ビルド](#cuda-compute-capability-dockerfilev31)が必要)。AMD (ROCm、コミュニティ検証済み (Community-tested))。Apple Silicon (Metal、macOS ハイブリッド、サポート対象 — [SETUP_MACOS.md](../../guides/SETUP_MACOS.md) を参照)。Vulkan (プレビュー (Preview)) はクロスベンダーのフォールバック。Intel Arc (SYCL) はロードマップ (Roadmap)。[§ 対応 GPU](#対応-gpu) を参照。 |
 | **GPU ドライバ** | NVIDIA: プロプライエタリドライバ（`nvidia-smi` で GPU が表示されること）。AMD: `amdgpu-dkms` カーネルドライバ（`/dev/kfd` が存在すること。`rocm-smi` で GPU が表示されること）。 |
 | **Python 3.9+** | pip 付き |
 | **curl** | モデル重みのダウンロード用 |
@@ -333,7 +333,7 @@ ATLAS は 2 つの CPU アーキテクチャを対象としています: `x86_64
 
 - **NVIDIA DGX Spark**（Grace-Blackwell GB10）— sbsa ベースイメージによる CUDA、compute cap 12.0/12.1
 - **NVIDIA Jetson Orin / AGX / Nano** — l4t ベースイメージによる CUDA、compute cap 8.7
-- **Apple Silicon (M1/M2/M3/M4)** — Docker Desktop の MoltenVK 経由の Vulkan（低速パス）。出荷済みの高速パスはネイティブのハイブリッド Metal インストールです。[SETUP_MACOS.md](../../SETUP_MACOS.md) を参照してください
+- **Apple Silicon (M1/M2/M3/M4)** — Docker Desktop の MoltenVK 経由の Vulkan（低速パス）。出荷済みの高速パスはネイティブのハイブリッド Metal インストールです。[SETUP_MACOS.md](../../guides/SETUP_MACOS.md) を参照してください
 - **Snapdragon X Elite**（Windows on ARM ラップトップ）— Adreno ドライバ経由の Vulkan
 - **Raspberry Pi 5** — Mesa V3D ドライバ経由の Vulkan、CPU 級の性能を想定
 - **Ampere Altra / AWS Graviton ワークステーション** — lavapipe 経由の Vulkan（コンシューマ向け arm64 dGPU がまだ存在しないため CPU フォールバック）
@@ -461,7 +461,7 @@ docker compose down --rmi all  # Stop and remove images (next start rebuilds)
 
 ### ログとアップデート
 
-サービスのログの確認は [OPERATIONS.md § Logs](../../OPERATIONS.md#logs)、インストールのアップデートは [OPERATIONS.md § Standard upgrade](../../OPERATIONS.md#standard-upgrade) をご覧ください。
+サービスのログの確認は [OPERATIONS.md § Logs](../../guides/OPERATIONS.md#logs)、インストールのアップデートは [OPERATIONS.md § Standard upgrade](../../guides/OPERATIONS.md#standard-upgrade) をご覧ください。
 
 ### アンインストール
 
@@ -664,7 +664,7 @@ K3s は設定に `.env` ではなく `atlas.conf` を使用します。HTTP コ�
 
 モデル・ランタイムパラメータ（`ATLAS_MAIN_MODEL`、`ATLAS_CONTEXT_LENGTH`、`ATLAS_PARALLEL_SLOTS`、`ATLAS_FLASH_ATTENTION`、KV キャッシュ量子化、レンズスコアリング用の `--embeddings`）は、どちらのモードでも同じ環境変数から読み込まれます — `atlas.conf.example` と `.env.example` を参照してください。
 
-全 `atlas.conf` リファレンスは [CONFIGURATION.md](../../CONFIGURATION.md) をご覧ください。
+全 `atlas.conf` リファレンスは [CONFIGURATION.md](../../guides/CONFIGURATION.md) をご覧ください。
 
 ### K3s デプロイの確認
 
@@ -803,7 +803,7 @@ docker build --build-arg GFX_TARGET="gfx1100;gfx1030" -f inference/Dockerfile.ro
 
 ATLAS のすべてのリクエストは Geometric Lens を必要とします（[ADR 0011](../../adr/0011-the-lens-is-required.md)）。レンズは提供されるモデルの C(x) / G(x) ウェイトを必要とします。それらがないと、プロキシは HTTP 503 `dependency_unavailable` ですべてのリクエストを拒否し、理由を示します。`atlas doctor` も失敗します。ウェイトはあるがキャリブレーションがまだのレンズは受け入れられます。スコアは返し、しきい値の介入はキャリブレーションを待ちます。
 
-[SUPPORT_MATRIX.md](../../SUPPORT_MATRIX.md) にレンズアーティファクトが載っているモデルは `atlas model install-artifacts` で取得できます。事前トレーニング済みウェイトとトレーニングデータは HuggingFace でも入手できます:
+[SUPPORT_MATRIX.md](../../guides/SUPPORT_MATRIX.md) にレンズアーティファクトが載っているモデルは `atlas model install-artifacts` で取得できます。事前トレーニング済みウェイトとトレーニングデータは HuggingFace でも入手できます:
 
 **[ATLAS Dataset on HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS)** — エンベディング、トレーニングデータ、ウェイトファイルが含まれています。
 
@@ -855,7 +855,7 @@ mkdir -p secrets     # or set ATLAS_SECRETS_DIR
 
 ### モデルの持ち込み
 
-デフォルト以外の GGUF に差し替えるには、[CONFIGURATION.md § Adding your own model](../../CONFIGURATION.md#adding-your-own-model-drop-in--unregistered) と [CLI.md § atlas lens](../../reference/CLI.md#atlas-lens) をご覧ください。
+デフォルト以外の GGUF に差し替えるには、[CONFIGURATION.md § Adding your own model](../../guides/CONFIGURATION.md#adding-your-own-model-drop-in--unregistered) と [CLI.md § atlas lens](../../reference/CLI.md#atlas-lens) をご覧ください。
 
 ---
 
@@ -891,6 +891,6 @@ mkdir -p secrets     # or set ATLAS_SECRETS_DIR
 ## 次のステップ
 
 - [CLI.md](../../reference/CLI.md) — ATLAS 起動後の使い方
-- [CONFIGURATION.md](../../CONFIGURATION.md) — すべての環境変数とチューニングオプション
+- [CONFIGURATION.md](../../guides/CONFIGURATION.md) — すべての環境変数とチューニングオプション
 - [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) — よくある問題と解決方法
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — システム内部の仕組み
