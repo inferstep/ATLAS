@@ -7,7 +7,8 @@
 FROM docker.io/python:3.13-slim@sha256:ae14d4ce8771606477a81446e7ef429edd6762305fc50c84507c1041fa8285d1
 WORKDIR /app
 
-# The week of the commit, from build-images.yml. A commit of a new week runs
+# The week of the commit, which build-images.yml passes for a push to dev and
+# for a PR build (a release build passes none). A commit of a new week runs
 # the package installs below again, so they take the distribution's fixes
 # between base bumps; within a week they come from the cache.
 ARG PACKAGE_REFRESH

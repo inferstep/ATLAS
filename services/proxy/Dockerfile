@@ -9,7 +9,8 @@ RUN go build -o atlas-proxy-v2 .
 
 # alpine:3.24 — digest-pinned for reproducible builds (Dependabot maintains)
 FROM docker.io/alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
-# The week of the commit, from build-images.yml. A commit of a new week runs
+# The week of the commit, which build-images.yml passes for a push to dev and
+# for a PR build (a release build passes none). A commit of a new week runs
 # the package installs of this stage again, so they take the distribution's
 # fixes between base bumps; the build stage above stays in the cache.
 ARG PACKAGE_REFRESH
