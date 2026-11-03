@@ -17,6 +17,10 @@
 
 # The default is pinned by digest. An override such as ROCM_TAG=7.2.3-complete
 # (ATLAS_ROCM_TAG in compose) is a tag only.
+# The digest is moved by hand. Read the tag's current one from the Digest line of
+#   docker buildx imagetools inspect docker.io/rocm/dev-ubuntu-22.04:6.2-complete
+# and set it here and in deploy/compose/docker-compose.rocm.yml, which passes
+# the same default (test_dependency_pinning.py checks that the two match).
 ARG ROCM_TAG=6.2-complete@sha256:e5df8c7787939b5319a02481affb5356198a9365b37a2b8719dba42590fd1812
 FROM docker.io/rocm/dev-ubuntu-22.04:${ROCM_TAG} AS builder
 

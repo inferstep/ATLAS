@@ -42,6 +42,12 @@
 # pin LLAMA_CPP_REV to a 2024 SHA that pre-dates the new vk-hpp usage).
 # The default is pinned by digest. An override such as UBUNTU_TAG=22.04
 # (ATLAS_UBUNTU_TAG in compose) is a tag only.
+# The digest is moved by hand. Read the tag's current one from the Digest line of
+#   docker buildx imagetools inspect docker.io/library/ubuntu:24.04
+# That is the multi-platform index's digest, not one platform's, so the arm64
+# build finds its own image. Set it here and in
+# deploy/compose/docker-compose.vulkan.yml, which passes the same default
+# (test_dependency_pinning.py checks that the two match).
 ARG UBUNTU_TAG=24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
 FROM ubuntu:${UBUNTU_TAG} AS builder
 
