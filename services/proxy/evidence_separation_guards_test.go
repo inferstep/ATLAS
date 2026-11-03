@@ -178,6 +178,9 @@ func TestGuardSuccessfulExecutionAloneIsNeverArtifactProof(t *testing.T) {
 	}
 	s := string(body)
 	i := strings.Index(s, "func coverageRecord(")
+	if i < 0 {
+		t.Fatal("guardrails.go holds no func coverageRecord, so its check reads nothing; name the file that holds it")
+	}
 	fn := s[i:]
 	if j := strings.Index(fn[1:], "\nfunc "); j > 0 {
 		fn = fn[:j]

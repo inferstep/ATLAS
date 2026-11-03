@@ -115,7 +115,11 @@ func TestThePolicyOwnerSetsDeliversInOnePlace(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := codeWithoutComments(string(src))
-	decide := body[strings.Index(body, "func decideCandidatePolicy("):]
+	start := strings.Index(body, "func decideCandidatePolicy(")
+	if start < 0 {
+		t.Fatal("candidate_advisory_policy.go holds no func decideCandidatePolicy, so its check reads nothing; name the file that holds it")
+	}
+	decide := body[start:]
 	if next := strings.Index(decide, "\nfunc "); next >= 0 {
 		decide = decide[:next]
 	}
