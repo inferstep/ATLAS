@@ -84,12 +84,12 @@ def test_every_form_of_the_on_block_is_read(ran, change, on):
     pytest.param({"pull_request": {"branches": ["release/**"]}}, ["a.py"], False, id="a pattern dev does not fit"),
     pytest.param({"pull_request": {"branches-ignore": ["dev"]}}, ["a.py"], False, id="dev ignored"),
     pytest.param({"pull_request": {"paths": ["extensions/vscode/**", ".github/workflows/ui.yml"]}},
-                 ["proxy/agent.go"], False, id="no changed file in its paths"),
+                 ["services/proxy/loop.go"], False, id="no changed file in its paths"),
     pytest.param({"pull_request": {"paths": ["extensions/vscode/**", ".github/workflows/ui.yml"]}},
-                 ["proxy/agent.go", "extensions/vscode/src/a/b.ts"], True, id="one changed file in its paths"),
+                 ["services/proxy/loop.go", "extensions/vscode/src/a/b.ts"], True, id="one changed file in its paths"),
     pytest.param({"pull_request": {"paths-ignore": ["docs/**", "*.md"]}}, ["docs/a/b.md", "README.md"], False,
                  id="every changed file ignored"),
-    pytest.param({"pull_request": {"paths-ignore": ["docs/**", "*.md"]}}, ["docs/a.md", "proxy/agent.go"], True,
+    pytest.param({"pull_request": {"paths-ignore": ["docs/**", "*.md"]}}, ["docs/a.md", "services/proxy/loop.go"], True,
                  id="one changed file not ignored"),
     # One star stays inside a folder; two stars cross folders.
     pytest.param({"pull_request": {"paths": ["*.md"]}}, ["docs/a.md"], False, id="one star in another folder"),
@@ -125,7 +125,7 @@ def test_every_workflow_of_this_repository_can_be_judged(ran, change):
 def test_the_replay_workflow_is_expected_only_when_its_paths_changed(ran, change):
     workflows = ran.read_workflows(ROOT)
     replay = ".github/workflows/replay.yml"
-    assert replay in ran.expected_workflows(workflows, change, ["proxy/agent.go"], "")[0]
+    assert replay in ran.expected_workflows(workflows, change, ["services/proxy/loop.go"], "")[0]
     assert replay in ran.expected_workflows(workflows, change, ["tests/replay/recordings/normal_edit.json"], "")[0]
     expected, unread = ran.expected_workflows(workflows, change, ["docs/README.md"], "")
     assert replay not in expected

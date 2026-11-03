@@ -22,7 +22,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_GATES = ("compose", "compose-rocm", "compose-vulkan", "compose-cpu", "compose-macos")
-PROXY = "proxy/"
+PROXY = "services/proxy/"
 INFRASTRUCTURE_SUITE = "tests/infrastructure"
 
 # Which gates of scripts/ci/production-readiness.py cover which changed files.
@@ -52,13 +52,13 @@ AGENT_ENDPOINT = "/v1/agent"
 SENDER_CONTRACT = "tests/contracts/test_api_version_contract.py"
 
 FIXES = {
-    "go-proxy-vet": "Fix the line `go vet` names (run it in proxy/).",
+    "go-proxy-vet": "Fix the line `go vet` names (run it in services/proxy/).",
     "go-tui-vet": "Fix the line `go vet` names (run it in tui/).",
     "go-proxy-staticcheck": "Fix the finding at the line shown. Its code (for example SA4006) is explained by `staticcheck -explain <code>`.",
     "go-tui-staticcheck": "Fix the finding at the line shown. Its code (for example SA4006) is explained by `staticcheck -explain <code>`.",
-    "go-proxy-test": "Run `go test -run '<TestName>' .` in proxy/ for a test that failed, then fix the code or the test.",
+    "go-proxy-test": "Run `go test -run '<TestName>' .` in services/proxy/ for a test that failed, then fix the code or the test.",
     "go-tui-test": "Run `go test -run '<TestName>' ./...` in tui/ for a test that failed, then fix the code or the test.",
-    "go-proxy-changed-tests": "Run `go test -run '<TestName>' .` in proxy/ for a test that failed, then fix the code or the test.",
+    "go-proxy-changed-tests": "Run `go test -run '<TestName>' .` in services/proxy/ for a test that failed, then fix the code or the test.",
     "python-compile": "A file does not compile. Fix the syntax error at the line shown.",
     "min-python": "The code uses a form Python 3.9 cannot run. Write it in a form 3.9 accepts.",
     "ruff": (
@@ -154,7 +154,7 @@ def advisory(changed: list[str], base: str) -> list[str]:
 def golangci_notes(changed: list[str], base: str) -> list[str]:
     """What golangci-lint finds in the Go code this change adds."""
     out = []
-    modules = [m for m in ("proxy", "tui") if any(p.startswith(m + "/") for p in changed)]
+    modules = [m for m, folder in (("proxy", "services/proxy"), ("tui", "tui")) if any(p.startswith(folder + "/") for p in changed)]
     if not modules or not (ROOT / ".golangci.yml").is_file():
         return out
     if not shutil.which("golangci-lint"):
@@ -194,7 +194,7 @@ def gates_to_run(pr, changed: list[str], full: bool) -> list:
     pattern = changed_go_tests(changed)
     if pattern and "go-proxy-test" not in names:
         run.append(pr.Gate("go-proxy-changed-tests", ("go", "test", "-count=1", "-run", pattern, "."),
-                           cwd=ROOT / "proxy", available=lambda: shutil.which("go") is not None,
+                           cwd=ROOT / "services" / "proxy", available=lambda: shutil.which("go") is not None,
                            unavailable_reason="Go is not installed", env=gates["go-proxy-vet"].env))
     if any(p.endswith((".go", ".py")) for p in changed):
         run.append(pr.Gate("code-health", (sys.executable, "scripts/ci/code_health.py")))

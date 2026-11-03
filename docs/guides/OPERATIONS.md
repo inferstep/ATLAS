@@ -270,7 +270,7 @@ docker inspect -f '{{index .Config.Labels "com.docker.compose.image"}}' atlas-at
 stack and records what "deployed" means. In order, it:
 
 - refuses a checkout with uncommitted changes;
-- runs `go test ./...` in `proxy/` and `pytest tests/v3-service tests/atlas`,
+- runs `go test ./...` in `services/proxy/` and `pytest tests/v3-service tests/atlas`,
   and stops on a failure;
 - tags each image it replaces as `atlas-prev:<service>-<stamp>`, the rollback
   target;

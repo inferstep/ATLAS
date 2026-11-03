@@ -68,7 +68,7 @@ COPY patches/ /patches/
 # Pin llama.cpp to a known-good SHA (same rationale as Dockerfile.v31 —
 # upstream context drift breaks the PC-202 patch periodically). Keep
 # this aligned with the other Dockerfiles.
-ARG LLAMA_CPP_REV=0000000000000000000000000000000000000000
+ARG LLAMA_CPP_REV=2e97c5f96f9fe2bb26f794a348e05d7a1c74baa1
 # #117: Split fetch -> patch -> build into three RUN layers so a
 # LLAMA_CPP_REV bump or a patches/ change invalidates only the affected
 # layer. ccache mount (below) further mitigates SHA bumps by caching
@@ -129,6 +129,11 @@ RUN --mount=type=cache,id=llama-ccache,target=/root/.ccache,sharing=locked \
 # inference path.
 # ---------------------------------------------------------------------------
 FROM ubuntu:${UBUNTU_TAG}
+# The week of the commit, which build-images.yml passes for a push to dev and
+# for a PR build (a release build passes none). A commit of a new week runs
+# the package installs of this stage again, so they take the distribution's
+# fixes between base bumps; the build stage above stays in the cache.
+ARG PACKAGE_REFRESH
 
 # Runtime deps:
 #   libvulkan1               — the Vulkan loader (calls into ICDs)

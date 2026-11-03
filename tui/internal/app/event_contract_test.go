@@ -53,7 +53,7 @@ func TestEveryStreamedEventTypeIsRenderable(t *testing.T) {
 		if handled[typ] || exempt[typ] != "" {
 			continue
 		}
-		missing = append(missing, typ+" (emitted in proxy/"+where+")")
+		missing = append(missing, typ+" (emitted in services/proxy/"+where+")")
 	}
 	sort.Strings(missing)
 	if len(missing) > 0 {
@@ -70,7 +70,7 @@ func proxyStreamedEvents(t *testing.T) map[string]string {
 	t.Helper()
 	emitted := map[string]string{}
 	streamRE := regexp.MustCompile(`ctx\.Stream\(\s*"([a-z0-9_]+)"`)
-	proxyDir := filepath.Join(tuiModuleRoot(t), "..", "proxy")
+	proxyDir := filepath.Join(tuiModuleRoot(t), "..", "services", "proxy")
 	if _, err := os.Stat(proxyDir); err != nil {
 		// A skip here would pass in silence once the proxy moves.
 		t.Fatalf("the proxy this contract reads is not at ../proxy: %v", err)

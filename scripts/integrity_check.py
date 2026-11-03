@@ -40,7 +40,7 @@ ROOT = Path(__file__).resolve().parent.parent
 TASK_SOURCE = Path("scripts") / "eval" / "e2e-reliability.py"
 
 CODE_EXTENSIONS = (".go", ".py", ".ts", ".js", ".mjs", ".sh")
-PRODUCT_DIRS = ("proxy/", "tui/", "atlas/", "v3-service/", "geometric-lens/",
+PRODUCT_DIRS = ("services/proxy/", "tui/", "atlas/", "v3-service/", "geometric-lens/",
                 "sandbox/", "inference/", "extensions/vscode/src/")
 DOC_DIRS_ALLOWED = (".github/",)
 # Files that decide what a check accepts: workflows, settings, baselines,

@@ -563,9 +563,9 @@ atlas model recommend
 atlas model install <registry-name>
 
 # 3. Build the proxy
-cd proxy
+cd services/proxy
 go build -o ~/.local/bin/atlas-proxy-v2 .
-cd ..
+cd ../..
 
 # 4. Install geometric-lens Python dependencies
 pip install -r geometric-lens/requirements.txt

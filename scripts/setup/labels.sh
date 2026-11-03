@@ -38,7 +38,7 @@ gh auth status >/dev/null 2>&1 || { echo "error: gh is not logged in (run: gh au
 
 # name|color|description
 LABELS=(
-    "area/proxy|1d76db|Go agent loop and SSE contract (proxy/)"
+    "area/proxy|1d76db|Go agent loop and SSE contract (services/proxy/)"
     "area/tui|1d76db|Bubbletea terminal UI (tui/)"
     "area/cli|1d76db|Python atlas CLI (atlas/)"
     "area/v3|1d76db|V3 candidate generation and selection (v3-service/)"

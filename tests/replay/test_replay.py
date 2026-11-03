@@ -165,8 +165,8 @@ def test_an_event_that_differs_is_named(normal, proxy_binary, tmp_path):
 def proxy_with_other_carried_text(tmp_path_factory):
     """The proxy of this checkout with one word more in its system prompt: the text that every request carries."""
     source = tmp_path_factory.mktemp("proxy-source") / "proxy"
-    shutil.copytree(stage.REPO / "proxy", source, ignore=shutil.ignore_patterns("*_test.go", "testdata"))
-    prompt = source / "system_prompt.go"
+    shutil.copytree(stage.REPO / "services" / "proxy", source, ignore=shutil.ignore_patterns("*_test.go", "testdata"))
+    prompt = source / "model_prompt.go"
     text = prompt.read_text(encoding="utf-8")
     assert text.count("You are ATLAS, a coding assistant") == 1
     prompt.write_text(text.replace("You are ATLAS, a coding assistant", "You are ATLAS, a careful coding assistant"), encoding="utf-8")

@@ -80,14 +80,14 @@ def _find_go() -> Optional[str]:
 
 
 def _find_atlas_dir() -> str:
-    """Find the ATLAS repo root (where proxy/ source lives)."""
+    """Find the ATLAS repo root (where services/proxy/ source lives)."""
     d = os.path.dirname(os.path.abspath(__file__))
     for _ in range(4):
-        if os.path.exists(os.path.join(d, "proxy", "main.go")):
+        if os.path.exists(os.path.join(d, "services", "proxy", "main.go")):
             return d
         d = os.path.dirname(d)
     # Check CWD
-    if os.path.exists(os.path.join(os.getcwd(), "proxy", "main.go")):
+    if os.path.exists(os.path.join(os.getcwd(), "services", "proxy", "main.go")):
         return os.getcwd()
     return ""
 
@@ -116,7 +116,7 @@ def _build_proxy(atlas_dir: str) -> Optional[str]:
     if not go_bin or not atlas_dir:
         return None
 
-    proxy_src = os.path.join(atlas_dir, "proxy")
+    proxy_src = os.path.join(atlas_dir, "services", "proxy")
     if not os.path.isfile(os.path.join(proxy_src, "main.go")):
         return None
 
@@ -146,7 +146,7 @@ def _build_proxy(atlas_dir: str) -> Optional[str]:
 def _select_proxy_binary(atlas_dir: str) -> Optional[str]:
     """Select or rebuild the local proxy for the current checkout."""
     binary = _find_proxy_binary(atlas_dir)
-    source_dir = os.path.join(atlas_dir, "proxy") if atlas_dir else ""
+    source_dir = os.path.join(atlas_dir, "services", "proxy") if atlas_dir else ""
     if binary and go_binary_is_current(binary, source_dir):
         return binary
     if binary:

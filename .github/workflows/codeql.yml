@@ -68,10 +68,10 @@ jobs:
           # GOTOOLCHAIN=local, so the version here must satisfy every
           # module — no auto-fetch.
           go-version: '1.26.10'
-          # The modules live in proxy/ and tui/ (no root go.mod); without
+          # The modules live in services/proxy/ and tui/ (no root go.mod); without
           # this the default cache lookup warns and never caches.
           cache-dependency-path: |
-            proxy/go.sum
+            services/proxy/go.sum
             tui/go.sum
 
       # Java/Kotlin needs a different init than the other three: Kotlin is
@@ -107,14 +107,14 @@ jobs:
 
       - name: build go modules
         # CodeQL needs to observe a real compile to extract dataflow.
-        # autobuild can't handle our two-module layout (proxy/ + tui/)
+        # autobuild can't handle our two-module layout (services/proxy/ + tui/)
         # so we do it manually. Each module's `go build ./...` is enough
         # for extraction of its code — we don't need the artifacts. The
         # tests are extracted only from a traced `go test` (with the option
         # above), so `go test -c` compiles them too, without running them.
         if: matrix.language == 'go'
         run: |
-          (cd proxy && go build ./... && go test -c -o "$RUNNER_TEMP/go-tests/proxy/" ./...)
+          (cd services/proxy && go build ./... && go test -c -o "$RUNNER_TEMP/go-tests/proxy/" ./...)
           (cd tui   && go build ./... && go test -c -o "$RUNNER_TEMP/go-tests/tui/" ./...)
 
       # The Kotlin plugin is a Gradle build, and CodeQL only extracts

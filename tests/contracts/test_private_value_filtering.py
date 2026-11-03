@@ -3,7 +3,7 @@
 One synthetic fixture corpus (tests/fixtures/private_value_fixtures.json)
 must pass against every implementation:
 
-  - Go: proxy/internal/logsafe/filter.go (exercised by `go test` in CI; here we
+  - Go: services/proxy/internal/logsafe/filter.go (exercised by `go test` in CI; here we
     assert the file exists and pins the same placeholder so drift is
     caught even in Python-only runs)
   - Python x4: geometric-lens/geometric_lens/private_values.py and its
@@ -117,6 +117,6 @@ def test_logging_filter_masks_records():
 
 
 def test_go_implementation_pins_same_placeholder():
-    go_src = go_source("proxy", "privateValuePlaceholder = ")
+    go_src = go_source("services/proxy", "privateValuePlaceholder = ")
     assert f'privateValuePlaceholder = "{CORPUS["placeholder"]}"' in go_src, (
         "Go placeholder drifted from the fixture corpus")

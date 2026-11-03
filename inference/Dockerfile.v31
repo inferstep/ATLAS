@@ -135,6 +135,23 @@ FROM ${RUNTIME_IMAGE}
 # Re-declare ARG after FROM so the runtime stage can reference it if
 # needed; Docker scopes ARGs per-stage unless re-declared.
 ARG RUNTIME_IMAGE
+# The week of the commit, which build-images.yml passes for a push to dev and
+# for a PR build (a release build passes none). A commit of a new week runs
+# the package installs of this stage again, so they take the distribution's
+# fixes between base bumps; the build stage above stays in the cache.
+ARG PACKAGE_REFRESH
+# NVIDIA has not rebuilt the 12.9.0 runtime image since May 2025, so its
+# packages are older than the distribution's: take Rocky's current ones.
+# Only from Rocky's own repos, never from NVIDIA's cuda repo, so the CUDA
+# runtime stays the one llama.cpp was built against. The apt branch, for
+# the l4t and Ubuntu bases, still takes the CA bundle only.
+RUN if command -v dnf >/dev/null 2>&1; then \
+        dnf upgrade -y --repo baseos --repo appstream && \
+        dnf clean all; \
+    else \
+        apt-get update && apt-get install -y --only-upgrade --no-install-recommends ca-certificates && \
+        rm -rf /var/lib/apt/lists/*; \
+    fi
 COPY --from=builder /llama.cpp/build/bin/llama-server /usr/local/bin/
 COPY --from=builder /llama.cpp/build/bin/llama-cli /usr/local/bin/
 # Ship cvector-generator alongside llama-server so the bootstrap can run

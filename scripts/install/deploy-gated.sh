@@ -58,7 +58,7 @@ echo "rebuilding: $SERVICES"
 
 # Full output goes to the record directory; the tail is enough to read here.
 echo "=== go test (proxy) ==="
-( cd proxy && go test ./... > "$RECORD/deployed/gotest-$STAMP.txt" 2>&1 ) ||
+( cd services/proxy && go test ./... > "$RECORD/deployed/gotest-$STAMP.txt" 2>&1 ) ||
   { tail -20 "$RECORD/deployed/gotest-$STAMP.txt"; fail "go test failed (deployed/gotest-$STAMP.txt)"; }
 tail -3 "$RECORD/deployed/gotest-$STAMP.txt"
 echo "=== pytest tests/v3-service tests/atlas ==="

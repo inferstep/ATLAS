@@ -91,26 +91,26 @@ K3s 部署路径（`scripts/install/install.sh`，清单在 `deploy/k3s/` 中）
 | 文件 | 职责 |
 |---|---|
 | `main.go` | HTTP 服务器、路由、鉴权、透传、错误信封、私密值日志过滤 |
-| `llm_call.go`, `model_reply.go` | 对 llama-server 的单次调用，以及读取模型的回复 |
-| `system_prompt.go`, `task_tier.go` | 系统提示词与上下文预算，消息的层级 |
-| `agent_handler.go` | `/v1/agent` 与 `/cancel` 端点 |
-| `agent.go` | `runAgentLoop`、围栏获取、工具链检测 |
+| `model_call.go`, `model_reply.go` | 对 llama-server 的单次调用，以及读取模型的回复 |
+| `model_prompt.go`, `task_tier.go` | 系统提示词与上下文预算，消息的层级 |
+| `server_agent.go` | `/v1/agent` 与 `/cancel` 端点 |
+| `loop.go` | `runAgentLoop`、围栏获取、工具链检测 |
 | `gates_exit.go` | 退出门控，以及它们读取的运行状态 |
 | `loop_turn.go`, `loop_checks.go`, `loop_results.go` | 循环的一轮：模型调用与回复、工具运行前的检查、结果与卡死循环断路器 |
 | `plan_generation.go`, `task_intake.go` | 请求是否需要计划以及对规划器的调用；请求声明的任务契约 |
-| `run_end.go`, `recovery.go` | 运行如何结束（终止事件、时间预算、摘要）；给卡住的模型看的内容以及尚欠的工作 |
-| `fenced_channel.go` | 获取文件正文的子调用及其预算 |
+| `loop_end.go`, `loop_recovery.go` | 运行如何结束（终止事件、时间预算、摘要）；给卡住的模型看的内容以及尚欠的工作 |
+| `model_fenced_channel.go` | 获取文件正文的子调用及其预算 |
 | `tools.go`, `tool_*.go` | 16 个工具定义与执行器、层级分类、工具调用语法 |
 | `gates*.go` | 诚实性/计划闸门：声明校验、结构、语法、内嵌脚本、计划遵循、计划提醒、资源 lint（`internal/assetlint`） |
-| `detectors.go` | 卡死模式检测：工具重复、推理重复、traceback 定位 |
-| `context.go` | 上下文增强：符号索引、项目扫描、工作区隔离、会话文件清单 |
-| `permissions.go` | 权限闸门（`/v1/permission`）、信任模式、硬阻断模式 |
+| `loop_detectors.go` | 卡死模式检测：工具重复、推理重复、traceback 定位 |
+| `loop_project.go` | 上下文增强：符号索引、项目扫描、工作区隔离、会话文件清单 |
+| `guardrails_permissions.go` | 权限闸门（`/v1/permission`）、信任模式、硬阻断模式 |
 | `lens.go` | lens 打分调用、校准状态 |
 | `guardrails*.go` | 按工具的引导防护（收缩、缺失命令/模块的引导、doctype 剥离） |
 | `internal/shellcmd/shell_wrapper.go` | `validateShellCommand` 背后的命令策略：拆分复合命令，最多深入 16 层检查执行包装器（`sh -c`、`eval` 等），拒绝灾难性命令和无法检查的包装器 |
-| `events.go` | 类型化信封 broker（`/events`）与 SSE 管道 |
-| `internal/v3client/client.go` | 面向 v3-service `/v3/generate` + `/v3/plan` 的 SSE 客户端；调用上限 `ATLAS_V3_TIMEOUT` 留在 `v3_bridge.go` |
-| `types.go` | 共享类型、层级、轮次上限 |
+| `server_events.go` | 类型化信封 broker（`/events`）与 SSE 管道 |
+| `internal/v3client/client.go` | 面向 v3-service `/v3/generate` + `/v3/plan` 的 SSE 客户端；调用上限 `ATLAS_V3_TIMEOUT` 留在 `tool_write_v3.go` |
+| `loop_state.go` | 共享类型、层级、轮次上限 |
 
 ```mermaid
 graph LR
@@ -170,7 +170,7 @@ flowchart LR
 
 在默认的 `strict` 模式下，代理发送一个完整的 JSON schema —— 带 `additionalProperties: false` 的 `oneOf`，工具名从注册表中枚举 —— llama-server 在 token 生成期间将其作为语法强制执行。语法约束让畸形输出变得罕见，而非不可能：`ATLAS_GRAMMAR_MODE=loose` 只发送 `{"type":"json_object"}`（有效 JSON，不强制形态 —— 有些模型需要它），而且回复 token 上限可能在 JSON 中途截断。代理把解析当作可能失败的操作对待 —— 它会从散文/`reasoning_content` 中恢复 JSON，在执行前检测被截断的工具参数，把针对性的解析失败描述反馈回去，并在连续三次失败后中断循环。
 
-**围栏内容通道（`@fenced`）。** 整文件正文不走 JSON 通道。JSON 字符串里的代码在每一行密集内容上都付出转义压力，一个已部署的 12B 模型可测地无法承受：同一个解法以围栏 markdown 块发出时 6/6 可解析，以 JSON 字符串发出时 0/6（丢失右括号、字面量 `\n` 把多条语句熔进注释、join 丢失空格）。系统提示指示模型把 `write_file` 的 `content` 设为恰好 `@fenced`；代理随后发起一次*不受约束*的子调用（无语法、无 `response_format`），其回复就是单个围栏块中的文件，并按目标扩展名打上标签（` ```python `、` ```html `，……）。信封仍在 JSON 约束之下；只有文件正文移到纯文本。机制的细节（`proxy/agent.go::fetchFencedContent`）：子调用是临时的（永不追加进对话——在主线程看来，模型写了 `@fenced`，写入就完成了）；若回复里的文件本身含有 ` ``` `，则由一个尾部围栏锚点提取，使内部围栏不会截断它；把哨兵值*和*文件放进同一个字符串的模型，会剥掉哨兵值并使用内联内容；两次尝试，然后一次退回，请求内联内容。每次尝试都是真实的生成，并计入运行总量（最终 `done` 载荷上的 `fenced_calls` / `fenced_tokens`，每次尝试一个 `fenced_fetch` 阶段事件）。
+**围栏内容通道（`@fenced`）。** 整文件正文不走 JSON 通道。JSON 字符串里的代码在每一行密集内容上都付出转义压力，一个已部署的 12B 模型可测地无法承受：同一个解法以围栏 markdown 块发出时 6/6 可解析，以 JSON 字符串发出时 0/6（丢失右括号、字面量 `\n` 把多条语句熔进注释、join 丢失空格）。系统提示指示模型把 `write_file` 的 `content` 设为恰好 `@fenced`；代理随后发起一次*不受约束*的子调用（无语法、无 `response_format`），其回复就是单个围栏块中的文件，并按目标扩展名打上标签（` ```python `、` ```html `，……）。信封仍在 JSON 约束之下；只有文件正文移到纯文本。机制的细节（`services/proxy/loop.go::fetchFencedContent`）：子调用是临时的（永不追加进对话——在主线程看来，模型写了 `@fenced`，写入就完成了）；若回复里的文件本身含有 ` ``` `，则由一个尾部围栏锚点提取，使内部围栏不会截断它；把哨兵值*和*文件放进同一个字符串的模型，会剥掉哨兵值并使用内联内容；两次尝试，然后一次退回，请求内联内容。每次尝试都是真实的生成，并计入运行总量（最终 `done` 载荷上的 `fenced_calls` / `fenced_tokens`，每次尝试一个 `fenced_fetch` 阶段事件）。
 
 重复检测器对**模型**发出的调用做指纹，快照取在工具调用分支顶部、在围栏解析用取回的正文改写 `parsed.Args` 之前。没有这个快照，检测器读到的字节在每次尝试中都不同，而调用本身却是字节等同的——这正是那次冻结运行里七轮 `@fenced` 循环直至触顶 harness 上限而检测器全程沉默的原因。取回的字节不受影响：它们仍然驱动变更、各道门、账本和写入。目标路径会被归一化后进入签名，因此 `solve.py` 和 `./solve.py` 买不到两份额度。
 
@@ -197,7 +197,7 @@ run-first 门本身引用一条指令，`runFirstInstruction`：运行该扩展�
 
 ### 工具
 
-`proxy/tools.go` 中注册了 16 个工具。各工具的说明、限制及是否只读请参见 [API.md § Tools available to the agent loop](../../reference/API.md#tools-available-to-the-agent-loop)。
+`services/proxy/tools.go` 中注册了 16 个工具。各工具的说明、限制及是否只读请参见 [API.md § Tools available to the agent loop](../../reference/API.md#tools-available-to-the-agent-loop)。
 
 ### 交付物账本（观测性）
 
@@ -227,7 +227,7 @@ run-first 门本身引用一条指令，`runFirstInstruction`：运行该扩展�
 
 分类是服务端事实。`ToolResult.ModelFacing()` 把结果投影为 `success` / `data` / `error` 加上 V3 溯源字段，而 `MarshalText`——结果进入 `ctx.Messages` 的唯一路径——经由它。完整结构体仍为内部用途携带全部字段做序列化；该投影是一份白名单，因此新加到 `ToolResult` 的字段不会进入对话，除非有人决定不然。
 
-三处测试守住这条边界，位于 `proxy/result_contract_test.go` 与 `proxy/tool_effect_test.go`：`TestEveryModelFacingSerializationSiteIsInventoried` 在出现新的直接序列化或经未盘点路由构建的工具消息时失败，`TestModelFacingTextCarriesNoClassification` 逐结果固定投影后的字节，而 `TestModelPromptBytesAreUnchangedByClassification` 让 agent 循环跑过两个分类发生变化的分支，并把请求体与父提交对比。
+三处测试守住这条边界，位于 `services/proxy/tool_result_contract_test.go` 与 `services/proxy/tool_effect_test.go`：`TestEveryModelFacingSerializationSiteIsInventoried` 在出现新的直接序列化或经未盘点路由构建的工具消息时失败，`TestModelFacingTextCarriesNoClassification` 逐结果固定投影后的字节，而 `TestModelPromptBytesAreUnchangedByClassification` 让 agent 循环跑过两个分类发生变化的分支，并把请求体与父提交对比。
 
 一个限制被如实携带而非绕开推理：`move_file` 的跨文件系统复制路径在生产可达，但没有生产路径的测试，因为单个临时目录无法横跨两个文件系统。
 
@@ -272,23 +272,23 @@ run-first 门本身引用一条指令，`runFirstInstruction`：运行该扩展�
 
 会话预算归服务器所有：总计 600 s，预留 30 s，因此工作停在 570 s。`ATLAS_AGENT_SESSION_TIMEOUT_SEC` 在 [120, 3600] 内覆盖总值；任何畸形、零、负值或越界都带一条日志回落默认。两个生命周期分开维护——响应上下存活到终结，而工作上下文（LLM、工具、门、V3、沙箱）早一个预留结束——因此停止工作的截止时刻不会杀死解释它的通道。到截止时刻服务器取消工作、只回收本会话的后台任务、重哈希被跟踪路径、原样运行 Phase 3B 恢复判定，并在预留内发射一个 `timed_out` 终端。客户端断连不是超时：工作停止、任务被回收，但没有任何东西被声称进一个已关闭的响应。Phase 2 围栏准入自动观察工作截止，因为它本已对 `ctx.Ctx` 的截止做预留。
 
-留给后续的可复现性工作，未在此修正：系统提示按 Go map 顺序渲染工具描述，因此两次运行相同代码会产生不同的提示字节。它只影响提示复现性，不影响行为；`proxy/tool_effect_test.go` 中的 `conversationBytes` 正为此省略系统消息。
+留给后续的可复现性工作，未在此修正：系统提示按 Go map 顺序渲染工具描述，因此两次运行相同代码会产生不同的提示字节。它只影响提示复现性，不影响行为；`services/proxy/tool_effect_test.go` 中的 `conversationBytes` 正为此省略系统消息。
 
-`SessionWrites` 是另一张更旧的、以模型提供的原始路径为键的表；`proxy/types.go` 记录了由此而来的别名问题。其读者是 write_file 覆盖守卫对模型自身草稿的概念、活跃调试快速路径、会话清单注记、V3 项目上下文、制品门的漂移检查与编辑工具的宽松门；这些都不在此改变。
+`SessionWrites` 是另一张更旧的、以模型提供的原始路径为键的表；`services/proxy/loop_state.go` 记录了由此而来的别名问题。其读者是 write_file 覆盖守卫对模型自身草稿的概念、活跃调试快速路径、会话清单注记、V3 项目上下文、制品门的漂移检查与编辑工具的宽松门；这些都不在此改变。
 
-工作契约的验证要求（`decideVerificationDemand`）把它问及的代码交付物取自账本，每个变更工具的落地都被 `recordLedgerEffect` 规范记录。回答它的覆盖——一次通过的运行点名了哪些路径、持有的是什么字节——由 `proxy/guardrails.go` 的 `changedPathsForCoverage` 计算：会话写入加账本的规范代码交付物，因此要求与其覆盖读同一身份。在那之前，覆盖只读会话写入表，而 `edit_file` 与 `structural_edit` 从不写入它、任何编辑工具也不为交付的候选写入它，因此 `task_mode: work` 下的每个编辑任务无论模型运行了什么都以 `verification_demanded_unmet` 收场。覆盖只陈述一次运行在其当前字节上点名了一条变更路径；完成仍需要那次运行，后续变更仍重新武装该要求，账本自身的验证仍结算变更债。只有运行了程序或其测试、或抓取了页面的片段才绑定覆盖，且仅当命令行报告该片段的退出状态时（`shellcmd.ClassifyCommandEvidence`）：一次解析、一次 lint 或一次构建不绑定任何东西，管道进 `tail` 的测试也不。不点名文件的运行器绑定它发现的会话文件（`shellcmd.RunnerEntries`）：一个裸 `pytest` 或 `pytest tests/` 绑定其测试文件，`python -m unittest` 绑定其 `test*.py`，`go run .` 绑定其包，`go test ./...` 绑定含测试的包（无测试时只编译），`npm test`、`jest` 或 `vitest` 绑定其默认模式匹配的文件；import 从那里如同从点名入口一样被跟随。失败的运行同样被记录，同一字节上的失败收回更早的通过，因此最新结果说了算。要求在退出时未满足，验证门在终结器拒绝退出之前言明，附上本可运行该文件的命令。一次被取消的编辑不报告变更，账本对它无观测。
+工作契约的验证要求（`decideVerificationDemand`）把它问及的代码交付物取自账本，每个变更工具的落地都被 `recordLedgerEffect` 规范记录。回答它的覆盖——一次通过的运行点名了哪些路径、持有的是什么字节——由 `services/proxy/guardrails.go` 的 `changedPathsForCoverage` 计算：会话写入加账本的规范代码交付物，因此要求与其覆盖读同一身份。在那之前，覆盖只读会话写入表，而 `edit_file` 与 `structural_edit` 从不写入它、任何编辑工具也不为交付的候选写入它，因此 `task_mode: work` 下的每个编辑任务无论模型运行了什么都以 `verification_demanded_unmet` 收场。覆盖只陈述一次运行在其当前字节上点名了一条变更路径；完成仍需要那次运行，后续变更仍重新武装该要求，账本自身的验证仍结算变更债。只有运行了程序或其测试、或抓取了页面的片段才绑定覆盖，且仅当命令行报告该片段的退出状态时（`shellcmd.ClassifyCommandEvidence`）：一次解析、一次 lint 或一次构建不绑定任何东西，管道进 `tail` 的测试也不。不点名文件的运行器绑定它发现的会话文件（`shellcmd.RunnerEntries`）：一个裸 `pytest` 或 `pytest tests/` 绑定其测试文件，`python -m unittest` 绑定其 `test*.py`，`go run .` 绑定其包，`go test ./...` 绑定含测试的包（无测试时只编译），`npm test`、`jest` 或 `vitest` 绑定其默认模式匹配的文件；import 从那里如同从点名入口一样被跟随。失败的运行同样被记录，同一字节上的失败收回更早的通过，因此最新结果说了算。要求在退出时未满足，验证门在终结器拒绝退出之前言明，附上本可运行该文件的命令。一次被取消的编辑不报告变更，账本对它无观测。
 
 
 ### 工具选择偏差缓解
 
 一次实测的参考部署显示出一种偏差：即便 `structural_edit` 才是正确选择，模型也倾向于用 `edit_file`（BiasBusters arxiv 2510.00307 —— 相邻工具名的嵌入会相互竞争；描述比名称更重要）。代理中组合了四道与模型无关的防线：
 
-1. **描述重写**（`proxy/tool_edit.go`、`proxy/tool_structural_edit.go`）。edit_file 的描述
+1. **描述重写**（`services/proxy/tool_edit.go`、`services/proxy/tool_structural_edit.go`）。edit_file 的描述
    警告不要用于整文件/整函数；structural_edit 的描述
    声明对 >10 行 / 整节点替换是必需的；write_file 的描述
    声明仅用于新文件。
-2. **条件式 GBNF 语法**（`proxy/tool_schema.go`，
-   `proxy/llm_call.go:stepExclusions`）。当一个 write_file 对
+2. **条件式 GBNF 语法**（`services/proxy/tool_schema.go`，
+   `services/proxy/model_call.go:stepExclusions`）。当一个 write_file 对
    一个 >5 行的已有 .py/.html/.htm 文件被拒绝时，下一次 LLM 调用会
    被一个 GBNF 语法约束，该语法从工具名产生式中禁掉
    edit_file 和 write_file。模型在物理上无法发出
@@ -324,9 +324,9 @@ run-first 门本身引用一条指令，`runFirstInstruction`：运行该扩展�
 | T2（功能） | 0（无上限） | 触发 V3 pipeline |
 | T3（困难） | 0（无上限） | 触发 V3 pipeline |
 
-tier 上限为 0（无上限）；由循环内部的检测器栈决定何时中断：lens 回退（`agent_lens_intervention`）、推理重复（`agent_reasoning_intervention`）、工具调用重复（`agent_repeat_intervention`）、路径感知的错误熔断器、无动作即 done 门控、claim-check 门控、计划遵循阈值，以及空回复回退。对于一次性的"修复整个应用"提示，运维人员可用 `ATLAS_MAX_TURNS=<n>` 覆盖 —— 见 `proxy/types.go::envOverrideMaxTurns`。
+tier 上限为 0（无上限）；由循环内部的检测器栈决定何时中断：lens 回退（`agent_lens_intervention`）、推理重复（`agent_reasoning_intervention`）、工具调用重复（`agent_repeat_intervention`）、路径感知的错误熔断器、无动作即 done 门控、claim-check 门控、计划遵循阈值，以及空回复回退。对于一次性的"修复整个应用"提示，运维人员可用 `ATLAS_MAX_TURNS=<n>` 覆盖 —— 见 `services/proxy/loop_state.go::envOverrideMaxTurns`。
 
-分类器在 `proxy/tools.go`（`classifyFileTier`）；逻辑模式匹配器在同一文件中（`hasLogicIndicators`）。
+分类器在 `services/proxy/tools.go`（`classifyFileTier`）；逻辑模式匹配器在同一文件中（`hasLogicIndicators`）。
 
 **始终为 T1（直接写入）：**
 - 按名称匹配的配置文件（如 `package.json`、`go.mod`、`pyproject.toml`、`dockerfile`、`docker-compose.*`）
@@ -336,10 +336,10 @@ tier 上限为 0（无上限）；由循环内部的检测器栈决定何时中�
 - 少于 **10 行**的极小文件（在那种体量下 V3 没有任何可以有意义地多样化的东西）
 - 没有逻辑指标的未知扩展名
 
-完整的配置文件列表和扩展名集合位于 `proxy/tools.go:classifyFileTier`。
+完整的配置文件列表和扩展名集合位于 `services/proxy/tools.go:classifyFileTier`。
 
 **T2（V3 pipeline）** —— 当文件 ≥10 行且满足以下任一条件时合格：
-- `hasLogicIndicators(content)` 返回 true —— 在覆盖函数/方法定义、控制流、错误处理、Flask/FastAPI/Django 路由、Express/Node API、React 状态/数据、校验、数据库调用、JSX/React 组件模式和导入的模式家族中出现 **2 次以上匹配**（字面 token 列表见 `proxy/tools.go:hasLogicIndicators`）
+- `hasLogicIndicators(content)` 返回 true —— 在覆盖函数/方法定义、控制流、错误处理、Flask/FastAPI/Django 路由、Express/Node API、React 状态/数据、校验、数据库调用、JSX/React 组件模式和导入的模式家族中出现 **2 次以上匹配**（字面 token 列表见 `services/proxy/tools.go:hasLogicIndicators`）
 - 或者该文件具有可识别的源代码 / 标记语言扩展名（`.py`、`.go`、`.rs`、`.ts`、`.tsx`、`.js`、`.jsx`、`.html`、`.htm` 等）且没有触发逻辑指标 —— 在 T2 给予它疑点利益（覆盖诸如 12 行组件骨架这类极简但真实的文件）
 
 **T3（困难）** —— 目前分类器自身从不直接发出 T3；圈复杂度精炼器（`refineTierWithCC`，经由 GH #39 第 2 点的 `/internal/cyclomatic_complexity`）按 McCabe CC *升级*：CC ≥ 8 时升到 T2（包括从 T1 升级），CC ≥ 16 时升到 T3。从不降级。
@@ -428,11 +428,11 @@ API 契约见 [API.md § POST /v3/plan](../../reference/API.md#post-v3plan)。
 
 | 文件 | 作用 |
 |---|---|
-| `proxy/internal/v3client/client.go` | `PlanStreaming(reqCtx, v3URL, requestID, req, onProgress)` — 打开 SSE 流，把进度事件转发给回调，并从 `event: result` 帧返回最终的 `Plan`。`reqCtx` 绑定 agent 的请求上下文，因此 `/cancel` 会中止进行中的计划。与 V3 流水线运行所用的 `GenerateStreaming` 结构相同。 |
-| `proxy/internal/wire/` | `V3PlanRequest`（`v3.go`）、`Plan` 与 `PlanStep`（`messages.go`）类型。 |
-| `proxy/types.go` | `AgentContext` 增加 `Plan`、`PlanStepsSatisfied[]`、`PlanOffStreak`、`PlanRevisions`。 |
-| `proxy/plan_generation.go`, `proxy/internal/projectcontext/sample.go` | `projectcontext.Sample()` 为规划器遍历优先文件（app.py、templates/index.html、package.json 等）。`shouldGeneratePlan()` 依据层级、消息长度以及是否为只读请求来判断。`generatePlan()` 运行桥接，丢弃逐 token 的噪声，并携带完整步骤列表发出 `plan_loaded`。 |
-| `proxy/gates_plan.go` | `matchPlanStep()`（工具名加路径后缀的宽松匹配）、`recordPlanAdherence()`（按工具调用记账；不匹配任何步骤的侦察调用 — `read_file`/`list_directory`/`find_file`/`search_files` — 是中性的：绝不延长 `off_streak`）、`revisePlan()`（把 `FilesRead` 作为额外上下文带入并重新生成）。 |
+| `services/proxy/internal/v3client/client.go` | `PlanStreaming(reqCtx, v3URL, requestID, req, onProgress)` — 打开 SSE 流，把进度事件转发给回调，并从 `event: result` 帧返回最终的 `Plan`。`reqCtx` 绑定 agent 的请求上下文，因此 `/cancel` 会中止进行中的计划。与 V3 流水线运行所用的 `GenerateStreaming` 结构相同。 |
+| `services/proxy/internal/wire/` | `V3PlanRequest`（`v3.go`）、`Plan` 与 `PlanStep`（`messages.go`）类型。 |
+| `services/proxy/loop_state.go` | `AgentContext` 增加 `Plan`、`PlanStepsSatisfied[]`、`PlanOffStreak`、`PlanRevisions`。 |
+| `services/proxy/plan_generation.go`, `services/proxy/internal/projectcontext/sample.go` | `projectcontext.Sample()` 为规划器遍历优先文件（app.py、templates/index.html、package.json 等）。`shouldGeneratePlan()` 依据层级、消息长度以及是否为只读请求来判断。`generatePlan()` 运行桥接，丢弃逐 token 的噪声，并携带完整步骤列表发出 `plan_loaded`。 |
+| `services/proxy/plan_gates.go` | `matchPlanStep()`（工具名加路径后缀的宽松匹配）、`recordPlanAdherence()`（按工具调用记账；不匹配任何步骤的侦察调用 — `read_file`/`list_directory`/`find_file`/`search_files` — 是中性的：绝不延长 `off_streak`）、`revisePlan()`（把 `FilesRead` 作为额外上下文带入并重新生成）。 |
 
 系统提示的渲染在 `buildSystemPrompt` 中完成。计划步骤渲染为编号列表，`✓` 标记只出现在验证步骤上，并把验证步骤标明为验证门控针对 `done` 所守护的“修复证据”步骤。（逐步骤的 ☐/✓/⚐ 字形属于 TUI 渲染，见下文。）
 
@@ -450,7 +450,7 @@ API 契约见 [API.md § POST /v3/plan](../../reference/API.md#post-v3plan)。
 
 #### 可调项
 
-定义在 `proxy/gates_plan.go`：
+定义在 `services/proxy/plan_gates.go`：
 
 | 常量 | 默认值 | 理由 |
 |---|---|---|
@@ -485,14 +485,14 @@ API 契约见 [API.md § POST /v3/plan](../../reference/API.md#post-v3plan)。
 | 层 | 文件 | 覆盖内容 |
 |---|---|---|
 | v3-service 计划端点 | `tests/v3-service/pipeline/test_plan_scoring.py`（打分器）；解析器通过 `curl /v3/plan` 做冒烟测试 | 打分器为运行程序、其测试或探针的验证步骤加分，对静态检查（构建、解析、linter）和侦察调用都不加分；解析器的容错（围栏、前置说明文字、花括号嵌套）由 3 候选采样器验证 |
-| 代理桥接 | `proxy/internal/v3client/client_test.go`；阶段路由见 `proxy/v3_bridge_test.go` | SSE 解析、缺少结果时的错误、阶段路由 |
-| 代理钩子 | `proxy/agent_test.go` | 优先文件选取、截断阈值、回退遍历、层级与长度判断 |
-| 代理遵循 | `proxy/gates_plan_test.go`；系统提示见 `proxy/gates_test.go` | 匹配逻辑（工具名 + 路径后缀）、排除失败的调用、修订上限、系统提示渲染 |
+| 代理桥接 | `services/proxy/internal/v3client/client_test.go`；阶段路由见 `services/proxy/tool_write_v3_bridge_test.go` | SSE 解析、缺少结果时的错误、阶段路由 |
+| 代理钩子 | `services/proxy/loop_test.go` | 优先文件选取、截断阈值、回退遍历、层级与长度判断 |
+| 代理遵循 | `services/proxy/plan_gates_test.go`；系统提示见 `services/proxy/gates_test.go` | 匹配逻辑（工具名 + 路径后缀）、排除失败的调用、修订上限、系统提示渲染 |
 | TUI 渲染 | `tui/internal/pipelinestate/plan_test.go`；处理程序见 `tui/internal/app/plan_test.go` | `PlanView` 状态转换、修订时由 plan_loaded 替换、偏离计划时静默 |
 
 ### 安全限制
 
-面向运维的限制及其调优旋钮。内部操控守卫（回溯定位、缺失模块/大小写不匹配操控、符号接地、空操作/空内容/语法门控、doctype 剥离）位于 `proxy/guardrails*.go` 和 `proxy/loop_*.go`。
+面向运维的限制及其调优旋钮。内部操控守卫（回溯定位、缺失模块/大小写不匹配操控、符号接地、空操作/空内容/语法门控、doctype 剥离）位于 `services/proxy/guardrails*.go` 和 `services/proxy/loop_*.go`。
 
 | 限制 | 取值 | 用途 |
 |-------|-------|---------|
@@ -501,7 +501,7 @@ API 契约见 [API.md § POST /v3/plan](../../reference/API.md#post-v3plan)。
 | V3 交互式墙钟上限 | 单次 V3 pipeline 调用被限制在 `ATLAS_V3_TIMEOUT`（默认 180s）；超时时代理回退到模型自身的语法门控内容（`0` 禁用） | 在长时间修复停滞下保持交互式会话的响应 |
 | 逐轮推理预算 | 在约 6144 个推理 token 后切断流（`ATLAS_REASONING_BUDGET`，0 禁用）；恢复时从推理中提取一个内嵌的 tool_call 或重新提示 | 限定推理螺旋 |
 | 对已有文件的 write_file | 文件 > 5 行时拒绝；在 .py/.html/.htm 上，逐步语法门控操控转向 `structural_edit` | 强制外科式编辑（`edit_file`）或整节点编辑（`structural_edit`） |
-| 可疑收缩守卫 | 当 `oldSize >= 100B` 且 `newSize < 64B` 时拒绝 `structural_edit`/`edit_file`（`proxy/guardrails_write.go::validateNotSuspiciouslyShrunk`） | 在破坏性的桩重写落盘之前抓住它们 |
+| 可疑收缩守卫 | 当 `oldSize >= 100B` 且 `newSize < 64B` 时拒绝 `structural_edit`/`edit_file`（`services/proxy/guardrails_write.go::validateNotSuspiciouslyShrunk`） | 在破坏性的桩重写落盘之前抓住它们 |
 | structural_edit 失控内容守卫 | 当 `content` > 8 KB 且 > 4× 文件大小时拒绝 | 抓住作为替换节点发出的推理泄漏块 |
 | 错误循环熔断器 | 同一路径上连续 3 次同类失败 | 停止失控的失败循环 |
 | 探索预算 | 连续 4 次只读调用时提示（nudge）；5 次以上时升级提示。读取始终会执行 —— 提示是把*下一*轮引向写入 | 推动模型去写，而不是无限探索 |
@@ -689,7 +689,7 @@ C(x) 的归一化是 `sigmoid(steepness × (energy - midpoint))`。所选模型�
 
 **模型侧调用的归因。** Lens 对模型服务器的每次请求（`/embedding`、`/v1/models` 身份探测）都经由同一套传输，`geometric_lens/model_transport.py`，它转发 ATLAS 其余部分已在用的两个关联标头：`X-ATLAS-Request-ID` 与 `X-ATLAS-V3-Invocation-ID`。它们的取值只来自 Lens 中间件为当前请求绑定的身份（每个 ATLAS Python 服务都使用的同一批 ContextVars）；V3 在其打分调用上同时发送二者。没有绑定身份时标头缺席，不完整的一对保持不完整，绑定随请求结束清除，因此并发请求与后台工作无法交换或继承身份。启动与就绪工作（启动自检、一次 `/ready` 重跑）只在 `ATLAS_LENS_STARTUP_REQUEST_ID` 与 `ATLAS_LENS_STARTUP_INVOCATION_ID` 同时设置时携带身份；测试工具导出该对并在其 relay 上注册，普通部署两者皆不设。仅作归因：没有任何打分、选择、授权或完成逻辑读取这些标头，也没有任何候选字节或用户内容进入它们。
 
-**代理的直接 Lens 调用携带自己的调用身份。** 代理在一条模型侧路径上直接与 Lens 通信，逐写打分（`/internal/lens/score-per-step`），它不是一次 V3 候选调用。唯一属主 `proxy/lens_identity.go` 构建这些请求，并把绑定的 `X-ATLAS-Request-ID` 与一个仅由该请求 id 派生的、代理所有的 Lens 调用身份盖在一起：`proxy-lens:` 后跟 `sha256("atlas/proxy-lens-invocation/v1\n" + request_id)` 的前 32 个十六进制位。它是确定性的（relay 可以在任何模型侧流量之前注册该对），同一请求内的每次直接 Lens 调用相同，跨请求且区别于 V3 的 UUID 调用，且只从类型化的请求 id 派生：绝不来自散文、路径、候选字节、工具参数或模型输出，也绝不可由模型设置。它走既有的 `X-ATLAS-V3-Invocation-ID` 通道；标头名是历史遗留，值是通用的模型侧调用身份。它是一个范围标签而非凭证：没有任何东西读取它来授权一次变更、权限、候选或完成，它也从不出现在 SSE 事件、工具结果、提示或日志中。缺席或超出封闭格式（`[A-Za-z0-9._:-]{1,128}`）的请求 id 不派生调用身份。封闭的规范与向量位于 `proxy/testdata/lens_invocation_vectors.json`。
+**代理的直接 Lens 调用携带自己的调用身份。** 代理在一条模型侧路径上直接与 Lens 通信，逐写打分（`/internal/lens/score-per-step`），它不是一次 V3 候选调用。唯一属主 `services/proxy/lens_identity.go` 构建这些请求，并把绑定的 `X-ATLAS-Request-ID` 与一个仅由该请求 id 派生的、代理所有的 Lens 调用身份盖在一起：`proxy-lens:` 后跟 `sha256("atlas/proxy-lens-invocation/v1\n" + request_id)` 的前 32 个十六进制位。它是确定性的（relay 可以在任何模型侧流量之前注册该对），同一请求内的每次直接 Lens 调用相同，跨请求且区别于 V3 的 UUID 调用，且只从类型化的请求 id 派生：绝不来自散文、路径、候选字节、工具参数或模型输出，也绝不可由模型设置。它走既有的 `X-ATLAS-V3-Invocation-ID` 通道；标头名是历史遗留，值是通用的模型侧调用身份。它是一个范围标签而非凭证：没有任何东西读取它来授权一次变更、权限、候选或完成，它也从不出现在 SSE 事件、工具结果、提示或日志中。缺席或超出封闭格式（`[A-Za-z0-9._:-]{1,128}`）的请求 id 不派生调用身份。封闭的规范与向量位于 `services/proxy/testdata/lens_invocation_vectors.json`。
 
 **嵌入容量边界。** llama-server 在单个物理批次（`-ub`，`ATLAS_UBATCH`）中处理一次 `/embedding` 请求，并拒绝更长的输入；Lens 的每次打分都是对整个序列的一次前向。该拒绝是部署的传输限制而非对文本的评判，它与每个分数分开存放：回答以 `scored: false` 连同每个分数字段中的 `null` 与一个类型化的 `failure`（`embed_capacity`，带服务器的 `input_tokens` 与 `capacity_tokens`、`model_server_error`、`model_server_unreachable`、`embedding_contract`、NaN 或无穷值的 `nonfinite_score`、`internal`）。服务路径上不做任何截断或切分，因为切分过的输入不是工件拟合时的那个向量。v3-service 把该失败记在候选上，将其排在每个已打分者之后，只作为最后存留的已验证候选交付；代理对未打分的写入不施加任何阈值。Lens 知道的容量（经 `LLAMA_EMBED_CAPACITY_TOKENS` 声明，或从一次拒绝中观测）报告于 `/health` 与 `/ready`，且当它低于代理的生成上限时，以状态维度中的 `lens_scoring: partial` 呈现。决策记录：[ADR 0010](../../adr/0010-lens-capacity-boundary-is-typed.md)。
 

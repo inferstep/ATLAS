@@ -79,7 +79,7 @@ def test_proxy_startup_banner_matches():
     does not silently drop the check.
     """
     version = _truth()
-    src = go_source("proxy", "ATLAS Proxy v")
+    src = go_source("services/proxy", "ATLAS Proxy v")
     m = re.search(r'"ATLAS Proxy v(\d+\.\d+\.\d+) starting', src)
     assert m, "proxy startup banner must say 'ATLAS Proxy vX.Y.Z starting'"
     assert m.group(1) == version, (

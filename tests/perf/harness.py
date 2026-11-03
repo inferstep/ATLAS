@@ -47,7 +47,7 @@ def _proxy_binary_bytes() -> Optional[int]:
     env = os.environ.get("ATLAS_PROXY_BINARY")
     if env:
         cands.append(Path(env))
-    cands += [REPO / "proxy" / "atlas-proxy-v2", Path("/tmp/test-atlas-proxy")]
+    cands += [REPO / "services" / "proxy" / "atlas-proxy-v2", Path("/tmp/test-atlas-proxy")]
     for cand in cands:
         if cand.is_file():
             return cand.stat().st_size

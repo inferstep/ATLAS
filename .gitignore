@@ -160,7 +160,7 @@ benchmark/results/
 .demo-v3-*/
 
 # ----- Go build artifacts -----
-proxy/atlas-proxy
+services/proxy/atlas-proxy
 tui/atlas-tui
 
 # ----- Geometric Lens large files (on HuggingFace, not in git) -----
@@ -219,6 +219,6 @@ skills-lock.json
 redteam/
 
 # Exploratory fuzz targets (red-team hunt, not shipped test surface).
-proxy/fuzz_redteam_test.go
-proxy/fuzz_redteam2_test.go
-proxy/testdata/fuzz/
+services/proxy/fuzz_redteam_test.go
+services/proxy/fuzz_redteam2_test.go
+services/proxy/testdata/fuzz/

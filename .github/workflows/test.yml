@@ -44,7 +44,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # The module's name labels its checks; dir is the folder it is in.
         module: [proxy, tui]
+        include:
+          - module: proxy
+            dir: services/proxy
+          - module: tui
+            dir: tui
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -82,7 +88,7 @@ jobs:
             ~/.cache/go-build
           # The number after "go-test" starts a new cache when it is raised:
           # a saved cache is never written again under the same key.
-          key: go-test-2-${{ matrix.module }}-${{ runner.os }}-go${{ steps.go.outputs.go-version }}-${{ hashFiles(format('{0}/go.mod', matrix.module), format('{0}/go.sum', matrix.module)) }}
+          key: go-test-2-${{ matrix.module }}-${{ runner.os }}-go${{ steps.go.outputs.go-version }}-${{ hashFiles(format('{0}/go.mod', matrix.dir), format('{0}/go.sum', matrix.dir)) }}
 
       - name: go test -race
         env:
@@ -92,7 +98,7 @@ jobs:
 
       - name: coverage total
         if: ${{ !cancelled() }}
-        working-directory: ${{ matrix.module }}
+        working-directory: ${{ matrix.dir }}
         run: |
           # The last command of a pipe decides the step. pipefail makes a
           # report that cannot be read fail the step.
@@ -237,7 +243,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Build proxy (for binary-size metric)
-        run: cd proxy && go build -o /tmp/test-atlas-proxy .
+        run: cd services/proxy && go build -o /tmp/test-atlas-proxy .
       - name: Measure + gate against budgets
         run: |
           ATLAS_PROXY_BINARY=/tmp/test-atlas-proxy \
@@ -385,7 +391,7 @@ jobs:
             .github/requirements/ci.txt
 
       - name: build proxy
-        run: cd proxy && go build -o /tmp/test-atlas-proxy .
+        run: cd services/proxy && go build -o /tmp/test-atlas-proxy .
 
       - name: install
         run: |
@@ -656,7 +662,7 @@ jobs:
 
       - name: build the proxy and the TUI
         run: |
-          (cd proxy && go build -o "$RUNNER_TEMP/atlas-proxy" .)
+          (cd services/proxy && go build -o "$RUNNER_TEMP/atlas-proxy" .)
           # Go fetches the TUI's modules first, with no cache (none would act in
           # the merge queue). A download that breaks off in its middle is tried
           # once more; a second failure fails the step with Go's own words.

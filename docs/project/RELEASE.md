@@ -99,7 +99,7 @@ python scripts/ci/staging-integration.py --keep   # leave the executor running
 
 The runner starts `sandbox/executor_server.py` on a free port against a
 throwaway workspace, points the proxy at the same directory (the alignment
-production requires), runs `proxy/staging_integration_test.go`, and tears it
+production requires), runs `services/proxy/evidence_staging_integration_test.go`, and tears it
 down. Without `ATLAS_STAGING_SANDBOX_URL` and `ATLAS_STAGING_SANDBOX_WORKSPACE`
 those Go tests skip with a reason naming what to set — they never pass silently.
 
@@ -240,6 +240,18 @@ Publishing is gated by the `production` environment
 the waiting deployment does the pipeline move `:latest` or a version tag.
 `dev` pushes deploy to `dev` and release-candidate tags to `staging`,
 without approval. Each promotion leaves a timestamped deployment record.
+
+**Before the 3.2.0 candidate.** `staging` and `main` still require
+`pytest (tests/v3)` and `pytest (tests/cli)`, the names these test jobs had
+before their folders were renamed on `dev`. A `dev` commit reports
+`pytest (tests/v3-service)` and `pytest (tests/atlas)` instead, so step 2
+would stop: the release step finds no green check under the old names.
+First, in a pull request into `dev`, delete `RELEASE_ONLY_CHECKS` in
+`scripts/setup/rulesets.sh` and move `"pytest (tests/atlas)"` from
+`DEV_ONLY_CHECKS` into `CHECKS`, together with the test that pins those
+lists (`tests/infrastructure/pipeline/test_branch_rules_setup.py`) and the
+two old names under `not_covered` in `.github/canary.json`. Once it is
+merged, the release owner runs `scripts/setup/rulesets.sh`.
 
 1. **Notes.** On `dev`, bump the "Applies to" line at the top of
    [SUPPORT_MATRIX.md](../guides/SUPPORT_MATRIX.md) and write the

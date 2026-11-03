@@ -21,7 +21,7 @@ change one thing without reading everything else.
   change makes one shorter, lower its number in the same pull request.
 - **The proxy's main package gains no file.** Its file count is pinned on the
   baseline (`proxy_main`), so a new subject goes into its own package under
-  `proxy/internal/`. Its line count is printed on every run as a trend. If
+  `services/proxy/internal/`. Its line count is printed on every run as a trend. If
   your change takes a file out, lower the number in the same pull request.
 - **A folder stays short enough to read.** Over 25 entries, files and
   sub-folders together, the check prints a note and passes. Split a folder

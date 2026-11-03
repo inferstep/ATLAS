@@ -29,11 +29,11 @@ def measure(root: Path) -> tuple[dict, list]:
     """Replay every recording with a coverage build. Returns statements by file and the share of each function."""
     binary, data = root / "atlas-proxy-cover", root / "coverage"
     data.mkdir()
-    subprocess.run(["go", "build", "-cover", "-o", str(binary), "."], cwd=stage.REPO / "proxy", check=True)
+    subprocess.run(["go", "build", "-cover", "-o", str(binary), "."], cwd=stage.REPO / "services" / "proxy", check=True)
     for name in recording.names():
         recording.run(recording.load(name), binary, root / name, more_env={"GOCOVERDIR": str(data)})
     profile = root / "profile.txt"
-    subprocess.run(["go", "tool", "covdata", "textfmt", f"-i={data}", f"-o={profile}"], cwd=stage.REPO / "proxy", check=True)
+    subprocess.run(["go", "tool", "covdata", "textfmt", f"-i={data}", f"-o={profile}"], cwd=stage.REPO / "services" / "proxy", check=True)
     by_file = defaultdict(lambda: [0, 0])
     for line in profile.read_text(encoding="utf-8").splitlines():
         block = BLOCK.match(line)
@@ -41,7 +41,7 @@ def measure(root: Path) -> tuple[dict, list]:
             totals = by_file[Path(block["file"]).name]
             totals[0] += int(block["statements"])
             totals[1] += int(block["statements"]) if int(block["count"]) else 0
-    listed = subprocess.run(["go", "tool", "cover", f"-func={profile}"], cwd=stage.REPO / "proxy", capture_output=True,
+    listed = subprocess.run(["go", "tool", "cover", f"-func={profile}"], cwd=stage.REPO / "services" / "proxy", capture_output=True,
                             text=True, check=True).stdout
     functions = [(Path(m["file"]).name, m["name"], float(m["share"])) for m in map(FUNCTION.match, listed.splitlines()) if m]
     return dict(by_file), functions

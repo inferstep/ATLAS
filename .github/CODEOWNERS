@@ -16,7 +16,7 @@
 /docs/project/PUBLISHING.md     @itigges22
 
 # Subsystems
-/proxy/                 @itigges22
+/services/proxy/                 @itigges22
 /tui/                   @itigges22
 /atlas/                 @itigges22
 /v3-service/            @itigges22

@@ -173,11 +173,9 @@ app.add_middleware(_ServiceTokenMiddleware)
 app.add_middleware(_CorrelationIDMiddleware)
 
 from resource_contract import (
-    OUTCOME_CANCELLED, OUTCOME_COMPLETED, OUTCOME_MEMORY_EXHAUSTED,
-    OUTCOME_OUTPUT_LIMIT, OUTCOME_PROCESS_LIMIT, OUTCOME_SPAWN_FAILED,
-    OUTCOME_TIMED_OUT, OUTCOME_UNCLASSIFIED, ResourceContract,
+    OUTCOME_TIMED_OUT, OUTCOME_UNCLASSIFIED,
     contract_from_env, outcome_is_complete, run_bounded, stopped_words, why_it_failed,
-    EXEC_TOKEN_VAR, _apply_child_limits, _kill_token, check_process_supervision)
+    EXEC_TOKEN_VAR, _apply_child_limits, check_process_supervision)
 
 # The parts of the executor that live in modules beside it (sandbox/Dockerfile copies each one).
 from executor_models import (

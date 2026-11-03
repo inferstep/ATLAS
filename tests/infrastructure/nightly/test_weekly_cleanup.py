@@ -89,9 +89,9 @@ for f in sorted(Path(sys.argv[-1]).rglob("*.go")):
 # The fixers that a test runs, unless it is about the whole list: the stand-in is started once for each fixer and module.
 A_FEW = ("any", "forvar", "minmax", "rangeint", "stringscut")
 ON_DEV = {
-    "proxy/main.go": "package main\n// old_any old_rangeint\n",
-    "proxy/tools.go": "package main\n// old_any\n",
-    "proxy/quiet.go": "package main\n",
+    "services/proxy/main.go": "package main\n// old_any old_rangeint\n",
+    "services/proxy/tools.go": "package main\n// old_any\n",
+    "services/proxy/quiet.go": "package main\n",
     "tui/view.go": "package main\n// old_minmax\n",
     "pkg/clean.py": "import os\n\nprint(os.sep)\n",
     "pkg/spaces.py": "import os   \n\nprint(os.sep)  \n",
@@ -204,8 +204,8 @@ def test_each_fixer_that_changes_a_file_gives_a_piece_whose_patch_applies_alone_
     run = made().make()
     assert run.status == 0, run.printed
     assert states(run.result) == {"go/proxy/any": "held", "go/proxy/rangeint": "held", "go/tui/minmax": "held", "python/W291": "offered"}
-    assert applies_alone(run, "go/proxy/any") == ["proxy/main.go", "proxy/tools.go"]
-    assert applies_alone(run, "go/proxy/rangeint") == ["proxy/main.go"]
+    assert applies_alone(run, "go/proxy/any") == ["services/proxy/main.go", "services/proxy/tools.go"]
+    assert applies_alone(run, "go/proxy/rangeint") == ["services/proxy/main.go"]
     assert applies_alone(run, "go/tui/minmax") == ["tui/view.go"]
     assert applies_alone(run, "python/W291") == ["pkg/spaces.py"]
     assert "+// new_any old_rangeint" in run.patch("go/proxy/any")
@@ -218,12 +218,12 @@ def test_each_fixer_that_changes_a_file_gives_a_piece_whose_patch_applies_alone_
 def test_making_the_text_changes_no_file_of_the_checkout_also_not_one_with_work_that_is_not_committed(made):
     run = made()
     # Work of a person in the checkout: a change that is not committed, in a file that a fixer would change, and a new file.
-    (run.repo / "proxy" / "main.go").write_text("package main\n// old_any old_rangeint and a line of mine\n")
+    (run.repo / "services" / "proxy" / "main.go").write_text("package main\n// old_any old_rangeint and a line of mine\n")
     (run.repo / "pkg" / "mine.py").write_text("x = 1   \n")
     before = {path: path.read_bytes() for path in run.repo.rglob("*") if path.is_file() and ".git" not in path.parts}
     run.make()
     assert run.status == 0, run.printed
-    assert git(run.repo, "status", "--porcelain") == " M proxy/main.go\n?? pkg/mine.py\n"
+    assert git(run.repo, "status", "--porcelain") == " M services/proxy/main.go\n?? pkg/mine.py\n"
     # The text is made for the commit: the work that is not committed is not in it.
     assert "a line of mine" not in run.patch("go/proxy/any")
     assert run.piece("python/W291")["changed"] == ["pkg/spaces.py"]
@@ -233,7 +233,7 @@ def test_making_the_text_changes_no_file_of_the_checkout_also_not_one_with_work_
 
 
 def test_for_each_piece_the_files_looked_at_are_the_changed_the_unchanged_and_the_left_out(made):
-    run = made(files={"pkg/unused.py": "import os\nimport sys\n\nprint(os.sep)   \n", "proxy/bad.go": "package main\n// breakvet_any\n"}).make()
+    run = made(files={"pkg/unused.py": "import os\nimport sys\n\nprint(os.sep)   \n", "services/proxy/bad.go": "package main\n// breakvet_any\n"}).make()
     looked_at = {"go/proxy": 4, "go/tui": 1, "python": 3}
     for piece in run.result["pieces"]:
         part = piece["name"].rsplit("/", 1)[0]
@@ -244,7 +244,7 @@ def test_for_each_piece_the_files_looked_at_are_the_changed_the_unchanged_and_th
         unchanged = int(re.search(rf"^\| `{re.escape(piece['name'])}` \| \d+ \| \d+ \| (\d+) \|", run.text, re.MULTILINE).group(1)) \
             if piece["state"] != "nothing to change" else piece["looked_at"]
         assert piece["looked_at"] == len(piece["changed"]) + unchanged + len(piece["left_out"]), piece["name"]
-    assert run.piece("go/proxy/any")["left_out"] == {name: "the piece fails a check" for name in ("proxy/bad.go", "proxy/main.go", "proxy/tools.go")}
+    assert run.piece("go/proxy/any")["left_out"] == {name: "the piece fails a check" for name in ("services/proxy/bad.go", "services/proxy/main.go", "services/proxy/tools.go")}
     assert run.piece("python/F401")["left_out"] == {"pkg/unused.py": "the syntax tree is not the same after the fix"}
     assert "| `go/proxy/rangeint` | 4 | 1 | 3 | 0 | +1 -1 | gofmt: passed, build: passed, vet: passed, tests: passed | held |" in run.text
     assert "| `python/W291` | 3 | 2 | 1 | 0 | +3 -3 | tree and comments: read in each file | offered |" in run.text
@@ -282,7 +282,11 @@ def test_the_lists_of_fixers_do_not_overlap_and_the_three_that_never_run_have_th
     assert set(cleanup.GO_NOT_RUN) == {"omitzero", "hostport", "buildtag"}
     assert len(set(cleanup.GO_FIXERS)) == len(cleanup.GO_FIXERS) == 19
     assert cleanup.PYTHON_RULES == ("W291", "W292", "W293", "W391", "F401")
-    assert cleanup.MODULES == tuple(sorted(path.parent.name for path in ROOT.glob("*/go.mod")))
+    # Every Go module of the repository is a piece of the cleanup, wherever its folder is.
+    modules = sorted(str(path.parent.relative_to(ROOT)) for path in ROOT.glob("**/go.mod")
+                     if not {"testdata", "node_modules", ".venv", "vendor"} & set(path.parts))
+    assert sorted(cleanup.FOLDERS.values()) == modules
+    assert tuple(cleanup.FOLDERS) == cleanup.MODULES
 
 
 # --- the checks of a Go piece --------------------------------------------------------------------------------------
@@ -322,24 +326,24 @@ def test_a_fixer_that_fails_on_its_own_result_or_does_not_come_to_an_end_is_left
     pytest.param("breakvet", "vet", {"gofmt": "passed", "build": "passed", "vet": "failed"}, id="vet fails"),
 ])
 def test_a_piece_that_fails_a_check_is_left_out_with_what_the_tool_said_and_the_others_are_not(made, mark, check, checks):
-    run = made(files={"proxy/tools.go": f"package main\n// old_any old_stringscut {mark}_stringscut\n"}).make()
+    run = made(files={"services/proxy/tools.go": f"package main\n// old_any old_stringscut {mark}_stringscut\n"}).make()
     assert run.status == 0, run.printed
     piece = run.piece("go/proxy/stringscut")
     assert piece["state"] == "left out"
     assert piece["checks"] == checks
-    assert piece["left_out"] == {"proxy/tools.go": "the piece fails a check"}
+    assert piece["left_out"] == {"services/proxy/tools.go": "the piece fails a check"}
     assert check in piece["said"][0]
     assert "tools.go" in "\n".join(piece["said"])
     assert not (run.out / "pieces" / "go-proxy-stringscut.patch").exists()
     assert states(run.result)["go/proxy/any"] == "held"
     assert run.piece("go/proxy/any")["checks"]["tests"] == "passed"
-    assert "go/proxy/stringscut:\n  proxy/tools.go: the piece fails a check\n  | " in run.text
+    assert "go/proxy/stringscut:\n  services/proxy/tools.go: the piece fails a check\n  | " in run.text
     # The tests of each module ran once, with the pieces that passed: new_stringscut is not in them.
     assert run.tested() == [{"in": "proxy", "holds": ["new_any", "new_rangeint"]}, {"in": "tui", "holds": ["new_minmax"]}]
 
 
 def test_a_file_that_gofmt_named_before_is_no_fault_of_a_piece(made):
-    run = made(files={"proxy/quiet.go": "package main\n// UNFORMATTED on dev as it is\n"}).make()
+    run = made(files={"services/proxy/quiet.go": "package main\n// UNFORMATTED on dev as it is\n"}).make()
     assert run.piece("go/proxy/any")["checks"]["gofmt"] == "passed"
     assert states(run.result)["go/proxy/any"] == "held"
 
@@ -361,7 +365,7 @@ def test_the_text_is_made_from_a_checkout_of_one_commit_with_no_branch_as_a_job_
 
 
 def test_when_the_tests_fail_with_the_pieces_together_none_of_the_module_is_offered_and_the_other_module_is(made):
-    run = made(files={"proxy/tools.go": "package main\n// old_any breaktest_forvar\n"}).make()
+    run = made(files={"services/proxy/tools.go": "package main\n// old_any breaktest_forvar\n"}).make()
     assert run.status == 0, run.printed
     for name in ("go/proxy/any", "go/proxy/rangeint", "go/proxy/forvar"):
         piece = run.piece(name)
@@ -389,7 +393,7 @@ def test_the_tests_of_a_module_run_with_the_flags_of_the_go_test_jobs(made, monk
 
 
 def test_of_a_test_run_that_failed_twice_the_text_names_the_failed_test_and_files_of_the_run_hold_the_whole_output(made):
-    run = made(files={"proxy/tools.go": "package main\n// old_any breaktest_forvar\n"}).make()
+    run = made(files={"services/proxy/tools.go": "package main\n// old_any breaktest_forvar\n"}).make()
     assert run.status == 0, run.printed
     later = "2026/10/08 08:52:48 [info] a line that a later test logged"
     assert run.piece("go/proxy/any")["said"] == [
@@ -413,7 +417,7 @@ def test_of_a_test_run_that_failed_twice_the_text_names_the_failed_test_and_file
 
 
 def test_with_one_piece_the_text_does_not_send_the_reader_to_the_one_piece_command(made):
-    run = made(files={"proxy/tools.go": "package main\n// old_any breaktest_any\n"}).make("--piece", "go/proxy/any")
+    run = made(files={"services/proxy/tools.go": "package main\n// old_any breaktest_any\n"}).make("--piece", "go/proxy/any")
     assert run.status == 0, run.printed
     said = run.piece("go/proxy/any")["said"]
     assert said[0] == "`go test` failed twice, with the same tests both times, and passed on the files as they are:"
@@ -425,7 +429,7 @@ def test_with_one_piece_the_text_does_not_send_the_reader_to_the_one_piece_comma
     pytest.param("othertest_forvar", "The first run failed: TestMarks0\nThe second run failed: TestMarks1\n", id="failed twice with other tests"),
 ])
 def test_tests_that_do_not_fail_the_same_way_twice_with_the_pieces_are_not_judged_and_no_piece_is_called_at_fault(made, mark, runs):
-    run = made(files={"proxy/tools.go": f"package main\n// old_any {mark}\n"}).make()
+    run = made(files={"services/proxy/tools.go": f"package main\n// old_any {mark}\n"}).make()
     assert run.status == 2
     assert ("weekly cleanup: not judged: the tests of `proxy` did not give the same result twice with the pieces of the module "
             "together. They pass on the files as they are.") in run.printed
@@ -486,9 +490,9 @@ def test_a_module_with_nothing_to_change_gets_no_test_run(made):
 
 
 @pytest.mark.parametrize("files, says", [
-    pytest.param({"proxy/quiet.go": "package main\n// NOTEST\n"}, "the tests of proxy on the files as they are: status 1.", id="tests fail"),
-    pytest.param({"proxy/quiet.go": "package main\n// NOVET\n"}, "go vet on proxy as it is: status 1.", id="vet fails"),
-    pytest.param({"proxy/quiet.go": "package main\n// NOFIX\n"}, "`go fix -any` on `proxy` as it is: status 1.", id="a fixer fails"),
+    pytest.param({"services/proxy/quiet.go": "package main\n// NOTEST\n"}, "the tests of proxy on the files as they are: status 1.", id="tests fail"),
+    pytest.param({"services/proxy/quiet.go": "package main\n// NOVET\n"}, "go vet on proxy as it is: status 1.", id="vet fails"),
+    pytest.param({"services/proxy/quiet.go": "package main\n// NOFIX\n"}, "`go fix -any` on `proxy` as it is: status 1.", id="a fixer fails"),
 ])
 def test_a_tool_that_fails_on_the_files_as_they_are_is_not_judged_and_no_text_is_made(made, files, says):
     run = made(files=files).make()
@@ -591,7 +595,7 @@ def test_with_the_hold_taken_off_the_list_the_go_pieces_are_offered(made, monkey
 
 
 def test_with_no_held_piece_that_changes_a_file_the_text_does_not_speak_of_a_hold(made):
-    run = made(files={"proxy/main.go": "package main\n", "proxy/tools.go": "package main\n", "tui/view.go": "package main\n"}).make()
+    run = made(files={"services/proxy/main.go": "package main\n", "services/proxy/tools.go": "package main\n", "tui/view.go": "package main\n"}).make()
     assert states(run.result) == {"python/W291": "offered"}
     assert "Held by a maintainer" not in run.text
 
@@ -606,7 +610,7 @@ def test_one_piece_is_made_alone_and_its_tests_run_with_that_piece_alone(made):
     assert {call["args"][1] for call in run.calls("fix")} == {"-rangeint"}
     assert {call["in"] for call in run.calls("fix")} == {"proxy"}
     assert run.tested() == [{"in": "proxy", "holds": ["new_rangeint"]}]
-    assert applies_alone(run, "go/proxy/rangeint") == ["proxy/main.go"]
+    assert applies_alone(run, "go/proxy/rangeint") == ["services/proxy/main.go"]
     assert sorted(path.name for path in (run.out / "pieces").iterdir()) == ["go-proxy-rangeint.patch"]
 
 
@@ -681,7 +685,7 @@ def test_in_a_job_the_text_names_the_runs_of_the_workflow_and_only_at_githubs_us
 
 
 def test_a_week_with_nothing_to_clean_says_so_with_the_date(made):
-    quiet = {"proxy/main.go": "package main\n", "proxy/tools.go": "package main\n", "tui/view.go": "package main\n", "pkg/spaces.py": "x = 1\n"}
+    quiet = {"services/proxy/main.go": "package main\n", "services/proxy/tools.go": "package main\n", "tui/view.go": "package main\n", "pkg/spaces.py": "x = 1\n"}
     run = made(files=quiet).make()
     assert run.status == 0, run.printed
     assert run.result["anything"] is False
@@ -701,7 +705,7 @@ def test_nothing_from_a_file_or_a_tool_can_be_read_as_a_mention_or_a_link_to_an_
     monkeypatch.setattr(cleanup, "HELD", {})
     files = {"pkg/a file @someone #1.py": "x = 1   \n", "pkg/unused @other #2.py": "import os\n",
              "pkg/text.py": "x = '''\n## A heading @here   \nCloses #5\n``````\n'''   \n",
-             "proxy/tools.go": "package main\n// old_any breakvet_stringscut @inthecode #7\n"}
+             "services/proxy/tools.go": "package main\n// old_any breakvet_stringscut @inthecode #7\n"}
     run = made(files=files).make()
     assert run.status == 0, run.printed
     # They are all in the text: the file names, the line of the tool, the lines of the patches.

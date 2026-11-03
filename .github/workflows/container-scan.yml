@@ -164,11 +164,25 @@ jobs:
           set -euo pipefail
           REF="ghcr.io/inferstep/${{ matrix.image }}:dev"
           echo "Verifying cosign signature on $REF"
-          cosign verify \
-            --certificate-identity-regexp \
-              "https://github.com/inferstep/ATLAS/.github/workflows/build-images.yml@.*" \
-            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-            "$REF" > /dev/null
+          # cosign fetches Sigstore's trusted root on each run, and a dropped
+          # connection to that service fails the check with "trusted root is
+          # required", which says nothing about the signature. Only that error
+          # is tried again; any other failure of the check fails the job.
+          for attempt in 1 2 3; do
+            if cosign verify \
+              --certificate-identity-regexp \
+                "https://github.com/inferstep/ATLAS/.github/workflows/build-images.yml@.*" \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              "$REF" > /dev/null 2> "$RUNNER_TEMP/cosign.err"; then
+              break
+            fi
+            if ! grep -q "trusted root is required" "$RUNNER_TEMP/cosign.err" || [ "$attempt" = 3 ]; then
+              cat "$RUNNER_TEMP/cosign.err" >&2
+              exit 1
+            fi
+            echo "::warning::Sigstore's trusted root could not be fetched (attempt $attempt of 3); trying again in 20 seconds"
+            sleep 20
+          done
           echo "Checking BuildKit attestations on $REF"
           SBOM=$(docker buildx imagetools inspect "$REF" --format '{{ json .SBOM }}')
           if [ -z "$SBOM" ] || [ "$SBOM" = "null" ] || [ "$SBOM" = "{}" ]; then

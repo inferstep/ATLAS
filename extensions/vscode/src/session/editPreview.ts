@@ -1,7 +1,7 @@
 // Client-side prediction of what a file-writing tool call will do, computed
 // at permission time from the CURRENT local file. Needed because the diff has
 // to be shown BEFORE the user allows the call — and for structural_edit even the
-// result carries no new content (proxy/internal/wire/tool_io.go StructuralEditOutput is ok/selector/
+// result carries no new content (services/proxy/internal/wire/tool_io.go StructuralEditOutput is ok/selector/
 // language/byte counts only), so the post-state can only be predicted here.
 //
 // Accuracy contract per tool:
@@ -227,7 +227,7 @@ function predictEditFile(
 		return { path, kind: 'file', left: current, right: current.split(oldStr).join(newStr), approximate: false };
 	}
 	// Without replace_all the proxy requires a UNIQUE match and rejects the
-	// call otherwise (proxy/tool_edit.go uniqueness check) — a first-occurrence
+	// call otherwise (services/proxy/tool_edit.go uniqueness check) — a first-occurrence
 	// splice labeled exact would show a diff that can never apply.
 	const count = current.split(oldStr).length - 1;
 	if (count > 1) {
@@ -275,7 +275,7 @@ function predictStructuralEdit(path: string, current: string | undefined, select
 		if (tag[1].toLowerCase() === 'html') {
 			// Mirror the proxy's <html>-selector quirk: the element replace
 			// does not cover a preceding <!DOCTYPE>, so the proxy strips a
-			// leading doctype from the content (proxy/tool_structural_edit.go).
+			// leading doctype from the content (services/proxy/tool_structural_edit.go).
 			body = stripLeadingDoctype(body);
 		}
 		const spliced = spliceHtmlElement(current, tag[1], body);

@@ -30,7 +30,7 @@ fi
 def test_a_download_of_the_tuis_modules_that_breaks_off_is_tried_once_more(tmp_path, breaks, ends, calls):
     workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "test.yml").read_text(encoding="utf-8"))
     step = next(step["run"] for step in workflow["jobs"]["proxy-tui-tests"]["steps"] if step.get("name") == "build the proxy and the TUI")
-    for folder in ("checkout/proxy", "checkout/tui", "bin", "temp"):
+    for folder in ("checkout/services/proxy", "checkout/tui", "bin", "temp"):
         (tmp_path / folder).mkdir(parents=True)
     (tmp_path / "bin" / "go").write_text(GO, encoding="utf-8")
     (tmp_path / "bin" / "go").chmod(0o755)

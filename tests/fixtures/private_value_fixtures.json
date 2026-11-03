@@ -1,5 +1,5 @@
 {
-  "_comment": "Synthetic filtering fixtures. Every value is obviously fake and exists only to prove the private-value filter masks it before serialization. The Go filter (proxy/internal/logsafe/filter.go) and the Python filters (three byte-identical copies, see tests/contracts/test_private_value_filtering.py) must all pass this corpus.",
+  "_comment": "Synthetic filtering fixtures. Every value is obviously fake and exists only to prove the private-value filter masks it before serialization. The Go filter (services/proxy/internal/logsafe/filter.go) and the Python filters (three byte-identical copies, see tests/contracts/test_private_value_filtering.py) must all pass this corpus.",
   "placeholder": "[FILTERED]",
   "cases": [
     {

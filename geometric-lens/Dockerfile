@@ -1,6 +1,12 @@
 # python:3.11-slim — digest-pinned for reproducible builds (Dependabot maintains)
-FROM docker.io/python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce
+FROM docker.io/python:3.11-slim@sha256:db20d8506e2f15b6db39b40b6015ca46bae855dec6dd326d462cfe79ae972893
 WORKDIR /app
+
+# The week of the commit, which build-images.yml passes for a push to dev and
+# for a PR build (a release build passes none). A commit of a new week runs
+# the package installs below again, so they take the distribution's fixes
+# between base bumps; within a week they come from the cache.
+ARG PACKAGE_REFRESH
 
 # Install curl for healthcheck
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*

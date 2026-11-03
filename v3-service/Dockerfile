@@ -4,8 +4,14 @@
 # code the sandbox then executes, so it has to use that interpreter's grammar.
 # On 3.11 it rejected valid 3.12+ code (PEP 701 f"{d["k"]}", PEP 695 type
 # parameters) that the sandbox runs fine.
-FROM docker.io/python:3.13-slim@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f
+FROM docker.io/python:3.13-slim@sha256:ae14d4ce8771606477a81446e7ef429edd6762305fc50c84507c1041fa8285d1
 WORKDIR /app
+
+# The week of the commit, which build-images.yml passes for a push to dev and
+# for a PR build (a release build passes none). A commit of a new week runs
+# the package installs below again, so they take the distribution's fixes
+# between base bumps; within a week they come from the cache.
+ARG PACKAGE_REFRESH
 
 # Install system deps
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
