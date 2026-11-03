@@ -19,7 +19,7 @@ top of the pinned revision — both against MIT-licensed code.
 Charm stack — `bubbletea`, `bubbles`, `lipgloss`, `glamour`, `x/*`,
 `colorprofile` (MIT); `chroma` (MIT); `atotto/clipboard` (BSD-3);
 `go-osc52` (MIT); `douceur` (MIT). Full pinned list: `tui/go.mod` /
-`tui/go.sum`. The proxy (`proxy/go.mod`) is stdlib-only.
+`tui/go.sum`. The proxy (`services/proxy/go.mod`) is stdlib-only.
 
 ## Python dependencies (service images)
 

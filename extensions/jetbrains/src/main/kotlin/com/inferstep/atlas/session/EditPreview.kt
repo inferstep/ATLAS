@@ -1,7 +1,7 @@
 // Client-side prediction of what a file-writing tool call will do, computed at
 // permission time from the CURRENT local file. Needed because the diff has to
 // be shown BEFORE the user allows the call — and for structural_edit even the
-// result carries no new content (proxy/internal/wire/tool_io.go StructuralEditOutput is
+// result carries no new content (services/proxy/internal/wire/tool_io.go StructuralEditOutput is
 // ok/selector/language/byte counts only), so the post-state can only be
 // predicted here.
 //
@@ -247,7 +247,7 @@ private fun predictEditFile(
         )
     }
     // Without replace_all the proxy requires a UNIQUE match and rejects the
-    // call otherwise (proxy/tool_edit.go uniqueness check) — a first-occurrence
+    // call otherwise (services/proxy/tool_edit.go uniqueness check) — a first-occurrence
     // splice labelled exact would show a diff that can never apply.
     val count = current.split(oldStr).size - 1
     val firstOccurrence =
@@ -314,7 +314,7 @@ private fun predictStructuralEdit(
         if (tag.groupValues[1].lowercase() == "html") {
             // Mirror the proxy's <html>-selector quirk: the element replace
             // does not cover a preceding <!DOCTYPE>, so the proxy strips a
-            // leading doctype from the content (proxy/tool_structural_edit.go).
+            // leading doctype from the content (services/proxy/tool_structural_edit.go).
             body = stripLeadingDoctype(body)
         }
         val spliced = spliceHtmlElement(current, tag.groupValues[1], body)

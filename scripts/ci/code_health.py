@@ -9,7 +9,7 @@ old from getting worse while it is refactored.
 
 The proxy's main package may not gain a file: its file count is pinned in
 the baseline as well, so a new subject goes into its own package under
-proxy/internal/ instead of the flat folder. Its line count is printed on
+services/proxy/internal/ instead of the flat folder. Its line count is printed on
 every run, as a trend, and never fails.
 
 It also names the folders with more than FOLDER_SOFT_MAX entries. That is a
@@ -45,11 +45,11 @@ FOLDER_SOFT_MAX = 25
 # GitHub reads workflows from this folder only, and never from a sub-folder.
 FLAT_BY_NECESSITY = {".github/workflows"}
 
-GO_DIRS = ("proxy", "tui")
+GO_DIRS = ("services/proxy", "tui")
 PY_DIRS = ("atlas", "v3-service", "geometric-lens", "sandbox", "scripts")
 SKIP_DIRS = {"tests", "test", "node_modules", ".venv", "__pycache__", "vendor"}
 # The Go package that may only shrink: the files directly in this folder.
-MAIN_PACKAGE = "proxy"
+MAIN_PACKAGE = "services/proxy"
 GO_FUNC = re.compile(r"^func (?:\(\w+ \*?(\w+)(?:\[[^\]]*\])?\) )?(\w+)")
 
 

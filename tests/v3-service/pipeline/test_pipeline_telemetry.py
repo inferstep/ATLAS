@@ -751,11 +751,11 @@ def test_no_new_field_reaches_any_public_surface():
     for module in ("contract.py", "adapters.py"):
         text = (v3dir / module).read_text()
         assert "incumbent" not in text, module
-    proxy = PROJECT_ROOT / "proxy"
+    proxy = PROJECT_ROOT / "services" / "proxy"
     wire_files = list((proxy / "internal" / "wire").glob("*.go"))
-    assert wire_files, "proxy/internal/wire holds no Go file"
+    assert wire_files, "services/proxy/internal/wire holds no Go file"
     contract_files = list((proxy / "internal" / "taskcontract").glob("*.go"))
-    assert contract_files, "proxy/internal/taskcontract holds no Go file"
-    go = "".join(path.read_text() for path in [proxy / "types.go", *wire_files, *contract_files])
+    assert contract_files, "services/proxy/internal/taskcontract holds no Go file"
+    go = "".join(path.read_text() for path in [proxy / "loop_state.go", *wire_files, *contract_files])
     for leaked in ("incumbent", "Incumbent", "shadow_comparison"):
         assert leaked not in go, leaked

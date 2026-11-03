@@ -63,13 +63,13 @@ GIT_ENV = {"GIT_AUTHOR_NAME": "a test", "GIT_AUTHOR_EMAIL": "test@example.invali
 # The repository as `dev` has it, in the parts that the run reads.
 ON_DEV = {
     "docker-compose.yml": "services: {}\n", "docker-compose.vulkan.yml": "services: {}\n", "docker-compose.cpu.yml": "services: {}\n",
-    ".dockerignore": "proxy/\n",
+    ".dockerignore": "services/proxy/\n",
     "scripts/eval/e2e-reliability.py": "# the driver of dev\n", "scripts/code_quality.py": "# of dev\n",
     "scripts/eval/reliability_report.py": "# of dev\n", "scripts/eval/reliability_stream.py": "# of dev\n",
     "scripts/eval/reliability_detectors.py": "# of dev\n", "scripts/eval/reliability_records.py": "# of dev\n",
     "scripts/eval/reliability_sandbox.py": "# of dev\n",
     "scripts/smoke_result.py": "# the mark script of dev\n",
-    "proxy/Dockerfile": "FROM scratch\n# the proxy of dev\n", "proxy/prompt.go": "package main\n",
+    "services/proxy/Dockerfile": "FROM scratch\n# the proxy of dev\n", "services/proxy/prompt.go": "package main\n",
     "v3-service/Dockerfile": "FROM scratch\n# v3 of dev\n", "v3-service/main.py": "# of dev\n",
     "geometric-lens/Dockerfile": "FROM scratch\n# the lens of dev\n", "geometric-lens/main.py": "# of dev\n",
     "geometric-lens/geometric_lens/models/gx_weights.json": "{}\n",
@@ -195,7 +195,7 @@ def repository(tmp_path):
 # --- a commit that the run takes ----------------------------------------------------------------------------------
 
 def test_a_commit_of_a_branch_runs_its_three_sessions_on_its_own_image_and_gives_the_one_line(tmp_path, repository):
-    commit = repository.on_a_branch({"proxy/prompt.go": "package main // a new text\n"})
+    commit = repository.on_a_branch({"services/proxy/prompt.go": "package main // a new text\n"})
     run = OneCommit(tmp_path, repository).run(commit)
     assert run.done.returncode == 0, run.done.stdout + run.done.stderr
     # No tests: the run is the three sessions and nothing else. The image is removed after the stack is stopped.
@@ -222,7 +222,7 @@ def test_a_commit_of_a_branch_runs_its_three_sessions_on_its_own_image_and_gives
 
 
 def test_the_stack_runs_the_image_that_was_built_and_the_driver_is_told_the_commit(tmp_path, repository):
-    commit = repository.on_a_branch({"proxy/prompt.go": "package main // a new text\n"})
+    commit = repository.on_a_branch({"services/proxy/prompt.go": "package main // a new text\n"})
     run = OneCommit(tmp_path, repository).run(commit)
     (up,) = [call["args"] for call in run.calls() if call["tool"] == "docker" and "up" in call["args"]]
     files = [up[n + 1] for n, word in enumerate(up) if word == "-f"]
@@ -240,7 +240,7 @@ def test_the_stack_runs_the_image_that_was_built_and_the_driver_is_told_the_comm
 
 
 def test_the_image_is_built_from_the_commits_files_and_the_tree_of_the_run_stays_at_the_head_of_dev(tmp_path, repository):
-    commit = repository.on_a_branch({"proxy/Dockerfile": "FROM scratch\n# the proxy of the commit\n", "proxy/new.go": "package main\n"})
+    commit = repository.on_a_branch({"services/proxy/Dockerfile": "FROM scratch\n# the proxy of the commit\n", "services/proxy/new.go": "package main\n"})
     run = OneCommit(tmp_path, repository).run(commit)
     (built,) = run.built()
     assert built["dockerfile"] == "FROM scratch\n# the proxy of the commit\n"
@@ -248,12 +248,12 @@ def test_the_image_is_built_from_the_commits_files_and_the_tree_of_the_run_stays
     tree = run.dir / "tree"
     assert git(tree, "rev-parse", "HEAD") == repository.head
     assert git(tree, "status", "--porcelain") == ""
-    assert (tree / "proxy" / "Dockerfile").read_text() == ON_DEV["proxy/Dockerfile"]
-    assert not (tree / "proxy" / "new.go").exists()
+    assert (tree / "services" / "proxy" / "Dockerfile").read_text() == ON_DEV["services/proxy/Dockerfile"]
+    assert not (tree / "services" / "proxy" / "new.go").exists()
 
 
 @pytest.mark.parametrize("service, changed, context, holds", [
-    pytest.param("atlas-proxy", "proxy/prompt.go", "proxy", ["Dockerfile", "prompt.go"], id="proxy"),
+    pytest.param("atlas-proxy", "services/proxy/prompt.go", "services/proxy", ["Dockerfile", "prompt.go"], id="proxy"),
     pytest.param("geometric-lens", "geometric-lens/main.py", "geometric-lens", ["Dockerfile", "geometric_lens", "main.py"],
                  id="lens"),
     pytest.param("sandbox", "sandbox/executor_server.py", "sandbox", ["Dockerfile", "executor_server.py"], id="sandbox"),
@@ -281,7 +281,7 @@ def test_each_service_is_built_from_its_own_folder_and_only_the_others_are_pulle
 
 
 def test_a_commit_that_changes_two_services_gets_both_built_and_both_removed(tmp_path, repository):
-    commit = repository.on_a_branch({"proxy/prompt.go": "a change\n", "sandbox/executor_server.py": "a change\n"})
+    commit = repository.on_a_branch({"services/proxy/prompt.go": "a change\n", "sandbox/executor_server.py": "a change\n"})
     run = OneCommit(tmp_path, repository).run(commit)
     assert run.report["changed_services"] == ["sandbox", "atlas-proxy"]
     assert run.did() == START + ["pull the model server", "pull the lens", "pull v3-service", "build the sandbox",
@@ -294,7 +294,7 @@ def test_a_commit_that_changes_two_services_gets_both_built_and_both_removed(tmp
 
 
 def test_a_build_is_given_the_room_of_the_whole_image_and_does_not_start_without_it(tmp_path, repository):
-    commit = repository.on_a_branch({"proxy/prompt.go": "a change\n"})
+    commit = repository.on_a_branch({"services/proxy/prompt.go": "a change\n"})
     # The registry's image is larger than any disk, and an image here has its one layer. So a pull needs no room.
     # A build is given the room of the whole image: for a build no layer counts as here.
     layer = "sha256:" + "1" * 64
@@ -358,7 +358,7 @@ def not_pushed(run, commit):
 
 def test_a_commit_of_a_pull_request_from_outside_is_not_run_though_a_fetch_by_its_id_works(tmp_path, repository):
     # The head of a pull request from outside is under refs/pull/ of the repository, and on no branch of it.
-    outside = repository.commit({"proxy/Dockerfile": "FROM scratch\nRUN anything\n"}, "refs/pull/7/head")
+    outside = repository.commit({"services/proxy/Dockerfile": "FROM scratch\nRUN anything\n"}, "refs/pull/7/head")
     git(repository.bare, "config", "uploadpack.allowAnySHA1InWant", "true")
     run = OneCommit(tmp_path, repository)
     git(run.dir / "tree", "fetch", "--quiet", "origin", outside)
@@ -371,7 +371,7 @@ def test_a_commit_of_a_pull_request_from_outside_is_not_run_though_a_fetch_by_it
     pytest.param("refs/heads/dependabot/go_modules/proxy/x", id="the-tip-of-a-branch-of-another-name"),
 ])
 def test_after_a_maintainer_pushed_a_commit_under_the_name_smoke_it_is_run(tmp_path, repository, first_name):
-    commit = repository.commit({"proxy/prompt.go": "a change\n"}, first_name)
+    commit = repository.commit({"services/proxy/prompt.go": "a change\n"}, first_name)
     git(repository.work, "push", "--quiet", "origin", f"{commit}:refs/heads/smoke/read-and-pushed")
     run = OneCommit(tmp_path, repository).run(commit)
     assert run.report["result"] == "passed", run.report["result"]
@@ -390,13 +390,13 @@ def test_a_commit_that_the_repository_does_not_have_is_not_run(tmp_path, reposit
     "smokey/a-change", "fix/smoke/a-change", "smoke", "smoke-a-change",
 ])
 def test_the_tip_of_a_branch_of_another_name_is_not_run(tmp_path, repository, branch):
-    commit = repository.on_a_branch({"proxy/go.mod": "module a-change\n"}, name=branch)
+    commit = repository.on_a_branch({"services/proxy/go.mod": "module a-change\n"}, name=branch)
     not_pushed(OneCommit(tmp_path, repository).run(commit), commit)
 
 
 def test_one_push_stands_for_one_commit_a_commit_further_down_the_branch_is_not_run(tmp_path, repository):
-    first = repository.on_a_branch({"proxy/prompt.go": "a change\n"})
-    tip = repository.commit({"proxy/prompt.go": "a change, and one more\n"}, "refs/heads/smoke/a-change", on=first)
+    first = repository.on_a_branch({"services/proxy/prompt.go": "a change\n"})
+    tip = repository.commit({"services/proxy/prompt.go": "a change, and one more\n"}, "refs/heads/smoke/a-change", on=first)
     assert git(repository.bare, "rev-list", "--count", f"{first}..{tip}") == "1"
     assert git(repository.bare, "rev-parse", "refs/heads/smoke/a-change") == tip
     not_pushed(OneCommit(tmp_path, repository).run(first), first)
@@ -405,7 +405,7 @@ def test_one_push_stands_for_one_commit_a_commit_further_down_the_branch_is_not_
 
 
 def test_a_commit_that_two_smoke_branches_have_as_their_tip_is_run_and_both_are_named(tmp_path, repository):
-    commit = repository.on_a_branch({"proxy/prompt.go": "a change\n"})
+    commit = repository.on_a_branch({"services/proxy/prompt.go": "a change\n"})
     git(repository.work, "push", "--quiet", "origin", f"{commit}:refs/heads/smoke/a-second-name")
     run = OneCommit(tmp_path, repository).run(commit)
     assert run.report["pushed_as"] == ["smoke/a-change", "smoke/a-second-name"]
@@ -414,7 +414,7 @@ def test_a_commit_that_two_smoke_branches_have_as_their_tip_is_run_and_both_are_
 
 
 def test_a_smoke_branch_that_is_gone_no_longer_counts(tmp_path, repository):
-    commit = repository.on_a_branch({"proxy/prompt.go": "a change\n"}, name="smoke/gone-soon")
+    commit = repository.on_a_branch({"services/proxy/prompt.go": "a change\n"}, name="smoke/gone-soon")
     run = OneCommit(tmp_path, repository)
     # An earlier run fetched the branch under the run's own names. Then the branch was deleted.
     git(run.dir / "tree", "fetch", "--quiet", "origin", "+refs/heads/smoke/*:refs/nightly/smoke/*")
@@ -424,7 +424,7 @@ def test_a_smoke_branch_that_is_gone_no_longer_counts(tmp_path, repository):
 
 
 def test_a_name_of_the_tree_that_is_no_smoke_branch_of_the_repository_does_not_count(tmp_path, repository):
-    outside = repository.commit({"proxy/prompt.go": "a change\n"}, "refs/pull/7/head")
+    outside = repository.commit({"services/proxy/prompt.go": "a change\n"}, "refs/pull/7/head")
     run = OneCommit(tmp_path, repository)
     tree = run.dir / "tree"
     git(tree, "fetch", "--quiet", "origin", "refs/pull/7/head:refs/heads/smoke/a-local-branch")
@@ -471,7 +471,7 @@ def test_no_workflow_starts_when_a_smoke_branch_is_pushed():
     pytest.param({"push": {"branches": ["main"], "tags": ["v*"]}}, False, id="push-to-main-and-of-tags"),
     pytest.param({"push": {"branches-ignore": ["smoke/**"]}}, False, id="push-that-leaves-out-smoke"),
     pytest.param({"push": None}, True, id="push-to-every-branch"),
-    pytest.param({"push": {"paths": ["proxy/**"]}}, True, id="push-with-paths-only"),
+    pytest.param({"push": {"paths": ["services/proxy/**"]}}, True, id="push-with-paths-only"),
     pytest.param({"push": {"branches": ["**"]}}, True, id="push-to-branches-double-star"),
     pytest.param({"push": {"branches": ["smoke/*"]}}, True, id="push-to-smoke-star"),
     pytest.param({"push": {"branches": ["s*/**"]}}, True, id="push-to-s-star-double-star"),
@@ -489,7 +489,7 @@ def test_the_reading_of_a_workflows_start_finds_each_way_that_a_push_starts_it(o
 
 
 def test_a_commit_that_does_not_stand_on_the_head_of_dev_is_not_run_until_its_branch_is_updated(tmp_path, repository):
-    behind = repository.on_a_branch({"proxy/prompt.go": "a change\n"})
+    behind = repository.on_a_branch({"services/proxy/prompt.go": "a change\n"})
     repository.head = repository.commit({"docs/API.md": "dev went on\n"}, "refs/heads/dev")
     run = OneCommit(tmp_path, repository)
     not_run(run.run(behind), f"the commit {behind[:12]} does not stand on the head of `dev` ({repository.head[:12]}).")
@@ -537,7 +537,7 @@ CHANGES = [(name, what, "of the commit\n") for name, what in TAKEN_FROM_DEV] + [
                          ids=[f"{name} {'removed' if text is None else 'changed'}" for name, _what, text in CHANGES])
 def test_a_commit_that_changes_what_the_run_takes_from_dev_is_not_run_and_the_file_is_named(tmp_path, repository, name, what, text):
     # The commit also changes a service: without the refusal the run would build and start it.
-    commit = repository.on_a_branch({name: text, "proxy/prompt.go": "a change\n"})
+    commit = repository.on_a_branch({name: text, "services/proxy/prompt.go": "a change\n"})
     run = OneCommit(tmp_path, repository).run(commit)
     not_run(run, f"the commit changes `{name}`: {what}. The run takes that from `dev`, so it would run the copy of `dev` under "
                  "the name of the commit.")
@@ -573,10 +573,10 @@ def test_the_result_names_the_first_such_file_and_counts_the_others(tmp_path, re
 
 
 @pytest.mark.parametrize("name, path, lies_in_it", [
-    pytest.param("proxy/prompt.go", "proxy/", True, id="a-file-in-the-folder"),
-    pytest.param("proxy/a/b.go", "proxy/", True, id="a-file-deeper-in-the-folder"),
-    pytest.param("proxy2/prompt.go", "proxy/", False, id="a-folder-whose-name-starts-the-same"),
-    pytest.param("docs/proxy/prompt.go", "proxy/", False, id="a-folder-of-the-same-name-elsewhere"),
+    pytest.param("services/proxy/prompt.go", "services/proxy/", True, id="a-file-in-the-folder"),
+    pytest.param("services/proxy/a/b.go", "services/proxy/", True, id="a-file-deeper-in-the-folder"),
+    pytest.param("proxy2/prompt.go", "services/proxy/", False, id="a-folder-whose-name-starts-the-same"),
+    pytest.param("docs/proxy/prompt.go", "services/proxy/", False, id="a-folder-of-the-same-name-elsewhere"),
     pytest.param("docker-compose.yml", "docker-compose.yml", True, id="the-file-itself"),
     pytest.param("docker-compose.yml.orig", "docker-compose.yml", False, id="a-file-whose-name-starts-the-same"),
     pytest.param("scripts/nightly_run.py/x", "scripts/nightly_run.py", False, id="a-file-is-no-folder"),
@@ -611,7 +611,7 @@ def test_an_image_of_the_run_has_a_name_of_this_machine_with_the_time_and_the_co
 
 
 def test_no_call_of_the_run_names_an_image_of_its_own_under_the_registry_or_removes_another_image(tmp_path, repository):
-    commit = repository.on_a_branch({"proxy/prompt.go": "a change\n", "v3-service/main.py": "a change\n"})
+    commit = repository.on_a_branch({"services/proxy/prompt.go": "a change\n", "v3-service/main.py": "a change\n"})
     run = OneCommit(tmp_path, repository).run(commit)
     own = {run.name_of("atlas-proxy"), run.name_of("v3-service")}
     docker = [call["args"] for call in run.calls() if call["tool"] == "docker"]
@@ -646,7 +646,7 @@ def test_no_call_of_the_run_names_an_image_of_its_own_under_the_registry_or_remo
                  "failed: the time limit of 0.05 minutes was reached, in the step: the smoke run", True, True, id="the-time-limit"),
 ])
 def test_whatever_ends_the_run_the_images_that_it_built_are_removed(tmp_path, repository, plan, more, says, proxy_built, stack):
-    commit = repository.on_a_branch({"sandbox/executor_server.py": "a change\n", "proxy/prompt.go": "a change\n"})
+    commit = repository.on_a_branch({"sandbox/executor_server.py": "a change\n", "services/proxy/prompt.go": "a change\n"})
     run = OneCommit(tmp_path, repository, **plan).run(commit, *more)
     assert run.report["result"].startswith(says), run.report["result"]
     sandbox, proxy = run.name_of("sandbox"), run.name_of("atlas-proxy")
@@ -661,7 +661,7 @@ def test_when_another_run_holds_the_card_the_built_images_are_removed_and_no_sta
     run = OneCommit(tmp_path, repository)
     with open(run.lock, "a") as held:
         fcntl.flock(held, fcntl.LOCK_EX)
-        run.run(repository.on_a_branch({"proxy/prompt.go": "a change\n"}))
+        run.run(repository.on_a_branch({"services/proxy/prompt.go": "a change\n"}))
     assert run.done.returncode == 0
     assert run.report["result"] == "not run: the card was in use"
     assert run.report["built_removed"] == {run.name_of("atlas-proxy"): "yes"}
@@ -670,7 +670,7 @@ def test_when_another_run_holds_the_card_the_built_images_are_removed_and_no_sta
 
 def test_a_run_that_is_told_to_stop_stops_its_stack_and_removes_its_images(tmp_path, repository):
     run = OneCommit(tmp_path, repository, sleep={base.DRIVER: 30})
-    run.commit = repository.on_a_branch({"proxy/prompt.go": "a change\n"})
+    run.commit = repository.on_a_branch({"services/proxy/prompt.go": "a change\n"})
     process = subprocess.Popen(run.command("--commit", run.commit), env=run.env(), stdout=subprocess.PIPE,
                                stderr=subprocess.STDOUT, text=True)
     run.wait_for("driver")
@@ -685,7 +685,7 @@ def test_a_run_that_is_told_to_stop_stops_its_stack_and_removes_its_images(tmp_p
 def test_each_build_has_a_time_limit_of_its_own(tmp_path, repository):
     run = OneCommit(tmp_path, repository, sleep={"build --tag": 40})
     start = time.monotonic()
-    run.run(repository.on_a_branch({"proxy/prompt.go": "a change\n"}), "--build-seconds", "2")
+    run.run(repository.on_a_branch({"services/proxy/prompt.go": "a change\n"}), "--build-seconds", "2")
     assert time.monotonic() - start < 30, "the build went on after its limit"
     assert run.done.returncode == 1
     assert run.report["result"] == "failed: the build of atlas-proxy from the commit: no end after 2 s"
@@ -694,12 +694,12 @@ def test_each_build_has_a_time_limit_of_its_own(tmp_path, repository):
 
 
 def test_an_image_that_cannot_be_removed_is_named_in_the_report(tmp_path, repository):
-    run = OneCommit(tmp_path, repository, fail=["image rm"]).run(repository.on_a_branch({"proxy/prompt.go": "a change\n"}))
+    run = OneCommit(tmp_path, repository, fail=["image rm"]).run(repository.on_a_branch({"services/proxy/prompt.go": "a change\n"}))
     assert run.report["built_removed"] == {run.name_of("atlas-proxy"): "no: status 1: a planted failure of: image rm"}
 
 
 def test_with_an_image_of_dev_that_was_not_built_from_the_head_the_commit_is_not_run_and_nothing_is_built(tmp_path, repository):
-    commit = repository.on_a_branch({"proxy/prompt.go": "a change\n"})
+    commit = repository.on_a_branch({"services/proxy/prompt.go": "a change\n"})
     run = OneCommit(tmp_path, repository, built_from={"atlas-v3": base.OLD}).run(commit)
     assert run.done.returncode == 0
     assert run.report["result"] == ("not run: the images are not of the head of the branch yet "
@@ -710,7 +710,7 @@ def test_with_an_image_of_dev_that_was_not_built_from_the_head_the_commit_is_not
 
 
 def test_the_image_of_dev_for_a_service_that_the_commit_builds_is_not_asked_for(tmp_path, repository):
-    commit = repository.on_a_branch({"proxy/prompt.go": "a change\n"})
+    commit = repository.on_a_branch({"services/proxy/prompt.go": "a change\n"})
     run = OneCommit(tmp_path, repository, built_from={"atlas-proxy": base.OLD}).run(commit)
     assert run.report["result"] == "passed"
     assert "pull the proxy" not in run.did()
@@ -719,7 +719,7 @@ def test_the_image_of_dev_for_a_service_that_the_commit_builds_is_not_asked_for(
 # --- the mark, the line, the report ---------------------------------------------------------------------------------
 
 def test_the_marks_are_made_by_the_copy_of_the_script_that_dev_has_before_anything_is_pulled_or_built(tmp_path, repository):
-    commit = repository.on_a_branch({"proxy/prompt.go": "a change\n"})
+    commit = repository.on_a_branch({"services/proxy/prompt.go": "a change\n"})
     run = OneCommit(tmp_path, repository).run(commit)
     calls = [call["args"] for call in run.calls() if call["args"][0] == "scripts/smoke_result.py"]
     assert calls == [["scripts/smoke_result.py", "--mark", commit], ["scripts/smoke_result.py", "--mark", repository.head]]
@@ -757,7 +757,7 @@ def test_with_another_mark_than_dev_and_a_proxy_that_is_devs_the_commit_is_not_r
 
 
 def test_with_another_mark_than_dev_and_a_proxy_built_from_the_commit_the_line_names_the_commits_text(tmp_path, repository):
-    commit = repository.on_a_branch({"tests/replay/recordings/one.json": '{"again": true}\n', "proxy/prompt.go": "a new text\n"})
+    commit = repository.on_a_branch({"tests/replay/recordings/one.json": '{"again": true}\n', "services/proxy/prompt.go": "a new text\n"})
     run = OneCommit(tmp_path, repository, marks={repository.head: OF_DEV}).run(commit)
     assert run.report["result"] == "passed", run.report["result"]
     assert run.report["mark_of_dev"] == OF_DEV
@@ -771,7 +771,7 @@ def test_with_another_mark_than_dev_and_a_proxy_built_from_the_commit_the_line_n
                  id="the-mark-script-prints-no-mark"),
 ])
 def test_without_a_mark_the_run_fails_before_it_pulls_builds_or_starts_anything(tmp_path, repository, plan, says):
-    run = OneCommit(tmp_path, repository, **plan).run(repository.on_a_branch({"proxy/prompt.go": "a change\n"}))
+    run = OneCommit(tmp_path, repository, **plan).run(repository.on_a_branch({"services/proxy/prompt.go": "a change\n"}))
     assert run.done.returncode == 1, run.report["result"]
     assert run.report["result"].startswith(says), run.report["result"]
     assert run.did() == ["mark"]
@@ -781,7 +781,7 @@ def test_without_a_mark_the_run_fails_before_it_pulls_builds_or_starts_anything(
 def test_with_no_full_path_of_the_lens_files_the_run_fails_before_it_pulls_or_builds(tmp_path, repository):
     run = OneCommit(tmp_path, repository)
     (run.dir / "nightly.env").write_text("ATLAS_MODEL_FILE=model.gguf\nATLAS_MODEL_NAME=model\n")
-    run.run(repository.on_a_branch({"proxy/prompt.go": "a change\n"}))
+    run.run(repository.on_a_branch({"services/proxy/prompt.go": "a change\n"}))
     assert run.done.returncode == 1, run.report["result"]
     assert run.report["step"] == "read the settings of the server"
     assert run.report["result"].startswith("failed: the run's settings name no folder of lens files as a full path")
@@ -819,7 +819,7 @@ def test_the_line_is_given_for_a_run_whose_sessions_ran_and_is_the_line_that_the
 
 
 def test_a_run_with_a_harness_defect_fails_and_its_line_says_how_many_sessions_had_none(tmp_path, repository):
-    commit = repository.on_a_branch({"proxy/prompt.go": "a change\n"})
+    commit = repository.on_a_branch({"services/proxy/prompt.go": "a change\n"})
     run = OneCommit(tmp_path, repository, driver_rows=base.rows(0, 2, 0)).run(commit)
     assert run.done.returncode == 1
     assert run.report["result"] == "failed: offbyone: 2 defect(s) of the harness"
@@ -827,7 +827,7 @@ def test_a_run_with_a_harness_defect_fails_and_its_line_says_how_many_sessions_h
 
 
 def test_the_run_for_a_commit_writes_only_inside_its_own_folder(tmp_path, repository):
-    commit = repository.on_a_branch({"proxy/prompt.go": "a change\n"})
+    commit = repository.on_a_branch({"services/proxy/prompt.go": "a change\n"})
     run = OneCommit(tmp_path, repository)
 
     def outside():
@@ -846,7 +846,7 @@ def test_when_taking_the_head_changes_the_script_the_copy_of_dev_does_the_run_fo
     # `dev` goes on and changes the script; the commit stands on that new head and does not change the script.
     repository.head = repository.commit({"scripts/nightly_run.py": SCRIPT.read_text() + "\n# the copy of dev, one commit later\n"}, "refs/heads/dev")
     (tmp_path / "plan.json").write_text(json.dumps({**run.plan, "head": repository.head}))
-    commit = repository.on_a_branch({"proxy/prompt.go": "a change\n"})
+    commit = repository.on_a_branch({"services/proxy/prompt.go": "a change\n"})
     run.run(commit)
     assert run.done.returncode == 0, run.done.stdout + run.done.stderr
     assert run.report["script"] == "the new copy: taking the head changed the script"

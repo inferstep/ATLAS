@@ -28,7 +28,7 @@ REQUIREMENTS_FILES = [
 
 # Production Dockerfiles scanned for inline `pip install <pkg>`.
 DOCKERFILES = [
-    "proxy/Dockerfile",
+    "services/proxy/Dockerfile",
     "v3-service/Dockerfile",
     "geometric-lens/Dockerfile",
     "sandbox/Dockerfile",
@@ -142,7 +142,7 @@ def test_production_bases_are_digest_pinned():
 def test_proxy_apk_packages_are_pinned():
     """The proxy's alpine packages support `=version` pinning; enforce it
     (the two runtime packages, curl + bash)."""
-    text = (REPO / "proxy" / "Dockerfile").read_text().replace("\\\n", " ")
+    text = (REPO / "services" / "proxy" / "Dockerfile").read_text().replace("\\\n", " ")
     m = re.search(r"apk add[^\n]*", text)
     assert m, "proxy Dockerfile no longer uses apk add — update this test"
     for tok in m.group(0).split():

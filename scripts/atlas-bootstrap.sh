@@ -903,7 +903,7 @@ ensure_repo_and_env() {
     log_step "Step 4: Repo, .env, and ATLAS CLI"
 
     # If we're not in a checkout, clone to ATLAS_INSTALL_DIR
-    if [[ ! -f "./docker-compose.yml" || ! -d "./proxy" ]]; then
+    if [[ ! -f "./docker-compose.yml" || ! -d "./services/proxy" ]]; then
         local install_dir="${ATLAS_INSTALL_DIR:-/opt/atlas}"
         local repo_url="${ATLAS_REPO_URL:-https://github.com/inferstep/ATLAS.git}"
 
@@ -1271,7 +1271,7 @@ install_atlas_cli() {
 }
 
 install_go() {
-    # The TUI is a Go binary. proxy/go.mod requires 1.24+, tui/go.mod
+    # The TUI is a Go binary. services/proxy/go.mod requires 1.24+, tui/go.mod
     # requires 1.26+. With Go 1.21+ auto-toolchain (default), installing
     # any 1.24+ is enough — Go transparently downloads the newer
     # toolchain when building tui. We pick 1.24 as the install target

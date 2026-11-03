@@ -164,3 +164,15 @@ def test_align_workspace_recreates_only_when_a_bind_misses_the_cwd(
     runtime._align_workspace("/atlas")
 
     assert recreates == ([os.path.realpath(cwd)] if recreated else [])
+
+
+# The CLI knows the checkout it runs from by the proxy's source. A path that is
+# no longer there gives "", and the CLI then runs whatever proxy binary is
+# installed instead of rebuilding it from the checkout, so it has to fail here.
+def test_the_cli_finds_the_checkout_it_runs_from(monkeypatch, tmp_path):
+    checkout = os.path.dirname(os.path.dirname(os.path.abspath(runtime.__file__)))
+    monkeypatch.chdir(tmp_path)
+    assert runtime._find_atlas_dir() == checkout, "not from the folder the CLI is installed in"
+    monkeypatch.setattr(runtime, "__file__", str(tmp_path / "atlas" / "runtime.py"))
+    monkeypatch.chdir(checkout)
+    assert runtime._find_atlas_dir() == checkout, "not from the folder the CLI runs in"

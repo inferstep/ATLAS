@@ -4,7 +4,7 @@
 
 import type { DoneEventData } from '../client/types';
 
-/** The terminal statuses the proxy sends (proxy/internal/wire/messages.go, TerminalStatus). */
+/** The terminal statuses the proxy sends (services/proxy/internal/wire/messages.go, TerminalStatus). */
 const KNOWN_STATUSES = new Set(['completed', 'incomplete', 'stopped', 'timed_out', 'failed']);
 
 export interface DoneOutcome {

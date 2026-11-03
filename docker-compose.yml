@@ -169,7 +169,7 @@ services:
       #
       # The readiness question IS gated, in the right place: the proxy asks
       # whether the lens can score before every request and refuses it, with
-      # the reason, when it cannot (proxy/lens_required.go; ADR 0011). Its
+      # the reason, when it cannot (services/proxy/lens_required.go; ADR 0011). Its
       # /ready reports the same answer. The stack stays up, so `atlas doctor`
       # and `atlas lens build` can still run.
       test: ["CMD", "curl", "-sf", "http://localhost:8099/health"]
@@ -426,7 +426,7 @@ services:
     # extra 40s is headroom between the process finishing and Docker killing it.
     stop_grace_period: 650s
     build:
-      context: ./proxy
+      context: ./services/proxy
     # Run as the invoking user (same rationale as the sandbox's
     # ATLAS_SANDBOX_UID): the proxy writes to the /workspace host bind mount
     # (write_file/edit_file targets). The image's baked-in non-root user

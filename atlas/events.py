@@ -49,7 +49,7 @@ Legacy shape
 
 v3-service's own SSE endpoints (`/v3/generate`, `/v3/plan`) emit the
 legacy `{"stage": ..., "detail": ...}` shape (consumed by the Go proxy
-client, proxy/internal/v3client/client.go — not by this module).
+client, services/proxy/internal/v3client/client.go — not by this module).
 `parse_envelope` raises `LegacyEventError` on that shape so callers fall
 back explicitly rather than silently mis-parsing.
 """
@@ -68,7 +68,7 @@ from typing import Any, Dict, Optional
 # ---------------------------------------------------------------------------
 
 # Terminal outcomes carried by a `done` payload's optional `status` key. The
-# proxy owns the vocabulary (proxy/internal/wire/); this is the consumer half.
+# proxy owns the vocabulary (services/proxy/internal/wire/); this is the consumer half.
 TERMINAL_STATUSES = (
     "completed",
     "incomplete",

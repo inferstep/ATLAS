@@ -120,10 +120,10 @@
       "reports": [
         "golangci-lint (proxy)"
       ],
-      "what": "a failing test, with a function that nothing calls, in proxy/canary_test.go",
+      "what": "a failing test, with a function that nothing calls, in services/proxy/canary_test.go",
       "shows": "canary: this test fails on purpose",
       "action": "write",
-      "path": "proxy/canary_test.go",
+      "path": "services/proxy/canary_test.go",
       "lines": [
         "package main",
         "",
@@ -295,9 +295,9 @@
       "reports": [
         "hadolint (dockerfiles)"
       ],
-      "what": "a `RUN cd` line at the end of proxy/Dockerfile",
+      "what": "a `RUN cd` line at the end of services/proxy/Dockerfile",
       "action": "append",
-      "path": "proxy/Dockerfile",
+      "path": "services/proxy/Dockerfile",
       "lines": [
         "# Planted by scripts/canary.py for the canary pull request. Never merge it.",
         "RUN cd /tmp"
@@ -356,10 +356,10 @@
       "red": [
         "replay (proxy)"
       ],
-      "what": "one changed word in a text of proxy/llm_call.go that the model reads",
+      "what": "one changed word in a text of services/proxy/model_call.go that the model reads",
       "shows": "canaryreference",
       "action": "replace_line",
-      "path": "proxy/llm_call.go",
+      "path": "services/proxy/model_call.go",
       "starts_with": "\tsb.WriteString(\" (line numbers are for reference",
       "lines": [
         "\tsb.WriteString(\" (line numbers are for canaryreference and are NOT in the file):\\n\")"

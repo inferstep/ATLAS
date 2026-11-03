@@ -93,9 +93,9 @@ def repo(tmp_path):
     root = tmp_path / "repo"
     root.mkdir()
     git(root, "init", "-q")
-    base = commit(root, {"proxy/calc.py": FAULTY, "proxy/tests/test_calc.py": OLD_TEST,
-                         "proxy/go.mod": "module p\n", "proxy/calc.go": "package p\n",
-                         "proxy/go_answers.json": json.dumps({"TestAdds": "fail", "TestOldCode": "fail"})}, "base")
+    base = commit(root, {"services/proxy/calc.py": FAULTY, "services/proxy/tests/test_calc.py": OLD_TEST,
+                         "services/proxy/go.mod": "module p\n", "services/proxy/calc.go": "package p\n",
+                         "services/proxy/go_answers.json": json.dumps({"TestAdds": "fail", "TestOldCode": "fail"})}, "base")
 
     def with_fix(files):
         commit(root, files, "fix")
@@ -129,7 +129,7 @@ def verdicts(fix, root, base, tools):
     return {test.name: name for test, name, _ in rows}, rows, notes, product
 
 
-GO_FIXED = {"proxy/calc.go": "package p\n\nfunc newHelper() int { return 5 }\n", "proxy/go_answers.json": "{}"}
+GO_FIXED = {"services/proxy/calc.go": "package p\n\nfunc newHelper() int { return 5 }\n", "services/proxy/go_answers.json": "{}"}
 
 
 def go_test(name, body):
@@ -137,62 +137,62 @@ def go_test(name, body):
 
 
 @pytest.mark.parametrize("fix_files, test_name, its_class, reason", [
-    pytest.param({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": new_test(
+    pytest.param({"services/proxy/calc.py": FIXED, "services/proxy/tests/test_calc.py": new_test(
                   "def test_add_adds():\n    assert calc.add(2, 3) == 5\n")},
                  "test_add_adds", "fails on the base", "it guards the fix: an assertion, raised in the test: assert",
                  id="fails by an assertion on the base"),
-    pytest.param({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": new_test(
+    pytest.param({"services/proxy/calc.py": FIXED, "services/proxy/tests/test_calc.py": new_test(
                   "def test_add_gives_a_number():\n    assert isinstance(calc.add(2, 3), int)\n")},
                  "test_add_gives_a_number", "passes on the base too", "it does not guard the fix",
                  id="passes on the base too"),
-    pytest.param({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": new_test(
+    pytest.param({"services/proxy/calc.py": FIXED, "services/proxy/tests/test_calc.py": new_test(
                   "def test_double_doubles():\n    assert calc.double(4) == 8\n")},
                  "test_double_doubles", "needs the fix's code",
                  "on the base the test cannot run as written: AttributeError", id="calls a function only the fix adds"),
-    pytest.param({"proxy/calc.py": FIXED, "proxy/tests/test_double.py":
+    pytest.param({"services/proxy/calc.py": FIXED, "services/proxy/tests/test_double.py":
                   PATH_LINE + "from calc import double\n\n\ndef test_double_doubles():\n    assert double(4) == 8\n"},
                  "test_double_doubles", "needs the fix's code", "on the base the test cannot run as written",
                  id="a new test file that does not import on the base"),
-    pytest.param({"proxy/calc.py": "def add(a, b, round_to=None):\n    return a + b\n",
-                  "proxy/tests/test_calc.py": new_test(
+    pytest.param({"services/proxy/calc.py": "def add(a, b, round_to=None):\n    return a + b\n",
+                  "services/proxy/tests/test_calc.py": new_test(
                       "def test_add_takes_a_rounding():\n    assert calc.add(2, 3, round_to=0) == 5\n")},
                  "test_add_takes_a_rounding", "needs the fix's code",
                  "on the base the test cannot run as written: TypeError: add() got an unexpected keyword argument "
                  "'round_to'", id="a call that does not fit the base's function"),
-    pytest.param({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": new_test(
+    pytest.param({"services/proxy/calc.py": FIXED, "services/proxy/tests/test_calc.py": new_test(
                   "def test_add_is_wrong():\n    assert calc.add(2, 3) == 6\n")},
                  "test_add_is_wrong", "not judged here",
                  "it fails on the base and with the fix: an assertion, raised in the test: assert 5 == 6",
                  id="fails with the fix too"),
-    pytest.param({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": new_test(
+    pytest.param({"services/proxy/calc.py": FIXED, "services/proxy/tests/test_calc.py": new_test(
                   "def test_add_still_subtracts():\n    assert calc.add(5, 3) == 2\n")},
                  "test_add_still_subtracts", "fails with the fix", "an assertion, raised in the test: assert 8 == 2",
                  id="passes on the base and fails with the fix"),
-    pytest.param({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": "import pytest\n" + new_test(
+    pytest.param({"services/proxy/calc.py": FIXED, "services/proxy/tests/test_calc.py": "import pytest\n" + new_test(
                   "@pytest.mark.parametrize('pair', [(2, 3), (4, 1)], "
                   "ids=['two and three - small', 'four [and] one'])\n"
                   "def test_add_adds(pair):\n    assert calc.add(*pair) == sum(pair)\n")},
                  "test_add_adds", "fails on the base", "it guards the fix: an assertion, raised in the test: assert",
                  id="a parametrized test is one test whatever its cases are called"),
-    pytest.param({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": new_test(
+    pytest.param({"services/proxy/calc.py": FIXED, "services/proxy/tests/test_calc.py": new_test(
                   "def test_add_adds_from_another_folder(tmp_path, monkeypatch):\n    monkeypatch.chdir(tmp_path)\n"
                   "    assert calc.add(2, 3) == 5\n")},
                  "test_add_adds_from_another_folder", "fails on the base",
                  "it guards the fix: an assertion, raised in the test: assert",
                  id="changes its folder and still fails in the test"),
-    pytest.param({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": "import pytest\n" + new_test(
+    pytest.param({"services/proxy/calc.py": FIXED, "services/proxy/tests/test_calc.py": "import pytest\n" + new_test(
                   "@pytest.mark.skip(reason='needs a terminal')\n"
                   "def test_add_adds():\n    assert calc.add(2, 3) == 5\n")},
                  "test_add_adds", "not judged here", "skipped (needs a terminal)", id="skipped"),
-    pytest.param({**GO_FIXED, "proxy/calc_test.go": go_test("TestAdds", "if add(2, 3) != 5 { t.Fatal() }")},
+    pytest.param({**GO_FIXED, "services/proxy/calc_test.go": go_test("TestAdds", "if add(2, 3) != 5 { t.Fatal() }")},
                  "TestAdds", "fails on the base", "it guards the fix: an assertion, raised in the test: want 5, got -1",
                  id="a Go test that fails on the base"),
-    pytest.param({**GO_FIXED, "proxy/new_test.go": go_test("TestUsesNewCode", "if newHelper() != 5 { t.Fatal() }")},
+    pytest.param({**GO_FIXED, "services/proxy/new_test.go": go_test("TestUsesNewCode", "if newHelper() != 5 { t.Fatal() }")},
                  "TestUsesNewCode", "needs the fix's code",
                  "on the base the test cannot run as written: ./x_test.go:6:5: undefined: newHelper",
                  id="a Go test that does not build on the base"),
-    pytest.param({**GO_FIXED, "proxy/go_answers.json": json.dumps({"TestAdds": "skip"}),
-                  "proxy/calc_test.go": go_test("TestAdds", "t.Skip()")},
+    pytest.param({**GO_FIXED, "services/proxy/go_answers.json": json.dumps({"TestAdds": "skip"}),
+                  "services/proxy/calc_test.go": go_test("TestAdds", "t.Skip()")},
                  "TestAdds", "not judged here", "skipped (needs a terminal)", id="a skipped Go test"),
 ])
 def test_a_test_of_the_fix_gets_its_class_and_the_reason(fix, repo, tools, fix_files, test_name, its_class, reason):
@@ -203,7 +203,7 @@ def test_a_test_of_the_fix_gets_its_class_and_the_reason(fix, repo, tools, fix_f
 
 
 def test_only_the_tests_the_change_touches_are_run_and_each_gets_its_own_class(fix, repo, tools):
-    root, base = repo({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": new_test(
+    root, base = repo({"services/proxy/calc.py": FIXED, "services/proxy/tests/test_calc.py": new_test(
         "def test_add_adds():\n    assert calc.add(2, 3) == 5\n\n\n"
         "def test_add_gives_a_number():\n    assert isinstance(calc.add(2, 3), int)\n\n\n"
         "def test_double_doubles():\n    assert calc.double(4) == 8\n")})
@@ -214,7 +214,7 @@ def test_only_the_tests_the_change_touches_are_run_and_each_gets_its_own_class(f
 
 def test_a_test_the_fix_only_changes_is_told_apart_from_a_test_it_adds(fix, repo, tools):
     changed = OLD_TEST.replace("assert calc.add(0, 0) == 0", "assert calc.add(0, 0) == 0  # zero stays zero")
-    root, base = repo({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": changed + "\n\n"
+    root, base = repo({"services/proxy/calc.py": FIXED, "services/proxy/tests/test_calc.py": changed + "\n\n"
                        "def test_add_gives_a_number():\n    assert isinstance(calc.add(2, 3), int)\n"})
     rows, _, _ = fix.judge(root, base, tools, 120)
     assert {(test.name, test.new, name) for test, name, _ in rows} == {
@@ -225,18 +225,18 @@ def test_a_test_the_fix_only_changes_is_told_apart_from_a_test_it_adds(fix, repo
 
 
 @pytest.mark.parametrize("faulty, fixed, said", [
-    pytest.param({"proxy/limits.py": "LIMITS = {}\n\n\ndef limit(name):\n    return LIMITS[name]\n"},
-                 {"proxy/limits.py": "LIMITS = {}\n\n\ndef limit(name):\n    return LIMITS.get(name, 0)\n",
-                  "proxy/tests/test_limits.py": PATH_LINE + "import limits\n\n\n"
+    pytest.param({"services/proxy/limits.py": "LIMITS = {}\n\n\ndef limit(name):\n    return LIMITS[name]\n"},
+                 {"services/proxy/limits.py": "LIMITS = {}\n\n\ndef limit(name):\n    return LIMITS.get(name, 0)\n",
+                  "services/proxy/tests/test_limits.py": PATH_LINE + "import limits\n\n\n"
                   "def test_an_unknown_name_has_no_limit():\n    assert limits.limit('x') == 0\n"},
-                 "an error (KeyError), raised in product code (proxy/limits.py)", id="raised in product code"),
-    pytest.param({"proxy/keep.py": "import shutil\n\n\ndef keep(src, dst):\n    shutil.copyfile(src, dst)\n"},
-                 {"proxy/keep.py": "import os\nimport shutil\n\n\ndef keep(src, dst):\n    if os.path.exists(src):\n"
+                 "an error (KeyError), raised in product code (services/proxy/limits.py)", id="raised in product code"),
+    pytest.param({"services/proxy/keep.py": "import shutil\n\n\ndef keep(src, dst):\n    shutil.copyfile(src, dst)\n"},
+                 {"services/proxy/keep.py": "import os\nimport shutil\n\n\ndef keep(src, dst):\n    if os.path.exists(src):\n"
                                    "        shutil.copyfile(src, dst)\n",
-                  "proxy/tests/test_keep.py": PATH_LINE + "import keep\n\n\n"
+                  "services/proxy/tests/test_keep.py": PATH_LINE + "import keep\n\n\n"
                   "def test_a_file_that_is_not_there_is_left_out(tmp_path):\n"
                   "    keep.keep(str(tmp_path / 'none'), str(tmp_path / 'copy'))\n"},
-                 "an error (FileNotFoundError), raised in the standard library (shutil.py), called from proxy/keep.py",
+                 "an error (FileNotFoundError), raised in the standard library (shutil.py), called from services/proxy/keep.py",
                  id="raised in the standard library"),
 ])
 def test_an_error_the_fault_itself_raises_is_a_failure_on_the_base_with_its_kind_and_place(fix, repo, tools, faulty,
@@ -250,8 +250,8 @@ def test_an_error_the_fault_itself_raises_is_a_failure_on_the_base_with_its_kind
 
 
 @pytest.mark.parametrize("frames, said", [
-    pytest.param(["proxy/tests/test_limits.py"], "in the test", id="a test file"),
-    pytest.param(["proxy/tests/test_limits.py", "proxy/limits.py"], "in product code (proxy/limits.py)",
+    pytest.param(["services/proxy/tests/test_limits.py"], "in the test", id="a test file"),
+    pytest.param(["services/proxy/tests/test_limits.py", "services/proxy/limits.py"], "in product code (services/proxy/limits.py)",
                  id="product code"),
     pytest.param(["tests/e2e/test_driver.py", "scripts/driver.py", "/usr/local/lib/python3.12/dataclasses.py"],
                  "in the standard library (dataclasses.py), called from scripts/driver.py",
@@ -259,8 +259,8 @@ def test_an_error_the_fault_itself_raises_is_a_failure_on_the_base_with_its_kind
     pytest.param(["tests/e2e/test_driver.py", "/usr/lib/python3.12/shutil.py"],
                  "in the standard library (shutil.py), called from the test",
                  id="the standard library, called from the test"),
-    pytest.param(["tests/test_x.py", "proxy/calc.py", "/home/u/.local/lib/python3.12/site-packages/yaml/scanner.py"],
-                 "in an installed package (scanner.py), called from proxy/calc.py",
+    pytest.param(["tests/test_x.py", "services/proxy/calc.py", "/home/u/.local/lib/python3.12/site-packages/yaml/scanner.py"],
+                 "in an installed package (scanner.py), called from services/proxy/calc.py",
                  id="an installed package, called from product code"),
     pytest.param(["/usr/lib/python3/dist-packages/_pytest/python.py"], "in an installed package (python.py)",
                  id="an installed package alone"),
@@ -273,10 +273,10 @@ def test_a_file_of_the_tree_that_pytest_names_by_its_whole_path_is_still_a_file_
     tree = tmp_path / "tree"
     (tree / "tests").mkdir(parents=True)
     output = (f"_________ test_a _________\n{tree}/tests/test_x.py:9: in test_a\n    assert f() == 1\n"
-              f"_________ test_b _________\n{tree}/tests/test_x.py:14: in test_b\n    g()\n{tree}/proxy/calc.py:3: in g\n"
+              f"_________ test_b _________\n{tree}/tests/test_x.py:14: in test_b\n    g()\n{tree}/services/proxy/calc.py:3: in g\n"
               f"_________ test_c _________\ntests/test_x.py:20: in test_c\n    h()\n/usr/lib/python3.12/shutil.py:5: in h\n")
     assert fix.raised_where(output, lambda path: "/tests/" in f"/{path}", tree) == {
-        "test_a": "in the test", "test_b": "in product code (proxy/calc.py)",
+        "test_a": "in the test", "test_b": "in product code (services/proxy/calc.py)",
         "test_c": "in the standard library (shutil.py), called from the test"}
     assert fix.from_the_root(str(tree) + "-other/tests/test_x.py", tree) == str(tree) + "-other/tests/test_x.py"
 
@@ -295,7 +295,7 @@ def test_a_test_that_asks_the_product_in_a_new_process_gets_the_tree_that_is_tes
         "    assert prod.answer() == 42\n")
     root, _ = repo({"prod/__init__.py": "def answer():\n    return 41\n"})
     base = git(root, "rev-parse", "HEAD")
-    commit(root, {"prod/__init__.py": "def answer():\n    return 42\n", "proxy/tests/test_prod.py": in_a_new_process}, "fix")
+    commit(root, {"prod/__init__.py": "def answer():\n    return 42\n", "services/proxy/tests/test_prod.py": in_a_new_process}, "fix")
     monkeypatch.setenv("PYTHONPATH", str(root))
     found, rows, _, _ = verdicts(fix, root, base, tools)
     assert found == {"test_the_product_answers_in_a_new_process_in_another_folder": "fails on the base",
@@ -347,7 +347,7 @@ def test_a_file_that_was_never_there_is_read():
 
 
 def test_a_test_that_stops_on_a_file_the_fix_adds_needs_the_fixs_code(fix, repo, tools):
-    root, base = repo({"proxy/calc.py": FIXED, "scripts/tool.py": "def answer():\n    return 42\n",
+    root, base = repo({"services/proxy/calc.py": FIXED, "scripts/tool.py": "def answer():\n    return 42\n",
                        "tests/test_tool.py": LOADS_A_SCRIPT})
     found, rows, _, _ = verdicts(fix, root, base, tools)
     assert found["test_the_tool_answers"] == "needs the fix's code"
@@ -385,7 +385,7 @@ def test_a_failure_is_missing_only_for_a_name_or_a_file_that_the_fix_brings(fix,
 
 
 def test_a_fix_with_no_new_or_changed_test_has_nothing_to_run(fix, repo, tools):
-    root, base = repo({"proxy/calc.py": FIXED})
+    root, base = repo({"services/proxy/calc.py": FIXED})
     rows, notes, product = fix.judge(root, base, tools, 120)
     assert (rows, notes, product) == ([], [], "code")
     assert fix.summary(rows, notes, product) == [
@@ -393,11 +393,11 @@ def test_a_fix_with_no_new_or_changed_test_has_nothing_to_run(fix, repo, tools):
 
 
 @pytest.mark.parametrize("files, kind", [
-    pytest.param({"proxy/Dockerfile": "FROM scratch\n", "inference/Dockerfile.v31": "FROM scratch\n"}, "folder",
+    pytest.param({"services/proxy/Dockerfile": "FROM scratch\n", "inference/Dockerfile.v31": "FROM scratch\n"}, "folder",
                  id="only build files of product folders"),
-    pytest.param({"proxy/Dockerfile": "FROM scratch\n", "proxy/calc.py": FIXED}, "code",
+    pytest.param({"services/proxy/Dockerfile": "FROM scratch\n", "services/proxy/calc.py": FIXED}, "code",
                  id="a build file and product code"),
-    pytest.param({"proxy/tests/test_calc.py": OLD_TEST + "\n\ndef test_more():\n    assert calc.add(0, 0) == 0\n"},
+    pytest.param({"services/proxy/tests/test_calc.py": OLD_TEST + "\n\ndef test_more():\n    assert calc.add(0, 0) == 0\n"},
                  "outside", id="only a test of a product folder"),
     pytest.param({"docs/CLI.md": "text\n", ".github/workflows/x.yml": "on: push\n"}, "outside", id="docs and CI"),
     pytest.param({"scripts/tool.py": "x = 1\n"}, "outside", id="a script"),
@@ -417,15 +417,15 @@ def test_the_go_stand_in_starts_where_the_path_of_python_holds_a_space(fix, repo
     folder.mkdir()
     venv.create(folder / "a python", with_pip=False, symlinks=True)
     go = go_stand_in(folder, str(folder / "a python" / "bin" / "python"))
-    root, base = repo({**GO_FIXED, "proxy/calc_test.go": go_test("TestAdds", "if add(2, 3) != 5 { t.Fatal() }")})
+    root, base = repo({**GO_FIXED, "services/proxy/calc_test.go": go_test("TestAdds", "if add(2, 3) != 5 { t.Fatal() }")})
     found, _, _, _ = verdicts(fix, root, base, {"python": sys.executable, "go": go})
     assert found == {"TestAdds": "fails on the base"}
 
 
 def test_a_go_test_file_that_uses_only_old_code_is_judged_alone_when_the_package_does_not_build(fix, repo, tools):
     root, base = repo({**GO_FIXED,
-                       "proxy/new_test.go": go_test("TestUsesNewCode", "if newHelper() != 5 { t.Fatal() }"),
-                       "proxy/old_test.go": go_test("TestOldCode", "if add(2, 3) != 5 { t.Fatal() }")})
+                       "services/proxy/new_test.go": go_test("TestUsesNewCode", "if newHelper() != 5 { t.Fatal() }"),
+                       "services/proxy/old_test.go": go_test("TestOldCode", "if add(2, 3) != 5 { t.Fatal() }")})
     found, _, notes, _ = verdicts(fix, root, base, tools)
     assert found == {"TestUsesNewCode": "needs the fix's code", "TestOldCode": "fails on the base"}
     assert notes == []
@@ -445,12 +445,12 @@ def test_a_go_test_file_that_uses_only_old_code_is_judged_alone_when_the_package
 ])
 def test_a_go_failure_keeps_the_tests_own_message_or_the_panic_and_says_when_there_is_none(fix, repo, tools,
                                                                                           monkeypatch, answer, said):
-    root, base = repo({**GO_FIXED, "proxy/calc_test.go": go_test("TestAdds", "if add(2, 3) != 5 { t.Fatal() }")})
+    root, base = repo({**GO_FIXED, "services/proxy/calc_test.go": go_test("TestAdds", "if add(2, 3) != 5 { t.Fatal() }")})
     original = fix.run_go
 
     def answers_on_the_base(tree, tests, go, limit):
         if tree != root:
-            (tree / "proxy" / "go_answers.json").write_text(json.dumps({"TestAdds": answer}), encoding="utf-8")
+            (tree / "services" / "proxy" / "go_answers.json").write_text(json.dumps({"TestAdds": answer}), encoding="utf-8")
         return original(tree, tests, go, limit)
     monkeypatch.setattr(fix, "run_go", answers_on_the_base)
     found, rows, _, _ = verdicts(fix, root, base, tools)
@@ -461,12 +461,12 @@ def test_a_go_failure_keeps_the_tests_own_message_or_the_panic_and_says_when_the
 def test_the_output_of_another_go_test_whose_name_starts_the_same_is_not_taken(fix, repo, tools, monkeypatch):
     both = (go_test("TestAdds", "if add(2, 3) != 5 { t.Fatal() }")
             + "\nfunc TestAddsMore(t *testing.T) {\n\tif add(2, 4) != 6 { t.Fatal() }\n}\n")
-    root, base = repo({**GO_FIXED, "proxy/calc_test.go": both})
+    root, base = repo({**GO_FIXED, "services/proxy/calc_test.go": both})
     original = fix.run_go
 
     def answers_on_the_base(tree, tests, go, limit):
         if tree != root:
-            (tree / "proxy" / "go_answers.json").write_text(json.dumps({"TestAdds": "silent", "TestAddsMore": "fail"}),
+            (tree / "services" / "proxy" / "go_answers.json").write_text(json.dumps({"TestAdds": "silent", "TestAddsMore": "fail"}),
                                                            encoding="utf-8")
         return original(tree, tests, go, limit)
     monkeypatch.setattr(fix, "run_go", answers_on_the_base)
@@ -480,8 +480,8 @@ def test_the_output_of_another_go_test_whose_name_starts_the_same_is_not_taken(f
 def test_more_go_test_files_than_the_limit_are_not_tried_one_by_one_and_that_is_said(fix, repo, tools, monkeypatch):
     monkeypatch.setattr(fix, "ISOLATE_AT_MOST", 1)
     root, base = repo({**GO_FIXED,
-                       "proxy/new_test.go": go_test("TestUsesNewCode", "if newHelper() != 5 { t.Fatal() }"),
-                       "proxy/old_test.go": go_test("TestOldCode", "if add(2, 3) != 5 { t.Fatal() }")})
+                       "services/proxy/new_test.go": go_test("TestUsesNewCode", "if newHelper() != 5 { t.Fatal() }"),
+                       "services/proxy/old_test.go": go_test("TestOldCode", "if add(2, 3) != 5 { t.Fatal() }")})
     found, _, notes, _ = verdicts(fix, root, base, tools)
     assert found == {"TestUsesNewCode": "needs the fix's code", "TestOldCode": "needs the fix's code"}
     assert notes == [("2 changed Go test files did not build together on the base; they were not tried one by one "
@@ -503,17 +503,17 @@ def test_a_test_file_this_check_cannot_run_is_named_as_not_judged(fix, repo, too
 
 
 def test_the_lines_a_change_touches_are_read_from_the_diff(fix, repo):
-    root, base = repo({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": OLD_TEST.replace("== 0", "== 0  # same")})
+    root, base = repo({"services/proxy/calc.py": FIXED, "services/proxy/tests/test_calc.py": OLD_TEST.replace("== 0", "== 0  # same")})
     touched = fix.changed_lines(root, base)
-    assert touched["proxy/calc.py"] == {2, 3, 4, 5, 6}
-    assert touched["proxy/tests/test_calc.py"] == {7}
+    assert touched["services/proxy/calc.py"] == {2, 3, 4, 5, 6}
+    assert touched["services/proxy/tests/test_calc.py"] == {7}
 
 
 def test_a_test_that_only_loses_a_line_is_a_changed_test(fix, repo, tools):
-    root, _ = repo({"proxy/tests/test_calc.py": OLD_TEST + "    assert calc.add(2, 3) == 5\n"})
+    root, _ = repo({"services/proxy/tests/test_calc.py": OLD_TEST + "    assert calc.add(2, 3) == 5\n"})
     base = git(root, "rev-parse", "HEAD")
-    commit(root, {"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": OLD_TEST}, "the fix takes a line out of a test")
-    assert fix.changed_lines(root, base)["proxy/tests/test_calc.py"] == {7, 8}
+    commit(root, {"services/proxy/calc.py": FIXED, "services/proxy/tests/test_calc.py": OLD_TEST}, "the fix takes a line out of a test")
+    assert fix.changed_lines(root, base)["services/proxy/tests/test_calc.py"] == {7, 8}
     rows, _, _ = fix.judge(root, base, tools, 120)
     assert [(test.name, test.new, name) for test, name, _ in rows] == [
         ("test_add_takes_two_numbers", False, "passes on the base too")]
@@ -634,12 +634,12 @@ def test_the_job_summary_gets_the_report(fix, monkeypatch, tmp_path, capsys):
 
 
 def test_a_finding_is_reported_and_does_not_fail_the_job(fix, repo, capsys):
-    root, base = repo({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": new_test(
+    root, base = repo({"services/proxy/calc.py": FIXED, "services/proxy/tests/test_calc.py": new_test(
         "def test_add_gives_a_number():\n    assert isinstance(calc.add(2, 3), int)\n")})
     assert fix.main(["--base", base, "--title", "fix(proxy): add adds", "--root", str(root), "--github"]) == 0
     out = capsys.readouterr().out
     assert "1 new test(s) pass on the base too" in out
-    assert "::warning file=proxy/tests/test_calc.py," in out
+    assert "::warning file=services/proxy/tests/test_calc.py," in out
 
 
 @pytest.mark.parametrize("title", ["feat(proxy): a new tool", "docs: fix a typo", "refactor(tui): fix the layout code"])
@@ -654,7 +654,7 @@ def test_a_fix_title_is_judged(fix, title):
 
 
 def test_a_base_it_cannot_read_ends_with_status_2_and_a_fix(fix, repo, capsys):
-    root, _ = repo({"proxy/calc.py": FIXED})
+    root, _ = repo({"services/proxy/calc.py": FIXED})
     assert fix.main(["--base", "no-such-commit", "--title", "fix: x", "--root", str(root)]) == 2
     err = capsys.readouterr().err
     assert err.startswith("FAIL fix tests: `git diff")

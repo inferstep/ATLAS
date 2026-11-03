@@ -28,7 +28,7 @@ CANONICAL = [
 
 
 def test_go_producer_emits_the_seven_dimensions():
-    src = go_source("proxy", "return []StatusDimension{")
+    src = go_source("services/proxy", "return []StatusDimension{")
     # Extract the ordered list literal returned by buildDimensions.
     block = src[src.index("return []StatusDimension{"):]
     names = re.findall(r'\{"([a-z_]+)",', block)

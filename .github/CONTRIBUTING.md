@@ -13,7 +13,7 @@ issue.
 ## 1. How ATLAS is organized
 
 ATLAS is a local coding agent made of a few services: the Go agent loop
-(`proxy/`), the terminal client (`tui/`), the Python CLI (`atlas/`), the V3
+(`services/proxy/`), the terminal client (`tui/`), the Python CLI (`atlas/`), the V3
 candidate pipeline (`v3-service/`), the Geometric Lens (`geometric-lens/`),
 the sandbox (`sandbox/`) and the llama.cpp images (`inference/`).
 [The repository map](../docs/README.md#repository-map) says what every directory owns, and
@@ -329,13 +329,13 @@ How code should read (size, structure, abstractions, comments) is in
 functions, lines up to 100 characters. `ruff` runs in the gate; it does not check line length.
 
 **Go.** Format with `gofmt`. `go vet` and `staticcheck` run in the gate
-for `proxy/` and `tui/`.
+for `services/proxy/` and `tui/`.
 
 New Go code is also linted with [golangci-lint](https://golangci-lint.run)
 (settings in `.golangci.yml`):
 
 ```bash
-cd proxy    # or tui
+cd services/proxy    # or tui
 golangci-lint run ./... --new-from-merge-base=origin/dev
 ```
 
@@ -394,7 +394,7 @@ pytest tests/v3-service/stages/test_plan_search.py -v
 
 # End-to-end acceptance: real proxy + sandbox executor + fake
 # llama-server. No GPU or model needed. Build the proxy binary first.
-cd proxy && go build -o /tmp/test-atlas-proxy . && cd ..
+cd services/proxy && go build -o /tmp/test-atlas-proxy . && cd ../..
 pip install -r sandbox/requirements-runtime.txt
 pytest tests/e2e -v
 ```
@@ -443,7 +443,7 @@ rebuild loop.
 ### When to use dev mode
 
 Use it when you are actively editing Python in `geometric-lens/` or
-`v3-service/`, or Go in `proxy/`. Skip it for one-off
+`v3-service/`, or Go in `services/proxy/`. Skip it for one-off
 contributions where a single rebuild is acceptable.
 
 Dev mode does not change image behavior in production-like ways —
@@ -513,8 +513,8 @@ ports (the defaults work because each upstream service publishes its
 port to localhost):
 
 ```bash
-cd proxy
-ATLAS_SERVICE_TOKEN_FILE=$(pwd)/../secrets/service-token \
+cd services/proxy
+ATLAS_SERVICE_TOKEN_FILE=$(pwd)/../../secrets/service-token \
   ATLAS_PROXY_PORT=8090 \
 ATLAS_INFERENCE_URL=http://localhost:8080 \
 ATLAS_LLAMA_URL=http://localhost:8080 \

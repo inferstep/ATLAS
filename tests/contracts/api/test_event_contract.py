@@ -26,13 +26,13 @@ ALLOWED_EXTRA_CONSUMERS = {"__turn_done__"}
 
 def _proxy_chat_events() -> set:
     events = set()
-    for go in (REPO / "proxy").rglob("*.go"):
+    for go in (REPO / "services" / "proxy").rglob("*.go"):
         if go.name.endswith("_test.go"):
             continue
         src = go.read_text()
         events.update(re.findall(r'ctx\.Stream(?:Fn)?\(\s*"([a-z0-9_]+)"', src))
     # v3StageToEvent maps v3-service stage names onto event types.
-    tools = go_source("proxy", "func v3StageToEvent")
+    tools = go_source("services/proxy", "func v3StageToEvent")
     fn = tools[tools.index("func v3StageToEvent"):]
     fn = fn[:fn.index("\nfunc ", 1)]
     events.update(re.findall(r'return "([a-z0-9_]+)"', fn))
@@ -77,9 +77,9 @@ def test_every_tui_handler_has_a_producer():
 
 def test_envelope_types_agree_across_implementations():
     """The 7 typed-envelope types must match across the Go producer
-    (proxy/internal/wire/events.go), the Go consumer
+    (services/proxy/internal/wire/events.go), the Go consumer
     (tui/internal/proxyclient/chat.go), and the Python spec (atlas/events.py)."""
-    go_src = (REPO / "proxy" / "internal" / "wire" / "events.go").read_text()
+    go_src = (REPO / "services" / "proxy" / "internal" / "wire" / "events.go").read_text()
     go_types = set(re.findall(r'Evt\w+\s*=\s*"([a-z_]+)"', go_src))
 
     py_src = (REPO / "atlas" / "events.py").read_text()

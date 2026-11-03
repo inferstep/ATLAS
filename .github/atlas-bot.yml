@@ -53,26 +53,26 @@ pull_requests:
   # the integrity check names a change to one on the pull request, for a
   # maintainer's approval.
   core_paths:
-    proxy/agent.go: the agent loop
-    proxy/agent_handler.go: the agent loop
-    proxy/fenced_channel.go: the agent loop
-    proxy/llm_call.go: the agent loop
-    proxy/loop_*: the agent loop
-    proxy/model_reply.go: the agent loop
-    proxy/plan_generation.go: the agent loop
-    proxy/recovery.go: the agent loop
-    proxy/run_end.go: the agent loop
-    proxy/system_prompt.go: the agent loop
-    proxy/task_intake.go: the agent loop
-    proxy/task_tier.go: the agent loop
-    proxy/tool*: the tool handlers
-    proxy/gates*: the guards
-    proxy/guardrails*: the guards
-    proxy/permissions.go: the guards
-    proxy/authorization_*: the guards
-    proxy/internal/shellcmd/*: the guards
-    proxy/internal/workspacefs/*: the guards
-    proxy/internal/logsafe/*: the guards
+    services/proxy/loop.go: the agent loop
+    services/proxy/server_agent.go: the agent loop
+    services/proxy/model_fenced_channel.go: the agent loop
+    services/proxy/model_call.go: the agent loop
+    services/proxy/loop_*: the agent loop
+    services/proxy/model_reply.go: the agent loop
+    services/proxy/plan_generation.go: the agent loop
+    services/proxy/internal/projectcontext/*: the agent loop
+    services/proxy/model_prompt.go: the agent loop
+    services/proxy/task_intake.go: the agent loop
+    services/proxy/task_tier.go: the agent loop
+    services/proxy/tool*: the tool handlers
+    services/proxy/gates*: the guards
+    services/proxy/guardrails*: the guards
+    services/proxy/candidate_authorization.go: the guards
+    services/proxy/candidate_grant.go: the guards
+    services/proxy/internal/shellcmd/*: the guards
+    services/proxy/internal/workspacefs/*: the guards
+    services/proxy/internal/logsafe/*: the guards
+    services/proxy/internal/assetlint/*: the guards
     sandbox/executor_server.py: the guards
     sandbox/executor_models.py: the guards
     sandbox/executor_parsers.py: the guards
@@ -97,7 +97,7 @@ pull_requests:
 
 # Path prefix -> area label, for pull requests. A file can match several.
 areas:
-  proxy/: area/proxy
+  services/proxy/: area/proxy
   tui/: area/tui
   atlas/: area/cli
   v3-service/: area/v3

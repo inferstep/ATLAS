@@ -48,7 +48,7 @@ for svc in "${SERVICES[@]}"; do
         # healthy from the outside.
         src_dir=""
         case "$svc" in
-            atlas-proxy)     src_dir="proxy" ;;
+            atlas-proxy)     src_dir="services/proxy" ;;
             v3-service)      src_dir="v3-service" ;;
             geometric-lens)  src_dir="geometric-lens" ;;
             sandbox)         src_dir="sandbox" ;;

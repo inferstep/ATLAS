@@ -1,0 +1,315 @@
+package main
+
+import (
+	"encoding/json"
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
+)
+
+// Configuration, telemetry and provenance, checked as facts about the build
+// rather than as intentions.
+
+// Neither the model nor the service can reach the mode, and no route reads a
+// mode off anything they produce.
+func TestNeitherModelNorServiceSelectsTheMode(t *testing.T) {
+	files := append(append([]string{"candidate_policy.go", "candidate_advisory_policy.go",
+		"delivery_edit_route.go"}, agentFiles...), toolFiles...)
+	for _, f := range files {
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := codeWithoutComments(string(src))
+		for _, banned := range []string{
+			"CandidatePolicy(v3Result", "CandidatePolicy(result",
+			"CandidatePolicy(msg", "CandidatePolicy(response",
+			"ParseCandidatePolicy(v3", "ParseCandidatePolicy(result",
+		} {
+			if strings.Contains(body, banned) {
+				t.Errorf("%s derives the mode from %q", f, banned)
+			}
+		}
+	}
+	// The wire shape a service answers with carries no policy field at all.
+	types, err := os.ReadFile("internal/wire/v3.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(types)
+	start := strings.Index(body, "type V3GenerateResponse struct")
+	if start < 0 {
+		t.Fatal("the response type moved")
+	}
+	resp := body[start : start+strings.Index(body[start:], "\n}")]
+	for _, banned := range []string{"Policy", "candidate_policy", "Mode"} {
+		if strings.Contains(resp, banned) {
+			t.Errorf("the V3 response carries %q", banned)
+		}
+	}
+}
+
+// automatic_v3 delivers what the pipeline selected, and only that.
+//
+// Its own precondition -- that these are the exact bytes the selection path
+// named -- is answered by the authorization owner, not here. A policy that
+// decided its own authorization would be the service certifying itself with
+// one more step in between.
+func TestAutomaticDeliversOnlyWhatTheOwnerAuthorized(t *testing.T) {
+	ctx := policyContext(t)
+	in := advisoryInput{
+		Observed:         checkOutcome{Status: wire.ValidationPassed},
+		TargetDeclared:   true,
+		TargetAuthorized: true,
+		ScopeAdmits:      true,
+		Evidence: []proxyEvidence{{
+			Provenance: wire.V3EvidenceProvenance{Source: wire.ProvenanceClientDeclaredVerification},
+			Outcome:    wire.ValidationPassed,
+		}},
+	}
+	// Without the owner's answer it keeps the baseline: no floor was met and
+	// nothing established that these bytes won anything.
+	out := decideCandidatePolicy(ctx, in, false)
+	if out.Decision != PolicyBaselineRetained {
+		t.Fatalf("automatic decided %q with no authorization", out.Decision)
+	}
+	if out.Delivers {
+		t.Fatal("automatic delivered without an authorization")
+	}
+	// With it, the candidate lands.
+	in.AutomaticEligible = true
+	out = decideCandidatePolicy(ctx, in, false)
+	if out.Decision != PolicyCandidateAutomaticV3 {
+		t.Fatalf("automatic decided %q", out.Decision)
+	}
+	if !out.Delivers {
+		t.Fatal("an authorized automatic candidate did not deliver")
+	}
+	// A veto still outranks it.
+	vetoed := in
+	vetoed.Observed = checkOutcome{Status: wire.ValidationFailed}
+	if got := decideCandidatePolicy(ctx, vetoed, false); got.Decision != PolicyCandidateRejectedHardVeto {
+		t.Errorf("a syntax failure under automatic decided %q", got.Decision)
+	} else if got.Delivers {
+		t.Error("a vetoed automatic candidate delivered")
+	}
+	// And capture-only takes the licence while keeping the answer.
+	suppressed := in
+	suppressed.CaptureOnlySuppressed = true
+	got := decideCandidatePolicy(ctx, suppressed, false)
+	if got.Decision != PolicyCandidateAutomaticV3 {
+		t.Errorf("capture-only rewrote the decision to %q", got.Decision)
+	}
+	if got.Delivers {
+		t.Error("capture-only left the licence in place")
+	}
+}
+
+// In the source: the policy owner sets Delivers in exactly one place, only two
+// decisions deliver, and the owner never authorizes for itself.
+func TestThePolicyOwnerSetsDeliversInOnePlace(t *testing.T) {
+	src, err := os.ReadFile("candidate_advisory_policy.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := codeWithoutComments(string(src))
+	decide := body[strings.Index(body, "func decideCandidatePolicy("):]
+	if next := strings.Index(decide, "\nfunc "); next >= 0 {
+		decide = decide[:next]
+	}
+	if n := strings.Count(decide, "out.Delivers ="); n != 1 {
+		t.Fatalf("the policy owner assigns Delivers %d times, want once", n)
+	}
+	// The one assignment applies the acquisition control, so a delivering
+	// decision cannot be added later that forgets to be suppressible.
+	if !strings.Contains(decide, "out.Delivers = delivers && !in.CaptureOnlySuppressed") {
+		t.Error("the delivering assignment does not apply capture-only suppression")
+	}
+	// And exactly two decisions may set it: the strict authorization, and the
+	// automatic one the authorization owner separately approved.
+	if n := strings.Count(decide, "delivers = "); n != 2 {
+		t.Errorf("%d branches set delivers, want exactly the two delivering "+
+			"decisions", n)
+	}
+	for _, delivering := range []string{
+		"out.Decision, delivers = PolicyCandidateAuthorizedStrict, true",
+		"out.Decision, delivers = PolicyCandidateAutomaticV3, true",
+	} {
+		if !strings.Contains(decide, delivering) {
+			t.Errorf("a delivering decision changed shape: %s", delivering)
+		}
+	}
+	// Automatic never decides its own eligibility here.
+	if !strings.Contains(decide, "in.AutomaticEligible") {
+		t.Error("the automatic branch does not read the owner's answer")
+	}
+	for _, banned := range []string{"automaticDeliveryAllowed", "mintAuthorizationGrant"} {
+		if strings.Contains(decide, banned) {
+			t.Errorf("the policy owner authorizes for itself via %s", banned)
+		}
+	}
+}
+
+// The policy record is identities and closed values. Nothing else.
+func TestPolicyTelemetryCarriesNoContent(t *testing.T) {
+	w := newRouteWorldWithClosure(t,
+		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
+			`"verification_knowledge":"declared","verification":["pytest -q --secret hunter2"]}`,
+		map[string]stubEffect{"pytest -q --secret hunter2": {}}, false)
+	recs := captureShadow(t, func() {
+		if _, err := w.write(t); err != nil {
+			t.Fatal(err)
+		}
+	})
+	kinds := []string{"candidate_policy_decision", "candidate_mutation_scope"}
+	seen := 0
+	for _, kind := range kinds {
+		for _, r := range recordsOfKind(recs, kind) {
+			seen++
+			raw, err := json.Marshal(r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			blob := string(raw)
+			for _, secret := range []string{
+				routeWinner, routeBaseline, "hunter2", "pytest", w.path,
+				"Make solve fast.", w.dir,
+			} {
+				if secret != "" && strings.Contains(blob, secret) {
+					t.Errorf("%s carries %q", kind, secret)
+				}
+			}
+		}
+	}
+	if seen == 0 {
+		t.Fatal("no policy or scope records were written")
+	}
+}
+
+// With the capture off (no sink is set in a test) the route still delivers,
+// and the record writers build nothing for a record they will not make.
+func TestCaptureDisabledIsInert(t *testing.T) {
+	w := newRouteWorldWithClosure(t,
+		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`,
+		nil, false)
+	res, err := w.write(t)
+	if err != nil {
+		t.Fatalf("write failed with the sink off: %v", err)
+	}
+	if res == nil || !res.Success {
+		t.Fatalf("the route did not deliver with the sink off: %+v", res)
+	}
+	// In the source: each record writer returns before building anything when
+	// the sink is off.
+	for _, writer := range []struct{ fn, file string }{
+		{"recordCandidatePolicyDecision", "candidate_policy.go"},
+		{"recordMutationScope", "candidate_mutation_scope.go"},
+	} {
+		src, err := os.ReadFile(writer.file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := string(src)
+		f := body[strings.Index(body, "func "+writer.fn+"("):]
+		f = f[:strings.Index(f, "\n}")]
+		guard := strings.Index(f, "if !sink.Enabled() {")
+		submit := strings.Index(f, "sink.Submit(")
+		if guard < 0 || submit < 0 || guard > submit {
+			t.Errorf("%s builds its record before checking the sink", writer.fn)
+		}
+	}
+}
+
+// Neither the model nor the service can set the delivered provenance: the
+// field is not on any wire type they fill.
+func TestNoWireTypeCarriesTheDeliveryProvenance(t *testing.T) {
+	body := readSourceForTest(t, "internal/wire/v3.go") + readSourceForTest(t, "internal/wire/messages.go")
+	for _, typeName := range []string{"type V3GenerateResponse struct",
+		"type WriteFileOutput struct", "type modelFacingResult struct"} {
+		start := strings.Index(body, typeName)
+		if start < 0 {
+			t.Errorf("internal/wire holds no %q, so its check reads nothing; name the file that holds it", typeName)
+			continue
+		}
+		decl := body[start : start+strings.Index(body[start:], "\n}")]
+		if strings.Contains(decl, "DeliveryProvenance") ||
+			strings.Contains(decl, "delivery_provenance") {
+			t.Errorf("%s carries the provenance", typeName)
+		}
+	}
+}
+
+// Neither the model nor the service can set the delivered provenance: it is set
+// only beside a delivery that happened, from the policy outcome.
+func TestDeliveredProvenanceCannotBeForged(t *testing.T) {
+	for _, f := range append([]string{"delivery_edit_route.go"}, toolFiles...) {
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, line := range strings.Split(codeWithoutComments(string(src)), "\n") {
+			if !strings.Contains(line, "DeliveryProvenance") {
+				continue
+			}
+			trimmed := strings.TrimSpace(line)
+			// The one setter, its own body, the field's declaration in a
+			// closed helper, and the terminal's event. Nothing reads a
+			// provenance off a response, a message or an envelope.
+			allowed := strings.Contains(trimmed, "withDeliveryProvenance(") ||
+				strings.Contains(trimmed, "deliveryProvenanceFor(") ||
+				strings.Contains(trimmed, "emitDeliveryProvenance(") ||
+				trimmed == "result.DeliveryProvenance = provenance" ||
+				strings.Contains(trimmed, "res.DeliveryProvenance")
+			if !allowed {
+				t.Errorf("%s sets the provenance from %q", f, trimmed)
+			}
+		}
+	}
+}
+
+// The delivered provenance describes the bytes that are on disk.
+func TestDeliveredProvenanceMatchesWhatLanded(t *testing.T) {
+	w := newRouteWorldWithClosure(t,
+		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
+			`"verification_knowledge":"declared",`+
+			`"verification_requirements_version":1,"verification_requirements":[`+
+			`{"command":"pytest -q","kind":"behavioral","expects":"exit_zero",`+
+			`"asset_authority":"client_supplied"}]}`,
+		map[string]stubEffect{"pytest -q": {}}, false)
+	res, err := w.write(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	landed := w.disk(t)
+	switch res.DeliveryProvenance {
+	case DeliveryFromStrictCandidate:
+		if landed != routeWinner {
+			t.Errorf("provenance says a candidate landed; disk holds %q", landed)
+		}
+	case DeliveryFromModelProposal:
+		if landed != routeBaseline {
+			t.Errorf("provenance says the model's bytes landed; disk holds %q", landed)
+		}
+	default:
+		t.Errorf("unexpected provenance %q", res.DeliveryProvenance)
+	}
+}
+
+// Every route that can put V3 bytes on disk is registered, and the registry is
+// the only way to reach one.
+func TestEveryByteToDiskRouteStaysRegistered(t *testing.T) {
+	for _, site := range []string{
+		"tool_write_v3.go:writeFileWithV3",
+		"delivery_edit_route.go:deliverEditCandidate",
+		"delivery.go:deliverAuthorizedCandidate",
+	} {
+		if !registeredV3DeliveryRoute(site) {
+			t.Errorf("%s is not a registered delivery route", site)
+		}
+	}
+	if registeredV3DeliveryRoute("tool_write_v3.go:somethingElse") {
+		t.Error("an unregistered site was accepted")
+	}
+}
