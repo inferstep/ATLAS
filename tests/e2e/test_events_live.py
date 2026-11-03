@@ -1,7 +1,7 @@
 """The event protocol across the Go and Python boundary (PC-061), against a running proxy.
 
 These tests start the real atlas-proxy binary and read its /events stream over HTTP with
-iter_events from tests/cli/event_harness.py: the producer, the SSE wire and the consumer
+iter_events from tests/atlas/event_harness.py: the producer, the SSE wire and the consumer
 are tested together.
 """
 
@@ -12,7 +12,7 @@ import urllib.request
 
 import pytest
 
-from tests.cli.event_harness import iter_events
+from tests.atlas.event_harness import iter_events
 
 from .conftest import PROXY_BINARY, SKIP_NO_PROXY_BINARY, free_port, proxy_binary_available, wait_for_port
 

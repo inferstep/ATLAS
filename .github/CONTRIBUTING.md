@@ -383,14 +383,14 @@ container, meaningful names and labels.
 ## Testing
 
 ```bash
-# The gate's Python test gates cover the suites CI runs: tests/v3,
-# tests/v3-service, tests/cli, tests/infrastructure, tests/concurrency,
+# The gate's Python test gates cover the suites CI runs:
+# tests/v3-service, tests/atlas, tests/infrastructure, tests/concurrency,
 # tests/perf, tests/contracts and tests/e2e; geometric-lens/tests runs in
 # its own process (CPU torch is enough).
 python scripts/ci/production-readiness.py
 
 # One file
-pytest tests/v3/stages/test_plan_search.py -v
+pytest tests/v3-service/stages/test_plan_search.py -v
 
 # End-to-end acceptance: real proxy + sandbox executor + fake
 # llama-server. No GPU or model needed. Build the proxy binary first.

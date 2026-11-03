@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "ci" / "production-readiness.py"
-PYTEST = (sys.executable, "-m", "pytest", "tests/cli", "--no-header", "-q")
+PYTEST = (sys.executable, "-m", "pytest", "tests/atlas", "--no-header", "-q")
 GO_TEST = ("go", "test", "-race", "./...")
 
 
@@ -58,7 +58,7 @@ def test_output_with_a_passed_test_or_of_a_command_that_is_not_a_test_run_is_a_p
                  id="pytest: skipped and xfailed"),
     pytest.param(PYTEST, "", "no summary line", id="pytest: no output"),
     pytest.param(PYTEST, "collected 3 items", "no summary line", id="pytest: no summary line"),
-    pytest.param(PYTEST, "tests/cli/test_x.py prints: 3 passed in 0.5s earlier\n"
+    pytest.param(PYTEST, "tests/atlas/test_x.py prints: 3 passed in 0.5s earlier\n"
                          "2 skipped in 0.10s", "every test was skipped",
                  id="pytest: a count inside the test output is not the summary"),
     pytest.param(GO_TEST, "?   \texample.invalid/tui/gen\t[no test files]", "go test ran no test",
@@ -91,13 +91,13 @@ def test_the_go_test_gates_never_take_a_result_from_the_test_cache(gates_module,
         monkeypatch.setenv(gates_module.COVERAGE_DIR_ENV, str(tmp_path))
     else:
         monkeypatch.delenv(gates_module.COVERAGE_DIR_ENV, raising=False)
-    gates = gates_module._with_coverage(gates_module._gates(("tests/cli",)))
+    gates = gates_module._with_coverage(gates_module._gates(("tests/atlas",)))
     for name in ("go-proxy-test", "go-tui-test"):
         assert "-count=1" in gates[name].command, name
 
 
 def test_every_test_gate_is_one_the_rule_reads(gates_module):
-    gates = gates_module._with_coverage(gates_module._gates(("tests/cli",)))
+    gates = gates_module._with_coverage(gates_module._gates(("tests/atlas",)))
     for name in ("go-proxy-test", "go-tui-test", "python-tests", "python-tests-lens"):
         assert gates_module._ran_no_test(gates[name].command, ""), name
 

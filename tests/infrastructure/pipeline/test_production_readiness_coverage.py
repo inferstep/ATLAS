@@ -31,14 +31,14 @@ def test_without_a_directory_in_the_variable_no_gate_changes(gates_module, monke
     monkeypatch.delenv(gates_module.COVERAGE_DIR_ENV, raising=False)
     if value is not None:
         monkeypatch.setenv(gates_module.COVERAGE_DIR_ENV, value)
-    plain = gates_module._gates(("tests/cli",))
+    plain = gates_module._gates(("tests/atlas",))
     assert gates_module._with_coverage(dict(plain)) == plain
 
 
 def test_the_test_gates_write_reports_into_the_directory(gates_module, monkeypatch, tmp_path):
     out = tmp_path / "reports"
     monkeypatch.setenv(gates_module.COVERAGE_DIR_ENV, str(out))
-    plain = gates_module._gates(("tests/cli",))
+    plain = gates_module._gates(("tests/atlas",))
     gates = gates_module._with_coverage(dict(plain))
 
     assert out.is_dir()
@@ -66,7 +66,7 @@ def test_the_test_gates_write_reports_into_the_directory(gates_module, monkeypat
 
 def test_only_the_test_gates_change(gates_module, monkeypatch, tmp_path):
     monkeypatch.setenv(gates_module.COVERAGE_DIR_ENV, str(tmp_path))
-    plain = gates_module._gates(("tests/cli",))
+    plain = gates_module._gates(("tests/atlas",))
     gates = gates_module._with_coverage(dict(plain))
     assert set(gates) == set(plain)
     for name in set(plain) - set(TEST_GATES):
