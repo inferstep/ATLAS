@@ -1033,12 +1033,13 @@ if __name__ == "__main__":
 
     # ThreadingHTTPServer: a long pipeline call must not starve /health and
     # the /internal/* endpoints. Shared state is thread-safe by construction:
-    # LLMAdapter._lock serializes the llama.cpp backend, pipeline components
-    # are read-only after __init__ except telemetry appends (each stage event
-    # is one small O_APPEND write; the per-task pipeline summary takes
-    # pipeline._SUMMARY_LOCK), per-run state (events, candidates, adapters)
-    # is local to each request, and the graph package's FileGraphCache
-    # carries its own lock.
+    # LLMAdapter._slots bounds the generations in flight to the backend's slot
+    # count (at one slot that is one at a time; above one, llama.cpp batches
+    # them), pipeline components are read-only after __init__ except telemetry
+    # appends (each stage event is one small O_APPEND write; the per-task
+    # pipeline summary takes pipeline._SUMMARY_LOCK), per-run state (events,
+    # candidates, adapters) is local to each request, and the graph package's
+    # FileGraphCache carries its own lock.
     server = ThreadingHTTPServer(("0.0.0.0", PORT), V3Handler)
     try:
         server.serve_forever()
