@@ -232,11 +232,24 @@ func TestEveryWorkspacePathToolHasANamedPipeCall(t *testing.T) {
 				t.Errorf("the call for %s does not set its registered path argument %q", name, field)
 			}
 		}
+	}
+}
+
+// A name in the registry that no tool has would drive no call.
+func TestEveryToolTheWorkspacePathRegistryNamesIsRegistered(t *testing.T) {
+	for name := range workspacePathFields {
+		if commandTools[name] {
+			continue
+		}
 		if getTool(name) == nil {
 			t.Errorf("workspacePathFields names %s, which is not a registered tool", name)
 		}
 	}
-	for name := range calls {
+}
+
+// A call for a tool the registry does not name is outside what the registry drives.
+func TestEveryNamedPipeCallIsForAToolTheRegistryNames(t *testing.T) {
+	for name := range specialFileCalls() {
 		if _, registered := workspacePathFields[name]; !registered {
 			t.Errorf("group 1 calls %s, which is not in workspacePathFields: the registry is the driver", name)
 		}
@@ -320,101 +333,120 @@ func TestSamplePlanContextSkipsANamedPipe(t *testing.T) {
 
 // The rest of the start's readers, each named by the file it opens, because
 // that is what decides whether the reader meets the pipe: a pipe named
-// notes.txt starts a session that a pipe named README.md holds.
-func TestTheSessionStartSkipsANamedPipe(t *testing.T) {
-	for _, tc := range []struct {
-		what  string
-		name  string
-		setup func(t *testing.T, dir string)
-		read  func(t *testing.T, dir string)
-	}{
-		{"walkPythonFiles walks the tree", theSpecialFile, nil, func(t *testing.T, dir string) {
-			if got := walkPythonFiles(dir); len(got) != 0 {
-				t.Errorf("walkPythonFiles read the pipe: %v", keysOf(got))
-			}
-		}},
-		{"walkPythonFiles reaches a nested .py", filepath.Join("pkg", "special.py"), func(t *testing.T, dir string) {
-			seedFile(t, dir, "app.py", "x = 1\n")
-		}, func(t *testing.T, dir string) {
-			got := walkPythonFiles(dir)
-			if _, walkedThePipe := got[filepath.Join("pkg", "special.py")]; walkedThePipe {
-				t.Errorf("walkPythonFiles read the pipe: %v", keysOf(got))
-			}
-			if got["app.py"] != "x = 1\n" {
-				t.Errorf("walkPythonFiles skipped the regular file beside the pipe: %v", keysOf(got))
-			}
-		}},
-		{"detectNodeJS reads package.json", "package.json", func(t *testing.T, dir string) {
-			// The control, in a folder beside the pipe: a regular package.json
-			// of the same name is still parsed. Seeding it over the pipe would
-			// be a write to a pipe with no reader, which is the wait again.
-			seedFile(t, dir, filepath.Join("control", "package.json"), `{"scripts":{"build":"vite build"}}`)
-		}, func(t *testing.T, dir string) {
-			files := map[string]bool{"package.json": true}
-			parsed := detectNodeJS(dir, files)
-			if parsed == nil {
-				parsed = &ProjectInfo{}
-			}
-			if parsed.Framework != "" {
-				t.Errorf("detectNodeJS took the framework from the pipe: %+v", parsed)
-			}
-			if parsed.BuildCommand != "" {
-				t.Errorf("detectNodeJS took the build command from the pipe: %+v", parsed)
-			}
-			if info := detectNodeJS(filepath.Join(dir, "control"), files); info == nil || info.BuildCommand == "" {
-				t.Errorf("detectNodeJS skipped a regular package.json: %+v", info)
-			}
-		}},
-		{"detectPython reads requirements.txt", "requirements.txt", func(t *testing.T, dir string) {
-			seedFile(t, dir, filepath.Join("control", "requirements.txt"), "flask==3.0.0\n")
-		}, func(t *testing.T, dir string) {
-			files := map[string]bool{"requirements.txt": true}
-			if info := detectPython(dir, files); info != nil && info.Framework != "" {
-				t.Errorf("detectPython parsed the pipe: %+v", info)
-			}
-			if info := detectPython(filepath.Join(dir, "control"), files); info == nil || info.Framework != "flask" {
-				t.Errorf("detectPython skipped a regular requirements.txt: %+v", info)
-			}
-		}},
-		{"resolveVerifyTarget reads .atlas/config.toml", filepath.Join(".atlas", "config.toml"), func(t *testing.T, dir string) {
-			t.Setenv("ATLAS_VERIFY_IN", "")
-		}, func(t *testing.T, dir string) {
-			if got := resolveVerifyTarget(dir); got != "sandbox" {
-				t.Errorf("resolveVerifyTarget = %q, want the default: the pipe named a target", got)
-			}
-		}},
-		{"probeASAStatus reads the marker beside the vector", "vector.gguf.model", func(t *testing.T, dir string) {
-			seedFile(t, dir, "vector.gguf", "weights")
-			t.Setenv("ATLAS_CONTROL_VECTOR", filepath.Join(dir, "vector.gguf"))
-		}, func(t *testing.T, dir string) {
-			if status := probeASAStatus(); strings.Contains(status.Hint, "control vector active") {
-				t.Errorf("probeASAStatus read the pipe: %+v", status)
-			}
-		}},
-		{"probeASAStatus reads the marker inside the workspace", filepath.Join("models", "vector.gguf.model"), func(t *testing.T, dir string) {
-			seedFile(t, dir, filepath.Join("models", "vector.gguf"), "weights")
-			t.Setenv("ATLAS_CONTROL_VECTOR", "/models/vector.gguf")
-			t.Setenv("ATLAS_WORKSPACE_DIR", dir)
-		}, func(t *testing.T, dir string) {
-			if status := probeASAStatus(); strings.Contains(status.Hint, "control vector active") {
-				t.Errorf("probeASAStatus read the pipe: %+v", status)
-			}
-		}},
-	} {
-		t.Run(tc.what, func(t *testing.T) {
-			dir := t.TempDir()
-			makePipe(t, dir, tc.name)
-			// Writing a file and setting a variable fail the test the wrong
-			// way from inside the goroutine the cap is watching.
-			if tc.setup != nil {
-				tc.setup(t, dir)
-			}
-			withinCap(t, waitCap, tc.what, func() { tc.read(t, dir) })
-		})
-	}
+// notes.txt starts a session that a pipe named README.md holds. Each test makes
+// its pipe and any regular file or setting first, then reads within the cap:
+// writing a file and setting a variable fail the test the wrong way from inside
+// the goroutine the cap is watching.
+
+func TestWalkPythonFilesSkipsANamedPipe(t *testing.T) {
+	dir := t.TempDir()
+	makePipe(t, dir, theSpecialFile)
+
+	withinCap(t, waitCap, "walkPythonFiles walks the tree", func() {
+		if got := walkPythonFiles(dir); len(got) != 0 {
+			t.Errorf("walkPythonFiles read the pipe: %v", keysOf(got))
+		}
+	})
 }
 
-// A start reader that refused everything would pass the case above, so the
+func TestWalkPythonFilesSkipsANestedPipeAndReadsTheFileBesideIt(t *testing.T) {
+	dir := t.TempDir()
+	makePipe(t, dir, filepath.Join("pkg", "special.py"))
+	seedFile(t, dir, "app.py", "x = 1\n")
+
+	withinCap(t, waitCap, "walkPythonFiles reaches a nested .py", func() {
+		got := walkPythonFiles(dir)
+		if _, walkedThePipe := got[filepath.Join("pkg", "special.py")]; walkedThePipe {
+			t.Errorf("walkPythonFiles read the pipe: %v", keysOf(got))
+		}
+		if got["app.py"] != "x = 1\n" {
+			t.Errorf("walkPythonFiles skipped the regular file beside the pipe: %v", keysOf(got))
+		}
+	})
+}
+
+func TestDetectNodeJSSkipsAPackageJSONThatIsAPipe(t *testing.T) {
+	dir := t.TempDir()
+	makePipe(t, dir, "package.json")
+	// The control, in a folder beside the pipe: a regular package.json of the
+	// same name is still parsed. Seeding it over the pipe would be a write to
+	// a pipe with no reader, which is the wait again.
+	seedFile(t, dir, filepath.Join("control", "package.json"), `{"scripts":{"build":"vite build"}}`)
+
+	withinCap(t, waitCap, "detectNodeJS reads package.json", func() {
+		files := map[string]bool{"package.json": true}
+		parsed := detectNodeJS(dir, files)
+		if parsed == nil {
+			parsed = &ProjectInfo{}
+		}
+		if parsed.Framework != "" {
+			t.Errorf("detectNodeJS took the framework from the pipe: %+v", parsed)
+		}
+		if parsed.BuildCommand != "" {
+			t.Errorf("detectNodeJS took the build command from the pipe: %+v", parsed)
+		}
+		if info := detectNodeJS(filepath.Join(dir, "control"), files); info == nil || info.BuildCommand == "" {
+			t.Errorf("detectNodeJS skipped a regular package.json: %+v", info)
+		}
+	})
+}
+
+func TestDetectPythonSkipsARequirementsFileThatIsAPipe(t *testing.T) {
+	dir := t.TempDir()
+	makePipe(t, dir, "requirements.txt")
+	seedFile(t, dir, filepath.Join("control", "requirements.txt"), "flask==3.0.0\n")
+
+	withinCap(t, waitCap, "detectPython reads requirements.txt", func() {
+		files := map[string]bool{"requirements.txt": true}
+		if info := detectPython(dir, files); info != nil && info.Framework != "" {
+			t.Errorf("detectPython parsed the pipe: %+v", info)
+		}
+		if info := detectPython(filepath.Join(dir, "control"), files); info == nil || info.Framework != "flask" {
+			t.Errorf("detectPython skipped a regular requirements.txt: %+v", info)
+		}
+	})
+}
+
+func TestResolveVerifyTargetSkipsAConfigThatIsAPipe(t *testing.T) {
+	dir := t.TempDir()
+	makePipe(t, dir, filepath.Join(".atlas", "config.toml"))
+	t.Setenv("ATLAS_VERIFY_IN", "")
+
+	withinCap(t, waitCap, "resolveVerifyTarget reads .atlas/config.toml", func() {
+		if got := resolveVerifyTarget(dir); got != "sandbox" {
+			t.Errorf("resolveVerifyTarget = %q, want the default: the pipe named a target", got)
+		}
+	})
+}
+
+func TestProbeASAStatusSkipsAMarkerPipeBesideTheVector(t *testing.T) {
+	dir := t.TempDir()
+	makePipe(t, dir, "vector.gguf.model")
+	seedFile(t, dir, "vector.gguf", "weights")
+	t.Setenv("ATLAS_CONTROL_VECTOR", filepath.Join(dir, "vector.gguf"))
+
+	withinCap(t, waitCap, "probeASAStatus reads the marker beside the vector", func() {
+		if status := probeASAStatus(); strings.Contains(status.Hint, "control vector active") {
+			t.Errorf("probeASAStatus read the pipe: %+v", status)
+		}
+	})
+}
+
+func TestProbeASAStatusSkipsAMarkerPipeInsideTheWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	makePipe(t, dir, filepath.Join("models", "vector.gguf.model"))
+	seedFile(t, dir, filepath.Join("models", "vector.gguf"), "weights")
+	t.Setenv("ATLAS_CONTROL_VECTOR", "/models/vector.gguf")
+	t.Setenv("ATLAS_WORKSPACE_DIR", dir)
+
+	withinCap(t, waitCap, "probeASAStatus reads the marker inside the workspace", func() {
+		if status := probeASAStatus(); strings.Contains(status.Hint, "control vector active") {
+			t.Errorf("probeASAStatus read the pipe: %+v", status)
+		}
+	})
+}
+
+// A start reader that refused everything would pass the tests above, so the
 // control: the same reader with a regular file of the same name reads it.
 func TestTheSessionStartStillReadsARegularFile(t *testing.T) {
 	dir := t.TempDir()
