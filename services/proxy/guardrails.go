@@ -49,6 +49,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/itigges22/atlas-proxy/internal/shellcmd"
 	"github.com/itigges22/atlas-proxy/internal/taskcontract"
@@ -244,20 +245,26 @@ func coverageFromLiveServer(ctx *AgentContext, command string) map[string]string
 		if !ok {
 			continue
 		}
-		for _, p := range changedPathsForCoverage(ctx) {
-			if _, already := covered[p]; already || !commandNamesPath(jobCmd, p) {
-				continue
-			}
-			info, err := os.Stat(p)
-			if err != nil || info.ModTime().After(started) {
-				continue // the file changed after this process started
-			}
-			if h := fileSHA256(ctx, p); h != "" {
-				covered[p] = h
-			}
-		}
+		creditJobFiles(ctx, covered, jobCmd, started)
 	}
 	return covered
+}
+
+// creditJobFiles credits a probe with each changed file that a running job
+// names and has not seen change since it started: those bytes are answering.
+func creditJobFiles(ctx *AgentContext, covered map[string]string, jobCmd string, started time.Time) {
+	for _, p := range changedPathsForCoverage(ctx) {
+		if _, already := covered[p]; already || !commandNamesPath(jobCmd, p) {
+			continue
+		}
+		info, err := os.Stat(p)
+		if err != nil || info.ModTime().After(started) {
+			continue // the file changed after this process started
+		}
+		if h := fileSHA256(ctx, p); h != "" {
+			covered[p] = h
+		}
+	}
 }
 
 // isHTTPProbe matches a request made against a local service — the shape the
