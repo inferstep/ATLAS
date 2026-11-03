@@ -225,14 +225,7 @@ func extractFailurePath(toolName string, args json.RawMessage) string {
 	// either returned "" and the path-aware 3-strike breaker read three
 	// identical failures as three different paths and never fired.
 	case "read_file", "write_file", "edit_file", "structural_edit", "delete_file", "find_file",
-		"insert_after", "replace_lines":
-		var p struct {
-			Path string `json:"path"`
-		}
-		if err := json.Unmarshal(args, &p); err == nil {
-			return p.Path
-		}
-	case "list_directory", "search_files":
+		"insert_after", "replace_lines", "list_directory", "search_files":
 		var p struct {
 			Path string `json:"path"`
 		}
