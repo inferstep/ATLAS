@@ -129,9 +129,9 @@ RUN --mount=type=cache,id=llama-ccache,target=/root/.ccache,sharing=locked \
 # inference path.
 # ---------------------------------------------------------------------------
 FROM ubuntu:${UBUNTU_TAG}
-# The week of the build, from build-images.yml. A new week runs the package
-# installs of this stage again, so they take the distribution's fixes
-# between base bumps; the build stage above stays in the cache.
+# The week of the commit, from build-images.yml. A commit of a new week runs
+# the package installs of this stage again, so they take the distribution's
+# fixes between base bumps; the build stage above stays in the cache.
 ARG PACKAGE_REFRESH
 
 # Runtime deps:

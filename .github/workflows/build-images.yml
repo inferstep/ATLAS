@@ -160,12 +160,13 @@ jobs:
             [registry."docker.io"]
               mirrors = ["mirror.gcr.io"]
 
-      # The ISO week, for the Dockerfiles' PACKAGE_REFRESH: the first build of
-      # a week runs the package installs again, later builds take them from
-      # the cache.
+      # The ISO week of the commit's date (UTC), for the Dockerfiles'
+      # PACKAGE_REFRESH: a commit of a new week runs the package installs
+      # again. The same commit always gets the same week, so a release build
+      # takes its candidate's layers from the cache while the cache holds them.
       - name: Week of the package refresh
         id: week
-        run: echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+        run: echo "week=$(TZ=UTC git log -1 --format=%cd --date=format-local:%G-W%V)" >> "$GITHUB_OUTPUT"
 
       - name: Build (no push)
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
@@ -331,12 +332,13 @@ jobs:
           tags: |
             type=sha,prefix=sha-,format=short
 
-      # The ISO week, for the Dockerfiles' PACKAGE_REFRESH: the first build of
-      # a week runs the package installs again, later builds take them from
-      # the cache.
+      # The ISO week of the commit's date (UTC), for the Dockerfiles'
+      # PACKAGE_REFRESH: a commit of a new week runs the package installs
+      # again. The same commit always gets the same week, so a release build
+      # takes its candidate's layers from the cache while the cache holds them.
       - name: Week of the package refresh
         id: week
-        run: echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+        run: echo "week=$(TZ=UTC git log -1 --format=%cd --date=format-local:%G-W%V)" >> "$GITHUB_OUTPUT"
 
       # Cache strategy:
       #   llama / llama-vulkan -> registry-based cache (CUDA/Vulkan builds

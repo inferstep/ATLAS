@@ -2,9 +2,9 @@
 FROM docker.io/python:3.11-slim@sha256:db20d8506e2f15b6db39b40b6015ca46bae855dec6dd326d462cfe79ae972893
 WORKDIR /app
 
-# The week of the build, from build-images.yml. A new week runs the package
-# installs below again, so they take the distribution's fixes between base
-# bumps; within a week they come from the cache.
+# The week of the commit, from build-images.yml. A commit of a new week runs
+# the package installs below again, so they take the distribution's fixes
+# between base bumps; within a week they come from the cache.
 ARG PACKAGE_REFRESH
 
 # Install curl for healthcheck
