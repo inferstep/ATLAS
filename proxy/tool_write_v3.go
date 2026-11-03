@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/itigges22/atlas-proxy/internal/logsafe"
+	"github.com/itigges22/atlas-proxy/internal/projectcontext"
 	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/v3client"
 	"github.com/itigges22/atlas-proxy/internal/wire"
@@ -174,7 +175,7 @@ func v3WriteRequest(path, baselineContent string, ctx *AgentContext) wire.V3Gene
 		if req.ProjectContext == nil {
 			req.ProjectContext = make(map[string]string)
 		}
-		req.ProjectContext[rel] = contextEntry(string(data), 4000)
+		req.ProjectContext[rel] = projectcontext.Entry(string(data), 4000)
 	}
 	return req
 }
@@ -1158,7 +1159,7 @@ func v3Request(path, content string, ctx *AgentContext) wire.V3GenerateRequest {
 			if rel == "" {
 				rel = p
 			}
-			req.ProjectContext[rel] = contextEntry(c, 4000)
+			req.ProjectContext[rel] = projectcontext.Entry(c, 4000)
 		}
 	}
 	if ctx.Project != nil {

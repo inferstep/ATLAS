@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/itigges22/atlas-proxy/internal/assetlint"
+	"github.com/itigges22/atlas-proxy/internal/projectcontext"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -308,9 +309,9 @@ func TestSamplePlanContextSkipsANamedPipe(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
 			makePipe(t, dir, name)
-			withinCap(t, waitCap, "samplePlanContext with a pipe named "+name, func() {
-				if got := samplePlanContext(dir, 10, 4096); len(got) != 0 {
-					t.Errorf("samplePlanContext read the pipe: %v", keysOf(got))
+			withinCap(t, waitCap, "projectcontext.Sample with a pipe named "+name, func() {
+				if got := projectcontext.Sample(dir, 10, 4096); len(got) != 0 {
+					t.Errorf("projectcontext.Sample read the pipe: %v", keysOf(got))
 				}
 			})
 		})
@@ -419,8 +420,8 @@ func TestTheSessionStartStillReadsARegularFile(t *testing.T) {
 	dir := t.TempDir()
 	seedFile(t, dir, "README.md", "the project")
 	seedFile(t, dir, "solve.py", "x = 1\n")
-	if got := samplePlanContext(dir, 10, 4096); got["README.md"] != "the project" {
-		t.Errorf("samplePlanContext returned %v, want the README's text", keysOf(got))
+	if got := projectcontext.Sample(dir, 10, 4096); got["README.md"] != "the project" {
+		t.Errorf("projectcontext.Sample returned %v, want the README's text", keysOf(got))
 	}
 	if got := walkPythonFiles(dir); got["solve.py"] != "x = 1\n" {
 		t.Errorf("walkPythonFiles returned %v, want solve.py's text", keysOf(got))

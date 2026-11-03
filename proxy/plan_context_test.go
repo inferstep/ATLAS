@@ -2,38 +2,18 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/itigges22/atlas-proxy/internal/projectcontext"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
-
-// More files were read than fit into the context of a revised plan. The
-// planner sees the first of them in sorted path order, every time, not
-// whatever the map's order gives.
-func TestTheFilesReadThatFillAPlansContextAreTheSameEachTime(t *testing.T) {
-	dir := t.TempDir()
-	ctx := NewAgentContext(dir, Tier2Medium)
-	for n := 11; n >= 0; n-- {
-		ctx.RecordFileRead(filepath.Join(dir, fmt.Sprintf("f%02d.py", n)), "x = 1\n")
-	}
-	want := []string{"f00.py", "f01.py", "f02.py", "f03.py", "f04.py", "f05.py", "f06.py", "f07.py"}
-	for try := 1; try <= 100; try++ {
-		pctx := map[string]string{}
-		addFilesReadToPlanContext(pctx, ctx.SnapshotFilesRead(), dir, 8)
-		if got := slices.Sorted(maps.Keys(pctx)); !reflect.DeepEqual(got, want) {
-			t.Fatalf("try %d: %v, want %v", try, got, want)
-		}
-	}
-}
 
 // A revised plan is shown the files the run has read, under the paths the agent
 // uses for them: relative to the working folder.
@@ -88,7 +68,7 @@ func TestEachRequestCutsAContextFileToItsLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	planContext := map[string]string{}
-	addFilesReadToPlanContext(planContext, ctx.SnapshotFilesRead(), dir, 8)
+	projectcontext.AddFilesRead(planContext, ctx.SnapshotFilesRead(), dir, 8)
 
 	mark := "\n... (truncated)"
 	for _, c := range []struct{ name, got, want string }{
@@ -97,7 +77,7 @@ func TestEachRequestCutsAContextFileToItsLimit(t *testing.T) {
 		{"an edit", v3Request(target, "", ctx).ProjectContext["read.py"], big[:4000] + mark},
 		{"the structural check", structuralProjectContext(ctx, target)["read.py"], big[:4000] + mark},
 		{"a revised plan", planContext["read.py"], big[:2000] + mark},
-		{"a file at the limit stays whole", contextEntry(big[:2000], 2000), big[:2000]},
+		{"a file at the limit stays whole", projectcontext.Entry(big[:2000], 2000), big[:2000]},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s: %d bytes, want %d", c.name, len(c.got), len(c.want))
