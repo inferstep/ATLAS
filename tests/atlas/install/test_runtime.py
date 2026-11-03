@@ -116,7 +116,7 @@ def test_compose_proxy_rebuild_uses_checkout_source_and_overlay(monkeypatch, tmp
 
 
 def test_a_proxy_built_by_hand_in_the_checkout_is_found(monkeypatch, tmp_path):
-    """`go build` in services/proxy/ leaves the binary there."""
+    """`go build -o atlas-proxy-v2` in services/proxy/ leaves the binary there."""
     monkeypatch.setattr(runtime.shutil, "which", lambda name: None)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     binary = tmp_path / "services" / "proxy" / "atlas-proxy-v2"
