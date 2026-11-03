@@ -222,7 +222,7 @@ services:
       # refinement budget gate, so both sides must see one value.
       - ATLAS_V3_TIMEOUT=${ATLAS_V3_TIMEOUT:-}
       - ATLAS_SERVICE_TOKEN_FILE=/run/atlas-secrets/service-token
-    # The image's telemetry folder belongs to group 1001 (mode 2770), so the
+    # The image's telemetry folder belongs to group 1001 (mode 770), so the
     # installing user writes the v3-telemetry volume through that group.
     group_add:
       - "1001"

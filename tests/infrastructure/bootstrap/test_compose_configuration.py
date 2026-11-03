@@ -131,7 +131,7 @@ def test_a_folder_that_a_service_writes_on_a_named_volume_is_writable_through_it
     assert config["group_add"] == ["1001"]
     image = (ROOT / dockerfile).read_text()
     assert "groupadd --gid 1001 appuser" in image
-    assert f"chown appuser:appuser {folder} && chmod 2770 {folder}" in image
+    assert f"chown appuser:appuser {folder} && chmod 770 {folder}" in image
 
 
 def test_legacy_runtime_keys_are_upgrade_fallbacks_only():

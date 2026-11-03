@@ -67,8 +67,8 @@ RUN groupadd --gid 1001 appuser && useradd --create-home --uid 1001 --gid 1001 a
     # mode on first mount, so stage telemetry is writable without a root
     # init step. docker-compose.yml runs the service as the installing user,
     # not as appuser, and adds group 1001 to it: the folder is writable for
-    # its owner and that group only (2770; new files keep the group).
-    mkdir -p /data/telemetry && chown appuser:appuser /data/telemetry && chmod 2770 /data/telemetry
+    # its owner and that group only.
+    mkdir -p /data/telemetry && chown appuser:appuser /data/telemetry && chmod 770 /data/telemetry
 USER appuser
 ENV HOME=/home/appuser
 
