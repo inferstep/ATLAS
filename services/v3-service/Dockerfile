@@ -62,12 +62,13 @@ RUN cd /app && python -c "import main, adapters, pipeline, contract"
 # app user needs no writable app directory. Bytecode caching is disabled
 # so Python never tries to write .pyc into the read-only /app.
 ENV PYTHONDONTWRITEBYTECODE=1
-RUN useradd --create-home --uid 1001 --user-group appuser && \
+RUN groupadd --gid 1001 appuser && useradd --create-home --uid 1001 --gid 1001 appuser && \
     # Pre-create the telemetry path: a named volume copies its owner and
     # mode on first mount, so stage telemetry is writable without a root
-    # init step. Mode 1777, because docker-compose.yml runs the service as
-    # the installing user, not as appuser.
-    mkdir -p /data/telemetry && chown appuser:appuser /data/telemetry && chmod 1777 /data/telemetry
+    # init step. docker-compose.yml runs the service as the installing user,
+    # not as appuser, and adds group 1001 to it: the folder is writable for
+    # its owner and that group only.
+    mkdir -p /data/telemetry && chown appuser:appuser /data/telemetry && chmod 770 /data/telemetry
 USER appuser
 ENV HOME=/home/appuser
 
