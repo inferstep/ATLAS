@@ -854,11 +854,11 @@ func badgeActionHint(s *calibrationStatus) string {
 	hint := ""
 	switch {
 	case lensWarn && asaWarn:
-		hint = "→ atlas lens build / atlas asa build · docs/PUBLISHING.md"
+		hint = "→ atlas lens build / atlas asa build · docs/project/PUBLISHING.md"
 	case lensWarn:
-		hint = "→ atlas lens build · docs/PUBLISHING.md"
+		hint = "→ atlas lens build · docs/project/PUBLISHING.md"
 	case asaWarn:
-		hint = "→ atlas asa build · docs/PUBLISHING.md"
+		hint = "→ atlas asa build · docs/project/PUBLISHING.md"
 	case asaUnverified:
 		hint = "→ atlas asa check"
 	}

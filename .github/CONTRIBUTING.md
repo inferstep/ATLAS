@@ -7,7 +7,7 @@ issue.
 **Quick links:** [Start Here](https://github.com/orgs/inferstep/projects/1/views/1) (issues ready for newcomers) ·
 [Roadmap board](https://github.com/orgs/inferstep/projects/1) ·
 [ARCHITECTURE](../docs/ARCHITECTURE.md) · [MAP](../docs/README.md#repository-map) ·
-[Development workflow](#development-workflow) · [GOVERNANCE](../docs/GOVERNANCE.md) ·
+[Development workflow](#development-workflow) · [GOVERNANCE](GOVERNANCE.md) ·
 [Security reports](SECURITY.md)
 
 ## 1. How ATLAS is organized
@@ -45,7 +45,7 @@ were trained against. If you've trained them with `atlas lens build` /
 `atlas asa publish`. That uploads to a Hugging Face repo you own and opens
 a registry pull request. You don't need write access here, just a Hugging
 Face account and write token. The walkthrough is in
-[PUBLISHING.md](../docs/PUBLISHING.md).
+[PUBLISHING.md](../docs/project/PUBLISHING.md).
 
 ## 3. Set up
 
@@ -303,7 +303,7 @@ Use the **RFC** issue form for architecture changes, new dependencies,
 security-model changes, release-policy or support-matrix changes, and any
 breaking change. An RFC gets a 7-day comment period and then a decision:
 Accepted, Revise, or Declined. An accepted RFC becomes an Epic with
-sub-issues. The whole flow is in [GOVERNANCE](../docs/GOVERNANCE.md#proposals-rfc--adr--epic).
+sub-issues. The whole flow is in [GOVERNANCE](GOVERNANCE.md#proposals-rfc--adr--epic).
 
 ## 12. Getting help
 
@@ -318,7 +318,7 @@ Report security problems privately, never in an issue (see
 Access follows trust built over time, not a count of pull requests. The
 path is Contributor → Triager → Reviewer → Maintainer. Each rung has a
 minimum time, a nomination, and hard technical limits. See the
-[trust ladder](../docs/GOVERNANCE.md#trust-ladder).
+[trust ladder](GOVERNANCE.md#trust-ladder).
 
 ## Code style
 

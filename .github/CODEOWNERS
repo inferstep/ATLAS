@@ -1,6 +1,6 @@
 # Review ownership by subsystem. Single-maintainer project today —
 # every path resolves to @itigges22 — but the map documents subsystem
-# boundaries for future co-maintainers (see docs/MAINTAINERS.md open seats),
+# boundaries for future co-maintainers (see docs/project/MAINTAINERS.md open seats),
 # and the security/release-critical paths are listed explicitly so
 # branch protection can require review on them.
 
@@ -13,7 +13,7 @@
 /scripts/               @itigges22
 /atlas/commands/model_registry.py  @itigges22
 /docs/RELEASE.md        @itigges22
-/docs/PUBLISHING.md     @itigges22
+/docs/project/PUBLISHING.md     @itigges22
 
 # Subsystems
 /proxy/                 @itigges22

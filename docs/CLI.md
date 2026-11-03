@@ -692,7 +692,7 @@ After a successful build:
 
 Uploads trained artifacts to a HuggingFace repo and generates a maintainer-reviewable PR body that adds the model to the ATLAS registry.
 
-> **New to publishing?** See [docs/PUBLISHING.md](PUBLISHING.md) for the end-to-end walkthrough — HF account setup, token generation, what happens after submission, and troubleshooting. The reference below assumes you've already got `HF_TOKEN` set.
+> **New to publishing?** See [docs/project/PUBLISHING.md](project/PUBLISHING.md) for the end-to-end walkthrough — HF account setup, token generation, what happens after submission, and troubleshooting. The reference below assumes you've already got `HF_TOKEN` set.
 
 ```bash
 atlas lens publish <registry-name> --repo alice/atlas-lens-my-model
@@ -766,7 +766,7 @@ After build:
 
 ### `atlas asa publish`
 
-Same shape as `atlas lens publish` — uploads the trained `.gguf` to a HuggingFace repo and generates a maintainer-reviewable registry PR. Full contributor walkthrough lives in [docs/PUBLISHING.md](PUBLISHING.md).
+Same shape as `atlas lens publish` — uploads the trained `.gguf` to a HuggingFace repo and generates a maintainer-reviewable registry PR. Full contributor walkthrough lives in [docs/project/PUBLISHING.md](project/PUBLISHING.md).
 
 ```bash
 atlas asa publish <registry-name> --repo alice/atlas-asa-my-model
