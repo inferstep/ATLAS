@@ -258,53 +258,52 @@ func stalledGenerateServer(t *testing.T) *httptest.Server {
 // cap, half of the session's remaining time, or the user's cancel
 // (TestCancelAbortsAStalledV3Stream).
 func TestGenerateStreamingEndsAStalledStream(t *testing.T) {
+	noDeadline := func() (context.Context, context.CancelFunc) { return context.WithCancel(context.Background()) }
+	timeLeft := func(d time.Duration) func() (context.Context, context.CancelFunc) {
+		return func() (context.Context, context.CancelFunc) { return context.WithTimeout(context.Background(), d) }
+	}
 	for _, tc := range []struct {
 		name    string
-		callCap time.Duration // the configured cap of one call
-		session time.Duration // time left in the session; 0 means no deadline
-		within  time.Duration // the call must return before this
+		callCap time.Duration                                // the configured cap of one call
+		session func() (context.Context, context.CancelFunc) // the session and the time left in it
+		within  time.Duration                                // the call must return before this
 	}{
 		{name: "the configured cap fires",
-			callCap: time.Second, within: 5 * time.Second},
+			callCap: time.Second, session: noDeadline, within: 5 * time.Second},
 		// Half of a long session is far above the cap, so the cap applies.
 		{name: "the cap bounds a long session",
-			callCap: time.Second, session: 10 * time.Minute, within: 5 * time.Second},
+			callCap: time.Second, session: timeLeft(10 * time.Minute), within: 5 * time.Second},
 		// With 6s left, V3 may have 3s, not 300s, so the run keeps as much
 		// again for the work still to do.
 		{name: "half of a short session",
-			callCap: 300 * time.Second, session: 6 * time.Second, within: 5 * time.Second},
+			callCap: 300 * time.Second, session: timeLeft(6 * time.Second), within: 5 * time.Second},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			srv := stalledGenerateServer(t)
-			sessionCtx := context.Background()
-			if tc.session > 0 {
-				var cancel context.CancelFunc
-				sessionCtx, cancel = context.WithTimeout(sessionCtx, tc.session)
-				defer cancel()
-			}
+		srv := stalledGenerateServer(t)
+		sessionCtx, cancel := tc.session()
+		defer cancel()
 
-			start := time.Now()
-			_, err := GenerateStreaming(sessionCtx, srv.URL, "", tc.callCap, wire.V3GenerateRequest{}, nil)
-			elapsed := time.Since(start)
+		start := time.Now()
+		_, err := GenerateStreaming(sessionCtx, srv.URL, "", tc.callCap, wire.V3GenerateRequest{}, nil)
+		elapsed := time.Since(start)
 
-			if err == nil {
-				t.Fatal("a stalled V3 run returned no error")
-			}
-			if elapsed > tc.within {
-				t.Errorf("the call took %v, want under %v", elapsed.Round(time.Millisecond), tc.within)
-			}
-			if sessionCtx.Err() != nil {
-				t.Errorf("V3 used up the whole session: %v", sessionCtx.Err())
-			}
-			// The cap firing and V3 finishing empty are different events with
-			// different fixes, so they must not share one message.
-			if strings.Contains(err.Error(), "without sending a result event") {
-				t.Errorf("the cap firing is reported as V3 finishing empty:\n%s", err)
-			}
-			if !strings.Contains(err.Error(), "ATLAS_V3_TIMEOUT") {
-				t.Errorf("the error does not name the cap that fired:\n%s", err)
-			}
-		})
+		if err == nil {
+			t.Errorf("%s: a stalled V3 run returned no error", tc.name)
+			continue
+		}
+		if elapsed > tc.within {
+			t.Errorf("%s: the call took %v, want under %v", tc.name, elapsed.Round(time.Millisecond), tc.within)
+		}
+		if sessionCtx.Err() != nil {
+			t.Errorf("%s: V3 used up the whole session: %v", tc.name, sessionCtx.Err())
+		}
+		// The cap firing and V3 finishing empty are different events with
+		// different fixes, so they must not share one message.
+		if strings.Contains(err.Error(), "without sending a result event") {
+			t.Errorf("%s: the cap firing is reported as V3 finishing empty:\n%s", tc.name, err)
+		}
+		if !strings.Contains(err.Error(), "ATLAS_V3_TIMEOUT") {
+			t.Errorf("%s: the error does not name the cap that fired:\n%s", tc.name, err)
+		}
 	}
 }
 

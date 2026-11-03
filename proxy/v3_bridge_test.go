@@ -82,11 +82,14 @@ func TestV3CallTimeout(t *testing.T) {
 	}
 }
 
-// Each production V3 call forwards its request's id. The client read the id
-// from the context itself before it became a package; now a caller could
-// leave it out, and the service joins a candidate pool to its request by it.
-func TestEveryV3CallForwardsTheRequestID(t *testing.T) {
-	calls := 0
+// v3clientCall is one call into the V3 client: the file it is in, the function
+// it calls and the expression it passes as the request id.
+type v3clientCall struct{ file, fn, requestID string }
+
+// v3clientCalls lists every call to v3client.GenerateStreaming or
+// v3client.PlanStreaming in the proxy's code.
+func v3clientCalls(t *testing.T) []v3clientCall {
+	var out []v3clientCall
 	for name, f := range proxyFiles(t) {
 		ast.Inspect(f, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
@@ -97,19 +100,27 @@ func TestEveryV3CallForwardsTheRequestID(t *testing.T) {
 			if !ok || types.ExprString(sel.X) != "v3client" {
 				return true
 			}
-			if sel.Sel.Name != "GenerateStreaming" && sel.Sel.Name != "PlanStreaming" {
-				return true
-			}
-			calls++
-			if got := types.ExprString(call.Args[2]); got != "requestIDOf(ctx)" {
-				t.Errorf("%s: v3client.%s gets %s as the request id, want requestIDOf(ctx)",
-					name, sel.Sel.Name, got)
+			if sel.Sel.Name == "GenerateStreaming" || sel.Sel.Name == "PlanStreaming" {
+				out = append(out, v3clientCall{name, sel.Sel.Name, types.ExprString(call.Args[2])})
 			}
 			return true
 		})
 	}
-	if calls == 0 {
+	return out
+}
+
+// Each production V3 call forwards its request's id. The client read the id
+// from the context itself before it became a package; now a caller could
+// leave it out, and the service joins a candidate pool to its request by it.
+func TestEveryV3CallForwardsTheRequestID(t *testing.T) {
+	calls := v3clientCalls(t)
+	if len(calls) == 0 {
 		t.Fatal("no call to v3client was found, so this guard reads nothing")
+	}
+	for _, c := range calls {
+		if c.requestID != "requestIDOf(ctx)" {
+			t.Errorf("%s: v3client.%s gets %s as the request id, want requestIDOf(ctx)", c.file, c.fn, c.requestID)
+		}
 	}
 }
 
