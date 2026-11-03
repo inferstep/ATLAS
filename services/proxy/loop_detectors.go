@@ -653,24 +653,32 @@ func missingFileSteer(ctx *AgentContext, output string) string {
 			continue
 		}
 		seen[cand] = true
-		base := filepath.Base(cand)
-		dir := filepath.Dir(cand) // "." when cand is a bare filename
-		entries, err := readWorkspaceDir(ctx, dir)
-		if err != nil {
-			continue
-		}
-		for _, e := range entries {
-			name := e.Name()
-			if name != base && strings.EqualFold(name, base) {
-				actual := name
-				if dir != "." && dir != "" {
-					actual = filepath.Join(dir, name)
-				}
-				return fmt.Sprintf("[system note]: There is no file `%s`, but `%s` exists — the name differs only in case. Re-run the command with the exact name `%s`. Do not re-run it unchanged.", cand, actual, actual)
-			}
+		if actual, ok := caseVariant(ctx, cand); ok {
+			return fmt.Sprintf("[system note]: There is no file `%s`, but `%s` exists — the name differs only in case. Re-run the command with the exact name `%s`. Do not re-run it unchanged.", cand, actual, actual)
 		}
 	}
 	return ""
+}
+
+// caseVariant is the workspace file whose name differs from cand only in case,
+// in cand's folder, when there is one.
+func caseVariant(ctx *AgentContext, cand string) (string, bool) {
+	base := filepath.Base(cand)
+	dir := filepath.Dir(cand) // "." when cand is a bare filename
+	entries, err := readWorkspaceDir(ctx, dir)
+	if err != nil {
+		return "", false
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if name != base && strings.EqualFold(name, base) {
+			if dir != "." && dir != "" {
+				return filepath.Join(dir, name), true
+			}
+			return name, true
+		}
+	}
+	return "", false
 }
 
 // tracebackExclusion is the grammar-level counterpart to runBlockAfterTraceback.
@@ -740,6 +748,56 @@ func runBlockAfterTraceback(ctx *AgentContext) *wire.ToolResult {
 	return nil
 }
 
+// deepestProjectFrame walks the frames outermost→deepest and keeps the LAST one
+// that is a project file (it skips stdlib / site-packages / <string> /
+// <frozen ...> frames — the bug is in the user's code, not the library it
+// called).
+func deepestProjectFrame(frames [][]string) (file string, lineNo int, fn string) {
+	for _, f := range frames {
+		p := f[1]
+		if strings.Contains(p, "site-packages") || strings.Contains(p, "/usr/lib/") ||
+			strings.Contains(p, "/lib/python") || strings.HasPrefix(p, "<") {
+			continue
+		}
+		n, err := strconv.Atoi(f[2])
+		if err != nil {
+			continue
+		}
+		file, lineNo, fn = p, n, f[3]
+	}
+	return file, lineNo, fn
+}
+
+// exceptionSummary is a traceback's last line that is not indented and is not
+// the "Traceback" heading.
+func exceptionSummary(output string) string {
+	exc := ""
+	for _, l := range strings.Split(strings.TrimRight(output, "\n"), "\n") {
+		if l == "" || strings.HasPrefix(l, " ") || strings.HasPrefix(l, "\t") ||
+			strings.HasPrefix(l, "Traceback") {
+			continue
+		}
+		exc = strings.TrimSpace(l)
+	}
+	return exc
+}
+
+// readOffendingLine is line lineNo of file, trimmed, or "" when it cannot be
+// read or the file has no such line. A file it reads is recorded as read.
+func readOffendingLine(ctx *AgentContext, file string, lineNo int) string {
+	data, resolved, err := readWorkspaceFile(ctx, file)
+	if err != nil {
+		return ""
+	}
+	exact := ""
+	lines := strings.Split(string(data), "\n")
+	if lineNo >= 1 && lineNo <= len(lines) {
+		exact = strings.TrimSpace(lines[lineNo-1])
+	}
+	ctx.RecordFileRead(resolved, string(data))
+	return exact
+}
+
 // tracebackSteer scans tool output for a Python traceback and returns a
 // directed steer naming the exact fix site, or "" when there is no parseable
 // in-project frame. ctx is used to read the offending line from disk
@@ -753,36 +811,11 @@ func tracebackSteer(ctx *AgentContext, output string) string {
 		return ""
 	}
 
-	// Walk frames outermost→deepest; keep the LAST one that's a project file
-	// (skip stdlib / site-packages / <string> / <frozen ...> frames — the bug
-	// is in the user's code, not the library it called).
-	var file, fn string
-	var lineNo int
-	for _, f := range frames {
-		p := f[1]
-		if strings.Contains(p, "site-packages") || strings.Contains(p, "/usr/lib/") ||
-			strings.Contains(p, "/lib/python") || strings.HasPrefix(p, "<") {
-			continue
-		}
-		n, err := strconv.Atoi(f[2])
-		if err != nil {
-			continue
-		}
-		file, lineNo, fn = p, n, f[3]
-	}
+	file, lineNo, fn := deepestProjectFrame(frames)
 	if file == "" || lineNo == 0 {
 		return ""
 	}
-
-	// Exception summary = last non-indented, non-"Traceback" line.
-	exc := ""
-	for _, l := range strings.Split(strings.TrimRight(output, "\n"), "\n") {
-		if l == "" || strings.HasPrefix(l, " ") || strings.HasPrefix(l, "\t") ||
-			strings.HasPrefix(l, "Traceback") {
-			continue
-		}
-		exc = strings.TrimSpace(l)
-	}
+	exc := exceptionSummary(output)
 
 	// Don't fire on environment errors. A missing top-level package
 	// (ModuleNotFoundError: pygame) is not a code bug the model can fix by
@@ -801,14 +834,7 @@ func tracebackSteer(ctx *AgentContext, output string) string {
 	// the model's correct directed edit bounces with "file not read yet," it
 	// loops, and gets stopped (the 2/3 variance). The harness HAS read the file
 	// to build this steer, so the edit is grounded, not blind.
-	exact := ""
-	if data, resolved, err := readWorkspaceFile(ctx, file); err == nil {
-		lines := strings.Split(string(data), "\n")
-		if lineNo >= 1 && lineNo <= len(lines) {
-			exact = strings.TrimSpace(lines[lineNo-1])
-		}
-		ctx.RecordFileRead(resolved, string(data))
-	}
+	exact := readOffendingLine(ctx, file, lineNo)
 
 	rel := file
 	if i := strings.Index(rel, "/workspace/"); i >= 0 {

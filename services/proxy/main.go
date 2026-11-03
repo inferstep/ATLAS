@@ -102,8 +102,22 @@ func resolveVerifyTarget(workingDir string) string {
 	if err != nil {
 		return target
 	}
+	switch workspaceExecutionTarget(string(cfg)) {
+	case "sandbox":
+		return "sandbox"
+	case "host":
+		log.Printf("[execution] .atlas/config.toml names target = \"host\"; ignored: " +
+			"only the operator chooses the host, with ATLAS_VERIFY_IN=host and ATLAS_TRUST_MODE=fully-trusted")
+	}
+	return target
+}
+
+// workspaceExecutionTarget is the first `target` under an [execution] header
+// of a workspace config that names "sandbox" or "host", or "" when none does.
+// Other values are skipped.
+func workspaceExecutionTarget(cfg string) string {
 	inExecution := false
-	for _, raw := range strings.Split(string(cfg), "\n") {
+	for _, raw := range strings.Split(cfg, "\n") {
 		line := strings.TrimSpace(raw)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
@@ -120,16 +134,11 @@ func resolveVerifyTarget(workingDir string) string {
 			continue
 		}
 		val := strings.ToLower(strings.Trim(strings.TrimSpace(parts[1]), `"'`))
-		if val == "sandbox" {
-			return "sandbox"
-		}
-		if val == "host" {
-			log.Printf("[execution] .atlas/config.toml names target = \"host\"; ignored: " +
-				"only the operator chooses the host, with ATLAS_VERIFY_IN=host and ATLAS_TRUST_MODE=fully-trusted")
-			return target
+		if val == "sandbox" || val == "host" {
+			return val
 		}
 	}
-	return target
+	return ""
 }
 
 // ---------------------------------------------------------------------------
