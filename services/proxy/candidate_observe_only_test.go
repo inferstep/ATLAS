@@ -90,9 +90,12 @@ func TestTheObserversRunAndRecordAttributably(t *testing.T) {
 			return
 		}
 		captureEntry := mintRouteEntry(w.ctx)
-		authorizeCandidateDelivery(w.ctx, captureEntry, w.path, w.code, id, nil,
-			[]proxyEvidence{ev}, "selected", nil, checkOutcome{Status: wire.ValidationPassed},
-			testMutationScope(w.ctx, captureEntry, w.path, w.code), automaticIntent{})
+		authorizeCandidateDelivery(w.ctx, candidateAuthorizationRequest{
+			Entry: captureEntry, Path: w.path, Code: w.code, Identity: id,
+			Evidence: []proxyEvidence{ev}, SelectedCandidateID: "selected",
+			Observed: checkOutcome{Status: wire.ValidationPassed},
+			Scope:    testMutationScope(w.ctx, captureEntry, w.path, w.code),
+		})
 	})
 
 	// Each record says truthfully whether it decided anything. Feasibility and
@@ -266,9 +269,12 @@ func TestTheObserversAreSilentWithNoSink(t *testing.T) {
 		t.Fatal("the producer went silent with the sink off")
 	}
 	sinkOffEntry := mintRouteEntry(w.ctx)
-	a := authorizeCandidateDelivery(w.ctx, sinkOffEntry, w.path, w.code, id, nil,
-		[]proxyEvidence{ev}, "selected", nil, checkOutcome{Status: wire.ValidationPassed},
-		testMutationScope(w.ctx, sinkOffEntry, w.path, w.code), automaticIntent{})
+	a := authorizeCandidateDelivery(w.ctx, candidateAuthorizationRequest{
+		Entry: sinkOffEntry, Path: w.path, Code: w.code, Identity: id,
+		Evidence: []proxyEvidence{ev}, SelectedCandidateID: "selected",
+		Observed: checkOutcome{Status: wire.ValidationPassed},
+		Scope:    testMutationScope(w.ctx, sinkOffEntry, w.path, w.code),
+	})
 	if !a.Decision.Authorized {
 		t.Errorf("the decision changed with the sink off: %q", a.Decision.Reason)
 	}

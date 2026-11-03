@@ -344,10 +344,12 @@ func TestARepairCandidateIsJudgedOnItsOwnBytes(t *testing.T) {
 		t.Error("a repair reused the first delivery's candidate identity")
 	}
 	repairEntry := mintRouteEntry(w.ctx)
-	a := authorizeCandidateDelivery(w.ctx, repairEntry, w.path, repaired, evID, nil,
-		[]proxyEvidence{ev}, "selected-repair", nil,
-		fallbackSyntaxOutcomeFor(w.ctx, w.path, repaired).aggregate(),
-		testMutationScope(w.ctx, repairEntry, w.path, repaired), automaticIntent{})
+	a := authorizeCandidateDelivery(w.ctx, candidateAuthorizationRequest{
+		Entry: repairEntry, Path: w.path, Code: repaired, Identity: evID,
+		Evidence: []proxyEvidence{ev}, SelectedCandidateID: "selected-repair",
+		Observed: fallbackSyntaxOutcomeFor(w.ctx, w.path, repaired).aggregate(),
+		Scope:    testMutationScope(w.ctx, repairEntry, w.path, repaired),
+	})
 	if a.Grant == nil {
 		t.Fatalf("the repair minted no grant to inspect: %s (%s)", a.Refusal, a.Decision.Reason)
 	}

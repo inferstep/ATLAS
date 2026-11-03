@@ -69,9 +69,11 @@ func (w *authWorld) authorize(id candidateEvidenceIdentity,
 	// production would give rather than for a zero value.
 	observed := fallbackSyntaxOutcomeFor(w.ctx, w.path, w.code).aggregate()
 	entry := mintRouteEntry(w.ctx)
-	return authorizeCandidateDelivery(w.ctx, entry, w.path, w.code, id, envelope,
-		evidence, "selected", nil, observed,
-		testMutationScope(w.ctx, entry, w.path, w.code), automaticIntent{})
+	return authorizeCandidateDelivery(w.ctx, candidateAuthorizationRequest{
+		Entry: entry, Path: w.path, Code: w.code, Identity: id, Envelope: envelope,
+		Evidence: evidence, SelectedCandidateID: "selected", Observed: observed,
+		Scope: testMutationScope(w.ctx, entry, w.path, w.code),
+	})
 }
 
 // authorizeCandidateDeliveryDecision is the live owner's decision, for rows
@@ -81,9 +83,11 @@ func authorizeCandidateDeliveryDecision(ctx *AgentContext, path, code string,
 	evidence []proxyEvidence) AuthorizationDecision {
 	observed := fallbackSyntaxOutcomeFor(ctx, path, code).aggregate()
 	entry := mintRouteEntry(ctx)
-	return authorizeCandidateDelivery(ctx, entry, path, code, id, envelope,
-		evidence, "selected", nil, observed,
-		testMutationScope(ctx, entry, path, code), automaticIntent{}).Decision
+	return authorizeCandidateDelivery(ctx, candidateAuthorizationRequest{
+		Entry: entry, Path: path, Code: code, Identity: id, Envelope: envelope,
+		Evidence: evidence, SelectedCandidateID: "selected", Observed: observed,
+		Scope: testMutationScope(ctx, entry, path, code),
+	}).Decision
 }
 
 // stagedWorld is a world whose client declared commands, with an executor that

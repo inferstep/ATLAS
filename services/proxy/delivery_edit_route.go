@@ -275,9 +275,13 @@ func decideEditCandidateDelivery(ctx *AgentContext, entry routeEntry, lifecycle 
 	if meta.Envelope != nil {
 		selected = meta.Envelope.Identity.CandidateContentHash
 	}
-	delivery := authorizeCandidateDelivery(ctx, entry, path, improved, evidence.evID,
-		meta.Envelope, evidence.pool, selected, evidence.unmet, evidence.observed, scope,
-		automaticIntent{VetoInput: vetoInput})
+	delivery := authorizeCandidateDelivery(ctx, candidateAuthorizationRequest{
+		Entry: entry, Path: path, Code: improved, Identity: evidence.evID,
+		Envelope: meta.Envelope, Evidence: evidence.pool,
+		SelectedCandidateID: selected, Unmet: evidence.unmet,
+		Observed: evidence.observed, Scope: scope,
+		Automatic: automaticIntent{VetoInput: vetoInput},
+	})
 	vetoes := delivery.Vetoes
 	vetoInput.Unmet = delivery.Unmet
 	lifecycle.noteAuthorization(delivery, evidence.evID, contentSHA256(improved), vetoes)
