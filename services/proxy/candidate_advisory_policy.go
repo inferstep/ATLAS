@@ -156,7 +156,23 @@ type advisoryInput struct {
 // permits a preference, so both veto.
 func advisoryVetoes(in advisoryInput) []string {
 	fired := map[string]bool{}
+	markObservedVetoes(fired, in)
+	markEvidenceVetoes(fired, in)
 
+	out := make([]string, 0, len(fired))
+	for name := range fired {
+		if advisoryVetoNames[name] {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// markObservedVetoes marks the vetoes that facts observed about the candidate
+// fire: its syntax check, its language and target, a cancellation, a
+// destructive change, protected assets and the mutation scope.
+func markObservedVetoes(fired map[string]bool, in advisoryInput) {
 	if in.Observed.Status == wire.ValidationFailed {
 		fired[VetoSyntaxOrStructural] = true
 	}
@@ -186,7 +202,11 @@ func advisoryVetoes(in advisoryInput) []string {
 	if !in.ScopeAdmits {
 		fired[VetoOutsideMutationScope] = true
 	}
+}
 
+// markEvidenceVetoes marks the vetoes that the unmet evidence and the
+// authorization decision fire.
+func markEvidenceVetoes(fired map[string]bool, in advisoryInput) {
 	for _, why := range in.Unmet {
 		switch why {
 		case ReasonEvidenceExecutionFailed:
@@ -221,15 +241,6 @@ func advisoryVetoes(in advisoryInput) []string {
 	if len(in.Decision.Missing) > 0 && in.Decision.Reason != ReasonAuthorized {
 		fired[VetoIncompleteEvidence] = true
 	}
-
-	out := make([]string, 0, len(fired))
-	for name := range fired {
-		if advisoryVetoNames[name] {
-			out = append(out, name)
-		}
-	}
-	sort.Strings(out)
-	return out
 }
 
 // advisorySignals are the quality observations available, recorded verbatim.
