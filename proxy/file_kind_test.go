@@ -9,11 +9,13 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/assetlint"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -603,17 +605,16 @@ func TestReadLedgerBytesSkipsANamedPipe(t *testing.T) {
 func TestAssetLintSkipsANamedPipeAndKeepsGoing(t *testing.T) {
 	dir := t.TempDir()
 	makePipe(t, dir, theSpecialFile)
-	seedFile(t, dir, "app.py", "def f():\n    return 1\n")
-	var files []lintFile
-	var ok bool
-	withinCap(t, waitCap, "assetLintFiles with a named pipe in the tree", func() {
-		files, ok = assetLintFiles(dir)
+	seedFile(t, dir, "templates/index.html", "<html></html>")
+	var findings []string
+	withinCap(t, waitCap, "assetlint.Findings with a named pipe in the tree", func() {
+		findings = assetlint.Findings(dir)
 	})
-	if !ok {
-		t.Fatal("assetLintFiles gave up on the project: a pipe is not a project too large to judge")
-	}
-	if len(files) != 1 || files[0].rel != "app.py" {
-		t.Errorf("assetLintFiles = %+v, want only the regular file", files)
+	// The template nothing renders is the one finding: the walk went on past the
+	// pipe, and did not give the project up as too large to judge.
+	want := []string{`templates/index.html is referenced by nothing (no render_template call or include names "index.html").`}
+	if !slices.Equal(findings, want) {
+		t.Errorf("assetlint.Findings = %q, want %q", findings, want)
 	}
 }
 

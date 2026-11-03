@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/assetlint"
 	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
@@ -2956,7 +2957,7 @@ func TestTheRouteContractMessageSteersToTheCheapRepair(t *testing.T) {
 	os.MkdirAll(filepath.Join(dir, "templates"), 0o755)
 	os.WriteFile(filepath.Join(dir, "app.py"), []byte(bookSiteApp), 0o644)
 	os.WriteFile(filepath.Join(dir, "templates/index.html"), []byte(bookSiteBadPage), 0o644)
-	msg := routeContractMessage(routeContractFindings(dir))
+	msg := assetlint.RouteContractMessage(assetlint.RouteContractFindings(dir))
 	if !strings.Contains(msg, "insert_after") || !strings.Contains(msg, "not a whole-file write_file") {
 		t.Errorf("the gate must say how to repair without re-entering the pipeline: %s", msg)
 	}
@@ -2972,7 +2973,7 @@ func TestRouteContractGateLeavesAQuestionAboutAnOldProjectAlone(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "app.py"), []byte("from flask import Flask\napp = Flask(__name__)\n@app.route('/')\ndef index():\n    return 'x'\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, "templates/index.html"), []byte("<form action=\"/add_book\"></form>\n"), 0o644)
 	ctx := NewAgentContext(dir, Tier0Conversational)
-	if len(routeContractFindings(dir)) == 0 {
+	if len(assetlint.RouteContractFindings(dir)) == 0 {
 		t.Fatal("fixture has no mismatch; the test proves nothing")
 	}
 	// Nothing written this session: the gate must stay out of the way.

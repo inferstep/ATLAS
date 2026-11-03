@@ -1,13 +1,13 @@
-// Asset-graph lint: cross-file coherence for small web projects — a template
-// no route renders, an href to a file that isn't there, a fetch to a route
-// that doesn't exist. Advisory notes, deduped per session. A form or fetch()
-// target that no route serves is a defect, and the exit gate asks about it.
+// Package assetlint is the asset-graph lint: cross-file coherence for small
+// web projects — a template no route renders, an href to a file that isn't
+// there, a fetch to a route that doesn't exist. Advisory notes, deduped per
+// session. A form or fetch() target that no route serves is a defect, and the
+// exit gate asks about it.
 //
-// The findings come from assetLintFindings, routeContractFindings and
-// assetLintFindingsFor, in gates.go. The walk that loads the project's files
-// and the steps assetLintFindingsFor runs over them are here.
-
-package main
+// The findings come from Findings, RouteContractFindings and findingsFor, in
+// findings.go. The walk that loads the project's files and the steps
+// findingsFor runs over them are here.
+package assetlint
 
 import (
 	"fmt"
@@ -271,10 +271,10 @@ func unservedRouteFindings(f lintFile, routeSet []*regexp.Regexp, routeRaw []str
 	return contract
 }
 
-// routeContractMessage is the exit gate's instruction when a page submits to
+// RouteContractMessage is the exit gate's instruction when a page submits to
 // a route the server never defines. It carries the lint's own finding, which
 // already names the target and lists the routes that do exist.
-func routeContractMessage(findings []string) string {
+func RouteContractMessage(findings []string) string {
 	var sb strings.Builder
 	sb.WriteString("Before finishing: a page you wrote submits to a route the server does not define, " +
 		"so that part of the site cannot work.\n\n")
@@ -294,21 +294,21 @@ func routeContractMessage(findings []string) string {
 	return sb.String()
 }
 
-// assetLintNotes remembers the findings the model was already told, so a
+// Notes remembers the findings the model was already told, so a
 // persistent orphan is mentioned once, not after every subsequent write. Its
 // zero value is ready to use.
-type assetLintNotes struct {
+type Notes struct {
 	seen map[string]bool
 }
 
-// note runs the lint over workingDir and formats the findings the model has
+// Note runs the lint over workingDir and formats the findings the model has
 // not seen yet as one [system note] body ("" when quiet).
-func (n *assetLintNotes) note(workingDir string) string {
+func (n *Notes) Note(workingDir string) string {
 	files, ok := assetLintFiles(workingDir)
 	if !ok {
 		return ""
 	}
-	advisory, contract := assetLintFindingsFor(workingDir, files)
+	advisory, contract := findingsFor(workingDir, files)
 	if len(advisory)+len(contract) == 0 {
 		return ""
 	}

@@ -3,8 +3,11 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/assetlint"
 )
 
 // outsideMarker is the content of the file outside the workspace. A read
@@ -140,19 +143,12 @@ func TestAssetLintStaysInsideTheWorkspace(t *testing.T) {
 	workspace := t.TempDir()
 	linkOutOfWorkspace(t, workspace, "templates/linked.html", outsideMarker)
 	writeInWorkspace(t, workspace, "templates/real.html", "<p>inside</p>\n")
-	files, ok := assetLintFiles(workspace)
-	if !ok {
-		t.Fatal("assetLintFiles reported a project too large to judge")
-	}
-	var names []string
-	for _, file := range files {
-		names = append(names, file.rel)
-		if strings.Contains(file.content, outsideMarker) {
-			t.Errorf("assetLintFiles returned the content of a file outside the workspace under %q", file.rel)
-		}
-	}
-	if got, want := strings.Join(names, " "), "templates/real.html"; got != want {
-		t.Errorf("assetLintFiles read %q, want %q", got, want)
+	// The lint names every template nothing renders, so the one finding is the
+	// one template inside the workspace: a read past the link, under any name,
+	// adds a finding.
+	want := []string{`templates/real.html is referenced by nothing (no render_template call or include names "real.html").`}
+	if got := assetlint.Findings(workspace); !slices.Equal(got, want) {
+		t.Errorf("assetlint.Findings = %q, want %q", got, want)
 	}
 }
 

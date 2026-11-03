@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/assetlint"
 	"github.com/itigges22/atlas-proxy/internal/shellcmd"
 	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
@@ -792,11 +793,11 @@ func (s *runState) routeContractGate(ctx *AgentContext) (string, string) {
 	// this run's contract to keep, and bouncing that answer three times would
 	// be a false positive the user cannot act on.
 	if sessionWroteWebFiles(ctx) {
-		if broken := routeContractFindings(ctx.WorkingDir); len(broken) > 0 {
+		if broken := assetlint.RouteContractFindings(ctx.WorkingDir); len(broken) > 0 {
 			if s.chargeBounce("route_contract_gate") {
 				log.Printf("[agent] route contract gate: %d unmatched submit target(s) at exit (bounce %d/%d)",
 					len(broken), s.gateBounces["route_contract_gate"], maxGateBounces)
-				return "route_contract_gate", routeContractMessage(broken)
+				return "route_contract_gate", assetlint.RouteContractMessage(broken)
 			}
 			s.gateUnresolved("route_contract_gate", fmt.Sprintf(
 				"%d form or request target(s) in the pages this run wrote name a route the server does not define", len(broken)))

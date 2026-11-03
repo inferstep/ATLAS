@@ -1,4 +1,4 @@
-package main
+package assetlint
 
 import (
 	"fmt"
@@ -7,8 +7,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-
-	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // writeTree writes each file of files under root, creating its directories.
@@ -23,16 +21,6 @@ func writeTree(t *testing.T, root string, files map[string]string) {
 			t.Fatal(err)
 		}
 	}
-}
-
-// findingsContaining reports whether any finding contains substr.
-func findingsContaining(findings []string, substr string) bool {
-	for _, f := range findings {
-		if strings.Contains(f, substr) {
-			return true
-		}
-	}
-	return false
 }
 
 // Each workspace below gives exactly the findings listed: advisory ones sorted,
@@ -137,7 +125,7 @@ func TestAssetLintFindings(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			root := t.TempDir()
 			writeTree(t, root, c.files)
-			if got := assetLintFindings(root); !slices.Equal(got, c.want) {
+			if got := Findings(root); !slices.Equal(got, c.want) {
 				t.Errorf("findings:\n%q\nwant:\n%q", got, c.want)
 			}
 		})
@@ -153,7 +141,7 @@ func TestAssetLintSkipsLargeProjects(t *testing.T) {
 		files[fmt.Sprintf("pkg/f%d.py", i)] = "x = 1\n"
 	}
 	writeTree(t, root, files)
-	if findings := assetLintFindings(root); findings != nil {
+	if findings := Findings(root); findings != nil {
 		t.Errorf("a large project must be skipped, got: %q", findings)
 	}
 }
@@ -170,15 +158,15 @@ func TestRouteContractFindingsStandApartFromTheAdvice(t *testing.T) {
 	orphan := `templates/index.html is referenced by nothing (no render_template call or include names "index.html").`
 	unserved := `templates/index.html calls "/add_book", but no Flask route matches it (routes: /).`
 
-	if got := routeContractFindings(root); !slices.Equal(got, []string{unserved}) {
-		t.Errorf("routeContractFindings = %q, want only the unserved target", got)
+	if got := RouteContractFindings(root); !slices.Equal(got, []string{unserved}) {
+		t.Errorf("RouteContractFindings = %q, want only the unserved target", got)
 	}
-	if got := assetLintFindings(root); !slices.Equal(got, []string{orphan, unserved}) {
-		t.Errorf("assetLintFindings = %q, want the advice and then the unserved target", got)
+	if got := Findings(root); !slices.Equal(got, []string{orphan, unserved}) {
+		t.Errorf("Findings = %q, want the advice and then the unserved target", got)
 	}
 
-	var notes assetLintNotes
-	note := notes.note(root)
+	var notes Notes
+	note := notes.Note(root)
 	for _, want := range []string{
 		"Project structure check: " + orphan + " This is advisory",
 		"Route check: " + unserved + " This is a defect, not advice: that page cannot submit.",
@@ -187,24 +175,7 @@ func TestRouteContractFindingsStandApartFromTheAdvice(t *testing.T) {
 			t.Errorf("note missing %q:\n%s", want, note)
 		}
 	}
-	if again := notes.note(root); again != "" {
+	if again := notes.Note(root); again != "" {
 		t.Errorf("findings the note already named must not repeat, got %q", again)
-	}
-}
-
-// After a successful write, the loop lints the run's own folder and adds what it
-// found to the conversation as a note.
-func TestASuccessfulWriteGetsTheAssetLintNoteForItsFolder(t *testing.T) {
-	root := t.TempDir()
-	writeTree(t, root, map[string]string{
-		"app.py":               "@app.route('/')\ndef index():\n    return 'home'\n",
-		"templates/index.html": "<form method=\"POST\" action=\"/add_book\"></form>",
-	})
-	ctx := &AgentContext{runSetup: runSetup{WorkingDir: root}}
-
-	noteCrossFileCoherence(ctx, 1, wire.ModelResponse{Name: "write_file"}, &wire.ToolResult{Success: true})
-
-	if len(ctx.Messages) != 1 || !strings.Contains(ctx.Messages[0].Content, `Route check: templates/index.html calls "/add_book"`) {
-		t.Errorf("messages = %v, want one note with the route check for the run's folder", ctx.Messages)
 	}
 }

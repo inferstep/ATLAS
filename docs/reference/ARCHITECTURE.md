@@ -100,7 +100,7 @@ Every non-test Go file of `proxy/`, sub-folders included, with its area of owner
 | `gates_exit.go` | The exit gates and the run state they read |
 | `loop_turn.go`, `loop_checks.go`, `loop_results.go` | One turn of the loop: the model call and its reply, the checks before a tool runs, and its result with the stuck-loop breakers. `loop_turn.go` also prompts a run to act or answer after repeated read-only calls, according to what the request requires |
 | `tools.go`, `tool_*.go` | The 16 tool definitions + executors, tier classification, tool-call grammar |
-| `gates*.go` | Honesty/plan gates: claim-check, structural, syntax, embedded-script, plan-adherence, plan-reminder, asset lint |
+| `gates*.go` | Honesty/plan gates: claim-check, structural, syntax, embedded-script, plan-adherence, plan-reminder |
 | `detectors.go` | Stuck-pattern detectors: tool repetition, reasoning repetition, traceback localization |
 | `context.go` | Context enrichment: symbol index, project scan, workspace containment, session file manifest |
 | `permissions.go` | Permission gate (`/v1/permission`), trust mode, hard-blocked patterns |
@@ -109,6 +109,7 @@ Every non-test Go file of `proxy/`, sub-folders included, with its area of owner
 | `lens_required.go` | Enforces that the geometric Lens is available, tracks Lens failures, and stops runs when scoring is unavailable |
 | `internal/logsafe/logsafe.go` | Builds privacy-safe tool argument summaries for logs, allowing only approved fields and redacting sensitive content |
 | `internal/logsafe/filter.go` | The writer every log line passes through: masks credential-shaped values, then prints control characters as text |
+| `internal/assetlint/lint.go`, `internal/assetlint/findings.go` | The asset-graph lint: a template no route renders, a script or stylesheet no page loads, a reference to a file that is not there, and a form or `fetch()` target no route serves |
 | `internal/shadowcapture/sink.go` | The private shadow capture: records comparing what a request declared with what ATLAS read from its text, written to a file by one goroutine and read by no decision. Off unless `ATLAS_SHADOW_CAPTURE` names a file |
 | `internal/memoryenvelope/envelope.go` | Validates declared deployment memory budgets against the operator-stated host capacity and reports unenforced budget overruns |
 | `internal/workspacefs/object_handle_linux.go` | Holds Linux filesystem objects open during deletion approval so the approved object cannot be replaced before removal |

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/assetlint"
 	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
@@ -416,9 +417,9 @@ type checkRecords struct {
 	// to, and those are exactly what makes a staged execution worth trusting.
 	StagedCommands []stagedCommandFulfillment
 
-	// AssetLint remembers the asset-graph lint findings (gates_asset_lint.go)
+	// AssetLint remembers the asset-graph lint findings (internal/assetlint)
 	// the model was already told, so a persistent orphan is mentioned once.
-	AssetLint assetLintNotes
+	AssetLint assetlint.Notes
 }
 
 // deliverableLedger holds the ledger and its lock.
