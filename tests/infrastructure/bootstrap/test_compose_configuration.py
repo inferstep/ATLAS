@@ -1,6 +1,7 @@
 """Static contracts for runtime configuration shared across services."""
 
 import os
+import re
 import shutil
 import subprocess
 
@@ -221,3 +222,15 @@ def test_tmp_stays_noexec():
             assert "exec" not in opts.split(","), f"/tmp must stay noexec: {entry}"
             return
     raise AssertionError("sandbox declares no /tmp tmpfs")
+
+
+# The bootstrap starts the stack with the overlays that compose_files_args
+# names. A path that is not in the tree fails only at a user's ROCm, Vulkan or
+# CPU install, so it has to fail here.
+def test_every_compose_file_the_bootstrap_names_is_in_the_tree():
+    script = (ROOT / "scripts" / "atlas-bootstrap.sh").read_text(encoding="utf-8")
+    body = script.split("compose_files_args() {", 1)[1].split("\n}\n", 1)[0]
+    named = sorted(set(re.findall(r"-f (\S+\.yml)", body)))
+    assert len(named) >= 4, named
+    for path in named:
+        assert (ROOT / path).is_file(), f"compose_files_args in scripts/atlas-bootstrap.sh names {path}, which is not in the tree"

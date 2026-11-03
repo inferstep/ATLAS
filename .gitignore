@@ -134,7 +134,7 @@ bin/
 # ----- K3s render output -----
 # manifests/ is generated from deploy/k3s/*.yaml.tmpl by
 # scripts/install/generate-manifests.sh (or install.sh's process_templates step) at
-# install time. Source of truth is templates/, not manifests/.
+# install time. Source of truth is deploy/k3s/, not manifests/.
 manifests/
 
 # ----- Local data (not for git — user provides their own models) -----

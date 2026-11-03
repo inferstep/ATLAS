@@ -611,7 +611,7 @@ For K3s deployment only. Copy `atlas.conf.example` to `atlas.conf` and edit. The
 | `ATLAS_LENS_NODEPORT` | `31144` | geometric-lens external port |
 | `ATLAS_LLAMA_NODEPORT` | `32735` | llama-server external port |
 | `ATLAS_SANDBOX_NODEPORT` | `30820` | sandbox external port |
-| `ATLAS_V3_NODEPORT` | `30070` | v3-service external port. The template exposes it on NodePort `30070` by default (debug access to `/v3/*`); delete the `type: NodePort` / `nodePort:` lines in `templates/v3-service-deployment.yaml.tmpl` to make the service cluster-internal. |
+| `ATLAS_V3_NODEPORT` | `30070` | v3-service external port. The template exposes it on NodePort `30070` by default (debug access to `/v3/*`); delete the `type: NodePort` / `nodePort:` lines in `deploy/k3s/v3-service-deployment.yaml.tmpl` to make the service cluster-internal. |
 | `ATLAS_LLAMA_PORT` | `8080` | llama-server internal port (matches Dockerfile EXPOSE) |
 | `ATLAS_LENS_PORT` | `8099` | geometric-lens internal port |
 | `ATLAS_PROXY_PORT` | `8090` | atlas-proxy internal port |
