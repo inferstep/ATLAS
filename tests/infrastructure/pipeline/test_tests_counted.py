@@ -247,7 +247,7 @@ def number_of_tests(file):
 
 
 def test_the_number_of_each_group_is_the_number_of_tests_in_its_files_and_the_gates_page_has_each(counted):
-    page = (ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8")
+    page = (ROOT / "docs" / "project" / "gates.md").read_text(encoding="utf-8")
     rows = {file: (int(count), runs_in) for file, count, runs_in in
             re.findall(r"^\| `(tests/infrastructure/(?:sandbox/)?test_\w+\.py)` \| (\d+) \| [^|]+ \| ([^|]+?) \|$", page, re.MULTILINE)}
     for name, group in counted.GROUPS.items():
@@ -255,10 +255,10 @@ def test_the_number_of_each_group_is_the_number_of_tests_in_its_files_and_the_ga
         assert sum(in_the_files.values()) == group.expected, (
             f"the files of the group `{name}` have {sum(in_the_files.values())} tests ({in_the_files}), and its number in "
             f"scripts/tests_counted.py is {group.expected}. A run of the group fails while the two differ. Fix: give the "
-            "new number to the group and to the rows of docs/quality/gates.md, in the same change.")
+            "new number to the group and to the rows of docs/project/gates.md, in the same change.")
         for file, count in in_the_files.items():
             assert rows.get(file) == (count, group.runs_in), (
-                f"the row of {file} in docs/quality/gates.md is {rows.get(file)} (its tests, the job that runs it), and the "
+                f"the row of {file} in docs/project/gates.md is {rows.get(file)} (its tests, the job that runs it), and the "
                 f"group `{name}` gives {(count, group.runs_in)}. Fix: the row of the page.")
     assert sorted(rows) == sorted(file for group in counted.GROUPS.values() for file in group.files)
     said = " ".join(page.split())
@@ -331,7 +331,7 @@ def test_the_sandbox_job_starts_the_service_through_the_compose_file_and_gives_n
                  "--user", "--security-opt", "--publish", "--privileged", "--project-directory"):
         assert word not in commands, f"the job gives `{word}` itself"
     assert "env" not in job, "a setting of the stack that is given to the whole job"
-    page = " ".join((ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8").split())
+    page = " ".join((ROOT / "docs" / "project" / "gates.md").read_text(encoding="utf-8").split())
     assert ("starts it as the stack starts it: by the `sandbox` service of the compose file, with its read-only base, its tmpfs "
             "mounts, its dropped capabilities and its limits. The job gives none of these itself") in page
 

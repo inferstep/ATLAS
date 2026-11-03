@@ -19,7 +19,7 @@ client pull requests without an approval that counts towards `staging` or
 need:
 
 1. **Release engineering / CI** — able to cut a release from
-   `docs/RELEASE.md` without help (this is the bus-factor-1 gap).
+   `docs/project/RELEASE.md` without help (this is the bus-factor-1 gap).
 2. **V3 / Lens** — the scoring and selection stack.
 3. **Proxy / protocol** — the Go agent loop and SSE contract.
 

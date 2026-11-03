@@ -214,7 +214,7 @@ cancelled workflow, re-run this check too.
 
 A required check stops the merge while it is red. The other checks report:
 a red one is a reason to look, and a maintainer decides what it means for
-the merge. The [quality gates page](../docs/quality/gates.md) keeps the list
+the merge. The [quality gates page](../docs/project/gates.md) keeps the list
 of both kinds.
 
 | You see | What it means | What to do |
@@ -294,7 +294,7 @@ ships your change. If the issue should stay open after your change lands
 (it still needs a check after a deploy), write `Refs #N` instead.
 
 Minor releases ship when `dev` is ready; there's no fixed calendar. Fixes
-and security releases can ship any time. [RELEASE.md](../docs/RELEASE.md) has
+and security releases can ship any time. [RELEASE.md](../docs/project/RELEASE.md) has
 the details.
 
 ## 11. Proposing something big
@@ -323,7 +323,7 @@ minimum time, a nomination, and hard technical limits. See the
 ## Code style
 
 How code should read (size, structure, abstractions, comments) is in
-[CODE_STYLE.md](../docs/CODE_STYLE.md). The rules per language:
+[CODE_STYLE.md](../docs/project/CODE_STYLE.md). The rules per language:
 
 **Python.** PEP 8, type hints on function signatures, docstrings on public
 functions, lines up to 100 characters. `ruff` runs in the gate; it does not check line length.
@@ -412,7 +412,7 @@ pytest tests/e2e -v
   with `tests/infrastructure/bounded_commands.py`.
 - More rules that a review or a failure has taught us, each with the check
   or test that holds it:
-  [the gates page](../docs/quality/gates.md#rules-learned-from-review-and-from-failures).
+  [the gates page](../docs/project/gates.md#rules-learned-from-review-and-from-failures).
 
 One more check reads your change, not the code. It looks for removed or
 skipped tests, history in new comments, new documents, new suppression

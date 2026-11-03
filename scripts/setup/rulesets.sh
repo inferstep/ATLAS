@@ -4,7 +4,7 @@
 # No account can push to dev, staging or main, and no account can skip a
 # required check. A change reaches dev as a pull request through the merge
 # queue. staging and main move forward by the release step
-# (scripts/setup/release_step.py, docs/RELEASE.md).
+# (scripts/setup/release_step.py, docs/project/RELEASE.md).
 #
 # Applies, in this order, stopping at the first failure:
 #   1. team access: maintainers = maintain, reviewers = write, triagers = triage
@@ -197,7 +197,7 @@ EOF
  "bypass_actors":[$ADMINS,$MAINTAINERS,$DEPENDABOT]}
 EOF
     # The development server builds and starts the tip of a branch
-    # `smoke/<name>` (docs/quality/gates.md, section "The smoke run of one
+    # `smoke/<name>` (docs/project/gates.md, section "The smoke run of one
     # commit"). The ruleset above lets an app and the repository's admin
     # role push a branch of any name. This one has neither on its list, and
     # under its three rules only the accounts on its own list create, push

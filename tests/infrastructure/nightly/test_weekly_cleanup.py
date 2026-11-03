@@ -1143,7 +1143,7 @@ def test_the_script_is_on_the_list_of_scripts_that_run_with_a_credential_that_ca
 
 
 def test_the_gates_page_names_each_fixer_and_what_is_left_out():
-    page = (ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8")
+    page = (ROOT / "docs" / "project" / "gates.md").read_text(encoding="utf-8")
     section = page.split("\n## The weekly cleanup\n", 1)[1]
     row = {line.split("|")[1].strip(): line for line in section.splitlines() if line.startswith("| ")}
     assert sorted(re.findall(r"`([a-z]+)`", row["Go: `proxy`, `tui`"].split("|")[2].replace("`go fix`", ""))) == sorted(cleanup.GO_FIXERS)

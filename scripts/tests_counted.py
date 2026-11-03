@@ -143,7 +143,7 @@ def main(argv: list | None = None) -> int:
           "A test of this group is never skipped: it runs and passes, or the job is red. Fix: a failed test, as any "
           "failed test; a skipped test, by what its reason names (the service or the tool is to be there, the condition "
           "is not to be taken out of the judge); another number of tests, in the group's number in "
-          "scripts/tests_counted.py and in the table of docs/quality/gates.md, in the same change.")
+          "scripts/tests_counted.py and in the table of docs/project/gates.md, in the same change.")
     return 1
 
 

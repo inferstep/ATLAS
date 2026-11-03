@@ -1467,12 +1467,12 @@ def required_checks(page):
 
 
 def test_no_required_check_has_a_name_that_starts_with_server():
-    names, count = required_checks((base.ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8"))
+    names, count = required_checks((base.ROOT / "docs" / "project" / "gates.md").read_text(encoding="utf-8"))
     assert len(names) == count, (len(names), count)
     assert count >= 20, (len(names), count)
     of_the_server = [name for name in names if name.lower().startswith("server/")]
     assert not of_the_server, (
-        f"the table of required checks in docs/quality/gates.md names {of_the_server}. A name that starts with `server/` "
+        f"the table of required checks in docs/project/gates.md names {of_the_server}. A name that starts with `server/` "
         "is a status of the development server, which is one machine that is not always on: a rule that waits for it stops every "
         "merge while that machine is off. Fix: take the check out of the required checks of the ruleset and out of "
         "that table.")
@@ -1491,7 +1491,7 @@ def test_the_reading_of_that_table_finds_a_name_of_the_server_in_a_row(row, foun
 
 
 def test_the_gates_page_says_what_the_script_does_with_its_own_names_and_numbers():
-    page = (base.ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8")
+    page = (base.ROOT / "docs" / "project" / "gates.md").read_text(encoding="utf-8")
     script = SCRIPT.read_text(encoding="utf-8")
     result = page.split("### The result on GitHub", 1)[1].split("### The timer", 1)[0]
     timer = page.split("### The timer", 1)[1].split("### The smoke run of one commit", 1)[0]

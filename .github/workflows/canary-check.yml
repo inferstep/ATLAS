@@ -1,7 +1,7 @@
 name: canary check
 
 # The canary is one draft pull request on which every listed check must be
-# red (docs/quality/gates.md, section "The canary"). Its checks run only when
+# red (docs/project/gates.md, section "The canary"). Its checks run only when
 # its branch is pushed. This job reads them once a week and fails when one is
 # not as the list says, or when the canary is old. It only reads: it renews
 # nothing, opens nothing and writes no comment. A red run is the report.

@@ -486,13 +486,13 @@ def test_the_gates_page_names_the_jobs_this_check_does_not_judge(ran):
         mine = sorted(job_id for job_id in jobs if ran.conditional(job_id, jobs))
         if mine:
             with_a_condition[Path(path).name] = mine
-    page = (ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8")
+    page = (ROOT / "docs" / "project" / "gates.md").read_text(encoding="utf-8")
     section = page.split("### What `checks ran` judges", 1)[1].split("\n## ", 1)[0]
     table = {name: sorted(re.findall(r"`([^`]+)`", listed))
              for name, listed in re.findall(r"^\| `([\w.-]+\.ya?ml)` \| (.+) \|$", section, re.MULTILINE)}
     assert table == with_a_condition, (
         "the gates page names other jobs with an `if:` of their own than the workflow files have. Fix: bring the "
-        "table under \"What `checks ran` judges\" in docs/quality/gates.md in line with the workflow files, and the "
+        "table under \"What `checks ran` judges\" in docs/project/gates.md in line with the workflow files, and the "
         "number in the text above it.")
     count = sum(len(jobs) for jobs in with_a_condition.values())
     assert f"- {count} job definitions have an `if:` of their own" in " ".join(section.split())

@@ -15,7 +15,7 @@ this page: [Rules learned from review and from failures](#rules-learned-from-rev
 - Every change is a pull request. A direct push to `dev`, `staging` or `main`
   is refused for every account, and no account can skip a required check.
   The one exception is the
-  [release step](../RELEASE.md#the-release-step), which moves `main`
+  [release step](RELEASE.md#the-release-step), which moves `main`
   forward and merges it back into `dev`, each time with the owner's
   approval.
 - A pull request merges through the merge queue, which runs the required

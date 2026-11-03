@@ -1,4 +1,4 @@
-"""scripts/ci/code_health.py measures what docs/CODE_STYLE.md limits, and the
+"""scripts/ci/code_health.py measures what docs/project/CODE_STYLE.md limits, and the
 committed baseline matches the code."""
 
 import importlib.util
@@ -70,4 +70,4 @@ def test_no_git_gives_no_note_and_no_failure(monkeypatch):
 def test_the_committed_baseline_matches_the_code():
     funcs, files, _ = ch.measure()
     assert ch.check(funcs, files, ch.load_baseline()) == [], (
-        "a function or file is new over the limit or grew: split it (docs/CODE_STYLE.md)")
+        "a function or file is new over the limit or grew: split it (docs/project/CODE_STYLE.md)")

@@ -636,7 +636,7 @@ def test_every_tool_of_the_gates_page_has_its_markers_decided(ic):
     What this sees: the first cell of each row of the "Tool settings" table. A
     linter that the page names only in running text is not seen.
     """
-    page = (SCRIPT.parents[1] / "docs" / "quality" / "gates.md").read_text(encoding="utf-8")
+    page = (SCRIPT.parents[1] / "docs" / "project" / "gates.md").read_text(encoding="utf-8")
     table = page.split("## Tool settings", 1)[1].split("\n## ", 1)[0]
     rows = [line.split("|")[1].strip().split(",")[0] for line in table.splitlines()
             if line.startswith("| ") and not line.startswith(("| Tool", "|---"))]
@@ -1230,7 +1230,7 @@ def test_the_check_reads_this_repositorys_own_settings_and_hook(ic):
     assert files
     assert all((root / target.lstrip("/")).is_file() for target in files)
     # The gates page lists each of these files, so that the page and the hook say the same.
-    page = (root / "docs" / "quality" / "gates.md").read_text(encoding="utf-8")
+    page = (root / "docs" / "project" / "gates.md").read_text(encoding="utf-8")
     assert [target for target in files if f"`{target.lstrip('/')}`" not in page] == []
 
 

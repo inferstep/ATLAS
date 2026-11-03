@@ -89,14 +89,14 @@ Task-oriented index for everything under `docs/`. The
   gate (`scripts/ci/production-readiness.py`).
 - [CONTRIBUTING.md § Development workflow](../.github/CONTRIBUTING.md#development-workflow) — dev mode, targeted rebuilds,
   running the proxy on the host against the compose stack.
-- [CODE_STYLE.md](CODE_STYLE.md) — how ATLAS code should read; what
+- [CODE_STYLE.md](project/CODE_STYLE.md) — how ATLAS code should read; what
   `scripts/ci/code_health.py` enforces on new code and refactors.
 - [scripts/eval/README.md](../scripts/eval/README.md) — the held-out evaluation
   contract between the evaluation side and the development side.
-- [quality/gates.md](quality/gates.md) — the checks on a pull request,
+- [project/gates.md](project/gates.md) — the checks on a pull request,
   which of them are required, how the outside tools are set, and the
   measured baselines.
-- [RELEASE.md](RELEASE.md) — the release contract, verification levels,
+- [RELEASE.md](project/RELEASE.md) — the release contract, verification levels,
   versioning, and the release and hotfix steps.
 - [GOVERNANCE.md § Triage](../.github/GOVERNANCE.md#triage) — how new issues become Ready work.
 - [INCIDENT_RESPONSE.md](project/INCIDENT_RESPONSE.md) — what to do when a key
@@ -175,7 +175,7 @@ In order, each building on the last:
 12. [SUPPORT_MATRIX.md](guides/SUPPORT_MATRIX.md) — claims and their evidence
 13. [OPERATIONS.md](guides/OPERATIONS.md) — running it long-term
 14. [../.github/CONTRIBUTING.md](../.github/CONTRIBUTING.md) (its Development workflow),
-    [RELEASE.md](RELEASE.md), [PUBLISHING.md](project/PUBLISHING.md),
+    [RELEASE.md](project/RELEASE.md), [PUBLISHING.md](project/PUBLISHING.md),
     [CONTAINER_PACKAGING.md](project/CONTAINER_PACKAGING.md) — working on it
 16. [../CHANGELOG.md](../CHANGELOG.md) — how it got here
 
@@ -202,7 +202,7 @@ Where things live: what each top-level folder owns. For how the pieces work toge
 | `.github/` | CI workflows, `CODEOWNERS`, `dependabot.yml`, `allowed_signers` for signed release tags, issue templates, and the community files GitHub reads: the contributor guide (`CONTRIBUTING.md`), the governance page (`GOVERNANCE.md`), the code of conduct and the security policy (`SECURITY.md`) | — |
 | `templates/` | K3s manifest templates rendered from `atlas.conf` via envsubst | — |
 | `tests/` | The Python tests, by subject: `cli/`, `concurrency/`, `contracts/` (doc-link, version and config gates), `e2e/` (the acceptance suite CI runs), `infrastructure/`, `perf/`, `v3/`, `v3-service/`. Go tests sit beside their code (`*_test.go` in `proxy/` and `tui/`), the extensions' tests in `extensions/vscode/test/` and `extensions/jetbrains/src/test/`, and `geometric-lens/tests/` beside its service, which has its own lock file | — |
-| `docs/` | The pages, listed above by what you are trying to do. `guides/` holds installing, configuring, running and fixing ATLAS, and the support matrix; `reference/` holds the API, the CLI, the architecture, the candidate policy and the sources, with the API's machine-readable schemas in `reference/schemas/`; `project/` holds how the project is run and shipped, `adr/` the decision records, `lang/` the ja, ko and zh-CN copies, and `quality/` the checks on a pull request. `reports/` is data: the raw traces of the withdrawn V3.0 ablation result, kept so the withdrawal can be checked. `assets/` holds files the README and the TUI demo read | [adr/README.md](adr/README.md) |
+| `docs/` | The pages, listed above by what you are trying to do. `guides/` holds installing, configuring, running and fixing ATLAS, and the support matrix; `reference/` holds the API, the CLI, the architecture, the candidate policy and the sources, with the API's machine-readable schemas in `reference/schemas/`; `project/` holds how the project is run, checked and shipped (`gates.md` lists the checks on a pull request), `adr/` the decision records, and `lang/` the ja, ko and zh-CN copies. `reports/` is data: the raw traces of the withdrawn V3.0 ablation result, kept so the withdrawal can be checked. `assets/` holds files the README and the TUI demo read | [adr/README.md](adr/README.md) |
 | `diagnostics/` | Where diagnostic captures are written at run time; git holds only a placeholder | [OPERATIONS.md](guides/OPERATIONS.md) |
 
 Root also holds the base Compose file `docker-compose.yml`, `atlas.conf.example` (K3s), `pyproject.toml`

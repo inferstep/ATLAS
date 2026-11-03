@@ -52,7 +52,7 @@ def test_it_runs_once_a_week_on_monday_and_not_at_a_full_hour(name, cron):
     minute, hour, day, month, weekday = cron.split()
     assert minute != "0"
     assert (day, month, weekday) == ("*", "*", "1")
-    page = (ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8")
+    page = (ROOT / "docs" / "project" / "gates.md").read_text(encoding="utf-8")
     assert f"each Monday at\n{int(hour):02}:{int(minute):02} UTC" in page
 
 
@@ -71,7 +71,7 @@ def test_the_canary_check_can_only_read():
     # The workflow itself gives no right (the test above), so its one job's rights are all it has.
     (job,) = workflow(CANARY)["jobs"].values()
     assert job["permissions"] == {"contents": "read", "pull-requests": "read", "checks": "read", "actions": "read", "statuses": "read"}
-    page = (ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8")
+    page = (ROOT / "docs" / "project" / "gates.md").read_text(encoding="utf-8")
     assert "the\ncontents, the pull request, the check runs, the logs of the jobs and the\nstatuses of a commit, and nothing else." in page
     assert job["name"] == "canary check (reads only)"
 
@@ -181,7 +181,7 @@ def test_a_newer_run_of_the_same_branch_ends_the_older_one(name):
 
 
 def test_the_gates_page_lists_both_jobs_that_run_on_a_pull_request_and_the_job_with_a_condition():
-    page = (ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8")
+    page = (ROOT / "docs" / "project" / "gates.md").read_text(encoding="utf-8")
     not_required = page.split("### Not required", 1)[1].split("\n## ", 1)[0]
     assert "| `canary check (reads only)` |" in not_required
     assert "| `weekly cleanup (make the text)` |" in not_required

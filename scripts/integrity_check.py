@@ -730,7 +730,7 @@ LEFT_OUT_WHY = ("The plain test jobs do not run a test that carries this mark. A
                 "then pass a pull request.")
 LEFT_OUT_FIX = ("Keep the test in the plain jobs. If it needs a running service, say so in a comment next to the mark "
                 "and name the job that runs it.")
-BORN_LEFT_OUT_FIX = "Check that a job runs it (docs/quality/gates.md, \"Tests that the plain jobs leave out\")."
+BORN_LEFT_OUT_FIX = "Check that a job runs it (docs/project/gates.md, \"Tests that the plain jobs leave out\")."
 
 
 def left_out_marks(settings: str | None) -> tuple[str, ...]:

@@ -9,7 +9,7 @@ fails the signature — trust needs both integrity and a known signer.
 
 Signatures are produced out of band with the release signing key
 (`ssh-keygen -Y sign -n atlas-artifact provenance.json`, see
-docs/RELEASE.md); verification needs only allowed_signers.
+docs/project/RELEASE.md); verification needs only allowed_signers.
 """
 
 import contextlib
