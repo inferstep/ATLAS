@@ -765,7 +765,7 @@ func noteCrossFileCoherence(ctx *AgentContext, turn int, parsed wire.ModelRespon
 			ctx.Messages = append(ctx.Messages, systemNote(note))
 			log.Printf("[agent] session manifest announced (%d files)", len(ctx.SessionWrites))
 		}
-		if note := ctx.AssetLint.note(ctx.WorkingDir); note != "" {
+		if note := ctx.AssetLint.Note(ctx.WorkingDir); note != "" {
 			ctx.Messages = append(ctx.Messages, systemNote(note))
 			ctx.Stream("asset_lint", map[string]interface{}{
 				"turn":   turn,

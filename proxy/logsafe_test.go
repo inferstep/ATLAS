@@ -149,7 +149,7 @@ func TestOperatorLogSitesCannotQuoteABody(t *testing.T) {
 	}
 	// Lines that are logger calls, or continuations of one.
 	for _, file := range append(append([]string{"gates.go",
-		"gates_asset_lint.go", "gates_background_jobs.go", "internal/shellcmd/shell_wrapper.go",
+		"internal/assetlint/lint.go", "internal/assetlint/findings.go", "gates_background_jobs.go", "internal/shellcmd/shell_wrapper.go",
 		"internal/shellcmd/destructive.go",
 		"gates_completion.go", "gates_edit_requests.go", "gates_ledger.go", "gates_plan.go",
 		"gates_syntax_rejection.go", "gates_workspace_alignment.go",

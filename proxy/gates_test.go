@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/assetlint"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -584,6 +585,23 @@ func TestSessionManifestNoteAnnouncesOncePerFile(t *testing.T) {
 	}
 }
 
+// After a successful write, the loop lints the run's own folder and adds what it
+// found to the conversation as a note.
+func TestASuccessfulWriteGetsTheAssetLintNoteForItsFolder(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"app.py":               "@app.route('/')\ndef index():\n    return 'home'\n",
+		"templates/index.html": "<form method=\"POST\" action=\"/add_book\"></form>",
+	})
+	ctx := &AgentContext{runSetup: runSetup{WorkingDir: root}}
+
+	noteCrossFileCoherence(ctx, 1, wire.ModelResponse{Name: "write_file"}, &wire.ToolResult{Success: true})
+
+	if len(ctx.Messages) != 1 || !strings.Contains(ctx.Messages[0].Content, `Route check: templates/index.html calls "/add_book"`) {
+		t.Errorf("messages = %v, want one note with the route check for the run's folder", ctx.Messages)
+	}
+}
+
 func TestBuildSystemPromptIncludesPlan(t *testing.T) {
 	plan := &wire.Plan{
 		Steps: []wire.PlanStep{
@@ -759,7 +777,7 @@ func TestAReferenceThatLeavesItsFolderIsDanglingByItsTextAlone(t *testing.T) {
 	})
 	writeTree(t, base, map[string]string{"sibling.js": "// placeholder\n"})
 
-	findings := assetLintFindings(workspace)
+	findings := assetlint.Findings(workspace)
 	for _, name := range []string{"../shared/page.html", "../other/app.css", "../sibling.js"} {
 		if !findingsContaining(findings, name) {
 			t.Errorf("the reference %q was not reported as dangling: %v", name, findings)
@@ -780,7 +798,7 @@ func TestAReferenceThatStaysInsideAndExistsIsNotDangling(t *testing.T) {
 		"static/app.js":  "// placeholder\n",
 		"static/app.css": "body {}\n",
 	})
-	for _, finding := range assetLintFindings(workspace) {
+	for _, finding := range assetlint.Findings(workspace) {
 		for _, name := range []string{"index.html", "app.js", "app.css"} {
 			if findingsContaining([]string{finding}, "does not exist") && findingsContaining([]string{finding}, name) {
 				t.Errorf("a reference that exists was reported as dangling: %q", finding)
@@ -803,4 +821,28 @@ func TestAnExpectedOutputOutsideTheKnownRootsIsSkipped(t *testing.T) {
 		t.Errorf("missingExpectedOutputs = %v, want %v: the file that is there is not missing, "+
 			"and the path under neither root is not judged", got, want)
 	}
+}
+
+// writeTree writes each file of files under root, creating its directories.
+func writeTree(t *testing.T, root string, files map[string]string) {
+	t.Helper()
+	for rel, content := range files {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// findingsContaining reports whether any finding contains substr.
+func findingsContaining(findings []string, substr string) bool {
+	for _, f := range findings {
+		if strings.Contains(f, substr) {
+			return true
+		}
+	}
+	return false
 }
