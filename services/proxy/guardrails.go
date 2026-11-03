@@ -873,6 +873,17 @@ var reMustProduce = regexp.MustCompile(`(?i)^\s*(must (exist|contain|include|be 
 // name, so "Write the parse results to out.json" still names an output.
 var reReadsTheFile = regexp.MustCompile(`(?i)\b(read|reads|reading|load|loads|loading|parse|parses|parsing|open|opens|opening)\s+((the|a|an|its|file|data|contents?|of)\s+){0,3}$`)
 
+// filenameIsOutput reports whether the filename token at m reads as an output
+// of the task: a write verb within ~70 chars before it that is not a read of
+// the file, OR "must exist/contain" requirement phrasing right after it.
+func filenameIsOutput(msg string, m []int) bool {
+	before := msg[max(m[0]-70, 0):m[0]]
+	if reOutputWriteVerb.MatchString(before) && !reReadsTheFile.MatchString(before) {
+		return true
+	}
+	return reMustProduce.MatchString(msg[m[1]:min(m[1]+40, len(msg))])
+}
+
 // expectedOutputPaths extracts the file(s) a task prompt explicitly asks
 // the model to produce: a filename token preceded within ~70 chars by a
 // write/save/create/output verb. Grounded in the task text (many bench and
@@ -887,18 +898,7 @@ func expectedOutputPaths(msg string) []string {
 		if path == "" || strings.Count(path, ".") == len(path) {
 			continue
 		}
-		start := m[0] - 70
-		if start < 0 {
-			start = 0
-		}
-		afterEnd := m[1] + 40
-		if afterEnd > len(msg) {
-			afterEnd = len(msg)
-		}
-		// Output signal: a write verb within ~70 chars before the filename,
-		// OR "must exist/contain" requirement phrasing right after it.
-		if (!reOutputWriteVerb.MatchString(msg[start:m[0]]) || reReadsTheFile.MatchString(msg[start:m[0]])) &&
-			!reMustProduce.MatchString(msg[m[1]:afterEnd]) {
+		if !filenameIsOutput(msg, m) {
 			continue // input/incidental filename
 		}
 		if !seen[path] {
