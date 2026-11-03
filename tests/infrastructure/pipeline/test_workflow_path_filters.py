@@ -34,7 +34,15 @@ def path_filters():
                     yield pytest.param(pattern, id=f"{path} {event} {key} {pattern}")
 
 
-@pytest.mark.parametrize("pattern", list(path_filters()))
+FILTERS = list(path_filters())
+
+
+def test_the_workflows_have_path_filters_to_read():
+    # An empty list would make pytest skip the test below, and the run stay green.
+    assert FILTERS, "no path filter was found, so this test reads the workflows wrongly"
+
+
+@pytest.mark.parametrize("pattern", FILTERS)
 def test_the_path_filter_matches_a_file_of_the_tree(pattern):
     regex = ran.glob_regex(pattern)
     assert regex is not None, f"checks_ran.py cannot read the filter {pattern!r}"
