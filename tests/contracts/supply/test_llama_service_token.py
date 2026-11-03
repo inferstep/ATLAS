@@ -28,7 +28,7 @@ def run_entrypoint(tmp_path, name, token_file):
     server = tmp_path / "server"
     server.write_text(f'#!/bin/bash\necho "$@" > "{seen_args}"\n', encoding="utf-8")
     server.chmod(0o755)
-    shipped = (ROOT / "inference" / name).read_text(encoding="utf-8")
+    shipped = (ROOT / "services" / "inference" / name).read_text(encoding="utf-8")
     script = tmp_path / name
     script.write_text(shipped.replace("/usr/local/bin/llama-server", str(server)), encoding="utf-8")
     env = {"PATH": os.environ["PATH"], "MODEL_PATH": "/models/model.gguf",

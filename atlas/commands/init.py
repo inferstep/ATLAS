@@ -107,7 +107,7 @@ def _choose(prompt: str, choices: List[str], default: str,
 
 # Single source of truth for vendor → backend mapping. Used by the wizard
 # (label rendering) and by .env writing (ATLAS_BACKEND). Keep aligned
-# with the Dockerfile suffixes in /inference/.
+# with the Dockerfile suffixes in /services/inference/.
 _BACKEND_BY_VENDOR = {
     "nvidia": ("cuda",  "CUDA",          True),   # supported in V3.1.0
     "amd":    ("rocm",  "ROCm",          True),   # supported in V3.1.1

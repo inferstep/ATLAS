@@ -320,7 +320,7 @@ ATLAS_ROCM_TAG=6.2-complete docker compose -f docker-compose.yml -f deploy/compo
 
 **Symptom:** `docker compose build` fails with CUDA-related errors during llama-server compilation.
 
-**Fix:** The llama-server Dockerfile builds llama.cpp inside a `nvidia/cuda:12.9.0-devel` base image (digest-pinned in `inference/Dockerfile.v31`), so CUDA headers are available during build without host GPU access. Common causes of build failure:
+**Fix:** The llama-server Dockerfile builds llama.cpp inside a `nvidia/cuda:12.9.0-devel` base image (digest-pinned in `services/inference/Dockerfile.v31`), so CUDA headers are available during build without host GPU access. Common causes of build failure:
 1. Insufficient disk space (~5GB needed for build artifacts)
 2. Network issues downloading the CUDA base image or cloning llama.cpp
 3. Podman rootless builds may fail with permission issues — try `podman-compose build` with `--podman-build-args="--format docker"`
@@ -337,12 +337,12 @@ fatal: fetch-pack: invalid index-pack output
 
 **Cause:** The full llama.cpp git history is large (~1 GB) and the fetch is sensitive to flaky/slow connections. A momentary stall causes the SSL read to time out and the whole transfer to abort.
 
-**Fix:** `inference/Dockerfile.v31` uses `git init` + a `--depth 1` fetch of the single pinned revision (`LLAMA_CPP_REV`), which avoids the ~1 GB full-history transfer, with `http.postBuffer=524288000` and `http.lowSpeedLimit/Time` to fail-fast on dead connections. If the issue recurs:
+**Fix:** `services/inference/Dockerfile.v31` uses `git init` + a `--depth 1` fetch of the single pinned revision (`LLAMA_CPP_REV`), which avoids the ~1 GB full-history transfer, with `http.postBuffer=524288000` and `http.lowSpeedLimit/Time` to fail-fast on dead connections. If the issue recurs:
 
 1. Retry the build — transient network blips happen, especially on residential connections.
 2. If retries keep failing, pre-fetch the pinned revision on the host and adjust the Dockerfile to COPY it. Quick recipe:
    ```bash
-   REV=$(grep -m1 'ARG LLAMA_CPP_REV=' inference/Dockerfile.v31 | cut -d= -f2)
+   REV=$(grep -m1 'ARG LLAMA_CPP_REV=' services/inference/Dockerfile.v31 | cut -d= -f2)
    git init /tmp/llama.cpp && cd /tmp/llama.cpp
    git remote add origin https://github.com/ggml-org/llama.cpp
    git fetch --depth 1 origin "$REV" && git checkout FETCH_HEAD
@@ -357,7 +357,7 @@ Developer-maintenance task. Two triggers land here:
 - **A dropped-in model fails to load** with `error loading model: unknown (model) architecture 'gemma4'` — the pinned llama.cpp predates that architecture.
 - **A build fails** with `error: patch failed: tools/server/server-context.cpp:NN` / `patch does not apply` — upstream drifted past the pinned SHA.
 
-The `atlas-llama` image pins llama.cpp via `LLAMA_CPP_REV` in all four Dockerfiles (`Dockerfile`, `Dockerfile.v31`, `Dockerfile.rocm`, `Dockerfile.vulkan`), and `Dockerfile.v31`, `Dockerfile.rocm`, and `Dockerfile.vulkan` — the three the compose files build from — apply `inference/patches/expose-hidden-states.patch` (the per-layer `hidden_states` extension the Geometric Lens depends on) during the build. The plain `Dockerfile` pins the rev but does not apply the patch, so a server built from it lacks the lens plumbing. To learn a new architecture, move the pin to a llama.cpp SHA that includes it. Prebuilt GHCR images skip the local build; only rebuild when you need an architecture newer than the published image.
+The `atlas-llama` image pins llama.cpp via `LLAMA_CPP_REV` in all four Dockerfiles (`Dockerfile`, `Dockerfile.v31`, `Dockerfile.rocm`, `Dockerfile.vulkan`), and `Dockerfile.v31`, `Dockerfile.rocm`, and `Dockerfile.vulkan` — the three the compose files build from — apply `services/inference/patches/expose-hidden-states.patch` (the per-layer `hidden_states` extension the Geometric Lens depends on) during the build. The plain `Dockerfile` pins the rev but does not apply the patch, so a server built from it lacks the lens plumbing. To learn a new architecture, move the pin to a llama.cpp SHA that includes it. Prebuilt GHCR images skip the local build; only rebuild when you need an architecture newer than the published image.
 
 **Preserve the hidden-states patch — rebase it, don't delete it.** Removing the `git apply` step builds a server that has silently lost the lens plumbing (`/embedding` ignores the `layers:` parameter). Bump runbook:
 
@@ -367,11 +367,11 @@ The `atlas-llama` image pins llama.cpp via `LLAMA_CPP_REV` in all four Dockerfil
    git init -q llama.cpp && cd llama.cpp
    git remote add origin https://github.com/ggml-org/llama.cpp
    git fetch --depth 1 origin <NEW_SHA> && git checkout -q FETCH_HEAD
-   git apply --check $REPO/inference/patches/expose-hidden-states.patch
+   git apply --check $REPO/services/inference/patches/expose-hidden-states.patch
    ```
    (Only this patch is `git apply`-ed. The spec-decode embeddings fix is a `sed` in the Dockerfiles, a no-op when its target line is absent.)
 2. **If it applies cleanly:** bump `LLAMA_CPP_REV` in all four Dockerfiles to the new SHA. The CI smoke test verifies they agree.
-3. **If it fails:** `git apply --reject …` to land the clean hunks, re-insert each `*.rej` hunk at its moved anchor (watch for upstream renames in surrounding code, e.g. `model` → `model_tgt`, and update the patch's added lines), then `git diff > $REPO/inference/patches/expose-hidden-states.patch`. Re-run step 1. Compile just the server target CPU-only to catch member/type errors before the long CUDA build: `cmake -B build-cpu -DGGML_CUDA=OFF && cmake --build build-cpu --target llama-server`.
+3. **If it fails:** `git apply --reject …` to land the clean hunks, re-insert each `*.rej` hunk at its moved anchor (watch for upstream renames in surrounding code, e.g. `model` → `model_tgt`, and update the patch's added lines), then `git diff > $REPO/services/inference/patches/expose-hidden-states.patch`. Re-run step 1. Compile just the server target CPU-only to catch member/type errors before the long CUDA build: `cmake -B build-cpu -DGGML_CUDA=OFF && cmake --build build-cpu --target llama-server`.
 4. Rebuild and bring up:
    ```bash
    docker compose build --build-arg LLAMA_CPP_REV=<sha> llama-server

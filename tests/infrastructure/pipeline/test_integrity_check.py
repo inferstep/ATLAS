@@ -367,7 +367,7 @@ MARKED = [
     (".github/workflows/test.yml", f"      {HASH} yamllint disable-line rule:line-length"),
     (".github/workflows/test.yml", f"        run: curl \"$URL\"  {HASH} NOSONAR"),
     ("sandbox/Dockerfile", f"{HASH} hadolint ignore=DL3008"),
-    ("inference/Dockerfile.vulkan", f"{HASH} hadolint global ignore=DL3003"),
+    ("services/inference/Dockerfile.vulkan", f"{HASH} hadolint global ignore=DL3003"),
     ("sandbox/Dockerfile", f"RUN curl -fsSL \"$URL\" | sh  {HASH} NOSONAR"),
 ]
 

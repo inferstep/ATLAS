@@ -79,7 +79,7 @@ Research that informs planned work. None of these are part of the current releas
 ## What this list intentionally excludes
 
 - **MoE / expert quantization work** (DynaExq, MoPEQ, MxMoE) — relevant only to the V3 Phase 5/6 model-swap roadmap, which is not active development.
-- **Medusa** (parallel decoding heads) — ATLAS uses no speculative decoding: the serving entrypoint passes no draft model (`inference/entrypoint-v3.1.sh`).
+- **Medusa** (parallel decoding heads) — ATLAS uses no speculative decoding: the serving entrypoint passes no draft model (`services/inference/entrypoint-v3.1.sh`).
 - **Forward-Forward, Direct Feedback Alignment** — speculative alternative learning rules, not in current plans.
 - **Community posts without a primary source** — referenced informally in PRs/issues but not cited here.
 

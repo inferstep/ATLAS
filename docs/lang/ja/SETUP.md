@@ -344,7 +344,7 @@ ATLAS は 2 つの CPU アーキテクチャを対象としています: `x86_64
 # Multi-arch build that produces a single image manifest covering both archs:
 docker buildx build --platform linux/amd64,linux/arm64 \
   -t atlas-llama-server:vulkan \
-  -f inference/Dockerfile.vulkan inference/
+  -f services/inference/Dockerfile.vulkan services/inference/
 ```
 
 **arm64 向け CUDA イメージのビルド**（DGX Spark の例）:
@@ -355,7 +355,7 @@ docker buildx build --platform linux/arm64 \
   --build-arg BUILDER_IMAGE=nvidia/cuda:12.9.0-devel-ubuntu22.04 \
   --build-arg RUNTIME_IMAGE=nvidia/cuda:12.9.0-runtime-ubuntu22.04 \
   -t atlas-llama-server:cuda-arm64 \
-  -f inference/Dockerfile.v31 inference/
+  -f services/inference/Dockerfile.v31 services/inference/
 ```
 
 Jetson では、両方の build arg を `nvcr.io/nvidia/l4t-jetpack:r36.3.0` に差し替えてください（l4t は JetPack + CUDA + cuDNN を 1 つのイメージとして出荷しています）。
@@ -722,18 +722,18 @@ medium ティアが ATLAS の開発ターゲットです — `atlas-bootstrap.sh
 
 | ベンダー | バックエンド | 状況 | ビルドパス | テスト済みカード |
 |---|---|---|---|---|
-| NVIDIA (Blackwell — RTX 50xx、B100、GB10) | CUDA | サポート対象 (Supported)（公開イメージ） | `inference/Dockerfile.v31` | RTX 5060 Ti 16GB（主要開発機） |
-| NVIDIA (Blackwell 以前 — RTX 20xx–40xx、GTX 10xx、V100/A100/H100/T4/L4) | CUDA | プレビュー (Preview) — 一度だけの[ローカル再ビルドが必要](#cuda-compute-capability-dockerfilev31) | `inference/Dockerfile.v31` + `--build-arg CUDA_ARCH=<cc>` | —（上流の llama.cpp はこれらをサポート。ATLAS 上でのメンテナー検証はなし） |
-| AMD | ROCm / HIP | コミュニティ検証済み (Community-tested) | `inference/Dockerfile.rocm` | RX 7900 XTX（コミュニティスモークテスト、[GH #26](https://github.com/inferstep/ATLAS/issues/26)） |
+| NVIDIA (Blackwell — RTX 50xx、B100、GB10) | CUDA | サポート対象 (Supported)（公開イメージ） | `services/inference/Dockerfile.v31` | RTX 5060 Ti 16GB（主要開発機） |
+| NVIDIA (Blackwell 以前 — RTX 20xx–40xx、GTX 10xx、V100/A100/H100/T4/L4) | CUDA | プレビュー (Preview) — 一度だけの[ローカル再ビルドが必要](#cuda-compute-capability-dockerfilev31) | `services/inference/Dockerfile.v31` + `--build-arg CUDA_ARCH=<cc>` | —（上流の llama.cpp はこれらをサポート。ATLAS 上でのメンテナー検証はなし） |
+| AMD | ROCm / HIP | コミュニティ検証済み (Community-tested) | `services/inference/Dockerfile.rocm` | RX 7900 XTX（コミュニティスモークテスト、[GH #26](https://github.com/inferstep/ATLAS/issues/26)） |
 | Apple Silicon | Metal | サポート対象（macOS ハイブリッド: ネイティブ llama-server + Docker、[#32](https://github.com/inferstep/ATLAS/issues/32)） | `scripts/install/atlas-setup-macos.sh` + `deploy/compose/docker-compose.macos.yml` | M2 Pro 32GB（検証済み）、M3/M4（対象） |
-| 任意（クロスベンダーフォールバック） | Vulkan | プレビュー | `inference/Dockerfile.vulkan` | lavapipe（CPU ICD）でスモークテスト済み。実 GPU での検証はまだなし |
+| 任意（クロスベンダーフォールバック） | Vulkan | プレビュー | `services/inference/Dockerfile.vulkan` | lavapipe（CPU ICD）でスモークテスト済み。実 GPU での検証はまだなし |
 | Intel Arc | SYCL | ロードマップ (Roadmap) — Intel Arc は現在 Vulkan を使用 | 未定 | Arc A770 16GB（対象） |
 
 `atlas tier` はベンダー横断で自動検出し、VRAM が最大の GPU を選択します。複数の GPU があり特定の 1 枚を使いたい場合は、`ATLAS_GPU_VENDOR=amd` や `ATLAS_GPU_INDEX=1` でオーバーライドしてください。
 
 #### CUDA Compute Capability (Dockerfile.v31)
 
-`inference/Dockerfile.v31` は llama.cpp を特定の CUDA compute capability 向けにコンパイルします。デフォルト — そして GHCR 上に公開されている `atlas-llama` イメージのビルドに使われている値 — は `120;121`（Blackwell: RTX 50xx、B100、GB10）**のみ**です。公開イメージにはそれより前の GPU 向けのカーネルが含まれず、埋め込まれた PTX を下位向けに JIT コンパイルすることもできないため、RTX 20/30/40 シリーズ、GTX 10xx、Blackwell 以前のデータセンターカード（V100/A100/H100/T4/L4）では、llama-server が起動時に `no kernel image is available for execution on the device` で失敗します。お使いのアーキテクチャ向けに、推論イメージを一度だけ再ビルドする必要があります。（誤った arch 値でのローカルビルドは、より早い段階で `nvcc fatal: unsupported gpu architecture` により失敗します。）
+`services/inference/Dockerfile.v31` は llama.cpp を特定の CUDA compute capability 向けにコンパイルします。デフォルト — そして GHCR 上に公開されている `atlas-llama` イメージのビルドに使われている値 — は `120;121`（Blackwell: RTX 50xx、B100、GB10）**のみ**です。公開イメージにはそれより前の GPU 向けのカーネルが含まれず、埋め込まれた PTX を下位向けに JIT コンパイルすることもできないため、RTX 20/30/40 シリーズ、GTX 10xx、Blackwell 以前のデータセンターカード（V100/A100/H100/T4/L4）では、llama-server が起動時に `no kernel image is available for execution on the device` で失敗します。お使いのアーキテクチャ向けに、推論イメージを一度だけ再ビルドする必要があります。（誤った arch 値でのローカルビルドは、より早い段階で `nvcc fatal: unsupported gpu architecture` により失敗します。）
 
 お使いの GPU の arch を確認し、`--build-arg CUDA_ARCH=<value>` で再ビルドしてください:
 
@@ -747,7 +747,7 @@ docker compose build --build-arg CUDA_ARCH=89 llama-server
 docker compose up -d --no-deps llama-server
 
 # Or build the image directly:
-podman build --build-arg CUDA_ARCH=89 -f inference/Dockerfile.v31 -t llama-server:local inference/
+podman build --build-arg CUDA_ARCH=89 -f services/inference/Dockerfile.v31 -t llama-server:local services/inference/
 
 # Multiple archs (semicolon-separated) — build a fat binary for Ampere + Ada + Hopper
 docker compose build --build-arg CUDA_ARCH="86;89;90" llama-server
@@ -767,7 +767,7 @@ docker compose build --build-arg CUDA_ARCH="86;89;90" llama-server
 
 #### AMD GPU ターゲット (Dockerfile.rocm)
 
-`inference/Dockerfile.rocm` は llama.cpp の HIP バックエンドを 1 つ以上の `gfx` ターゲット向けにコンパイルします。デフォルトは、もっとも一般的なコンシューマ + データセンター AMD GPU をカバーする肥大ビルドです: `gfx1100;gfx1101;gfx1102;gfx1030;gfx90a`。
+`services/inference/Dockerfile.rocm` は llama.cpp の HIP バックエンドを 1 つ以上の `gfx` ターゲット向けにコンパイルします。デフォルトは、もっとも一般的なコンシューマ + データセンター AMD GPU をカバーする肥大ビルドです: `gfx1100;gfx1101;gfx1102;gfx1030;gfx90a`。
 
 ビルド時に `--build-arg GFX_TARGET=<value>` でオーバーライドしてください（または compose オーバーライドが転送する `ATLAS_GFX_TARGET` 環境変数経由で）:
 
@@ -776,7 +776,7 @@ docker compose build --build-arg CUDA_ARCH="86;89;90" llama-server
 ATLAS_GFX_TARGET=gfx1100 docker compose -f docker-compose.yml -f deploy/compose/docker-compose.rocm.yml build llama-server
 
 # Two targets for RDNA3 + RDNA2 mixed-fleet
-docker build --build-arg GFX_TARGET="gfx1100;gfx1030" -f inference/Dockerfile.rocm -t atlas-llama-rocm:custom inference/
+docker build --build-arg GFX_TARGET="gfx1100;gfx1030" -f services/inference/Dockerfile.rocm -t atlas-llama-rocm:custom services/inference/
 ```
 
 一般的な値:
@@ -869,7 +869,7 @@ mkdir -p secrets     # or set ATLAS_SECRETS_DIR
 
 1. `build_cvector_prompts.py` が、コミット済みの `geometric-lens/asa_calibration/contrast_pairs.jsonl`（1000 ペア）をポジティブ / ネガティブのプロンプトファイルに変換する。
 2. ブートストラップが `llama-server` を短時間停止し、`llama-cvector-generator` を `--method mean -ngl 99` 付きのワンショットコンテナとして実行し、`models/ast_edit_steering.gguf` に加えて、ベクトルがどのモデルに対してビルドされたかを記録する `models/ast_edit_steering.gguf.model` サイドカーマーカーを書き込み、その後 `llama-server` を再起動する。
-3. `inference/entrypoint-v3.1.sh` が次回起動時にファイルを検出し、`.model` サイドカーマーカーが選択中のモデルと一致することを確認して、`llama-server` のコマンドラインに `--control-vector-scaled /models/ast_edit_steering.gguf:0.5` を追加する。マーカーが存在しない、または別のモデルを指しているベクトルは**無効のまま**になります（起動バナーが理由を報告します）— ベクトルは 1 つのモデルに紐づく残差空間のアーティファクトだからです。
+3. `services/inference/entrypoint-v3.1.sh` が次回起動時にファイルを検出し、`.model` サイドカーマーカーが選択中のモデルと一致することを確認して、`llama-server` のコマンドラインに `--control-vector-scaled /models/ast_edit_steering.gguf:0.5` を追加する。マーカーが存在しない、または別のモデルを指しているベクトルは**無効のまま**になります（起動バナーが理由を報告します）— ベクトルは 1 つのモデルに紐づく残差空間のアーティファクトだからです。
 
 ビルドはモデルが載っているのと同じハードウェア上で実行され、生成されるベクトルはモデル固有です（あるモデルのアーティファクトに対してビルドされた `ast_edit_steering.gguf` を、別のベースモデルを実行するホストに移動しないでください）。
 

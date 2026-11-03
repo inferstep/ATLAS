@@ -144,18 +144,18 @@ stops at the one step only you can do (the rebuild); the manual flow is:
    (model) architecture '<arch>'`, your `atlas-llama` image's bundled llama.cpp
    predates that architecture and **you must rebuild the inference image**:
    ```bash
-   # The image pins llama.cpp (LLAMA_CPP_REV in inference/Dockerfile.v31) so
+   # The image pins llama.cpp (LLAMA_CPP_REV in services/inference/Dockerfile.v31) so
    # the hidden-states patch applies cleanly — a plain rebuild reuses that same
    # pinned revision and will NOT pick up newer architectures. Override the
    # pin with a llama.cpp commit that knows your model's architecture:
    docker compose build --build-arg LLAMA_CPP_REV=<sha> llama-server
    ```
    > ⚠️ **Do not strip ATLAS's custom llama.cpp features when rebuilding.** The
-   > build re-applies `inference/patches/expose-hidden-states.patch` (the
+   > build re-applies `services/inference/patches/expose-hidden-states.patch` (the
    > per-layer `hidden_states` extension the Geometric Lens relies on) to the
    > freshly-cloned source. If upstream has drifted, the `git apply` step can fail
    > and the build aborts — **rebase the patch, don't delete it or remove the
-   > `git apply` line from `inference/Dockerfile.v31`**, or you'll silently lose
+   > `git apply` line from `services/inference/Dockerfile.v31`**, or you'll silently lose
    > the lens plumbing. See [TROUBLESHOOTING.md § Rebuilding llama.cpp](TROUBLESHOOTING.md#rebuilding-llamacpp-new-model-architecture-or-patch-drift).
 
 6. **Retrain the Geometric Lens for the new model.** The lens `C(x)` is
@@ -503,7 +503,7 @@ Python FastAPI service for isolated code execution with compilation, linting, an
 
 C++ inference server (llama.cpp) with CUDA GPU acceleration and grammar-constrained JSON output.
 
-Both Docker Compose and K3s use the same image with the same entrypoint (`inference/entrypoint-v3.1.sh`), so the flag set is identical. The only differences are which env vars feed the entrypoint and what default value each deployment passes for them.
+Both Docker Compose and K3s use the same image with the same entrypoint (`services/inference/entrypoint-v3.1.sh`), so the flag set is identical. The only differences are which env vars feed the entrypoint and what default value each deployment passes for them.
 
 ### Entrypoint env vars (read by `entrypoint-v3.1.sh`)
 

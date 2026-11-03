@@ -112,7 +112,7 @@ def test_a_base_that_reads_as_an_option_is_refused():
 
 def test_a_dockerfile_change_asks_for_hadolint_when_it_is_not_installed(verify, monkeypatch):
     monkeypatch.setattr(verify.shutil, "which", lambda name: None)
-    assert verify.hadolint_notes(["inference/Dockerfile.vulkan"]) == [
+    assert verify.hadolint_notes(["services/inference/Dockerfile.vulkan"]) == [
         "skip hadolint: it is not installed (https://github.com/hadolint/hadolint/releases)"]
 
 

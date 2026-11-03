@@ -34,7 +34,7 @@
 #     to this matrix.
 #
 # Deliberately NOT in the matrix:
-#   - llama-rocm (inference/Dockerfile.rocm) is a local-build image. AMD is
+#   - llama-rocm (services/inference/Dockerfile.rocm) is a local-build image. AMD is
 #     Community-tested (docs/guides/SUPPORT_MATRIX.md), CI has no AMD GPU to smoke-test
 #     the result on, and the default fat build covers five gfx targets — a
 #     hosted-runner job would publish an unexercised image (and a multi-GB
@@ -262,15 +262,15 @@ jobs:
             context: ./sandbox
             dockerfile: ./sandbox/Dockerfile
           - name: llama
-            context: ./inference
-            dockerfile: ./inference/Dockerfile.v31
+            context: ./services/inference
+            dockerfile: ./services/inference/Dockerfile.v31
           # #116: universal Vulkan llama image. Same llama.cpp inside,
           # different backend at the cmake step. Multi-arch via QEMU on
           # tag pushes (see Set up QEMU step). Image name is suffixed
           # to keep it distinguishable from the CUDA llama on GHCR.
           - name: llama-vulkan
-            context: ./inference
-            dockerfile: ./inference/Dockerfile.vulkan
+            context: ./services/inference
+            dockerfile: ./services/inference/Dockerfile.vulkan
 
     steps:
       - name: Checkout

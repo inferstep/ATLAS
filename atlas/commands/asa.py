@@ -61,7 +61,7 @@ from atlas.display import (
 )
 
 
-# Default paths shared with the entrypoint (inference/entrypoint-v3.1.sh).
+# Default paths shared with the entrypoint (services/inference/entrypoint-v3.1.sh).
 # Keep aligned — operators expect `atlas asa` to point at the same file
 # llama-server will actually --control-vector-scaled at boot.
 DEFAULT_VECTOR_NAME = "ast_edit_steering.gguf"
@@ -434,7 +434,7 @@ def _check_llama_server(probe: LlamaProbe, color: bool) -> Optional[int]:
         _safe_print(f"  {RED if color else ''}llama-server does not have "
                     f"the PC-202 hidden-states patch. ASA training extracts "
                     f"per-layer residuals via this patch — rebuild llama-server "
-                    f"with inference/Dockerfile.v31 (which bakes the patch) "
+                    f"with services/inference/Dockerfile.v31 (which bakes the patch) "
                     f"first.{RESET if color else ''}")
         return 2
     return None

@@ -138,5 +138,5 @@ def probe_llama(url: Optional[str] = None,
         probe.error = (f"llama-server at {url} is up but /embedding "
                        f"didn't return an embedding. Likely cause: model "
                        f"was started without `--embeddings`. Check "
-                       f"inference/entrypoint-v3.1.sh.")
+                       f"services/inference/entrypoint-v3.1.sh.")
     return probe

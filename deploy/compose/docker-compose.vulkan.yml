@@ -36,12 +36,12 @@ services:
     # Pull / build the Vulkan-built image, not CUDA/ROCm.
     image: ghcr.io/${ATLAS_GHCR_OWNER:-inferstep}/atlas-llama-vulkan:${ATLAS_IMAGE_TAG:-latest}
     build:
-      context: ./inference
+      context: ./services/inference
       dockerfile: Dockerfile.vulkan
       args:
         # 24.04 default: ubuntu 22.04's vulkan-headers (1.3.204) is too
         # old for current llama.cpp Vulkan code which uses 1.3.246+ APIs.
-        # See inference/Dockerfile.vulkan ARG UBUNTU_TAG comment for the
+        # See services/inference/Dockerfile.vulkan ARG UBUNTU_TAG comment for the
         # full rationale. Override via ATLAS_UBUNTU_TAG=22.04 if needed.
         UBUNTU_TAG: ${ATLAS_UBUNTU_TAG:-24.04}
     # Wipe the NVIDIA driver request from the base file when targeting

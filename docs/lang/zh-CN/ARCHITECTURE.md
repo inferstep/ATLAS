@@ -47,10 +47,10 @@ llama-server 是唯一使用 GPU 的服务；其余每个 ATLAS 服务都跑在 
 
 | 后端 | 状态 (V3.1.x) | 镜像 / 构建路径 | Compose override | 已测试显卡 |
 |---|---|---|---|---|
-| **CUDA** (NVIDIA) | 支持 (Supported)（自 V3.1.0 起） | `inference/Dockerfile.v31` → `atlas-llama` | （默认） | RTX 5060 Ti 16GB（基准）。发布的镜像只针对 Blackwell（计算能力 12.0/12.1）编译；更早的代次需要本地重建 —— 见 [SETUP.md](../../guides/SETUP.md) |
-| **ROCm / HIP** (AMD) | 社区验证 (Community-tested)（自 V3.1.1 起） | `inference/Dockerfile.rocm` → `atlas-llama-rocm` | `deploy/compose/docker-compose.rocm.yml` | RX 7900 XTX（社区冒烟测试，GH #26） |
+| **CUDA** (NVIDIA) | 支持 (Supported)（自 V3.1.0 起） | `services/inference/Dockerfile.v31` → `atlas-llama` | （默认） | RTX 5060 Ti 16GB（基准）。发布的镜像只针对 Blackwell（计算能力 12.0/12.1）编译；更早的代次需要本地重建 —— 见 [SETUP.md](../../guides/SETUP.md) |
+| **ROCm / HIP** (AMD) | 社区验证 (Community-tested)（自 V3.1.1 起） | `services/inference/Dockerfile.rocm` → `atlas-llama-rocm` | `deploy/compose/docker-compose.rocm.yml` | RX 7900 XTX（社区冒烟测试，GH #26） |
 | **Metal** (Apple Silicon) | 支持 ([#32](https://github.com/inferstep/ATLAS/issues/32)) | 混合方案：原生 llama-server (Metal) + 其余组件用 Docker（macOS 无法将 GPU 直通给容器） | `deploy/compose/docker-compose.macos.yml` | M 系列；≤16 GB 用 Q4_K_M，≥24 GB 统一内存用 Q6_K |
-| **Vulkan**（跨厂商回退） | 预览 (Preview) | `inference/Dockerfile.vulkan` → `atlas-llama-vulkan` | `deploy/compose/docker-compose.vulkan.yml` | lavapipe CPU 启动路径（已冒烟测试）；尚无真实 GPU 验证 |
+| **Vulkan**（跨厂商回退） | 预览 (Preview) | `services/inference/Dockerfile.vulkan` → `atlas-llama-vulkan` | `deploy/compose/docker-compose.vulkan.yml` | lavapipe CPU 启动路径（已冒烟测试）；尚无真实 GPU 验证 |
 | **SYCL** (Intel Arc) | 路线图 (Roadmap) —— Intel Arc 目前使用 `vulkan` | 待定 | 待定 | — |
 
 **后端选择发生在安装时，而非运行时。** `atlas init` 运行 `tier.detect_gpu()`（见 `atlas/commands/tier.py`），在所有检测到的厂商中挑选显存最大的 GPU（可用 `ATLAS_GPU_VENDOR` / `ATLAS_GPU_INDEX` 覆盖），并把 `ATLAS_BACKEND={cuda|rocm|metal|vulkan}` 写入 `.env`。当主机存在打包好的原生后端时，检测会解析到它：NVIDIA 用 CUDA，x86_64 上的 AMD 用 ROCm，macOS 用混合 Metal 路径。当主机没有打包好的原生后端时（Intel Arc、arm64 上的 AMD、无法识别的厂商），向导会提供 Vulkan 通用回退（默认选是）：一个镜像覆盖 AMD、Intel、Adreno、MoltenVK 和 lavapipe CPU 光栅化器，性能比调优过的原生后端低大约 20–40%。只有当完全不存在可用的后端时，它才会拒绝 —— 而不是写出一个无法启动的 `.env`。每个后端都有自己预构建的镜像；用户不会运行一个打包了所有后端库的臃肿镜像。
@@ -300,7 +300,7 @@ run-first 门本身引用一条指令，`runFirstInstruction`：运行该扩展�
    激活操控在上游移动残差流分布，因此即使在任何拒绝
    触发之前的首次尝试决策中，也会偏好 structural_edit。仅当
    `/models/ast_edit_steering.gguf` 的 `.model` 侧车标记与所选模型
-   匹配时，才由 `inference/entrypoint-v3.1.sh` 自动加载 —— 一旦通过
+   匹配时，才由 `services/inference/entrypoint-v3.1.sh` 自动加载 —— 一旦通过
    `geometric-lens/asa_calibration/README.md` 中的工作流构建出兼容的
    向量，它就始终生效。可通过 `ATLAS_CONTROL_VECTOR*` 环境变量
    覆盖路径/缩放/层范围。
@@ -781,7 +781,7 @@ graph LR
     style AP fill:#1a3a5c,color:#fff
 ```
 
-`llama-server` 和 `sandbox` 独立启动。`geometric-lens` 等待 `llama-server` 变为健康；`v3-service` 等待 `llama-server` 和 `geometric-lens`；`atlas-proxy` 等待 `llama-server`、`geometric-lens`、`v3-service` 和 `sandbox`。同一个 `inference/entrypoint-v3.1.sh` 驱动 Docker Compose、裸机和 K3s，因此上下文大小、KV 缓存量化、flash attention 和 mlock 都由环境变量控制，行为在这些模式之间完全一致；macOS 混合路径通过 `scripts/install/atlas-llama-macos.sh` 启动原生 llama-server，该脚本复刻了入口点的各项标志。
+`llama-server` 和 `sandbox` 独立启动。`geometric-lens` 等待 `llama-server` 变为健康；`v3-service` 等待 `llama-server` 和 `geometric-lens`；`atlas-proxy` 等待 `llama-server`、`geometric-lens`、`v3-service` 和 `sandbox`。同一个 `services/inference/entrypoint-v3.1.sh` 驱动 Docker Compose、裸机和 K3s，因此上下文大小、KV 缓存量化、flash attention 和 mlock 都由环境变量控制，行为在这些模式之间完全一致；macOS 混合路径通过 `scripts/install/atlas-llama-macos.sh` 启动原生 llama-server，该脚本复刻了入口点的各项标志。
 
 安装及各模式的拉起步骤（NVIDIA / ROCm override、裸机、macOS 混合 Metal、K3s 清单）见 [SETUP.md](../../guides/SETUP.md)；macOS 原生路径见 [SETUP_MACOS.md](../../guides/SETUP_MACOS.md)。
 

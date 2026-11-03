@@ -780,7 +780,7 @@ def check_asa_steering(atlas_root: str) -> CheckResult:
 
     Warn-not-fail: ATLAS works without it. When present, llama-server
     auto-applies it on startup via `--control-vector-scaled` (see
-    `inference/entrypoint-v3.1.sh`). When absent, the
+    `services/inference/entrypoint-v3.1.sh`). When absent, the
     `structural_edit`-vs-`edit_file` proposal bias is unsteered and we lean
     entirely on the grammar gate downstream.
 

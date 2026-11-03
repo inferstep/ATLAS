@@ -16,7 +16,7 @@ installing user's uid:gid instead (see below).
 | v3-service | `appuser` | 1001:1001 | 8070 |
 | geometric-lens | `lens` | 1001:1001 | 8099 |
 | sandbox | `sandbox` | 1000:1000 (overridable via `ATLAS_SANDBOX_UID/GID`) | 8020 |
-| llama-server (`atlas-llama`, `inference/Dockerfile*`) | `atlas`, not the image's default | 1001:1001 | 8080 (`EXPOSE`) |
+| llama-server (`atlas-llama`, `services/inference/Dockerfile*`) | `atlas`, not the image's default | 1001:1001 | 8080 (`EXPOSE`) |
 
 `docker-compose.yml` runs llama-server, the proxy, the V3 service and the lens
 as `ATLAS_PROXY_UID:ATLAS_PROXY_GID`, and the sandbox as
