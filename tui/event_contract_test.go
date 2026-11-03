@@ -72,7 +72,8 @@ func proxyStreamedEvents(t *testing.T) map[string]string {
 	streamRE := regexp.MustCompile(`ctx\.Stream\(\s*"([a-z0-9_]+)"`)
 	proxyDir := filepath.Join("..", "proxy")
 	if _, err := os.Stat(proxyDir); err != nil {
-		t.Skipf("proxy source not available: %v", err)
+		// A skip here would pass in silence once the proxy moves.
+		t.Fatalf("the proxy this contract reads is not at ../proxy: %v", err)
 	}
 	err := filepath.WalkDir(proxyDir, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {

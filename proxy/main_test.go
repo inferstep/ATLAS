@@ -1553,7 +1553,8 @@ func TestShutdownBudgetRefusesAGraceThatCannotCoverTheSession(t *testing.T) {
 func TestComposeGraceAgreesWithTheDefault(t *testing.T) {
 	b, err := os.ReadFile("../docker-compose.yml")
 	if err != nil {
-		t.Skipf("compose unavailable: %v", err)
+		// A skip here would pass in silence once the compose file moves.
+		t.Fatalf("the compose file this test pins is not at ../docker-compose.yml: %v", err)
 	}
 	if !strings.Contains(string(b), "stop_grace_period: 650s") {
 		t.Error("docker-compose.yml does not pin stop_grace_period: 650s to match " +
