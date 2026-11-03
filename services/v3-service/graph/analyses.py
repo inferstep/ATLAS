@@ -117,28 +117,6 @@ def callees(graph: CodeGraph, source: str) -> List[str]:
     return out
 
 
-def reachability(graph: CodeGraph, frm: str, to: str) -> bool:
-    """Is `to` reachable from `frm` through any call chain? A self-pair holds
-    only via a real self-edge (matching the Prolog reaches/2 semantics)."""
-    idx = _build_index(graph)
-    from_targets = _resolve_targets(graph, frm)
-    to_targets = set(_resolve_targets(graph, to))
-    if not from_targets or not to_targets:
-        return False
-    for f in from_targets:
-        if f not in idx.nodes:
-            continue
-        if f in to_targets and f in idx.adj.get(f, ()):
-            return True
-        reached = set(_bfs(idx.adj, f))
-        for t in to_targets:
-            if t == f:
-                continue
-            if t in reached:
-                return True
-    return False
-
-
 def path(graph: CodeGraph, frm: str, to: str) -> List[str]:
     """Shortest call chain from `frm` to `to` as a list of names, or []."""
     idx = _build_index(graph)
@@ -212,83 +190,8 @@ def impact(graph: CodeGraph, target: str) -> List[str]:
     return union
 
 
-def cycles(graph: CodeGraph) -> List[str]:  # noqa: C901
-    """Function-level cycles via iterative Tarjan SCC. Methods are excluded
-    because unqualified method names collide across classes and produce phantom
-    cycles (faithful to chiasmus)."""
-    idx = _build_index(graph)
-    func_adj: Dict[str, List[str]] = {}
-    func_nodes: "dict[str, None]" = {}  # ordered set: deterministic SCC start order
-    for u, vs in idx.adj.items():
-        if u in idx.methods:
-            continue
-        kept = [v for v in vs if v not in idx.methods]
-        if kept:
-            func_adj[u] = kept
-            func_nodes.setdefault(u, None)
-            for v in kept:
-                func_nodes.setdefault(v, None)
-
-    index = 0
-    indices: Dict[str, int] = {}
-    lowlink: Dict[str, int] = {}
-    on_stack: Set[str] = set()
-    stack: List[str] = []
-    result: "dict[str, None]" = {}  # ordered set: stable result order
-
-    for start in func_nodes:
-        if start in indices:
-            continue
-        work = [[start, 0, func_adj.get(start, [])]]  # [v, it, succs]
-        indices[start] = index
-        lowlink[start] = index
-        index += 1
-        stack.append(start)
-        on_stack.add(start)
-
-        while work:
-            frame = work[-1]
-            v, it, succs = frame[0], frame[1], frame[2]
-            if it < len(succs):
-                w = succs[it]
-                frame[1] += 1
-                if w not in indices:
-                    indices[w] = index
-                    lowlink[w] = index
-                    index += 1
-                    stack.append(w)
-                    on_stack.add(w)
-                    work.append([w, 0, func_adj.get(w, [])])
-                elif w in on_stack:
-                    if indices[w] < lowlink[v]:
-                        lowlink[v] = indices[w]
-            else:
-                if lowlink[v] == indices[v]:
-                    scc: List[str] = []
-                    while True:
-                        w = stack.pop()
-                        on_stack.discard(w)
-                        scc.append(w)
-                        if w == v:
-                            break
-                    if len(scc) > 1:
-                        for n in scc:
-                            result.setdefault(n, None)
-                    else:
-                        solo = scc[0]
-                        if solo in func_adj.get(solo, ()):
-                            result.setdefault(solo, None)
-                work.pop()
-                if work:
-                    parent = work[-1][0]
-                    if lowlink[v] < lowlink[parent]:
-                        lowlink[parent] = lowlink[v]
-
-    return list(result.keys())
-
-
 def detect_entry_points(graph: CodeGraph) -> List[str]:
-    """Heuristic entry points for dead-code: exported functions with zero
+    """Heuristic entry points: exported functions with zero
     in-degree, then all exports, then zero-in-degree functions. Methods
     excluded. Faithful to chiasmus entry-points.ts."""
     called = {c.callee for c in graph.calls}
@@ -303,32 +206,3 @@ def detect_entry_points(graph: CodeGraph) -> List[str]:
         return sorted(set(exported_fns))
     roots = [n for n in function_names if n not in called]
     return sorted(set(roots))
-
-
-def dead_code(graph: CodeGraph, entry_points: Optional[List[str]] = None) -> List[str]:
-    """Functions defined, called by nobody, and not an entry point. Methods
-    excluded (dynamic dispatch can't be statically resolved)."""
-    called = {c.callee for c in graph.calls}
-    entries: Set[str] = set()
-    if entry_points:
-        for ep in entry_points:
-            resolved = _resolve_targets(graph, ep)
-            if not resolved:
-                entries.add(ep)
-            else:
-                entries.update(resolved)
-    else:
-        entries = {e.name for e in graph.exports}
-
-    out: List[str] = []
-    seen: Set[str] = set()
-    for d in graph.defines:
-        if d.kind != "function" or d.name in seen:
-            continue
-        if d.name in called or d.name in entries:
-            continue
-        seen.add(d.name)
-        out.append(d.name)
-    return out
-
-

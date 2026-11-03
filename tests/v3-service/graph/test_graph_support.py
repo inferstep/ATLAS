@@ -9,7 +9,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "services" / "v3-service"))
 
 import graph
-from graph.analyses import reachability
+from graph.analyses import callees
 from graph.extract import available as extraction_available
 from graph.types import CodeGraph, ImportsFact
 from graph.resolve import resolve_imports, _module_name
@@ -105,8 +105,8 @@ class TestBuildGraph:
         # cross-file import resolved to the defining file
         imp = next(i for i in g.imports if i.name == "helper")
         assert imp.resolved == "pkg/util.py"
-        # reachability across the project graph
-        assert reachability(g, "main", "helper") is True
+        # the call crosses the files of the project graph
+        assert callees(g, "main") == ["helper"]
 
     def test_ignores_non_python(self):
         g = graph.build_graph({"a.md": "# not code", "b.json": "{}"})
