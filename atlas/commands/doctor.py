@@ -611,7 +611,7 @@ def _probe_service_auth(name: str, method: str, url: str, body: Optional[dict], 
 def check_internal_auth(atlas_root: str) -> List[CheckResult]:
     """Internal service auth: token file status + live enforcement.
 
-    Per the auth design (proxy/auth.go, ADR 0001):
+    Per the auth design (requireServiceToken in proxy/main.go, ADR 0001):
       - no token file       -> warn (auth disabled; localhost-only model)
       - token, loose perms  -> fail (the credential is readable by others)
       - token the services cannot read -> fail (each of them stops)
