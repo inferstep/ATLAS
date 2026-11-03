@@ -72,82 +72,112 @@ type recoveredCall struct {
 // values that arrived whole. A string still open at the cut is not a token and
 // is never returned.
 func recoverCutCall(raw string) recoveredCall {
-	rc := recoveredCall{Args: map[string]string{}}
+	r := cutCallReader{rc: recoveredCall{Args: map[string]string{}}, expectKey: map[int]bool{}}
 	dec := json.NewDecoder(strings.NewReader(strings.TrimSpace(raw)))
-	depth := 0
-	var key string
-	inArgs := false
-	expectKey := map[int]bool{}
-	lastArgKey := ""
 	for {
 		tok, err := dec.Token()
 		if err != nil {
 			break
 		}
-		switch v := tok.(type) {
-		case json.Delim:
-			switch v {
-			case '{':
-				depth++
-				expectKey[depth] = true
-				if depth == 2 && key == "args" {
-					inArgs = true
-				}
-			case '}':
-				if depth == 2 {
-					inArgs = false
-				}
-				depth--
-				if depth >= 1 {
-					expectKey[depth] = true
-				}
-			case '[':
-				depth++
-			case ']':
-				depth--
-				if depth >= 1 {
-					expectKey[depth] = true
-				}
-			}
+		if v, isDelim := tok.(json.Delim); isDelim {
+			r.delim(v)
 			continue
-		case string:
-			if expectKey[depth] {
-				key = v
-				expectKey[depth] = false
-				if inArgs && depth == 2 {
-					lastArgKey = v
-				}
-				continue
-			}
-			if depth == 1 && key == "name" {
-				rc.Tool = v
-			}
-			if inArgs && depth == 2 {
-				rc.Args[key] = v
-			}
-		default:
-			if inArgs && depth == 2 && key != "" {
-				rc.Args[key] = fmt.Sprint(v)
-			}
 		}
-		expectKey[depth] = true
+		if v, isString := tok.(string); isString && r.expectKey[r.depth] {
+			r.takeKey(v)
+			continue
+		}
+		r.takeValue(tok)
+		r.expectKey[r.depth] = true
 	}
-	if lastArgKey != "" {
-		if _, done := rc.Args[lastArgKey]; !done {
-			rc.CutField = lastArgKey
-			// The key as the raw JSON writes it: a quote or a backslash in it is
-			// escaped, and an HTML character is not.
-			var key strings.Builder
-			enc := json.NewEncoder(&key)
-			enc.SetEscapeHTML(false)
-			_ = enc.Encode(lastArgKey) // a string always encodes
-			marker := strings.TrimSuffix(key.String(), "\n") + `:"`
-			if i := strings.LastIndex(raw, marker); i >= 0 {
-				rc.CutLines = strings.Count(raw[i+len(marker):], `\n`) + 1
-			}
+	r.markCutField(raw)
+	return r.rc
+}
+
+// cutCallReader is where recoverCutCall stands in the token stream: how deep,
+// under which key, whether inside "args", and which keys it expects next.
+type cutCallReader struct {
+	rc         recoveredCall
+	depth      int
+	key        string
+	inArgs     bool
+	expectKey  map[int]bool
+	lastArgKey string
+}
+
+// delim follows an opening or closing brace or bracket.
+func (r *cutCallReader) delim(v json.Delim) {
+	switch v {
+	case '{':
+		r.depth++
+		r.expectKey[r.depth] = true
+		if r.depth == 2 && r.key == "args" {
+			r.inArgs = true
+		}
+	case '}':
+		if r.depth == 2 {
+			r.inArgs = false
+		}
+		r.depth--
+		if r.depth >= 1 {
+			r.expectKey[r.depth] = true
+		}
+	case '[':
+		r.depth++
+	case ']':
+		r.depth--
+		if r.depth >= 1 {
+			r.expectKey[r.depth] = true
 		}
 	}
-	return rc
+}
+
+// takeKey reads an object key, and remembers the last key of "args".
+func (r *cutCallReader) takeKey(v string) {
+	r.key = v
+	r.expectKey[r.depth] = false
+	if r.inArgs && r.depth == 2 {
+		r.lastArgKey = v
+	}
+}
+
+// takeValue keeps a value that arrived whole: the tool's name, or an argument.
+func (r *cutCallReader) takeValue(tok json.Token) {
+	switch v := tok.(type) {
+	case string:
+		if r.depth == 1 && r.key == "name" {
+			r.rc.Tool = v
+		}
+		if r.inArgs && r.depth == 2 {
+			r.rc.Args[r.key] = v
+		}
+	default:
+		if r.inArgs && r.depth == 2 && r.key != "" {
+			r.rc.Args[r.key] = fmt.Sprint(v)
+		}
+	}
+}
+
+// markCutField names the argument whose value was cut, and counts the lines of
+// it that arrived: the last argument key whose value never closed.
+func (r *cutCallReader) markCutField(raw string) {
+	if r.lastArgKey == "" {
+		return
+	}
+	if _, done := r.rc.Args[r.lastArgKey]; done {
+		return
+	}
+	r.rc.CutField = r.lastArgKey
+	// The key as the raw JSON writes it: a quote or a backslash in it is
+	// escaped, and an HTML character is not.
+	var key strings.Builder
+	enc := json.NewEncoder(&key)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(r.lastArgKey) // a string always encodes
+	marker := strings.TrimSuffix(key.String(), "\n") + `:"`
+	if i := strings.LastIndex(raw, marker); i >= 0 {
+		r.rc.CutLines = strings.Count(raw[i+len(marker):], `\n`) + 1
+	}
 }
 
 var writeToolNames = map[string]bool{"write_file": true, "edit_file": true, "structural_edit": true,
