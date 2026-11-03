@@ -6,7 +6,7 @@
 //   /v1/agent → chatStreamMsg → chat history (per-turn, on Enter)
 //
 // Update hands key and mouse messages to the handlers in input.go. The
-// events pane's lines are built in event_lines.go.
+// events pane's lines are built in events_lines.go.
 
 package app
 

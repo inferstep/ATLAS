@@ -512,7 +512,7 @@ API の契約は [API.md § POST /v3/plan](../../reference/API.md#post-v3plan) �
 | プロキシのブリッジ | `services/proxy/internal/v3client/client_test.go`。ステージのルーティングは `services/proxy/tool_write_v3_bridge_test.go` | SSE の解析、結果が欠けたときのエラー、ステージのルーティング |
 | プロキシのフック | `services/proxy/loop_test.go` | 優先ファイルの取得、切り詰めのしきい値、フォールバックの走査、ティアと長さの判定 |
 | プロキシの遵守 | `services/proxy/plan_gates_test.go`。システムプロンプトは `services/proxy/gates_test.go` | 一致ロジック（ツール名 + パス末尾）、失敗したコールの除外、修正回数の上限、システムプロンプトのレンダリング |
-| TUI のレンダリング | `tui/internal/pipelinestate/plan_test.go`。ハンドラーは `tui/internal/app/plan_test.go` | `PlanView` の状態遷移、修正時の plan_loaded による置き換え、プラン外での無言 |
+| TUI のレンダリング | `tui/internal/pipelinestate/plan_test.go`。ハンドラーは `tui/internal/app/state_plan_test.go` | `PlanView` の状態遷移、修正時の plan_loaded による置き換え、プラン外での無言 |
 
 ### 安全制限
 

@@ -681,7 +681,7 @@ Both are paid up front before the agent's first tool call. The investment is rec
 | proxy bridge | `services/proxy/internal/v3client/client_test.go`; `services/proxy/tool_write_v3_bridge_test.go` for stage routing | SSE parse, missing-result error, stage routing |
 | proxy hook | `services/proxy/loop_test.go` | priority-file pickup, truncation thresholds, fallback walk, tier/length gating |
 | proxy adherence | `services/proxy/plan_gates_test.go`; `services/proxy/gates_test.go` for the system prompt | match logic (tool name + path suffix), failed-call exclusion, revision cap, system-prompt rendering |
-| TUI rendering | `tui/internal/pipelinestate/plan_test.go`; `tui/internal/app/plan_test.go` for the handlers | `PlanView` state transitions, plan_loaded replacement on revise, off-plan silence |
+| TUI rendering | `tui/internal/pipelinestate/plan_test.go`; `tui/internal/app/state_plan_test.go` for the handlers | `PlanView` state transitions, plan_loaded replacement on revise, off-plan silence |
 
 ### Safety Limits
 
