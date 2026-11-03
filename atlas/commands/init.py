@@ -721,9 +721,10 @@ def _step_write_env(m: model_registry.Model, profile: tier.TierProfile,
 def _print_secrets_dir_refused(secrets_dir: str, st: os.stat_result, color: bool) -> None:
     """Why api-keys.json is not written into a secrets/ folder that cannot be set to 0700, and the fix."""
     try:
-        uid, gid = os.getuid(), os.getgid()
+        uid = os.getuid()
+        you = f"{uid}:{os.getgid()}"
     except AttributeError:  # non-POSIX host
-        uid = gid = None
+        uid, you = None, "<your uid>:<your gid>"
     mode = oct(st.st_mode & 0o777)
     if st.st_uid == uid:
         _safe_print(f"  {RED if color else ''}{secrets_dir} is yours, with mode {mode}, but its filesystem "
@@ -737,7 +738,6 @@ def _print_secrets_dir_refused(secrets_dir: str, st: os.stat_result, color: bool
         owner = f"{pwd.getpwuid(st.st_uid).pw_name} (uid {st.st_uid})"
     except (ImportError, KeyError):  # non-POSIX host, or a uid with no name
         owner = f"uid {st.st_uid}"
-    you = f"{uid}:{gid}" if uid is not None else "<your uid>:<your gid>"
     _safe_print(f"  {RED if color else ''}{secrets_dir} belongs to {owner}, with mode {mode}: atlas init "
                 f"cannot set it to 0700, so it does not write api-keys.json into it.{RESET if color else ''}")
     _safe_print("  Docker makes a folder it bind-mounts as root when the folder does not exist yet.")
