@@ -69,13 +69,12 @@ RUN arch="$(dpkg --print-architecture)" \
     && tar -C /usr/local -xzf /tmp/go.tar.gz \
     && rm /tmp/go.tar.gz
 ENV PATH="/usr/local/go/bin:${PATH}"
-RUN go version
-
-# Install Java 21 (JDK headless — javac + java, no GUI libs)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    openjdk-21-jdk-headless \
-    && rm -rf /var/lib/apt/lists/*
-RUN java --version && javac --version
+RUN go version \
+    # Install Java 21 (JDK headless — javac + java, no GUI libs)
+    && apt-get update && apt-get install -y --no-install-recommends \
+        openjdk-21-jdk-headless \
+    && rm -rf /var/lib/apt/lists/* \
+    && java --version && javac --version
 
 # Install Kotlin 2.4.0 (JVM target — requires Java, installed above)
 ARG KOTLIN_VERSION=2.4.0
@@ -90,17 +89,13 @@ RUN curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/kotlin.zip \
 
 ENV PATH="/opt/kotlinc/bin:${PATH}"
 
-# Install Ruby (interpreter, no compile step)
+# Install PHP (CLI, no compile step) and Ruby (interpreter, no compile step)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ruby \
-    && rm -rf /var/lib/apt/lists/*
-RUN ruby --version
-
-# Install PHP (CLI, no compile step)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    php-cli \
-    && rm -rf /var/lib/apt/lists/*
-RUN php --version
+        php-cli \
+        ruby \
+    && rm -rf /var/lib/apt/lists/* \
+    && php --version \
+    && ruby --version
 
 # Install Rust (rustup, a fixed toolchain) under /opt so the runtime
 # user (non-root) can read it. RUSTUP_HOME stays /opt/rustup at runtime
@@ -126,14 +121,13 @@ RUN case "$(dpkg --print-architecture)" in \
     && rm /tmp/rustup-init \
     && chmod -R a+rX /opt/rustup /opt/cargo
 ENV PATH="/opt/cargo/bin:${PATH}"
-RUN rustc --version && cargo --version
-
-# Install JavaScript/TypeScript verification tools and package managers.
-# Project detection may select npm, pnpm, yarn, or bun from lockfiles; the
-# sandbox needs all of them available for build-command verification to be
-# accurate.
-RUN npm install -g --ignore-scripts typescript@7.0.2 tsx@4.23.15 pnpm@12.14.0 yarn@1.22.22
-RUN tsc --version && pnpm --version && yarn --version
+RUN rustc --version && cargo --version \
+    # Install JavaScript/TypeScript verification tools and package managers.
+    # Project detection may select npm, pnpm, yarn, or bun from lockfiles; the
+    # sandbox needs all of them available for build-command verification to be
+    # accurate.
+    && npm install -g --ignore-scripts typescript@7.0.2 tsx@4.23.15 pnpm@12.14.0 yarn@1.22.22 \
+    && tsc --version && pnpm --version && yarn --version
 
 # Install Bun for bun.lockb projects (under /opt for non-root reads),
 # checked against the published SHA-256.
