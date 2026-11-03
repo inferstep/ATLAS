@@ -646,6 +646,10 @@ func lensVerdictCanScore(verdict string) bool {
 	return verdict == "supported" || verdict == "uncalibrated"
 }
 
+// modelsDir is the models folder: at the root inside the containers, and in
+// the workspace on the host.
+const modelsDir = "/models/"
+
 // probeASAStatus checks for the configured ASA control-vector file on disk.
 // The configured path is container-relative (e.g.
 // /models/ast_edit_steering.gguf as llama-server sees it). The proxy
@@ -670,11 +674,11 @@ func probeASAStatus() ASAStatus {
 
 	// Candidate paths to probe, in order.
 	candidates := []vectorCandidate{{path: configured}}
-	if strings.HasPrefix(configured, "/models/") {
-		base := strings.TrimPrefix(configured, "/models/")
+	if strings.HasPrefix(configured, modelsDir) {
+		base := strings.TrimPrefix(configured, modelsDir)
 		workspace := envOr("ATLAS_WORKSPACE_DIR", "/workspace")
 		candidates = append(candidates, vectorCandidate{
-			path: workspace + "/models/" + base, root: workspace, rel: filepath.Join("models", base)})
+			path: workspace + modelsDir + base, root: workspace, rel: filepath.Join("models", base)})
 		if mdir := os.Getenv("ATLAS_MODELS_DIR"); mdir != "" {
 			candidates = append(candidates, vectorCandidate{path: mdir + "/" + base})
 		}
