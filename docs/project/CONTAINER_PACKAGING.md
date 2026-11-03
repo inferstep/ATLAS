@@ -49,7 +49,7 @@ Each account can write only where the service actually needs to.
 | Service | Writable at runtime | Why |
 |---|---|---|
 | atlas-proxy | *(none in the container fs)*; the `/workspace` mount (file tools) and the `/data/diagnostics` mount (only when `ATLAS_SHADOW_CAPTURE` is set) | Reads config from env/mounts; secrets are a read-only mount; logs go to stdout/stderr. Bytecode caching is irrelevant (Go binary). |
-| v3-service | `/data/telemetry` (the `v3-telemetry` volume, mode 1777 in the image), `$HOME` (`/tmp` under compose) | Stage telemetry JSONL (fail-soft when the path is unwritable, with one line at start that names the repair) plus library caches; everything else the pipeline does is proxied to llama/lens/sandbox. `PYTHONDONTWRITEBYTECODE=1` avoids `.pyc` writes into read-only `/app`. |
+| v3-service | `/data/telemetry` (the `v3-telemetry` volume; mode 2770 and group 1001 in the image, a group compose adds to the service), `$HOME` (`/tmp` under compose) | Stage telemetry JSONL (fail-soft when the path is unwritable, with one line at start that names the repair) plus library caches; everything else the pipeline does is proxied to llama/lens/sandbox. `PYTHONDONTWRITEBYTECODE=1` avoids `.pyc` writes into read-only `/app`. |
 | geometric-lens | `$HOME` (`/tmp` under compose) | Library caches. The models dir, config, and secrets are read-only mounts. `PYTHONDONTWRITEBYTECODE=1` set. |
 | sandbox | `/workspace` (mount), the per-language tmpfs set (`/home/sandbox/*`, `/tmp`) | Executes untrusted build/test commands; the tmpfs set is where toolchains install per the universal-tmpfs pattern (see docker-compose.yml). |
 

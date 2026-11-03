@@ -120,13 +120,18 @@ def test_the_lens_and_v3_have_a_home_that_their_user_can_write(service):
 @pytest.mark.parametrize("service, dockerfile, folder", [
     ("v3-service", "services/v3-service/Dockerfile", "/data/telemetry"),
 ])
-def test_a_folder_that_a_service_writes_on_a_named_volume_is_writable_for_any_user(service, dockerfile, folder):
+def test_a_folder_that_a_service_writes_on_a_named_volume_is_writable_through_its_group(service, dockerfile, folder):
     # A new named volume takes the owner and mode of the image's folder, and
     # the service runs as the installing user, not as the image's own user.
+    # The folder belongs to group 1001, which compose adds to the service, and
+    # no other user may write it.
     yaml = pytest.importorskip("yaml")
-    volumes = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"][service]["volumes"]
-    assert [v for v in volumes if v.endswith(f":{folder}") and not v.startswith((".", "/", "$"))]
-    assert f"chmod 1777 {folder}" in (ROOT / dockerfile).read_text()
+    config = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"][service]
+    assert [v for v in config["volumes"] if v.endswith(f":{folder}") and not v.startswith((".", "/", "$"))]
+    assert config["group_add"] == ["1001"]
+    image = (ROOT / dockerfile).read_text()
+    assert "groupadd --gid 1001 appuser" in image
+    assert f"chown appuser:appuser {folder} && chmod 2770 {folder}" in image
 
 
 def test_legacy_runtime_keys_are_upgrade_fallbacks_only():
