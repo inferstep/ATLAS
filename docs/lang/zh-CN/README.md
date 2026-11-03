@@ -2,7 +2,7 @@
 > **[English](../../../README.md)** | **简体中文** | **[日本語](../ja/README.md)** | **[한국어](../ko/README.md)**
 
 <p align="center">
-  <img src="../../images/herodemo.gif" alt="ATLAS TUI 实时演示"/><br/>
+  <img src="../../assets/herodemo.gif" alt="ATLAS TUI 实时演示"/><br/>
   <sub><i>ATLAS TUI 实况（10× 加速），V3 pipeline 正在处理一次文件创建。</i></sub>
 </p>
 

@@ -11,7 +11,7 @@
 // the same rendering events, without entering the agent or tool protocols.
 //
 // Reliability without scripting: prompt comes from a curated bank in
-// docs/demo/demo_prompts.json — each entry is hand-validated to expose
+// docs/assets/demo_prompts.json — each entry is hand-validated to expose
 // the V3 difference. Inference itself is real.
 
 package main
@@ -168,7 +168,7 @@ type demoEvent struct {
 	done   *demoStreamDone
 }
 
-// pickPrompt loads docs/demo/demo_prompts.json (looked up under the
+// pickPrompt loads docs/assets/demo_prompts.json (looked up under the
 // session's working dir, then the process cwd, then the embedded
 // fallback) and returns
 // a random prompt whose difficulty fits the requested length. Bucket
@@ -179,8 +179,8 @@ type demoEvent struct {
 // erroring on a misconfigured length.
 func pickPrompt(workingDir, length string) (demoPrompt, error) {
 	candidates := []string{
-		filepath.Join(workingDir, "docs", "demo", "demo_prompts.json"),
-		"docs/demo/demo_prompts.json",
+		filepath.Join(workingDir, "docs", "assets", "demo_prompts.json"),
+		"docs/assets/demo_prompts.json",
 	}
 	var raw []byte
 	for _, p := range candidates {

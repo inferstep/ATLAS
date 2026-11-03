@@ -2,7 +2,7 @@
 > **[English](../../../README.md)** | **[简体中文](../zh-CN/README.md)** | **[日本語](../ja/README.md)** | **한국어**
 
 <p align="center">
-  <img src="../../images/herodemo.gif" alt="ATLAS TUI 실행 모습"/><br/>
+  <img src="../../assets/herodemo.gif" alt="ATLAS TUI 실행 모습"/><br/>
   <sub><i>ATLAS TUI 라이브 데모(10배속). V3 파이프라인이 파일 생성을 처리하는 모습.</i></sub>
 </p>
 
