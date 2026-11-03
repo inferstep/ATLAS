@@ -165,7 +165,7 @@ func cutCallDiagnostic(ctx *AgentContext, raw string) string {
 	source, readable := "", false
 	if path != "" && ctx != nil {
 		args, _ := json.Marshal(map[string]string{"path": path})
-		if reason := validateToolWorkspacePaths(rc.Tool, args, ctx); reason != "" {
+		if validateToolWorkspacePaths(rc.Tool, args, ctx) != "" {
 			fmt.Fprintf(&sb, "What arrived was an unfinished %s call whose path is outside the workspace; nothing was executed.", rc.Tool)
 			return sb.String()
 		}
