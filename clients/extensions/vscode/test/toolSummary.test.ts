@@ -40,6 +40,7 @@ describe('summarizeToolResult', () => {
 		// The generic keys the TUI already uses.
 		['command output', 'ok', 'run_command', payload({ stdout: 'ok' })],
 		['file content', '3 lines', 'read_file', payload({ content: 'a\nb\nc' })],
+		['two lines of output', '2 lines', 'run_command', payload({ stdout: 'a\nb' })],
 		// Degrades to the old chip rather than inventing a summary.
 		['a shape it does not know', undefined, 'future_tool', payload({ weird: true })],
 		['no payload', undefined, 'x', undefined],
