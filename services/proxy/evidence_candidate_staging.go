@@ -89,29 +89,13 @@ func stageCandidate(ctx *AgentContext, req stagingRequest) (stagingResult, bool)
 			Index: cmd.Index, Count: cmd.Count,
 		}
 
-		switch {
-		case ctx.Ctx != nil && ctx.Ctx.Err() != nil:
-			out.Outcome = stagingCancelled
-		case time.Now().After(deadline):
-			out.Outcome = stagingBudgetExceeded
-		case stagingBackgroundRe.MatchString(cmd.Text):
-			// Refused before it runs: a command that has not exited when we
-			// look cannot be observed, and killing it afterwards would not
-			// make the observation true.
-			out.Outcome = stagingBackgroundedRefusal()
-		case validateShellCommand(cmd.Text) != "":
-			// The existing safety check, unchanged. Client authority to ask
-			// for verification is not authority to do something the safety
-			// gate refuses the model.
-			out.Outcome = stagingRefused
-		default:
-			obs, ran := stagingRun(ctx, cmd.Text, overlay, overlayPath,
-				req.Budget.PerCommandTimeoutSec, deadline)
-			if !ran {
-				out.Outcome = stagingUnavailable
-			} else {
-				stagingApplyObservation(&out, obs, req.Identity.CandidateHash, &stagedHash)
-			}
+		if outcome, stopped := stagingStopBeforeRun(ctx, cmd.Text, deadline); stopped {
+			out.Outcome = outcome
+		} else if obs, ran := stagingRun(ctx, cmd.Text, overlay, overlayPath,
+			req.Budget.PerCommandTimeoutSec, deadline); !ran {
+			out.Outcome = stagingUnavailable
+		} else {
+			stagingApplyObservation(&out, obs, req.Identity.CandidateHash, &stagedHash)
 		}
 
 		res.Commands = append(res.Commands, out)
@@ -122,18 +106,49 @@ func stageCandidate(ctx *AgentContext, req stagingRequest) (stagingResult, bool)
 		}
 	}
 
-	res.Complete = len(res.Commands) == len(req.Commands)
-	for _, c := range res.Commands {
-		if c.Outcome == stagingBudgetExceeded || c.Outcome == stagingCancelled ||
-			c.Outcome == stagingUnavailable {
-			res.Complete = false
-		}
-	}
+	res.Complete = stagingSetComplete(res.Commands, len(req.Commands))
 	// The executor deletes its overlay in a finally, on every path including a
 	// timeout and an exception. Recorded as a fact about the mechanism used,
 	// not as a claim this function verified from outside the container.
 	res.WorkspaceDestroyed = true
 	return res, true
+}
+
+// stagingStopBeforeRun is the outcome of a command that is not run, and true
+// when it is stopped before it runs: the request was cancelled, the budget is
+// spent, it would run in the background, or the safety check refuses it.
+func stagingStopBeforeRun(ctx *AgentContext, text string, deadline time.Time) (stagingCommandOutcome, bool) {
+	switch {
+	case ctx.Ctx != nil && ctx.Ctx.Err() != nil:
+		return stagingCancelled, true
+	case time.Now().After(deadline):
+		return stagingBudgetExceeded, true
+	case stagingBackgroundRe.MatchString(text):
+		// Refused before it runs: a command that has not exited when we
+		// look cannot be observed, and killing it afterwards would not
+		// make the observation true.
+		return stagingBackgroundedRefusal(), true
+	case validateShellCommand(text) != "":
+		// The existing safety check, unchanged. Client authority to ask
+		// for verification is not authority to do something the safety
+		// gate refuses the model.
+		return stagingRefused, true
+	}
+	return "", false
+}
+
+// stagingSetComplete is whether every command of the set ran to an outcome
+// about the candidate: none is missing, and none was stopped by the budget, a
+// cancellation or an unavailable executor.
+func stagingSetComplete(results []stagingCommandResult, want int) bool {
+	complete := len(results) == want
+	for _, c := range results {
+		if c.Outcome == stagingBudgetExceeded || c.Outcome == stagingCancelled ||
+			c.Outcome == stagingUnavailable {
+			complete = false
+		}
+	}
+	return complete
 }
 
 // stagingBackgroundedRefusal names the background case. Split out so the
