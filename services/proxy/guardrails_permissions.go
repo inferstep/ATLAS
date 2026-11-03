@@ -575,6 +575,9 @@ func (d deleteTarget) identityMatches(other deleteTarget) bool {
 // only the read buffer.
 const deleteHashBufferBytes = 64 * 1024
 
+// deleteFilePrefix names the tool at the start of a refusal reason.
+const deleteFilePrefix = "delete_file: "
+
 // inspectDeleteTarget runs every non-mutating check delete_file itself would
 // run, and returns the target the user should be asked about.
 //
@@ -592,10 +595,10 @@ func inspectDeleteTarget(ctx *AgentContext, args json.RawMessage) (deleteTarget,
 	}
 	canonical, err := resolveWorkspacePath(ctx, input.Path)
 	if err != nil {
-		return deleteTarget{}, "delete_file: " + err.Error()
+		return deleteTarget{}, deleteFilePrefix + err.Error()
 	}
 	if reason := denyWritePathReason(input.Path); reason != "" {
-		return deleteTarget{}, "delete_file: " + reason
+		return deleteTarget{}, deleteFilePrefix + reason
 	}
 	// Lstat, never Stat: a symlink is its own object and deleting it must
 	// never be presented as deleting whatever it points at.
@@ -609,7 +612,7 @@ func inspectDeleteTarget(ctx *AgentContext, args json.RawMessage) (deleteTarget,
 	// than no approval.
 	handle, perr := pinObjectFn(canonical)
 	if perr != nil {
-		return deleteTarget{}, "delete_file: " + perr.Error()
+		return deleteTarget{}, deleteFilePrefix + perr.Error()
 	}
 	t := deleteTarget{Canonical: canonical, Rel: input.Path, Size: info.Size(), info: info, handle: handle}
 	// Every refusal below happens after the reference was taken, so every

@@ -82,6 +82,7 @@ import (
 // Fail-open: (nil, false) for a non-.py file, an empty V3 URL, a network
 // failure, or a tree-sitter/parse error on the far side.
 func checkStructuralUnresolved(ctx *AgentContext, path, content string) ([]string, bool) {
+	const check = "unresolved-name"
 	if ctx == nil || ctx.V3URL == "" {
 		return nil, false
 	}
@@ -113,17 +114,17 @@ func checkStructuralUnresolved(ctx *AgentContext, path, content string) ([]strin
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		noteCheckServiceUnavailable(ctx, "unresolved-name", "service unreachable")
+		noteCheckServiceUnavailable(ctx, check, serviceUnreachable)
 		return nil, false // fail-open
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(serviceAnswer(resp.Body))
 	if err != nil {
-		noteCheckServiceUnavailable(ctx, "unresolved-name", "response unreadable")
+		noteCheckServiceUnavailable(ctx, check, "response unreadable")
 		return nil, false
 	}
 	if resp.StatusCode != http.StatusOK {
-		noteCheckServiceUnavailable(ctx, "unresolved-name", fmt.Sprintf("service returned %d", resp.StatusCode))
+		noteCheckServiceUnavailable(ctx, check, fmt.Sprintf("service returned %d", resp.StatusCode))
 		return nil, false
 	}
 	var r struct {
@@ -497,6 +498,18 @@ func workspaceRelativeName(ctx *AgentContext, path string) (string, bool) {
 // requestNotBuilt is the detail of a check that could not build its request.
 const requestNotBuilt = "request could not be built"
 
+// serviceUnreachable is the detail of a check whose service did not answer.
+const serviceUnreachable = "service unreachable"
+
+// setServiceHeaders marks a check's request body as JSON, and adds the service
+// token when one is set.
+func setServiceHeaders(req *http.Request) {
+	req.Header.Set("Content-Type", "application/json")
+	if serviceToken != "" {
+		req.Header.Set("Authorization", "Bearer "+serviceToken)
+	}
+}
+
 // sandboxSyntaxOutcome is the whole-file half of checkFallbackSyntax: the
 // sandbox's /syntax-check in the file's own language. APPLICABILITY IS EVALUATED
 // FIRST: the extension decides whether this check applies at all, before any
@@ -539,10 +552,7 @@ func sandboxSyntaxOutcome(ctx *AgentContext, path, content string) checkOutcome 
 	if err != nil {
 		return checkOutcome{Status: wire.ValidationNotRun, Detail: requestNotBuilt}
 	}
-	req.Header.Set("Content-Type", "application/json")
-	if serviceToken != "" {
-		req.Header.Set("Authorization", "Bearer "+serviceToken)
-	}
+	setServiceHeaders(req)
 	resp, err := client.Do(req)
 	if err != nil {
 		return checkOutcome{Status: wire.ValidationNotRun, Detail: "sandbox unreachable", ProducerUnavailable: true}
@@ -677,14 +687,11 @@ func embeddedScriptOutcome(ctx *AgentContext, path, content, previous string) ch
 	if err != nil {
 		return checkOutcome{Status: wire.ValidationNotRun, Detail: requestNotBuilt}
 	}
-	req.Header.Set("Content-Type", "application/json")
-	if serviceToken != "" {
-		req.Header.Set("Authorization", "Bearer "+serviceToken)
-	}
+	setServiceHeaders(req)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		noteCheckServiceUnavailable(ctx, "embedded-script", "service unreachable")
-		return checkOutcome{Status: wire.ValidationNotRun, Detail: "service unreachable"}
+		noteCheckServiceUnavailable(ctx, "embedded-script", serviceUnreachable)
+		return checkOutcome{Status: wire.ValidationNotRun, Detail: serviceUnreachable}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -881,10 +888,7 @@ func postOrphanCheck(ctx *AgentContext, rel, previous, current string) []orphane
 	if err != nil {
 		return nil
 	}
-	req.Header.Set("Content-Type", "application/json")
-	if serviceToken != "" {
-		req.Header.Set("Authorization", "Bearer "+serviceToken)
-	}
+	setServiceHeaders(req)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil
