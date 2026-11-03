@@ -87,52 +87,67 @@ func shellCommandWords(seg string) ([]string, bool) {
 		if i == len(seg) {
 			break
 		}
-		var word strings.Builder
-		quote := byte(0)
-		for i < len(seg) {
-			c := seg[i]
-			if quote == 0 && strings.ContainsRune(" \t\r\n", rune(c)) {
-				break
-			}
-			switch {
-			case c == '$' && quote == 0 && i+1 < len(seg) && (seg[i+1] == '\'' || seg[i+1] == '"'):
-				// ANSI-C and locale quotes need expansions this lexer does not model.
-				return append(words, word.String()), false
-			case c == '\'' && quote != '"':
-				if quote == '\'' {
-					quote = 0
-				} else {
-					quote = '\''
-				}
-			case c == '"' && quote != '\'':
-				if quote == '"' {
-					quote = 0
-				} else {
-					quote = '"'
-				}
-			case c == '\\' && quote != '\'':
-				if i+1 == len(seg) {
-					return append(words, word.String()), false
-				}
-				i++
-				next := seg[i]
-				if quote == '"' && !strings.ContainsRune("$`\"\\\n", rune(next)) {
-					word.WriteByte('\\')
-				}
-				if next != '\n' {
-					word.WriteByte(next)
-				}
-			default:
-				word.WriteByte(c)
-			}
-			i++
-		}
-		words = append(words, word.String())
-		if quote != 0 {
+		word, next, quote, supported := readShellWord(seg, i)
+		words = append(words, word)
+		if !supported || quote != 0 {
 			return words, false
 		}
+		i = next
 	}
 	return words, true
+}
+
+// readShellWord reads the shell word that starts at i, up to the first
+// whitespace outside quotes. It returns the word, the index after it, and the
+// quote still open at its end. supported is false when the word needs an
+// expansion this lexer does not model; the word read so far comes with it.
+func readShellWord(seg string, i int) (word string, next int, quote byte, supported bool) {
+	var b strings.Builder
+	for i < len(seg) {
+		c := seg[i]
+		if quote == 0 && strings.ContainsRune(" \t\r\n", rune(c)) {
+			break
+		}
+		switch {
+		case c == '$' && quote == 0 && i+1 < len(seg) && (seg[i+1] == '\'' || seg[i+1] == '"'):
+			// ANSI-C and locale quotes need expansions this lexer does not model.
+			return b.String(), i, quote, false
+		case c == '\'' && quote != '"':
+			quote = toggleQuote(quote, '\'')
+		case c == '"' && quote != '\'':
+			quote = toggleQuote(quote, '"')
+		case c == '\\' && quote != '\'':
+			if i+1 == len(seg) {
+				return b.String(), i, quote, false
+			}
+			i++
+			writeEscaped(&b, seg[i], quote)
+		default:
+			b.WriteByte(c)
+		}
+		i++
+	}
+	return b.String(), i, quote, true
+}
+
+// toggleQuote opens quote q, or closes it when it is the one open.
+func toggleQuote(open, q byte) byte {
+	if open == q {
+		return 0
+	}
+	return q
+}
+
+// writeEscaped writes what a backslash escapes. Inside double quotes a
+// backslash escapes only $ ` " \ and a newline, and stays before anything
+// else; an escaped newline joins two lines and writes nothing.
+func writeEscaped(b *strings.Builder, next, quote byte) {
+	if quote == '"' && !strings.ContainsRune("$`\"\\\n", rune(next)) {
+		b.WriteByte('\\')
+	}
+	if next != '\n' {
+		b.WriteByte(next)
+	}
 }
 
 // unwrapShellWrapper locates execution layers after supported command prefixes.
