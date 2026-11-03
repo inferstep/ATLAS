@@ -1,7 +1,7 @@
 """Status-dimension parity contract.
 
 The canonical seven-dimension lens/ASA status is defined once in the Go
-producer (proxy/calibration_status.go, buildDimensions) and rendered by
+producer (buildDimensions in proxy/lens.go) and rendered by
 the TUI badge, atlas doctor, and documented in SUPPORT_MATRIX. This
 contract asserts the dimension NAMES agree across those surfaces so a
 rename in one place can't silently desync the others.
