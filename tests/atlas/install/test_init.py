@@ -243,6 +243,92 @@ def test_loose_secrets_dir_without_yes_reports_setup_incomplete(atlas_root, caps
     assert not (secrets_dir / "api-keys.json").exists()
 
 
+def test_your_own_secrets_dir_that_its_filesystem_will_not_set_to_0700_is_refused(atlas_root, monkeypatch, capsys):
+    """A 0755 secrets/ of your own whose chmod to 0700 fails: the filesystem refused it. The wizard says so,
+    writes no key, and reports the setup incomplete."""
+    secrets_dir = atlas_root / "secrets"
+    secrets_dir.mkdir()
+    secrets_dir.chmod(0o755)
+    real_chmod = os.chmod
+
+    def chmod(path, mode, *args, **kwargs):
+        if os.fspath(path) == str(secrets_dir):
+            raise PermissionError(1, "Operation not permitted", os.fspath(path))
+        return real_chmod(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(os, "chmod", chmod)
+    rc = init.main(["--yes", "--skip-download", "--no-color"])
+
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert f"{secrets_dir} is yours, with mode 0o755, but its filesystem refused the change to 0700" in out
+    assert f"Fix: chmod 700 {secrets_dir} where the filesystem allows it" in out
+    assert "chown" not in out
+    assert "Setup incomplete" in out
+    assert not (secrets_dir / "api-keys.json").exists()
+    assert not (secrets_dir / "service-token").exists()
+
+
+def test_a_0700_secrets_dir_root_owns_and_you_cannot_write_is_refused_with_its_owner_and_the_fix(
+        atlas_root, monkeypatch, capsys):
+    """A 0700 secrets/ that root owns, as Docker makes one it bind-mounts: the chmod fails and the folder is
+    not writable. The wizard names the owner and the chown fix, writes no key, and reports the setup
+    incomplete. Stand-ins answer for root's ownership, so this also holds when the suite runs as root."""
+    secrets_dir = atlas_root / "secrets"
+    secrets_dir.mkdir()
+    secrets_dir.chmod(0o700)
+    real_chmod, real_stat, real_access = os.chmod, os.stat, os.access
+
+    def chmod(path, mode, *args, **kwargs):
+        if os.fspath(path) == str(secrets_dir):
+            raise PermissionError(1, "Operation not permitted", os.fspath(path))
+        return real_chmod(path, mode, *args, **kwargs)
+
+    def stat(path, *args, **kwargs):
+        st = real_stat(path, *args, **kwargs)
+        if os.fspath(path) != str(secrets_dir):
+            return st
+        return os.stat_result((st.st_mode, st.st_ino, st.st_dev, st.st_nlink, 0, 0, st.st_size,
+                               int(st.st_atime), int(st.st_mtime), int(st.st_ctime)))
+
+    def access(path, mode, *args, **kwargs):
+        if os.fspath(path) == str(secrets_dir):
+            return False
+        return real_access(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(os, "chmod", chmod)
+    monkeypatch.setattr(os, "stat", stat)
+    monkeypatch.setattr(os, "access", access)
+    rc = init.main(["--yes", "--skip-download", "--no-color"])
+
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert f"{secrets_dir} belongs to root (uid 0), with mode 0o700: atlas init cannot set it to 0700" in out
+    assert "Docker makes a folder it bind-mounts as root" in out
+    assert f"Fix: sudo chown -R {os.getuid()}:{os.getgid()} {secrets_dir}" in out
+    assert "Setup incomplete" in out
+    assert not (secrets_dir / "api-keys.json").exists()
+    assert not (secrets_dir / "service-token").exists()
+
+
+def test_a_0700_secrets_dir_on_a_filesystem_that_refuses_chmod_is_written(atlas_root, monkeypatch):
+    secrets_dir = atlas_root / "secrets"
+    secrets_dir.mkdir()
+    secrets_dir.chmod(0o700)
+    real_chmod = os.chmod
+
+    def chmod(path, mode, *args, **kwargs):
+        if os.fspath(path) == str(secrets_dir):
+            raise PermissionError(1, "Operation not permitted", os.fspath(path))
+        return real_chmod(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(os, "chmod", chmod)
+    rc = init.main(["--yes", "--skip-download", "--no-color"])
+
+    assert rc == 0
+    assert (secrets_dir / "api-keys.json").exists()
+
+
 # ---------------------------------------------------------------------------
 # Prompts
 # ---------------------------------------------------------------------------
