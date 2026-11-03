@@ -181,16 +181,14 @@ RUN bun --version
 # scripts/ci/ci-lock.sh makes from them with a hash for each package, and
 # only from built packages, so no package's setup script runs here.
 COPY requirements-lock.txt /tmp/sandbox-requirements-lock.txt
-RUN pip install --no-cache-dir --require-hashes --only-binary=:all: -r /tmp/sandbox-requirements-lock.txt
-
-# The workspace base (/tmp/sandbox) is made by the server at start, as the
-# user it runs as.
-
-# Non-root runtime user. Compose may override the uid/gid at runtime
-# (ATLAS_SANDBOX_UID/GID, written by `atlas init` to match the host
-# user so /workspace writes keep the right owner); HOME comes from the
-# compose environment because an overridden uid has no passwd entry.
-RUN groupadd -g 1000 sandbox && useradd -u 1000 -g 1000 -d /home/sandbox -s /bin/bash sandbox \
+RUN pip install --no-cache-dir --require-hashes --only-binary=:all: -r /tmp/sandbox-requirements-lock.txt \
+    # Non-root runtime user. Compose may override the uid/gid at runtime
+    # (ATLAS_SANDBOX_UID/GID, written by `atlas init` to match the host
+    # user so /workspace writes keep the right owner); HOME comes from the
+    # compose environment because an overridden uid has no passwd entry.
+    # The workspace base (/tmp/sandbox) is made by the server at start, as
+    # the user it runs as.
+    && groupadd -g 1000 sandbox && useradd -u 1000 -g 1000 -d /home/sandbox -s /bin/bash sandbox \
     && mkdir -p /home/sandbox && chown 1000:1000 /home/sandbox
 
 COPY structured_log.py .
