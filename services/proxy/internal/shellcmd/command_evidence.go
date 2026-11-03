@@ -545,26 +545,33 @@ func readHereDocBodies(cmd string, p int, docs []hereDoc, bodyAt map[int]*string
 			b = &strings.Builder{}
 			bodyAt[doc.seg] = b
 		}
-		for p < len(cmd) {
-			line, next := cmd[p:], len(cmd)
-			if end := strings.IndexByte(line, '\n'); end >= 0 {
-				line, next = line[:end], p+end+1
-			}
-			p = next
-			check := strings.TrimRight(line, "\r")
-			if doc.stripTabs {
-				check = strings.TrimLeft(check, "\t")
-			}
-			if check == doc.delim {
-				break
-			}
-			if b.Len() > 0 {
-				b.WriteByte('\n')
-			}
-			b.WriteString(line)
-		}
+		p = readHereDocBody(cmd, p, doc, b)
 	}
 	return p - 1
+}
+
+// readHereDocBody adds to b the lines of one here-document body that starts at
+// p, up to and with its delimiter line, and returns the index after it.
+func readHereDocBody(cmd string, p int, doc hereDoc, b *strings.Builder) int {
+	for p < len(cmd) {
+		line, next := cmd[p:], len(cmd)
+		if end := strings.IndexByte(line, '\n'); end >= 0 {
+			line, next = line[:end], p+end+1
+		}
+		p = next
+		check := strings.TrimRight(line, "\r")
+		if doc.stripTabs {
+			check = strings.TrimLeft(check, "\t")
+		}
+		if check == doc.delim {
+			break
+		}
+		if b.Len() > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(line)
+	}
+	return p
 }
 
 // dropEmptyTrailingSegments removes the empty segments at the end of a split.
