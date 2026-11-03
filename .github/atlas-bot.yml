@@ -78,6 +78,7 @@ pull_requests:
     sandbox/executor_models.py: the guards
     sandbox/executor_parsers.py: the guards
     sandbox/resource_contract.py: the guards
+    sandbox/start_up.py: the guards
   # Path -> what it is. A pull request that changes one is high risk too.
   # These files of v3-service hold a prompt, or shape the request that
   # carries it. No recorded request shows a change of that text, so this

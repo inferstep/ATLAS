@@ -182,6 +182,7 @@ from executor_models import (
     ExecuteRequest, ExecuteResponse, ShellObservation, ShellRequest, ShellResponse,
     SyntaxCheckRequest, SyntaxCheckResponse)
 from executor_parsers import _html_syntax_errors, _xml_syntax_errors, _yaml_syntax_errors
+from start_up import serve
 
 # THE resource contract for every untrusted command, validated here at import.
 # A malformed operator budget stops the executor from starting rather than
@@ -2020,7 +2021,5 @@ LANGUAGE_HANDLERS = {
 
 
 if __name__ == "__main__":
-    import uvicorn
-    WORKSPACE_BASE.mkdir(parents=True, exist_ok=True)
     logger.info(f"Supported languages: {list(LANGUAGE_HANDLERS.keys())}")
-    uvicorn.run(app, host="0.0.0.0", port=8020)
+    serve(app, WORKSPACE_BASE)

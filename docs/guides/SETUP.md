@@ -614,6 +614,8 @@ python executor_server.py
 # The sandbox checks on startup whether it can govern child processes via /proc.
 # On hosts without a readable /proc (e.g. macOS), it starts with degraded limits
 # and reports "resource limits not enforced" in /health and execution results.
+# It listens on 127.0.0.1:8020 only (ATLAS_SANDBOX_HOST sets the address), and it
+# does not start when its workspace base (/tmp/sandbox) is a link or another user's.
 
 # Terminal 5: atlas-proxy
 ATLAS_PROXY_PORT=8090 \
