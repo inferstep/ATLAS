@@ -1166,12 +1166,6 @@ func runnerEntries(command, workDir string, candidates []string) []string {
 	dir := workDir
 	var out []string
 	seen := map[string]bool{}
-	add := func(p string) {
-		if !seen[p] {
-			seen[p] = true
-			out = append(out, p)
-		}
-	}
 	for _, seg := range segs {
 		words := programWords(shellFields(strings.TrimSpace(seg)))
 		if len(words) == 0 {
@@ -1182,44 +1176,63 @@ func runnerEntries(command, workDir string, candidates []string) []string {
 			dir = joinDir(dir, args[0])
 			continue
 		}
-		var roots []string
-		var match func(path string) bool
-		recursive := true
-		switch {
-		case prog == "pytest" || prog == "py.test" || (isPythonProgram(prog) && pythonModule(args) == "pytest"):
-			roots, match = runnerRoots(dir, pathArgs(args, "pytest")), isPytestFile
-		case isPythonProgram(prog) && pythonModule(args) == "unittest":
-			roots, match = []string{dir}, func(p string) bool {
-				b := filepath.Base(p)
-				return strings.HasPrefix(b, "test") && strings.HasSuffix(b, ".py")
+		for _, p := range segmentRunnerEntries(prog, args, dir, workDir, candidates) {
+			if !seen[p] {
+				seen[p] = true
+				out = append(out, p)
 			}
-		case prog == "go" && len(args) > 0 && (args[0] == "test" || args[0] == "run"):
-			for _, pkg := range goPackages(args[1:]) {
-				pkgDir, all := joinDir(dir, strings.TrimSuffix(pkg, "/...")), strings.HasSuffix(pkg, "...")
-				for _, c := range candidates {
-					if !strings.HasSuffix(c, ".go") || !underDir(c, pkgDir, workDir, all) {
-						continue
-					}
-					if args[0] == "test" && !dirHasGoTests(filepath.Dir(absUnder(c, workDir))) {
-						continue // compiled, and nothing ran
-					}
-					add(c)
-				}
-			}
-			continue
-		case (prog == "npm" || prog == "yarn" || prog == "pnpm") && len(args) > 0 && (args[0] == "test" || args[0] == "t"),
-			prog == "jest" || prog == "vitest" || prog == "mocha",
-			(prog == "npx" || prog == "pnpx" || prog == "bunx") && len(args) > 0 && (args[0] == "jest" || args[0] == "vitest" || args[0] == "mocha"):
-			roots, match = []string{dir}, isJSTestFile
-		default:
-			continue
 		}
-		for _, root := range roots {
-			for _, c := range candidates {
-				if match(c) && underDir(c, root, workDir, recursive) {
-					add(c)
-				}
+	}
+	return out
+}
+
+// segmentRunnerEntries returns the candidates that one segment's runner
+// discovers when it runs in dir, and none for a segment that runs no runner.
+func segmentRunnerEntries(prog string, args []string, dir, workDir string, candidates []string) []string {
+	switch {
+	case prog == "pytest" || prog == "py.test" || (isPythonProgram(prog) && pythonModule(args) == "pytest"):
+		return candidatesUnder(runnerRoots(dir, pathArgs(args, "pytest")), isPytestFile, workDir, candidates)
+	case isPythonProgram(prog) && pythonModule(args) == "unittest":
+		return candidatesUnder([]string{dir}, isUnittestFile, workDir, candidates)
+	case prog == "go" && len(args) > 0 && (args[0] == "test" || args[0] == "run"):
+		return goPackageEntries(args, dir, workDir, candidates)
+	case (prog == "npm" || prog == "yarn" || prog == "pnpm") && len(args) > 0 && (args[0] == "test" || args[0] == "t"),
+		prog == "jest" || prog == "vitest" || prog == "mocha",
+		(prog == "npx" || prog == "pnpx" || prog == "bunx") && len(args) > 0 && (args[0] == "jest" || args[0] == "vitest" || args[0] == "mocha"):
+		return candidatesUnder([]string{dir}, isJSTestFile, workDir, candidates)
+	}
+	return nil
+}
+
+// candidatesUnder returns, root by root, the candidates that match and sit
+// anywhere below that root.
+func candidatesUnder(roots []string, match func(path string) bool, workDir string, candidates []string) []string {
+	var out []string
+	for _, root := range roots {
+		for _, c := range candidates {
+			if match(c) && underDir(c, root, workDir, true) {
+				out = append(out, c)
 			}
+		}
+	}
+	return out
+}
+
+// goPackageEntries returns the .go candidates in the packages that `go test`
+// or `go run` names. `go test` only compiles a package without test files, so
+// such a package adds nothing to a test run.
+func goPackageEntries(args []string, dir, workDir string, candidates []string) []string {
+	var out []string
+	for _, pkg := range goPackages(args[1:]) {
+		pkgDir, all := joinDir(dir, strings.TrimSuffix(pkg, "/...")), strings.HasSuffix(pkg, "...")
+		for _, c := range candidates {
+			if !strings.HasSuffix(c, ".go") || !underDir(c, pkgDir, workDir, all) {
+				continue
+			}
+			if args[0] == "test" && !dirHasGoTests(filepath.Dir(absUnder(c, workDir))) {
+				continue // compiled, and nothing ran
+			}
+			out = append(out, c)
 		}
 	}
 	return out
@@ -1302,6 +1315,12 @@ func goPackages(args []string) []string {
 func isPytestFile(p string) bool {
 	b := filepath.Base(p)
 	return strings.HasSuffix(b, ".py") && (strings.HasPrefix(b, "test_") || strings.HasSuffix(b, "_test.py"))
+}
+
+// isUnittestFile matches the files `python -m unittest` discovers: test*.py.
+func isUnittestFile(p string) bool {
+	b := filepath.Base(p)
+	return strings.HasPrefix(b, "test") && strings.HasSuffix(b, ".py")
 }
 
 var jsTestFileRe = regexp.MustCompile(`\.(test|spec)\.[cm]?[jt]sx?$`)
