@@ -52,6 +52,7 @@ func TestClassifyCommandEvidence(t *testing.T) {
 		{"set -e; pytest; echo done", evidenceExecution, false},
 		{"make test", evidenceExecution, false},
 		{"make check", evidenceExecution, false},
+		{"pytest && ruff check .", evidenceExecution, false},
 		{"python3 -m unittest discover", evidenceExecution, false},
 		{"python3 - <<'EOF'\nimport app\nprint(app.solve())\nEOF", evidenceExecution, false},
 		{"lua main.lua", evidenceExecution, false},
@@ -150,6 +151,8 @@ func TestMaskNoteNamesWhatHidTheResult(t *testing.T) {
 		"python3 app.py; echo done":  "`; echo`",
 		"python3 app.py &":           "background",
 		"curl http://localhost:5000": "curl -sf",
+		// The first result hidden is the one the note names.
+		"pytest | tail -5; python3 app.py &": "`| tail`",
 	} {
 		if note := classifyCommandEvidence(cmd).MaskNote; !strings.Contains(note, want) {
 			t.Errorf("%q: note %q does not name %s", cmd, note, want)
@@ -159,7 +162,8 @@ func TestMaskNoteNamesWhatHidTheResult(t *testing.T) {
 
 // Only a segment that ran something binds the files it names. A parse in the
 // same chain names a file it never ran; a compile step whose output a later
-// segment ran does bind its source.
+// segment ran does bind its source. A `cd` comes once, before the first
+// segment it moved.
 func TestCoveringSegments(t *testing.T) {
 	for cmd, want := range map[string][]string{
 		"python3 -m py_compile a.py && python3 b.py": {"python3 b.py"},
@@ -167,6 +171,8 @@ func TestCoveringSegments(t *testing.T) {
 		"gcc main.c -o main && ./main":               {"gcc main.c -o main", "./main"},
 		"ruff check a.py && pytest -q":               {"pytest -q"},
 		"python3 -m py_compile a.py":                 nil,
+		"gcc main.c -o main":                         nil,
+		"cd app && pytest && python3 main.py":        {"cd app", "pytest", "python3 main.py"},
 	} {
 		var got []string
 		for _, seg := range classifyCommandEvidence(cmd).Covering {
@@ -204,6 +210,10 @@ func TestHereDocumentsAreNotSplit(t *testing.T) {
 	}
 	if !executionAttempt(strings.Join(ev.Honest, " && "), "store.py") {
 		t.Fatal("an import inside a here-document is not an execution attempt")
+	}
+	viaShell := classifyCommandEvidence("bash -c 'python3 -' <<'EOF'\nimport store\nEOF")
+	if len(viaShell.Honest) != 1 || !strings.Contains(viaShell.Honest[0], "import store") {
+		t.Fatalf("the body did not stay with the shell that reads it: %q", viaShell.Honest)
 	}
 }
 

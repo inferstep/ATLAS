@@ -98,10 +98,8 @@ type commandEvidence struct {
 func classifyCommandEvidence(command string) commandEvidence {
 	segs, ops, bodies := splitTopLevelShell(command)
 	// `bash -c "pytest | tail"` is the command inside the quotes.
-	if len(segs) == 1 && bodies[0] == "" {
-		if script, ok := shellScript(segs[0]); ok {
-			return classifyCommandEvidence(script)
-		}
+	if script, ok := soleShellScript(segs, bodies); ok {
+		return classifyCommandEvidence(script)
 	}
 	// `set -e` makes `;` stop at the first failure, and `set -o pipefail`
 	// makes a pipeline report its first failure, so neither hides one.
@@ -118,48 +116,9 @@ func classifyCommandEvidence(command string) commandEvidence {
 			}
 			continue
 		}
-		hiddenBy, asserted := "", false
-		for j := i; j < len(ops) && hiddenBy == ""; j++ {
-			op := ops[j]
-			if j+1 >= len(segs) {
-				// A trailing operator with nothing after it: `pytest;` still
-				// reports pytest. A trailing `&` backgrounds it.
-				if op == "&" {
-					hiddenBy = "&"
-				}
-				break
-			}
-			switch {
-			case op == "|" && j == i && kind == evidenceProbe && pipeAssertion(segs[j+1]):
-				// `curl -s localhost:5000/ | grep -q Welcome`: the pipeline's
-				// status is a check on the body the probe fetched.
-				asserted = true
-			case op == "&&", op == ";" && errexit, op == "|" && pipefail:
-			case op == "||" && failurePropagates(segs[j+1]):
-				// `pytest || exit 1`: the fallback re-raises the failure.
-			case op == "&":
-				hiddenBy = "&"
-			default:
-				hiddenBy = strings.TrimSpace(op + " " + firstWord(segs[j+1]))
-			}
-		}
-		note := ""
-		switch {
-		case hiddenBy == "&":
-			note = fmt.Sprintf("`&` runs `%s` in the background, so its exit status is never seen. Run it in "+
-				"the foreground, or start a server with run_background and probe it.", programName(seg))
-		case hiddenBy != "":
-			note = fmt.Sprintf("`%s` replaces the exit status of `%s`, so a failure would still have looked "+
-				"like success. Run it on its own; long output is truncated for you anyway.", hiddenBy, programName(seg))
-		case kind == evidenceProbe && !asserted && probeStatusBlind(seg):
-			note = fmt.Sprintf("`%s` exits 0 even when the server answers with an error page, so a broken "+
-				"page would still have looked like success. Use `curl -sf <url>`, or pipe the body into "+
-				"`grep` for what the page must contain.", programName(seg))
-		}
-		if note != "" {
-			if !ev.Masked {
-				ev.Masked, ev.MaskNote = true, note
-			}
+		hiddenBy, asserted := hiddenStatus(i, kind, segs, ops, errexit, pipefail)
+		if note := maskNote(seg, kind, hiddenBy, asserted); note != "" {
+			ev.mask(note)
 			continue
 		}
 		honest := seg
@@ -170,28 +129,102 @@ func classifyCommandEvidence(command string) commandEvidence {
 		bare = append(bare, seg)
 		cdBefore = append(cdBefore, lastCd)
 		kinds = append(kinds, kind)
-		if kind > ev.Kind {
-			ev.Kind = kind
+		ev.Kind = max(ev.Kind, kind)
+	}
+	ev.Covering = coveringSegments(ev.Honest, bare, cdBefore, kinds)
+	return ev
+}
+
+// soleShellScript returns the inline script of a line that is one shell
+// started with a script (`bash -c SCRIPT`) and reads no here-document.
+func soleShellScript(segs, bodies []string) (string, bool) {
+	if len(segs) != 1 || bodies[0] != "" {
+		return "", false
+	}
+	return shellScript(segs[0])
+}
+
+// hiddenStatus reports what keeps segment i's exit status from reaching the
+// line's: the operator and the word after it, "&" for the background
+// operator, or "" when nothing does. asserted is set when segment i is a
+// probe piped into a check on the body it fetched.
+func hiddenStatus(i int, kind commandEvidenceKind, segs, ops []string, errexit, pipefail bool) (hiddenBy string, asserted bool) {
+	for j := i; j < len(ops) && hiddenBy == ""; j++ {
+		op := ops[j]
+		if j+1 >= len(segs) {
+			// A trailing operator with nothing after it: `pytest;` still
+			// reports pytest. A trailing `&` backgrounds it.
+			if op == "&" {
+				hiddenBy = "&"
+			}
+			break
+		}
+		switch {
+		case op == "|" && j == i && kind == evidenceProbe && pipeAssertion(segs[j+1]):
+			// `curl -s localhost:5000/ | grep -q Welcome`: the pipeline's
+			// status is a check on the body the probe fetched.
+			asserted = true
+		case op == "&&", op == ";" && errexit, op == "|" && pipefail:
+		case op == "||" && failurePropagates(segs[j+1]):
+			// `pytest || exit 1`: the fallback re-raises the failure.
+		case op == "&":
+			hiddenBy = "&"
+		default:
+			hiddenBy = strings.TrimSpace(op + " " + firstWord(segs[j+1]))
 		}
 	}
+	return hiddenBy, asserted
+}
+
+// maskNote says, for the model, what hid a verifying segment's result and
+// what to run instead, or "" when the line reports that result.
+func maskNote(seg string, kind commandEvidenceKind, hiddenBy string, asserted bool) string {
+	switch {
+	case hiddenBy == "&":
+		return fmt.Sprintf("`&` runs `%s` in the background, so its exit status is never seen. Run it in "+
+			"the foreground, or start a server with run_background and probe it.", programName(seg))
+	case hiddenBy != "":
+		return fmt.Sprintf("`%s` replaces the exit status of `%s`, so a failure would still have looked "+
+			"like success. Run it on its own; long output is truncated for you anyway.", hiddenBy, programName(seg))
+	case kind == evidenceProbe && !asserted && probeStatusBlind(seg):
+		return fmt.Sprintf("`%s` exits 0 even when the server answers with an error page, so a broken "+
+			"page would still have looked like success. Use `curl -sf <url>`, or pipe the body into "+
+			"`grep` for what the page must contain.", programName(seg))
+	}
+	return ""
+}
+
+// mask records that a verifying segment's result was hidden. The first note
+// is the one the model sees.
+func (ev *commandEvidence) mask(note string) {
+	if !ev.Masked {
+		ev.Masked, ev.MaskNote = true, note
+	}
+}
+
+// coveringSegments picks the honest segments a passing line binds files from:
+// each that ran or probed something, and each compile step whose output a
+// later segment ran, preceded by the `cd` that set where it ran.
+func coveringSegments(honest, bare, cdBefore []string, kinds []commandEvidenceKind) []string {
 	lastRun := -1
 	for i, k := range kinds {
 		if k == evidenceExecution {
 			lastRun = i
 		}
 	}
+	var covering []string
 	placed := ""
 	for i, k := range kinds {
 		if k.verifies() || (i < lastRun && compileStep(bare[i])) {
 			// Where it ran decides what a runner discovers (runnerEntries).
 			if cdBefore[i] != "" && cdBefore[i] != placed {
-				ev.Covering = append(ev.Covering, cdBefore[i])
+				covering = append(covering, cdBefore[i])
 				placed = cdBefore[i]
 			}
-			ev.Covering = append(ev.Covering, ev.Honest[i])
+			covering = append(covering, honest[i])
 		}
 	}
-	return ev
+	return covering
 }
 
 // shellOptions reads `set -e` / `set -o errexit` and `set -o pipefail` from
