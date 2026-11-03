@@ -667,7 +667,7 @@ func TestNoRouteReadsADeliveryMode(t *testing.T) {
 // The attribution is not an obligation kind, a verification kind, an evidence
 // kind or a completion reason: none of those owners knows the word.
 func TestTheAttributionCannotBecomeAnObligationOrAVerificationResult(t *testing.T) {
-	for _, f := range append(append(packageFiles(t, "internal/taskcontract"), "task_obligation_kinds.go", "evidence_verification_requirements.go",
+	for _, f := range append(append(packageFiles(t, "internal/taskcontract"), "task_obligation_kinds.go", "evidence_verification.go",
 		"evidence_verification.go", "evidence_staged_command.go", "evidence_wiring.go",
 		"candidate_authorization.go", "candidate_grant.go", "delivery.go",
 		"delivery_settlement.go", "candidate_feasibility.go", "candidate_policy.go",

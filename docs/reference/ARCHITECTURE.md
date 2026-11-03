@@ -97,7 +97,7 @@ Every non-test Go file of `services/proxy/`, sub-folders included, with its area
 | `plan_generation.go`, `task_intake.go` | Whether a request earns a plan and the call that asks the planner for one; the task contract a request declares |
 | `loop_end.go`, `loop_recovery.go` | How a run ends: its terminal, time budget and summary; what a stuck model is shown and the work a run still owes |
 | `model_fenced_channel.go` | The sub-call that fetches a file body, and what it may spend |
-| `gates_exit.go` | The exit gates and the run state they read |
+| `gates_exit.go` | The exit gates and the run state they read. It also tells a verification command that failed because it is a long-running server (it hit the time limit, or its port was taken) from one that failed because the code is broken |
 | `loop_turn.go`, `loop_checks.go`, `loop_results.go` | One turn of the loop: the model call and its reply, the checks before a tool runs, and its result with the stuck-loop breakers. `loop_turn.go` also prompts a run to act or answer after repeated read-only calls, according to what the request requires |
 | `tools.go`, `tool_*.go` | The 16 tool definitions + executors, tier classification, tool-call grammar |
 | `gates*.go` | Honesty/plan gates: claim-check, structural, syntax, embedded-script, plan-adherence, plan-reminder |
@@ -121,7 +121,7 @@ Every non-test Go file of `services/proxy/`, sub-folders included, with its area
 | `internal/shellcmd/command_evidence.go` | What a shell command demonstrates: execution, probe, static check or nothing, and whether the command line reports that part's exit status |
 | `guardrails*.go` | Per-tool steering guards (shrinkage, missing-command/module steers, doctype strip). `guardrails_reply.go` normalizes introductory phrases so completion checks can recognize replies that merely announce future work |
 | `server_events.go` | Typed-envelope broker (`/events`) and SSE plumbing |
-| `internal/v3client/client.go` | SSE client for v3-service `/v3/generate` + `/v3/plan`; `tool_write_v3_timeout.go` keeps the call's cap, `ATLAS_V3_TIMEOUT` |
+| `internal/v3client/client.go` | SSE client for v3-service `/v3/generate` + `/v3/plan`; `tool_write_v3.go` keeps the call's cap, `ATLAS_V3_TIMEOUT` |
 | `loop_state.go` | Shared types, tiers, turn caps |
 | `internal/wire/messages.go` | The model's messages, tool results and the plan: what crosses a boundary |
 | `internal/wire/v3.go` | The V3 service's request, response and evidence envelope, and the check that reads one |
@@ -137,7 +137,7 @@ Every non-test Go file of `services/proxy/`, sub-folders included, with its area
 | `candidate_attribution.go` | Records why automatic candidate delivery succeeded or was refused, using the decisions already made by the route, authorization, policy, and delivery owners |
 | `candidate_automatic.go` | Checks whether the exact V3-selected candidate meets the safety and identity requirements for automatic delivery |
 | `candidate_capture_only.go` | Prevents candidate delivery during capture-only measurement runs and records the suppression |
-| `delivery.go` | Authorizes candidate delivery, consumes its one-use permission, rechecks current workspace state, and writes the approved bytes |
+| `delivery.go` | Authorizes candidate delivery, consumes its one-use permission, rechecks current workspace state, and writes the approved bytes. It also lists the production routes and originating tools allowed to deliver service-authored candidate content |
 | `candidate_policy.go` | Defines the fixed candidate policy, its possible outcomes, and the private record of each decision |
 | `candidate_provenance.go` | Reports where delivered content came from and which policy allowed it to reach disk |
 | `candidate_reachability.go` | Determines and records why a mutation bypassed candidate generation, including eligibility and remaining time |
@@ -161,14 +161,11 @@ Every non-test Go file of `services/proxy/`, sub-folders included, with its area
 | `evidence_staging_contract.go` | Defines and validates sandbox staging requests, observations, execution budgets, and their identity bindings |
 | `candidate_mutation_target.go` | Checks whether a parsed mutation call grounds candidate delivery to its exact target when the client has not declared output paths |
 | `evidence_syntax.go` | Turns proxy syntax-check observations into evidence bound to exact candidate bytes and structural obligations |
-| `delivery_registry.go` | Lists the production routes and originating tools allowed to deliver service-authored candidate content |
 | `delivery_v3_fallback.go` | Tracks files written after V3 failed or timed out and discloses still-current unchecked content in the final summary |
-| `evidence_verification.go` | Produces evidence from client-declared command observations and tracks which individual verification obligations they satisfy |
-| `evidence_verification_requirements.go` | Limits a declared verification's evidence strength by where its test assets came from, as this session saw it |
+| `evidence_verification.go` | Produces evidence from client-declared command observations and tracks which individual verification obligations they satisfy. It also limits a declared verification's evidence strength by where its test assets came from, as this session saw it |
 | `gates_workspace_observation.go` | Observes file changes made by foreground and background commands and records deliverables and deletions in the session ledger |
 | `internal/workspacefs/confined_dir.go` | Reads one folder through `os.Root`: a name that resolves to something outside the folder is an error, never a read, and a name that holds something other than a regular file is skipped like one that is absent |
 | `internal/workspacefs/sandbox_subdir.go` | Allows a `sandbox_subdir` of ASCII letters, digits, dot, underscore and dash, at most 64 characters, and never `.` or `..` |
-| `gates_exit_server_start.go` | Tells a verification command that failed because it is a long-running server (it hit the time limit, or its port was taken) from one that failed because the code is broken |
 | `server_service_answer.go` | Reads an answer from a service of the stack (llama-server, the V3 service, the lens, the sandbox) up to 64 MiB, so a service that sends without end cannot fill the proxy's memory |
 | `internal/shellcmd/shell_wrapper.go` | The command policy behind `validateShellCommand`: splits compound commands, looks inside execution wrappers (`sh -c`, `eval`, …) up to 16 layers deep, and refuses catastrophic commands and wrappers it cannot check |
 | `internal/shellcmd/destructive.go` | The shell forms no command may use: catastrophic deletes, fork bombs, writes to a device |

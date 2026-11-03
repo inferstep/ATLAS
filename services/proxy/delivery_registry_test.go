@@ -292,7 +292,7 @@ func TestTheRegistryNamesOnlyRealRoutes(t *testing.T) {
 func TestProseCannotSatisfyTheRegistryGuard(t *testing.T) {
 	// A comment naming a route is not a registration: the guard reads the
 	// call graph and the registry map, never the file's text.
-	body, err := os.ReadFile("delivery_registry.go")
+	body, err := os.ReadFile("delivery.go")
 	if err != nil {
 		t.Fatal(err)
 	}
