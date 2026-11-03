@@ -1,6 +1,6 @@
 name: vscode-extension
 
-# Code-level checks for the VS Code extension (extensions/vscode/) —
+# Code-level checks for the VS Code extension (clients/extensions/vscode/) —
 # type-check, lint, unit tests, and a production bundle. Kept out of
 # test.yml's Go/Python matrix: the extension is its own npm ecosystem and
 # only needs to run when its files change.
@@ -9,12 +9,12 @@ on:
   push:
     branches: [main, dev]
     paths:
-      - 'extensions/vscode/**'
+      - 'clients/extensions/vscode/**'
       - '.github/workflows/vscode-extension.yml'
   pull_request:
     branches: [main, dev]
     paths:
-      - 'extensions/vscode/**'
+      - 'clients/extensions/vscode/**'
       - '.github/workflows/vscode-extension.yml'
 
 # A newer commit on a pull request cancels the run of the older one. A push
@@ -33,7 +33,7 @@ jobs:
     runs-on: ubuntu-24.04
     defaults:
       run:
-        working-directory: extensions/vscode
+        working-directory: clients/extensions/vscode
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -43,7 +43,7 @@ jobs:
         with:
           node-version: '20'
           cache: npm
-          cache-dependency-path: extensions/vscode/package-lock.json
+          cache-dependency-path: clients/extensions/vscode/package-lock.json
 
       - name: install
         run: npm ci --ignore-scripts
@@ -64,8 +64,8 @@ jobs:
           name: coverage-typescript
           # The coverage report, and the result of each test.
           path: |
-            extensions/vscode/coverage/lcov.info
-            extensions/vscode/coverage/junit.xml
+            clients/extensions/vscode/coverage/lcov.info
+            clients/extensions/vscode/coverage/junit.xml
           if-no-files-found: error
           retention-days: 14
 

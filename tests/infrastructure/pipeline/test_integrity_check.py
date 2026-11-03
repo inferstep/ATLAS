@@ -95,7 +95,7 @@ def test_a_deleted_test_file_is_reported(ic):
 @pytest.mark.parametrize("path, line, name", [
     ("services/proxy/gates_test.go", "func TestGateRefuses(t *testing.T) {", "TestGateRefuses"),
     ("tests/cli/test_doctor.py", "def test_doctor_reports():", "test_doctor_reports"),
-    ("extensions/vscode/test/sse.test.ts", "  it('parses a frame', () => {", "parses a frame"),
+    ("clients/extensions/vscode/test/sse.test.ts", "  it('parses a frame', () => {", "parses a frame"),
 ])
 def test_a_removed_test_is_reported_unless_it_moved(ic, path, line, name):
     assert whats(ic, diff(path, removed=[line])) == [f"test removed: {name}"]
@@ -167,7 +167,7 @@ def test_a_new_document_needs_approval_outside_the_allowed_folders(ic):
 
 def test_new_dependencies_are_listed_as_notes(ic):
     change = (diff("services/proxy/go.mod", added=["\tgithub.com/example/retry v1.2.0"])
-              + diff("extensions/vscode/package.json", added=['    "left-pad": "^1.3.0",', '  "version": "0.0.2",'])
+              + diff("clients/extensions/vscode/package.json", added=['    "left-pad": "^1.3.0",', '  "version": "0.0.2",'])
               + diff("sandbox/requirements-runtime.txt", added=["fastapi==0.200.0"]))
     findings = ic.check(change, TASKS)
     assert [f.level for f in findings] == ["note", "note", "note"]
@@ -177,7 +177,7 @@ def test_new_dependencies_are_listed_as_notes(ic):
 def test_a_large_change_is_noted_and_lock_files_do_not_count(ic):
     big = diff("services/proxy/loop.go", added=[f"\tstep{i}()" for i in range(400)])
     assert whats(ic, big) == ["large change: 400 changed lines"]
-    assert whats(ic, diff("extensions/vscode/package-lock.json", added=["x"] * 900)) == []
+    assert whats(ic, diff("clients/extensions/vscode/package-lock.json", added=["x"] * 900)) == []
 
 
 def test_every_finding_says_why_and_how_to_fix(ic):
@@ -236,7 +236,7 @@ def test_a_base_that_looks_like_an_option_is_not_one(ic, tmp_path):
                  "test_doctor_reports -> test_doctor_names_each_fault", id="python"),
     pytest.param("services/proxy/gates_test.go", "func TestGateRefuses(t *testing.T) {", "func TestGateRefusesAWrite(t *testing.T) {",
                  "TestGateRefuses -> TestGateRefusesAWrite", id="go"),
-    pytest.param("extensions/vscode/test/sse.test.ts", "  it('parses a frame', () => {", "  it('parses one frame', () => {",
+    pytest.param("clients/extensions/vscode/test/sse.test.ts", "  it('parses a frame', () => {", "  it('parses one frame', () => {",
                  "parses a frame -> parses one frame", id="typescript"),
 ])
 def test_a_test_renamed_in_place_is_a_note(ic, path, old, new, renamed):
@@ -355,12 +355,12 @@ MARKED = [
     ("atlas/cli.py", f"run(cmd)  {HASH} nosec B603"),
     ("atlas/cli.py", f"if debug:  {HASH} pragma: no cover"),
     ("atlas/cli.py", f"x = 1  {HASH} NOSONAR"),
-    ("extensions/vscode/src/sse.ts", f"  {SLASHES} eslint-disable-next-line max-lines-per-function"),
-    ("extensions/vscode/src/sse.ts", f"  {SLASHES} @ts-ignore"),
-    ("extensions/vscode/src/sse.ts", f"  {SLASHES} @ts-expect-error"),
-    ("extensions/vscode/eslint.config.mjs", f"  {SLASHES} NOSONAR"),
-    ("extensions/vscode/src/sse.ts", "  /* v8 ignore next */"),
-    ("extensions/vscode/src/sse.ts", "  /* istanbul ignore else */"),
+    ("clients/extensions/vscode/src/sse.ts", f"  {SLASHES} eslint-disable-next-line max-lines-per-function"),
+    ("clients/extensions/vscode/src/sse.ts", f"  {SLASHES} @ts-ignore"),
+    ("clients/extensions/vscode/src/sse.ts", f"  {SLASHES} @ts-expect-error"),
+    ("clients/extensions/vscode/eslint.config.mjs", f"  {SLASHES} NOSONAR"),
+    ("clients/extensions/vscode/src/sse.ts", "  /* v8 ignore next */"),
+    ("clients/extensions/vscode/src/sse.ts", "  /* istanbul ignore else */"),
     ("scripts/install.sh", f"{HASH} shellcheck disable=SC2086"),
     ("scripts/install.sh", f"curl \"$url\"  {HASH} NOSONAR"),
     (".github/workflows/test.yml", f"          persist-credentials: false  {HASH} zizmor: ignore[artipacked]"),
@@ -385,7 +385,7 @@ def test_a_marker_in_a_file_of_its_kind_needs_approval(ic, path, line):
     ("atlas/cli.py", f"x = 1  {HASH} nolint"),
     ("services/proxy/retry.go", f"\tcall() {SLASHES} noqa"),
     ("services/proxy/retry.go", f"\tcall() {SLASHES} eslint-disable"),
-    ("extensions/vscode/src/sse.ts", f"  {SLASHES} nolint"),
+    ("clients/extensions/vscode/src/sse.ts", f"  {SLASHES} nolint"),
     ("scripts/install.sh", f"{HASH} noqa"),
     ("scripts/install.sh", f"{HASH} hadolint ignore=DL3008"),
     (".github/workflows/test.yml", f"      {HASH} noqa"),
@@ -536,7 +536,7 @@ def test_a_script_under_test_the_replay_harness_and_a_lock_file_are_ordinary_fil
     assert whats(ic, diff(path, added=["x=1"])) == []
 
 
-# Leading folders are part of the name: extensions/jetbrains/scripts/x.sh is not scripts/x.sh.
+# Leading folders are part of the name: clients/extensions/jetbrains/scripts/x.sh is not scripts/x.sh.
 SCRIPT_NAME = re.compile(r"(?:[A-Za-z0-9_.-]+/)*scripts/[A-Za-z0-9_./-]+\.(?:py|sh)")
 
 
@@ -579,13 +579,13 @@ def scripts_a_workflow_names(text):
 
 @pytest.mark.parametrize("job, named", [
     ({"steps": [{"run": "python scripts/ci/verify.py"}]}, "scripts/ci/verify.py"),
-    ({"steps": [{"working-directory": "extensions/jetbrains", "run": "bash scripts/check-distribution.sh"}]},
-     "extensions/jetbrains/scripts/check-distribution.sh"),
-    ({"defaults": {"run": {"working-directory": "extensions/jetbrains"}},
+    ({"steps": [{"working-directory": "clients/extensions/jetbrains", "run": "bash scripts/check-distribution.sh"}]},
+     "clients/extensions/jetbrains/scripts/check-distribution.sh"),
+    ({"defaults": {"run": {"working-directory": "clients/extensions/jetbrains"}},
       "steps": [{"run": "bash scripts/check-distribution.sh"}]},
-     "extensions/jetbrains/scripts/check-distribution.sh"),
-    ({"steps": [{"run": "bash extensions/jetbrains/scripts/check-distribution.sh"}]},
-     "extensions/jetbrains/scripts/check-distribution.sh"),
+     "clients/extensions/jetbrains/scripts/check-distribution.sh"),
+    ({"steps": [{"run": "bash clients/extensions/jetbrains/scripts/check-distribution.sh"}]},
+     "clients/extensions/jetbrains/scripts/check-distribution.sh"),
 ], ids=["a root script", "named from the step's working directory", "named from the job's working directory",
         "named by its full path"])
 def test_a_workflow_names_a_script_by_its_path_from_the_root(job, named):
@@ -664,7 +664,7 @@ CLASS = "every test of this class stops running"
 GROUP = "every test of this group stops running"
 NEEDS_YAML = ", with its reason: needs the module yaml"
 IN_A_TEST = "1 new call(s) to `pytest.importorskip` in a test"
-PY, GO, TS = "tests/cli/test_doctor.py", "services/proxy/gates_test.go", "extensions/vscode/test/sse.test.ts"
+PY, GO, TS = "tests/cli/test_doctor.py", "services/proxy/gates_test.go", "clients/extensions/vscode/test/sse.test.ts"
 STOPPED = [
     (PY, "@pytest.mark.skip", ONE),
     (PY, "@pytest.mark.skipif(sys.platform == 'darwin')", ONE),
@@ -1405,6 +1405,6 @@ def test_the_checkout_lists_the_files_that_git_tracks_and_no_others(ic, tmp_path
     ("  it('parses a frame', () => {", "  it.skipIf(os.platform() === 'win32')('parses a frame', () => {"),
 ])
 def test_a_test_that_gets_a_modifier_in_front_of_its_name_is_not_a_removed_test(ic, before, after):
-    found = whats(ic, diff("extensions/vscode/test/sse.test.ts", added=[after], removed=[before]))
+    found = whats(ic, diff("clients/extensions/vscode/test/sse.test.ts", added=[after], removed=[before]))
     assert [what for what in found if what.startswith("test removed")] == []
     assert len(found) == 1

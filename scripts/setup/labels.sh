@@ -45,7 +45,7 @@ LABELS=(
     "area/lens|1d76db|Geometric Lens scoring (geometric-lens/)"
     "area/inference|1d76db|llama-server images and patches (inference/)"
     "area/sandbox|1d76db|Sandboxed execution (sandbox/)"
-    "area/extensions|1d76db|Editor extensions (extensions/)"
+    "area/extensions|1d76db|Editor extensions (clients/extensions/)"
     "area/install|1d76db|Bootstrap, compose files and install scripts"
     "area/ci|1d76db|GitHub Actions workflows and release tooling"
     "area/docs|1d76db|Documentation"

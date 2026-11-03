@@ -41,7 +41,7 @@ TASK_SOURCE = Path("scripts") / "eval" / "e2e-reliability.py"
 
 CODE_EXTENSIONS = (".go", ".py", ".ts", ".js", ".mjs", ".sh")
 PRODUCT_DIRS = ("services/proxy/", "tui/", "atlas/", "v3-service/", "geometric-lens/",
-                "sandbox/", "inference/", "extensions/vscode/src/")
+                "sandbox/", "inference/", "clients/extensions/vscode/src/")
 DOC_DIRS_ALLOWED = (".github/",)
 # Files that decide what a check accepts: workflows, settings, baselines,
 # expected values, and the scripts whose result is a check's result.
@@ -54,7 +54,7 @@ GATE_FILES = (
     ".github/codecov.yml", ".github/.codecov.yml", ".github/codecov.yaml", ".github/.codecov.yaml",
     "dev/codecov.yml", "dev/.codecov.yml", "dev/codecov.yaml", "dev/.codecov.yaml",
     ".sonarcloud.properties", "sonar-project.properties", "pyproject.toml",
-    "extensions/vscode/eslint.config.mjs", "extensions/jetbrains/scripts/check-distribution.sh",
+    "clients/extensions/vscode/eslint.config.mjs", "clients/extensions/jetbrains/scripts/check-distribution.sh",
     "tests/perf/budgets.json", "tests/replay/recordings/",
     "tests/infrastructure/gradle_wrapper_jar_sums.txt",
     "scripts/integrity_check.py", "scripts/ci/code_health.py", "scripts/ci/production-readiness.py", "scripts/fix_tests.py",
