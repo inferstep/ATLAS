@@ -18,9 +18,6 @@ from pathlib import Path
 import pytest
 
 PROXY = Path(__file__).resolve().parents[3] / "services" / "proxy"
-# Read in this order, a tool's body runs from its constructor to the next one.
-# The V3 route comes first so that no body holds that route's own definitions:
-# a check on a name must find a call, not the function it names.
 TOOL_FILES = ("tool_write_v3.go", "tool_write.go", "tool_edit.go", "tool_structural_edit.go")
 
 # Gates every write path must run, and why skipping one is not cosmetic.
@@ -43,14 +40,32 @@ def _tool_source() -> str:
     return "\n".join(line for line in lines if not line.lstrip().startswith("//"))
 
 
+def _function(src: str, name: str) -> str:
+    """One function of the tool files, from its `func` line to its closing brace."""
+    return src[src.index(f"func {name}("):].split("\n}\n", 1)[0]
+
+
+def _reach(src: str, start: str) -> str:
+    """`start` and every function of the tool files that it names, and that those name in turn.
+
+    A gate counts for a tool only when the tool's own path names it: a gate in
+    a function that the tool no longer calls is not in its reach.
+    """
+    defined = set(re.findall(r"^func (\w+)\(", src, re.M))
+    seen, todo = [], [start]
+    while todo:
+        name = todo.pop()
+        if name not in seen:
+            seen.append(name)
+            todo += [n for n in re.findall(r"\w+", _function(src, name)) if n in defined]
+    return "\n".join(_function(src, name) for name in seen)
+
+
 def _tool_bodies() -> dict:
-    src = _tool_source().splitlines()
-    starts = [(i, m.group(1)) for i, line in enumerate(src)
-              if (m := re.match(r"func ([a-zA-Z]+)Tool\(\) \*ToolDef", line))]
-    assert starts, "no tool constructors found — did the tool files get restructured?"
-    bounds = starts + [(len(src), "")]
-    return {name: "\n".join(src[a:b])
-            for (a, name), (b, _) in zip(bounds, bounds[1:]) if name}
+    src = _tool_source()
+    tools = re.findall(r"^func ([a-zA-Z]+)Tool\(\) \*ToolDef", src, re.M)
+    assert tools, "no tool constructors found — did the tool files get restructured?"
+    return {name: _reach(src, f"{name}Tool") for name in tools}
 
 
 @pytest.fixture(scope="module")
@@ -88,7 +103,7 @@ def _steps_of_the_write_route() -> str:
     assert listed, "applyWriteGates has no list of gates — did the write route get restructured?"
     names = re.findall(r"\w+", listed.group(1))
     assert names, "applyWriteGates lists no gate"
-    return "\n".join(src[src.index(f"func {name}("):].split("\n}\n", 1)[0] for name in names)
+    return "\n".join(_function(src, name) for name in names)
 
 
 @pytest.mark.parametrize("gate,consequence", sorted(REQUIRED.items()))
