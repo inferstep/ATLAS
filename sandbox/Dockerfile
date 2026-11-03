@@ -81,7 +81,7 @@ RUN java --version && javac --version
 ARG KOTLIN_VERSION=2.4.0
 ARG KOTLIN_SHA256=ba1b9e6eb6ddc3275079224f2e9ea4a2b02eef7d59ce2d38404f04b22613c20a
 
-RUN curl -fsSL -o /tmp/kotlin.zip \
+RUN curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/kotlin.zip \
     "https://github.com/JetBrains/kotlin/releases/download/v${KOTLIN_VERSION}/kotlin-compiler-${KOTLIN_VERSION}.zip" \
     && echo "${KOTLIN_SHA256}  /tmp/kotlin.zip" | sha256sum -c - \
     && unzip -q /tmp/kotlin.zip -d /opt \
@@ -176,15 +176,15 @@ RUN bun --version
 # between sandbox-baked-flask and user-pinned-flask, and the same
 # pattern works for Node/Rust/Go/Ruby/Java/PHP without favoring
 # Python. Keep the API runtime dependencies in one shared file so the
-# container and the unit-test environment cannot drift apart.
-COPY requirements-runtime.txt /tmp/sandbox-requirements-runtime.txt
-COPY requirements-verify.txt /tmp/sandbox-requirements-verify.txt
-RUN pip install --no-cache-dir \
-    -r /tmp/sandbox-requirements-runtime.txt \
-    -r /tmp/sandbox-requirements-verify.txt
+# container and the unit-test environment cannot drift apart. The image
+# installs both files from requirements-lock.txt, which
+# scripts/ci/ci-lock.sh makes from them with a hash for each package, and
+# only from built packages, so no package's setup script runs here.
+COPY requirements-lock.txt /tmp/sandbox-requirements-lock.txt
+RUN pip install --no-cache-dir --require-hashes --only-binary=:all: -r /tmp/sandbox-requirements-lock.txt
 
-# Create sandbox workspace
-RUN mkdir -p /tmp/sandbox && chmod 777 /tmp/sandbox
+# The workspace base (/tmp/sandbox) is made by the server at start, as the
+# user it runs as.
 
 # Non-root runtime user. Compose may override the uid/gid at runtime
 # (ATLAS_SANDBOX_UID/GID, written by `atlas init` to match the host
