@@ -1166,7 +1166,7 @@ func readFileForDisplay(path string, maxLines, maxCols, offset int) (string, int
 // runDemo launches the demo subprogram in the same terminal session.
 // Called from Run (run.go) after the primary TUI exits with launchDemoMode
 // set, or from a `--demo` flag on cold start.
-func runDemo(proxyURL, workingDir, length string) error {
+func runDemo(proxyURL, workingDir, length, mouse string) error {
 	if !proxySupportsRawDemo(proxyURL) {
 		return fmt.Errorf(
 			"active atlas-proxy is too old for an honest split demo; " +
@@ -1181,7 +1181,7 @@ func runDemo(proxyURL, workingDir, length string) error {
 	// the demo panes needs cell-motion reporting, opt out with
 	// ATLAS_TUI_MOUSE=off to keep the terminal's native selection.
 	opts := []tea.ProgramOption{tea.WithAltScreen()}
-	if strings.ToLower(EnvOr("ATLAS_TUI_MOUSE", "on")) != "off" {
+	if strings.ToLower(mouse) != "off" {
 		opts = append(opts, tea.WithMouseCellMotion())
 	}
 	prog := tea.NewProgram(model, opts...)

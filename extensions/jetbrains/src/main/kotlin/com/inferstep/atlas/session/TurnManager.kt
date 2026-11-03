@@ -29,7 +29,7 @@ import kotlinx.coroutines.launch
 import java.security.SecureRandom
 
 /** The proxy caps replayed history at the most recent 40 entries; the client
- * caps too, so the request body never grows unbounded (tui/model.go). */
+ * caps too, so the request body never grows unbounded (tui/internal/app/model.go). */
 const val HISTORY_LIMIT = 40
 
 /** The `done` event type, the one that carries the terminal summary. */
@@ -45,7 +45,7 @@ private val sessionIdRandom = SecureRandom()
 
 /**
  * A client-minted per-turn session id: 12 random bytes, hex-encoded (24
- * characters) — the same recipe as tui/model.go and the VS Code client. The
+ * characters) — the same recipe as tui/internal/app/model.go and the VS Code client. The
  * proxy keys `/cancel` and pending permission requests by it, so it has to be
  * unguessable and unique per turn.
  */

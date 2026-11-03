@@ -20,17 +20,31 @@ import (
 	"github.com/itigges22/atlas-tui/internal/termtext"
 )
 
+// Options is what main hands the program: its flags, and the two settings the
+// program reads from the environment.
+type Options struct {
+	ProxyURL, LogPath, Mouse, Demo string
+	Resume, Continue               bool
+	// StartupNote is ATLAS_TUI_STARTUP_NOTE, shown as the first chat row.
+	StartupNote string
+	// DemoMouse is ATLAS_TUI_MOUSE as the demo reads it: the demo does not
+	// take the --mouse flag.
+	DemoMouse string
+}
+
 // Run is the program once main has read its flags: the demo when --demo asks
 // for it, otherwise the debug log, the interactive TUI with its /events stream,
 // and the demo the TUI hands off to. It ends the process with status 1 when one
 // of them fails.
-func Run(proxyURL, logPath, mouseFlag, demoMode string, resumeFlag, continueFlag bool) {
+func Run(options Options) {
+	proxyURL, logPath, mouseFlag, demoMode := options.ProxyURL, options.LogPath, options.Mouse, options.Demo
+	resumeFlag, continueFlag := options.Resume, options.Continue
 	// Cold-start --demo bypasses the main TUI entirely. Demo and the
 	// continue/resume flags are mutually exclusive — demo wins by
 	// short-circuiting here, so the resume flags are simply ignored.
 	if demoMode != "" {
 		cwd, _ := os.Getwd()
-		if err := runDemo(proxyURL, cwd, demoMode); err != nil {
+		if err := runDemo(proxyURL, cwd, demoMode, options.DemoMouse); err != nil {
 			fmt.Fprintf(os.Stderr, "atlas-tui demo: %v\n", err)
 			os.Exit(1)
 		}
@@ -52,7 +66,7 @@ func Run(proxyURL, logPath, mouseFlag, demoMode string, resumeFlag, continueFlag
 	// Surface the Python wrapper's startup warning (workspace mismatch
 	// etc.) inside the TUI. Without this the warning prints to stderr
 	// and is immediately covered by alt-screen.
-	if note := EnvOr("ATLAS_TUI_STARTUP_NOTE", ""); note != "" {
+	if note := options.StartupNote; note != "" {
 		model.chat = append(model.chat, sessionstore.ChatMessage{
 			Role: sessionstore.RoleSystem, Meta: "startup", Body: note,
 		})
@@ -75,7 +89,7 @@ func Run(proxyURL, logPath, mouseFlag, demoMode string, resumeFlag, continueFlag
 	// model and quits; we now relaunch in the same terminal.
 	if fm, ok := finalModel.(tuiModel); ok && fm.launchDemoLength != "" {
 		cwd, _ := os.Getwd()
-		if err := runDemo(proxyURL, cwd, fm.launchDemoLength); err != nil {
+		if err := runDemo(proxyURL, cwd, fm.launchDemoLength, options.DemoMouse); err != nil {
 			fmt.Fprintf(os.Stderr, "atlas-tui demo: %v\n", err)
 			os.Exit(1)
 		}
@@ -122,15 +136,6 @@ func programOptions(mouseFlag string) []tea.ProgramOption {
 		opts = append(opts, tea.WithMouseCellMotion())
 	}
 	return opts
-}
-
-// EnvOr is the value of the environment variable key, or fallback when the
-// variable is unset or empty.
-func EnvOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" { //nolint:forbidigo // EnvOr is the reader of settings this rule points to
-		return v
-	}
-	return fallback
 }
 
 // applyContinue loads the most recent saved session for the current directory

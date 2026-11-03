@@ -14,6 +14,7 @@ package main
 
 import (
 	"flag"
+	"os"
 
 	"github.com/itigges22/atlas-tui/internal/app"
 	"github.com/itigges22/atlas-tui/internal/proxyclient"
@@ -25,12 +26,12 @@ const (
 
 func main() {
 	proxyclient.InstallTokenTransport()
-	proxyURL := flag.String("proxy", app.EnvOr("ATLAS_PROXY_URL", defaultProxyURL),
+	proxyURL := flag.String("proxy", envOr("ATLAS_PROXY_URL", defaultProxyURL),
 		"atlas-proxy base URL (default: $ATLAS_PROXY_URL or http://localhost:8090)")
-	logPath := flag.String("log", app.EnvOr("ATLAS_TUI_LOG", ""),
+	logPath := flag.String("log", envOr("ATLAS_TUI_LOG", ""),
 		"append-only debug log path (default: off; alt-screen makes copy hard, "+
 			"so tail this file to see what the TUI saw)")
-	mouseFlag := flag.String("mouse", app.EnvOr("ATLAS_TUI_MOUSE", "on"),
+	mouseFlag := flag.String("mouse", envOr("ATLAS_TUI_MOUSE", "on"),
 		"mouse capture: 'on' (wheel scrolls chat) or 'off' (lets you select/copy text). "+
 			"Mid-session toggle: /mouse on|off")
 	demoMode := flag.String("demo", "",
@@ -43,5 +44,21 @@ func main() {
 			"to pick from a list")
 	flag.Parse()
 
-	app.Run(*proxyURL, *logPath, *mouseFlag, *demoMode, *resumeFlag, *continueFlag)
+	app.Run(app.Options{
+		ProxyURL:    *proxyURL,
+		LogPath:     *logPath,
+		Mouse:       *mouseFlag,
+		Demo:        *demoMode,
+		Resume:      *resumeFlag,
+		Continue:    *continueFlag,
+		StartupNote: envOr("ATLAS_TUI_STARTUP_NOTE", ""),
+		DemoMouse:   envOr("ATLAS_TUI_MOUSE", "on"),
+	})
+}
+
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
 }
