@@ -1297,7 +1297,7 @@ curl http://localhost:30820/languages
 ```json
 {
   "languages": {
-    "python": "Python 3.13.16",
+    "python": "Python 3.13.18",
     "javascript": "v24.22.0",
     "typescript": "Version 7.0.2",
     "go": "go version go1.27.2 linux/amd64",
