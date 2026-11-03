@@ -141,3 +141,27 @@ def test_a_client_that_sends_its_headers_a_byte_at_a_time_is_cut_off_at_the_head
         server.server_close()
     assert closed, "the service kept reading headers for 5 s"
     assert took < 1 + 1.5, took
+
+
+def test_a_request_whose_headers_arrived_outlives_the_headers_deadline(monkeypatch):
+    """The headers' deadline ends with the headers: a request whose body comes slowly is still answered."""
+    monkeypatch.setattr(adapters, "SERVICE_TOKEN", TOKEN)
+    monkeypatch.setattr(main, "REQUEST_HEADERS_SECONDS", 0.5)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), main.V3Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    headers = (b"POST /internal/outline HTTP/1.1\r\nHost: v3\r\nContent-Type: application/json\r\n"
+               b"Authorization: Bearer %s\r\nContent-Length: %d\r\n\r\n" % (TOKEN.encode(), len(SOURCE)))
+    answer = b""
+    try:
+        with socket.create_connection(("127.0.0.1", server.server_port), timeout=10) as client:
+            client.sendall(headers)
+            for at in range(0, len(SOURCE), 12):  # the body in pieces, over longer than the deadline
+                time.sleep(0.3)
+                client.sendall(SOURCE[at:at + 12])
+            while chunk := client.recv(65536):
+                answer += chunk
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert answer.startswith(b"HTTP/1.0 200"), answer[:80]
+    assert b'"symbols"' in answer
