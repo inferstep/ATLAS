@@ -71,3 +71,30 @@ def test_the_committed_baseline_matches_the_code():
     funcs, files, _ = ch.measure()
     assert ch.check(funcs, files, ch.load_baseline()) == [], (
         "a function or file is new over the limit or grew: split it (docs/project/CODE_STYLE.md)")
+
+
+def test_the_main_package_may_lose_files_but_not_gain_one():
+    base = {"proxy_main": {"files": 90}}
+    assert ch.main_package_problems({"files": 90, "lines": 40000}, base) == []
+    assert ch.main_package_problems({"files": 89, "lines": 39000}, base) == []
+    grew = ch.main_package_problems({"files": 91, "lines": 40000}, base)
+    assert any("files 90 -> 91" in p for p in grew)
+
+
+def test_more_lines_in_the_main_package_are_no_failure():
+    base = {"proxy_main": {"files": 90}}
+    assert ch.main_package_problems({"files": 90, "lines": 50000}, base) == []
+
+
+def test_the_main_package_counts_only_its_own_code_files(tmp_path, monkeypatch):
+    (tmp_path / "proxy" / "internal" / "x").mkdir(parents=True)
+    (tmp_path / "proxy" / "a.go").write_text("package main\n\nfunc a() {}\n")
+    (tmp_path / "proxy" / "a_test.go").write_text("package main\n")
+    (tmp_path / "proxy" / "internal" / "x" / "x.go").write_text("package x\n")
+    monkeypatch.setattr(ch, "ROOT", str(tmp_path))
+    assert ch.main_package_size() == {"files": 1, "lines": 3}
+
+
+def test_the_main_package_is_within_its_pin():
+    assert ch.main_package_problems(ch.main_package_size(), ch.load_baseline()) == [], (
+        "proxy's main package grew past its pin: put the new subject in its own package")

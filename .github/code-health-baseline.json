@@ -12,5 +12,8 @@
  "files": {
   "sandbox/executor_server.py": 2028,
   "v3-service/pipeline.py": 2700
+ },
+ "proxy_main": {
+  "files": 90
  }
 }
