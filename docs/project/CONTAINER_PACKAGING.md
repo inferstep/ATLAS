@@ -56,8 +56,9 @@ Each account can write only where the service actually needs to.
 ## Dependency version recording
 
 Production Python dependencies are pinned with exact `==` versions for
-every package the files list; the packages those depend on are not
-pinned, so a rebuild can resolve newer ones:
+every package the files list. Each service image installs them from a
+hashed lock beside them (`requirements-lock.txt`, made by
+`scripts/ci/ci-lock.sh`), which pins the packages those depend on too:
 
 | File | Scope |
 |---|---|
@@ -67,7 +68,7 @@ pinned, so a rebuild can resolve newer ones:
 | `sandbox/requirements-verify.txt` | In-sandbox verify/lint tools (pytest, ruff, mypy, requests) and the executor's YAML and Jinja checkers (pyyaml, jinja2) |
 
 The proxy's two Alpine packages are pinned in `services/proxy/Dockerfile`
-(`curl=8.22.0-r0`, `bash=5.3.9-r1`).
+(`curl=8.23.0-r0`, `bash=5.3.9-r1`).
 
 `tests/infrastructure/supply/test_dependency_pinning.py` asserts the pinning
 policy: requirements files carry `==` pins on every entry, inline
