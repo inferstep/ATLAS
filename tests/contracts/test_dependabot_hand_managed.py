@@ -22,8 +22,8 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 SETTINGS = ROOT / ".github" / "dependabot.yml"
-FOLDER = "/extensions/jetbrains"
-BUILD = ROOT / "extensions" / "jetbrains" / "build.gradle.kts"
+FOLDER = "/clients/extensions/jetbrains"
+BUILD = ROOT / "clients" / "extensions" / "jetbrains" / "build.gradle.kts"
 # The Gradle plugin that the comment of the entry names as managed by hand, by the name that Dependabot gives it.
 PLATFORM_PLUGIN = "org.jetbrains.intellij.platform"
 
