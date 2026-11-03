@@ -422,6 +422,8 @@
     }
   ],
   "not_covered": {
+    "pytest (tests/v3)": "Required on staging and main only, until the release brings them the folders of dev, where its tests moved into tests/v3-service. The canary runs on dev, which has no such job; the plant of `pytest (tests/v3-service)` shows that those tests still turn a check red.",
+    "pytest (tests/cli)": "Required on staging and main only, until the release brings them the folders of dev, where these tests are tests/atlas. The canary runs on dev, which has no such job; the plant of `pytest (tests/atlas)` shows that those tests still turn a check red.",
     "codeql (go)": "The job reports that the analysis ran. A finding does not turn it red.",
     "codeql (python)": "The job reports that the analysis ran. A finding does not turn it red.",
     "codeql (javascript-typescript)": "The job reports that the analysis ran. A finding does not turn it red.",

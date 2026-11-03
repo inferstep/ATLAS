@@ -229,10 +229,15 @@ def test_every_required_check_is_on_the_canary_list_with_a_plant_that_turns_it_r
     assert [finding.message for finding in findings] == []
 
 
+# Until a release brings renamed checks to staging and main, they keep the old
+# names, listed in RELEASE_ONLY_CHECKS; any other check they need, dev needs too.
 def test_staging_and_main_require_only_checks_that_dev_requires(first_run):
     dev = required_checks(first_run.rulesets, "dev")
+    script = (REPO / "scripts" / "setup" / "rulesets.sh").read_text(encoding="utf-8")
+    release_only = set(re.findall(r'"([^"]+)"', script.split("RELEASE_ONLY_CHECKS=(", 1)[1].split("\n)\n", 1)[0]))
+    assert release_only == {"pytest (tests/v3)", "pytest (tests/cli)"}
     for branch in ("staging", "main"):
-        assert required_checks(first_run.rulesets, branch) <= dev
+        assert required_checks(first_run.rulesets, branch) - release_only <= dev
 
 
 def test_the_release_step_names_rulesets_that_the_script_writes(first_run):
