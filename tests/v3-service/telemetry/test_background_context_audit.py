@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
-SERVICES = ["services/v3-service", "geometric-lens", "sandbox-service"]
+SERVICES = ["services/v3-service", "geometric-lens", "services/sandbox"]
 
 # Constructs that start work somewhere the current context does not follow by
 # itself. asyncio.create_task is deliberately NOT here: it copies the current
@@ -58,6 +58,24 @@ CLASSIFIED = {
          "no-request until 2026-08-24 on the grounds that `label` was enough: "
          "the sealed Stage-A acquisition then produced 159,533 records of "
          "which the only two unattributable ones came from here."),
+    "services/sandbox/executor_server.py::<module>::Thread":
+        ("no-request",
+         "The background-job janitor, started once at import, before any "
+         "request. It sweeps the process-wide job table: it stamps finished "
+         "jobs, drops old ones and kills those past their age. It logs "
+         "nothing and reads no request-scoped value."),
+    "services/sandbox/executor_server.py::background_start::Thread":
+        ("no-request",
+         "The two pipe drains of a background job. Each copies its pipe's "
+         "lines into the job's buffer until the process ends. The job id and "
+         "the pipe are handed as arguments; the drain logs nothing, calls "
+         "nothing outside and reads no request-scoped value."),
+    "services/sandbox/executor_server.py::run_shell::to_thread":
+        ("propagates",
+         "asyncio.to_thread runs _run_cmd in a copy of the current context, "
+         "so the request ID that the request set reaches the worker. The "
+         "per-request cancel flag, gone.is_set, and the command, cwd, env "
+         "and timeout are handed as arguments."),
 }
 
 
@@ -66,8 +84,6 @@ def _sites():
     found = {}
     for service in SERVICES:
         base = ROOT / service
-        if not base.is_dir():
-            continue
         for path in sorted(base.rglob("*.py")):
             rel = path.relative_to(ROOT).as_posix()
             parts = set(path.parts)
@@ -124,6 +140,13 @@ def test_every_background_site_is_classified():
         "\n\nA worker inherits no ContextVar and no local from its parent. "
         "Add an entry to CLASSIFIED in this file saying which it is: "
         "'propagates', 'no-request', or 'defective'.")
+
+
+@pytest.mark.parametrize("folder", SERVICES)
+def test_every_audited_folder_is_in_the_tree(folder):
+    # A folder that moved or never existed would leave its sites unaudited
+    # without a word.
+    assert (ROOT / folder).is_dir(), f"the audited folder {folder} is not in the tree"
 
 
 def test_no_site_is_still_defective():
