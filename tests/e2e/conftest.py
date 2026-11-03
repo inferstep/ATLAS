@@ -55,7 +55,7 @@ def proxy_binary_available() -> bool:
 
 SKIP_NO_PROXY_BINARY = (
     f"atlas-proxy binary not available at {PROXY_BINARY} "
-    f"— run `cd proxy && go build -o {PROXY_BINARY} .` first"
+    f"— run `cd services/proxy && go build -o {PROXY_BINARY} .` first"
 )
 
 
