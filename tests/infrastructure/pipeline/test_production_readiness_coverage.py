@@ -152,3 +152,9 @@ def test_a_gate_with_a_result_file_writes_it_and_is_judged_by_the_text(gates_mod
     assert result.output.splitlines()[-1] == f"FAIL\t{PKG}\t1.221s"
     assert ElementTree.fromstring(target.read_text(encoding="utf-8")).find("testsuite").get("tests") == "3"
 
+
+
+# CI runs each compose gate by its name, and a full local run skips a set whose
+# files are missing, so a wrong overlay path has to fail here.
+def test_every_compose_overlay_set_is_in_this_checkout(gates_module):
+    assert sorted(gates_module._compose_gates()) == ["compose", "compose-cpu", "compose-macos", "compose-rocm", "compose-vulkan"]

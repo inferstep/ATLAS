@@ -18,7 +18,7 @@ READER_GLOBS = [
     "sandbox/*.py",
     "scripts/*.sh", "scripts/**/*.sh", "scripts/**/*.py",
     "inference/*.sh", "inference/Dockerfile*",
-    "templates/*.tmpl", "docker-compose*.yml", "compose/*.yml",
+    "deploy/k3s/*.tmpl", "docker-compose*.yml", "deploy/compose/*.yml",
 ]
 
 
@@ -63,7 +63,9 @@ def test_compose_interpolations_are_documented():
     doc = (REPO / "docs" / "guides" / "CONFIGURATION.md").read_text()
     example = (REPO / ".env.example").read_text()
     undocumented = set()
-    for compose in [*REPO.glob("docker-compose*.yml"), *REPO.glob("compose/*.yml")]:
+    overlays = sorted(REPO.glob("deploy/compose/*.yml"))
+    assert overlays, "no compose overlay under deploy/compose/: the check below would read the root file alone"
+    for compose in [*REPO.glob("docker-compose*.yml"), *overlays]:
         for var in re.findall(r"\$\{(ATLAS_[A-Z0-9_]+)", compose.read_text()):
             if f"`{var}`" not in doc and var not in example:
                 undocumented.add(var)

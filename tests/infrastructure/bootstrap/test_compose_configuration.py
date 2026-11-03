@@ -16,10 +16,10 @@ ROOT = Path(__file__).resolve().parents[3]
 # actually merged onto the base file.
 COMPOSE_COMBINATIONS = [
     ("docker-compose.yml",),
-    ("docker-compose.yml", "compose/docker-compose.rocm.yml"),
-    ("docker-compose.yml", "compose/docker-compose.vulkan.yml"),
-    ("docker-compose.yml", "compose/docker-compose.vulkan.yml", "compose/docker-compose.cpu.yml"),
-    ("docker-compose.yml", "compose/docker-compose.macos.yml"),
+    ("docker-compose.yml", "deploy/compose/docker-compose.rocm.yml"),
+    ("docker-compose.yml", "deploy/compose/docker-compose.vulkan.yml"),
+    ("docker-compose.yml", "deploy/compose/docker-compose.vulkan.yml", "deploy/compose/docker-compose.cpu.yml"),
+    ("docker-compose.yml", "deploy/compose/docker-compose.macos.yml"),
 ]
 
 
@@ -86,7 +86,7 @@ def test_the_services_that_read_the_token_run_as_the_installing_user(service):
     assert services[service]["user"] == (proxy if service != "sandbox" else proxy.replace("PROXY", "SANDBOX"))
 
 
-@pytest.mark.parametrize("overlay", ["compose/docker-compose.rocm.yml", "compose/docker-compose.vulkan.yml"])
+@pytest.mark.parametrize("overlay", ["deploy/compose/docker-compose.rocm.yml", "deploy/compose/docker-compose.vulkan.yml"])
 def test_the_gpu_overlays_take_the_host_group_numbers(overlay):
     # A name in group_add resolves in the image, and the device nodes belong
     # to the host's numbers. Read as text: these files use compose's !reset.
@@ -94,7 +94,7 @@ def test_the_gpu_overlays_take_the_host_group_numbers(overlay):
     assert "- ${ATLAS_VIDEO_GID:-video}\n      - ${ATLAS_RENDER_GID:-render}\n" in text
 
 
-@pytest.mark.parametrize("overlay", ["compose/docker-compose.rocm.yml", "compose/docker-compose.vulkan.yml"])
+@pytest.mark.parametrize("overlay", ["deploy/compose/docker-compose.rocm.yml", "deploy/compose/docker-compose.vulkan.yml"])
 def test_the_gpu_overlays_keep_root_until_the_user_is_written(overlay):
     # A .env from before 3.2.0 has no group numbers, and a non-root account
     # would lose the GPU.
@@ -104,7 +104,7 @@ def test_the_gpu_overlays_keep_root_until_the_user_is_written(overlay):
 def test_the_cpu_stack_runs_as_the_installing_user():
     # It layers on the Vulkan overlay. A !reset would leave no user, and the
     # image declares none, so this must name the account.
-    text = (ROOT / "compose" / "docker-compose.cpu.yml").read_text()
+    text = (ROOT / "deploy" / "compose" / "docker-compose.cpu.yml").read_text()
     assert 'user: "${ATLAS_PROXY_UID:-1000}:${ATLAS_PROXY_GID:-1000}"' in text
 
 
@@ -164,8 +164,8 @@ def test_v3_service_gets_the_slot_count_llama_server_gets():
 
 
 def test_the_k3s_v3_template_gets_the_slot_count_llama_server_gets():
-    v3 = (ROOT / "templates" / "v3-service-deployment.yaml.tmpl").read_text()
-    llama = (ROOT / "templates" / "llama-deployment.yaml.tmpl").read_text()
+    v3 = (ROOT / "deploy" / "k3s" / "v3-service-deployment.yaml.tmpl").read_text()
+    llama = (ROOT / "deploy" / "k3s" / "llama-deployment.yaml.tmpl").read_text()
 
     assert '{name: ATLAS_PARALLEL_SLOTS, value: "${ATLAS_PARALLEL_SLOTS}"}' in v3
     assert '{name: PARALLEL_SLOTS,  value: "${ATLAS_PARALLEL_SLOTS}"}' in llama

@@ -70,17 +70,17 @@ and falls through. The CLI applies this order
 | `ATLAS_SANDBOX_PIP_SIZE` | `1G` | Size ceiling for the sandbox's `~/.local` tmpfs (`pip install --user` target). Heavy scientific installs need room: pandas+pyarrow+numpy alone unpack ~400 MB. |
 | `ATLAS_SANDBOX_CACHE_SIZE` | `512M` | Size ceiling for the sandbox's `~/.cache` tmpfs (pip wheel cache, ruff, mypy). |
 | `ATLAS_PROXY_PORT` | `8090` | atlas-proxy host port (TUI and OpenAI-compat clients connect here) |
-| `ATLAS_BACKEND` | `cuda` | Inference backend. `cuda` (NVIDIA, V3.1.0+), `rocm` (AMD, V3.1.1, x86_64 only), `vulkan` (universal fallback), `metal` (Apple Silicon hybrid: native llama-server + Docker for the rest — see [SETUP_MACOS.md](SETUP_MACOS.md)), `sycl` (Intel Arc, roadmap). Set by `atlas init`; the entrypoint scripts read this to pick per-vendor env vars. ROCm + Vulkan + Metal also require bringing up the stack with `-f compose/docker-compose.rocm.yml`, `-f compose/docker-compose.vulkan.yml`, or `-f compose/docker-compose.macos.yml` respectively (the wizard prints the right command). On aarch64 hosts (DGX Spark, Snapdragon X Elite, Jetson, Pi 5) `atlas init` filters out `rocm` since AMD has no arm64 release — see [SETUP.md § arm64](SETUP.md#arm64). |
+| `ATLAS_BACKEND` | `cuda` | Inference backend. `cuda` (NVIDIA, V3.1.0+), `rocm` (AMD, V3.1.1, x86_64 only), `vulkan` (universal fallback), `metal` (Apple Silicon hybrid: native llama-server + Docker for the rest — see [SETUP_MACOS.md](SETUP_MACOS.md)), `sycl` (Intel Arc, roadmap). Set by `atlas init`; the entrypoint scripts read this to pick per-vendor env vars. ROCm + Vulkan + Metal also require bringing up the stack with `-f deploy/compose/docker-compose.rocm.yml`, `-f deploy/compose/docker-compose.vulkan.yml`, or `-f deploy/compose/docker-compose.macos.yml` respectively (the wizard prints the right command). On aarch64 hosts (DGX Spark, Snapdragon X Elite, Jetson, Pi 5) `atlas init` filters out `rocm` since AMD has no arm64 release — see [SETUP.md § arm64](SETUP.md#arm64). |
 | `ATLAS_MACOS_PREFIX` | `~/.atlas/macos` | macOS Metal only. Native llama.cpp install root shared by setup, launcher, and doctor. Set this when setup used `--prefix`. |
 | `ATLAS_LLAMA_HOST` | `127.0.0.1` | macOS Metal only. Bind address for the native llama-server launched by `scripts/install/atlas-llama-macos.sh`. Loopback by default; override only when access from another host is intentionally required. |
-| `ATLAS_GPU_INDEX` | (unset — all GPUs visible; the ROCm/Vulkan overlay files default it to `0`) | Vendor-local index of the GPU ATLAS should use on multi-GPU hosts. Compose passes it into the llama-server container; the entrypoint maps it to `CUDA_VISIBLE_DEVICES` (NVIDIA) or the HIP/Vulkan equivalent, and skips the export when empty. `compose/docker-compose.rocm.yml` and `compose/docker-compose.vulkan.yml` pin it to `0` when unset. |
+| `ATLAS_GPU_INDEX` | (unset — all GPUs visible; the ROCm/Vulkan overlay files default it to `0`) | Vendor-local index of the GPU ATLAS should use on multi-GPU hosts. Compose passes it into the llama-server container; the entrypoint maps it to `CUDA_VISIBLE_DEVICES` (NVIDIA) or the HIP/Vulkan equivalent, and skips the export when empty. `deploy/compose/docker-compose.rocm.yml` and `deploy/compose/docker-compose.vulkan.yml` pin it to `0` when unset. |
 | `ATLAS_GFX_TARGET` | `gfx1100;gfx1101;gfx1102;gfx1030;gfx90a` | **ROCm only.** AMD compute target(s), semicolon-separated. Forwarded to `Dockerfile.rocm` as `AMDGPU_TARGETS` at build time. Trim to your GPU for a smaller image — see [SETUP.md § AMD GPU Targets](SETUP.md#amd-gpu-targets-dockerfilerocm). |
 | `ATLAS_ROCM_TAG` | `6.2-complete` | **ROCm only.** Base image tag for `rocm/dev-ubuntu-22.04`. Bump when you want to test a newer ROCm release. |
 | `ATLAS_UBUNTU_TAG` | `24.04` | **Vulkan only.** Base image tag for the `ubuntu` build stage of `Dockerfile.vulkan` (compose build arg). |
 | `ATLAS_HSA_OVERRIDE_GFX_VERSION` | (unset) | **ROCm only.** Force a specific HSA gfx version at runtime — workaround for "officially unsupported" GPUs (e.g., older Vega) that still work with a compatible target. Example: `10.3.0` makes RDNA1 cards masquerade as RDNA2 for HIP kernel selection. |
 | `ATLAS_CONFIG_SCHEMA_VERSION` | (stamped by `atlas config migrate`) | Schema-version stamp that `atlas config migrate` writes into `.env` — leave it in place. |
 
-Docker Compose also sets inter-service URLs using Docker networking (e.g., `http://llama-server:8080`). These are fixed inside the Docker network and usually do not need to be configured by users. On macOS Metal, `compose/docker-compose.macos.yml` keeps the container-side URL at `llama-server:8080` but forwards it to the native host-side `${ATLAS_LLAMA_PORT:-8080}`, so the port can move when 8080 is already occupied.
+Docker Compose also sets inter-service URLs using Docker networking (e.g., `http://llama-server:8080`). These are fixed inside the Docker network and usually do not need to be configured by users. On macOS Metal, `deploy/compose/docker-compose.macos.yml` keeps the container-side URL at `llama-server:8080` but forwards it to the native host-side `${ATLAS_LLAMA_PORT:-8080}`, so the port can move when 8080 is already occupied.
 
 **Runtime-tuning passthrough.** `.env.example` carries a commented "Runtime tuning" section, and compose passes each key through to the owning container (empty default, except `ATLAS_SANDBOX_MAX_EXECUTION_TIME`, default `300`, and `ATLAS_GRAMMAR_MODE`, default `strict`) — so setting any of `ATLAS_V3_TIMEOUT`, `ATLAS_MAX_TOKENS`, `ATLAS_MAX_COMPLETION_TOKENS`, `ATLAS_AGENT_HISTORY_BUDGET`, `ATLAS_KEEP_LLAMA_WARM`, `ATLAS_FRESH_SLOT_PER_SESSION`, the repetition-sampling keys (`ATLAS_DRY_MULTIPLIER`, `ATLAS_DRY_BASE`, `ATLAS_DRY_ALLOWED_LENGTH`, `ATLAS_DRY_PENALTY_LAST_N`, `ATLAS_REPEAT_PENALTY`, `ATLAS_REPEAT_LAST_N`, `ATLAS_TRANSCRIPTION_SAMPLER`, `ATLAS_RESTATE_LAST_READ`) (proxy, § 2), `ATLAS_SANDBOX_MAX_EXECUTION_TIME` (sandbox, § 5), or `ATLAS_GPU_INDEX` / `ATLAS_GRAMMAR_MODE` in `.env` reaches the container without a compose edit. (`ATLAS_BACKEND` is not in the passthrough: it drives the host-side overlay choice, and the ROCm/Vulkan overlays set their own container-side value.) An empty/unset key means the in-code default applies.
 
@@ -97,9 +97,9 @@ canonical `ATLAS_*` names take precedence and are what `atlas init` and
 | `ATLAS_BACKEND` | Required compose invocation |
 |---|---|
 | `cuda` (default) | `docker compose up -d` |
-| `rocm` | `docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml up -d` |
-| `vulkan` | `docker compose -f docker-compose.yml -f compose/docker-compose.vulkan.yml up -d` |
-| `metal` (hybrid) | `./scripts/install/atlas-llama-macos.sh` + `docker compose -f docker-compose.yml -f compose/docker-compose.macos.yml up -d` |
+| `rocm` | `docker compose -f docker-compose.yml -f deploy/compose/docker-compose.rocm.yml up -d` |
+| `vulkan` | `docker compose -f docker-compose.yml -f deploy/compose/docker-compose.vulkan.yml up -d` |
+| `metal` (hybrid) | `./scripts/install/atlas-llama-macos.sh` + `docker compose -f docker-compose.yml -f deploy/compose/docker-compose.macos.yml up -d` |
 | `sycl` | Not yet packaged — Intel Arc users should use `vulkan` for now |
 
 `atlas init` prints the right invocation as part of its "Next steps" summary. CLI-managed Compose operations also resolve the overlay from `ATLAS_BACKEND`; `atlas-bootstrap.sh` picks the Linux override automatically from its hardware probe.
@@ -594,7 +594,7 @@ The CLI sends no generation parameters of its own; interactive generation runs t
 
 ## 8. K3s Configuration (atlas.conf)
 
-For K3s deployment only. Copy `atlas.conf.example` to `atlas.conf` and edit. The install pipeline reads this file, renders `templates/*.yaml.tmpl` via `envsubst`, and applies the resulting manifests in `manifests/*.yaml`.
+For K3s deployment only. Copy `atlas.conf.example` to `atlas.conf` and edit. The install pipeline reads this file, renders `deploy/k3s/*.yaml.tmpl` via `envsubst`, and applies the resulting manifests in `manifests/*.yaml`.
 
 > **Note:** `atlas.conf` is only used by K3s deployment scripts. Docker Compose uses `.env` instead. The two files configure different deployment targets and should not be mixed.
 
@@ -622,7 +622,7 @@ For K3s deployment only. Copy `atlas.conf.example` to `atlas.conf` and edit. The
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ATLAS_MODELS_DIR` | `/opt/atlas/models` | GGUF model files. Mounted into llama-server at `/models` (read-only) via `hostPath` in `templates/llama-deployment.yaml.tmpl`. |
+| `ATLAS_MODELS_DIR` | `/opt/atlas/models` | GGUF model files. Mounted into llama-server at `/models` (read-only) via `hostPath` in `deploy/k3s/llama-deployment.yaml.tmpl`. |
 | `ATLAS_PROJECTS_DIR` | `/opt/atlas/data/projects` | User project workspace. Bind-mounted at `/workspace` in BOTH atlas-proxy and sandbox pods (`hostPath` with `DirectoryOrCreate`) so the agent sees the same files in both. `uninstall.sh --data` removes this folder too, also when it is not inside `ATLAS_DATA_DIR`; the script lists it with its path before it asks. |
 | `ATLAS_DATA_DIR` | `/opt/atlas/data` | Parent of `ATLAS_PROJECTS_DIR`. Printed at install time; `uninstall.sh` removes it when `--data` is set, and refuses to run with `--data` when this setting or `ATLAS_PROJECTS_DIR` is empty, is not a full path, or names the root folder, your home folder or a folder that holds this repository. Not mounted as a volume itself. |
 

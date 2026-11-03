@@ -16,7 +16,7 @@ log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1" >&2; }
 
-TEMPLATES_DIR="$K8S_DIR/templates"
+TEMPLATES_DIR="$K8S_DIR/deploy/k3s"
 MANIFESTS_DIR="$K8S_DIR/manifests"
 
 main() {

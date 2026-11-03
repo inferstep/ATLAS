@@ -160,11 +160,11 @@ remove_atlas_services() {
     log_info "Removing ATLAS services..."
 
     # Delete everything install.sh applied. generate-manifests.sh renders
-    # templates/*.yaml.tmpl into this directory.
+    # deploy/k3s/*.yaml.tmpl into this directory.
     kubectl delete -f "$K8S_DIR/manifests/" -n "$ATLAS_NAMESPACE" 2>/dev/null || true
 
     # Delete any remaining deployments by label. One entry per app label in
-    # templates/*.yaml.tmpl — keep this list in step with that directory.
+    # deploy/k3s/*.yaml.tmpl — keep this list in step with that directory.
     for app in llama-server geometric-lens atlas-proxy v3-service sandbox; do
         kubectl delete deployment -n "$ATLAS_NAMESPACE" -l "app=$app" \
             2>/dev/null || true

@@ -25,6 +25,6 @@ def test_the_image_creates_the_account_and_declares_no_user(dockerfile):
 
 
 def test_k3s_runs_the_model_server_as_the_images_account():
-    template = (ROOT / "templates" / "llama-deployment.yaml.tmpl").read_text(encoding="utf-8")
+    template = (ROOT / "deploy" / "k3s" / "llama-deployment.yaml.tmpl").read_text(encoding="utf-8")
 
     assert "runAsUser: 1001" in template
