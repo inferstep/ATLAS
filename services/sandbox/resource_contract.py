@@ -715,6 +715,19 @@ def run_bounded(cmd: List[str], contract: ResourceContract,
             outcome=OUTCOME_SPAWN_FAILED, returncode=-1, stdout="",
             stderr=str(exc), peak_memory_bytes=0, peak_processes=0,
             output_bytes=0, elapsed_seconds=time.time() - started, truncated=False)
+    except subprocess.SubprocessError as exc:
+        # The limits are set in the child, between fork and exec. When the host
+        # refuses one, the parent gets this, without the cause, and the command
+        # does not run: it is not run without its limits.
+        why = f"the command was not started: its resource limits could not be set ({exc})"
+        if contract.address_space_multiple:
+            why += (f". The address-space limit (ATLAS_EXEC_ADDRESS_SPACE_MULTIPLE="
+                    f"{contract.address_space_multiple:g}) is the one some hosts refuse, macOS among them;"
+                    " unset it there")
+        return BoundedResult(
+            outcome=OUTCOME_SPAWN_FAILED, returncode=-1, stdout="",
+            stderr=why, peak_memory_bytes=0, peak_processes=0,
+            output_bytes=0, elapsed_seconds=time.time() - started, truncated=False)
 
     pgid = proc.pid  # setsid in the child makes the pid the group id
     half = max(1, contract.output_bytes // 2)
