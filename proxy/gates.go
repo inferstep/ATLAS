@@ -939,7 +939,9 @@ func missingUnder(root, rel string) bool {
 	if !filepath.IsLocal(rel) {
 		return true
 	}
-	_, err := os.Stat(filepath.Join(root, rel))
+	// Cleaned from "/", rel cannot climb out of root even without the check
+	// above, and CodeQL's path-injection rule reads this form as contained.
+	_, err := os.Stat(filepath.Join(root, filepath.Clean("/"+rel)))
 	return err != nil
 }
 
