@@ -220,18 +220,10 @@ func TestBannedWriteLoopTerminatesAtTheFailureCeiling(t *testing.T) {
 	}
 }
 
-// The ban branch itself, on a shape the refused-replacement recovery does not
-// own: an edit_file rejected for a reason that is not a no-op and not a
-// write_file proposal, re-sent unchanged. The ban must count failures
-// against the ceiling wherever it is the branch that answers.
-func TestBannedEditLoopEntersTheBanBranch(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "mod.py"),
-		[]byte(banLoopValidBody), 0o644); err != nil {
-		t.Fatal(err)
-	}
+func banEditLoopStubs(t *testing.T) *httptest.Server {
+	t.Helper()
 	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/v3/") || strings.HasPrefix(r.URL.Path, "/internal/") {
 			http.Error(w, "unavailable", http.StatusServiceUnavailable)
 			return
@@ -268,6 +260,19 @@ func TestBannedEditLoopEntersTheBanBranch(t *testing.T) {
 				{"delta": map[string]string{"content": reply}}}})
 		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", delta)
 	}))
+}
+
+// The ban branch itself, on a shape the refused-replacement recovery does not
+// own: an edit_file rejected for a reason that is not a no-op and not a
+// write_file proposal, re-sent unchanged. The ban must count failures
+// against the ceiling wherever it is the branch that answers.
+func TestBannedEditLoopEntersTheBanBranch(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "mod.py"),
+		[]byte(banLoopValidBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv := banEditLoopStubs(t)
 	defer srv.Close()
 
 	ctx := NewAgentContext(dir, Tier2Medium)
