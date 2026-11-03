@@ -85,6 +85,7 @@ LINTER_MARKERS = {
     "ESLint": ("script",), "vitest coverage": ("script",),
     "SonarQube": ("go", "python", "script", "shell", "workflow", "dockerfile"),
     "actionlint": "none", "CodeScene": "none", "Codecov": "none", "Trivy": "none", "CodeQL": "none",
+    "govulncheck": "none",
 }
 LOCK_FILES = ("package-lock.json", "go.sum", ".github/requirements/ci.txt")
 SIZE_BASELINE = ".github/code-health-baseline.json"
