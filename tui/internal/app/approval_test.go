@@ -1,7 +1,7 @@
 // Approval prompts are answered for what they show, deletions one file at a
 // time, and every request to the proxy carries the credential it checks.
 
-package main
+package app
 
 import (
 	"encoding/json"

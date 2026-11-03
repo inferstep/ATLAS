@@ -1,7 +1,7 @@
 // The events pane's lines: one line per /events envelope, with its time, its
 // type in color, its stage and a short summary of its payload.
 
-package main
+package app
 
 import (
 	"fmt"

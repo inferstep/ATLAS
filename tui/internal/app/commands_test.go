@@ -5,7 +5,7 @@
 // (context add/drop, help/quit signaling). Shell-out commands are not
 // executed here — that's covered by step 7's integration tests.
 
-package main
+package app
 
 import (
 	"encoding/json"
@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -141,7 +142,7 @@ func TestAskSelectsQuestionModeOnce(t *testing.T) {
 
 // Every owned sender declares a mode, so a new one cannot silently omit it.
 func TestEveryOwnedSenderDeclaresATaskMode(t *testing.T) {
-	src, err := os.ReadFile("internal/proxyclient/chat.go")
+	src, err := os.ReadFile(filepath.Join(tuiModuleRoot(t), "internal", "proxyclient", "chat.go"))
 	if err != nil {
 		t.Fatal(err)
 	}

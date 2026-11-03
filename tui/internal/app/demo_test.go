@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -98,7 +98,7 @@ func TestRunDemoRejectsOldProxyBeforeLaunching(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	err := runDemo(srv.URL, t.TempDir(), "short")
+	err := runDemo(srv.URL, t.TempDir(), "short", "on")
 	if err == nil || !strings.Contains(err.Error(), "too old") {
 		t.Fatalf("runDemo error = %v, want stale-proxy rejection", err)
 	}

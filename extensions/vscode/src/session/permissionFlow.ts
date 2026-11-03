@@ -2,7 +2,7 @@
 // vscode imports — the UI (native notification + webview card) is injected
 // via PermissionUi so the flow runs under plain vitest.
 //
-// Conventions mirrored from tui/model.go:
+// Conventions mirrored from tui/internal/app/model.go:
 //   - A tool already in sessionAllowedTools is auto-answered allow/"once"
 //     (NOT "session" — the allowlist itself is re-sent on the next turn's
 //     request; the proxy does not persist it), fire-and-forget, no prompt.

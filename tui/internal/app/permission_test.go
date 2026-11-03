@@ -2,7 +2,7 @@
 // "permission_request" SSE handler, the y/a/n input gating, and the
 // /v1/permission post-back.
 
-package main
+package app
 
 import (
 	"context"

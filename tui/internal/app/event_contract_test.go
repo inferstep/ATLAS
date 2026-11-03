@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"io/fs"
@@ -70,7 +70,7 @@ func proxyStreamedEvents(t *testing.T) map[string]string {
 	t.Helper()
 	emitted := map[string]string{}
 	streamRE := regexp.MustCompile(`ctx\.Stream\(\s*"([a-z0-9_]+)"`)
-	proxyDir := filepath.Join("..", "proxy")
+	proxyDir := filepath.Join(tuiModuleRoot(t), "..", "proxy")
 	if _, err := os.Stat(proxyDir); err != nil {
 		// A skip here would pass in silence once the proxy moves.
 		t.Fatalf("the proxy this contract reads is not at ../proxy: %v", err)
@@ -97,4 +97,24 @@ func proxyStreamedEvents(t *testing.T) map[string]string {
 		t.Fatal(err)
 	}
 	return emitted
+}
+
+// tuiModuleRoot is the folder of the TUI's go.mod, found from the test's own
+// folder upward, so a test reads the same files from any package of the module.
+func tuiModuleRoot(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("no go.mod in the test's folder or above it")
+		}
+		dir = parent
+	}
 }

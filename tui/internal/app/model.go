@@ -8,7 +8,7 @@
 // Update hands key and mouse messages to the handlers in input.go. The
 // events pane's lines are built in event_lines.go.
 
-package main
+package app
 
 import (
 	"context"
@@ -49,7 +49,7 @@ type tuiModel struct {
 	proxyURL string
 	events   chan proxyclient.Envelope
 
-	// /demo handoff: set by the slash command just before quitting; main.go
+	// /demo handoff: set by the slash command just before quitting; Run
 	// relaunches into the split-pane demo with this length (short|medium|long).
 	launchDemoLength string
 

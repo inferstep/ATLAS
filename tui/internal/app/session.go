@@ -1,7 +1,7 @@
 // The model's side of session persistence: the saved Session built from the
 // chat, its title, and when it is written. The store is internal/sessionstore.
 
-package main
+package app
 
 import (
 	"strings"

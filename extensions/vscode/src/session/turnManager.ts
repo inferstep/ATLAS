@@ -8,7 +8,7 @@ import { randomBytes } from 'node:crypto';
 import type { AgentRequest, ChatEvent, HistoryMessage, PermissionMode, TaskMode } from '../client/types';
 
 /** The proxy caps replayed history at the most recent 40 entries; we cap
- * client-side too so the request body never grows unbounded (tui/model.go). */
+ * client-side too so the request body never grows unbounded (tui/internal/app/model.go). */
 export const HISTORY_LIMIT = 40;
 
 /** Minimal client surface TurnManager needs — satisfied by AtlasClient,
@@ -19,7 +19,7 @@ export interface TurnClient {
 }
 
 /** Client-minted per-turn session id: 12 random bytes, hex-encoded
- * (24 chars) — same recipe as tui/model.go. */
+ * (24 chars) — same recipe as tui/internal/app/model.go. */
 export function mintSessionId(): string {
 	return randomBytes(12).toString('hex');
 }
@@ -49,7 +49,7 @@ export class TurnManager {
 	 * updates on done, error, and cancel alike (partial assistant text kept).
 	 *
 	 * `workingDir` is the client's workspace root, like the TUI's host cwd
-	 * (tui/model.go): on Docker installs the proxy uses it for host-to-
+	 * (tui/internal/app/model.go): on Docker installs the proxy uses it for host-to-
 	 * container path translation; on bare metal file ops resolve against it.
 	 *
 	 * `taskMode` is the user's Work/Question declaration for this one request
@@ -113,7 +113,7 @@ export class TurnManager {
 			const finalText = assistantText !== '' ? assistantText : doneSummary;
 			if (finalText !== '') {
 				// TUI convention: assistant history entries are re-wrapped in
-				// the {"type":"text","content":...} envelope (tui/model.go).
+				// the {"type":"text","content":...} envelope (tui/internal/app/model.go).
 				this.history.push({
 					role: 'assistant',
 					content: JSON.stringify({ type: 'text', content: finalText }),

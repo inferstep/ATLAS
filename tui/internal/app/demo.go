@@ -14,7 +14,7 @@
 // docs/assets/demo_prompts.json — each entry is hand-validated to expose
 // the V3 difference. Inference itself is real.
 
-package main
+package app
 
 import (
 	"bufio"
@@ -1164,9 +1164,9 @@ func readFileForDisplay(path string, maxLines, maxCols, offset int) (string, int
 }
 
 // runDemo launches the demo subprogram in the same terminal session.
-// Called from main.go after the primary TUI exits with launchDemoMode
+// Called from Run (run.go) after the primary TUI exits with launchDemoMode
 // set, or from a `--demo` flag on cold start.
-func runDemo(proxyURL, workingDir, length string) error {
+func runDemo(proxyURL, workingDir, length, mouse string) error {
 	if !proxySupportsRawDemo(proxyURL) {
 		return fmt.Errorf(
 			"active atlas-proxy is too old for an honest split demo; " +
@@ -1177,11 +1177,11 @@ func runDemo(proxyURL, workingDir, length string) error {
 	if err != nil {
 		return err
 	}
-	// Mouse gating mirrors the primary TUI (main.go): wheel-scroll of
+	// Mouse gating mirrors the primary TUI (run.go): wheel-scroll of
 	// the demo panes needs cell-motion reporting, opt out with
 	// ATLAS_TUI_MOUSE=off to keep the terminal's native selection.
 	opts := []tea.ProgramOption{tea.WithAltScreen()}
-	if strings.ToLower(envOr("ATLAS_TUI_MOUSE", "on")) != "off" {
+	if strings.ToLower(mouse) != "off" {
 		opts = append(opts, tea.WithMouseCellMotion())
 	}
 	prog := tea.NewProgram(model, opts...)

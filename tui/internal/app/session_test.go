@@ -1,7 +1,7 @@
 // Tests for the model's own session saves. The store's tests are in
 // internal/sessionstore.
 
-package main
+package app
 
 import (
 	"testing"

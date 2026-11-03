@@ -281,7 +281,7 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 
 #### ターミナル契約とセッション予算
 
-すべてのセッションは、1つのエミッタから発せられるちょうど1つのターミナルイベントで終わります。それはレガシーの `summary` を変更せず運び、加算的な `status` — `completed`、`incomplete`、`stopped`、`timed_out`、`failed` — と安定した機械可読な `reason` を伴います。クライアントは、不在の status を `incomplete` として読み、未認識の語はそのまま表示し、完了としては読みません（`tui/events.go` の `onDone`、VS Code と JetBrains の拡張機能の `doneOutcome`）。ブローカーの `done`/`stage_end` エンベロープは、`success: true` を主張する代わりに同じ結果を報告します。
+すべてのセッションは、1つのエミッタから発せられるちょうど1つのターミナルイベントで終わります。それはレガシーの `summary` を変更せず運び、加算的な `status` — `completed`、`incomplete`、`stopped`、`timed_out`、`failed` — と安定した機械可読な `reason` を伴います。クライアントは、不在の status を `incomplete` として読み、未認識の語はそのまま表示し、完了としては読みません（`tui/internal/app/events.go` の `onDone`、VS Code と JetBrains の拡張機能の `doneOutcome`）。ブローカーの `done`/`stage_end` エンベロープは、`success: true` を主張する代わりに同じ結果を報告します。
 
 `completed` 以外のすべてのステータスについて、サーバーはフィールドと同じくその文も所有します。モデル自身の説明が通されるのは、完了ゲートがそれを認可した場合のみです。サマリのない非完了ターミナルには、結果・ディスク上に何かが存在するか・それが有効と示されたかを名指しするサーバー作成のサマリが与えられ、非完了ステータスでエミッタに到達した完了の主張は、周囲を編集するのではなく全面的に差し替えられます。これによりフェーズ 2B が残したギャップが閉じられます: `summary` だけを読むクライアント — `status` が存在する前に書かれたすべてのクライアント — は今、両方を読むクライアントと同じ真実を読みます。
 
@@ -461,7 +461,7 @@ API の契約は [API.md § POST /v3/plan](../../reference/API.md#post-v3plan) �
 
 ##### tui: レンダリング (Go)
 
-`tui/internal/pipelinestate/plan.go` は `PlanView`（モデル上の状態）を定義し、`tui/state.go` は `tui/events.go` のチャットディスパッチャーに接続された 3 つの `applyPlan*` ハンドラーを定義します:
+`tui/internal/pipelinestate/plan.go` は `PlanView`（モデル上の状態）を定義し、`tui/internal/app/state.go` は `tui/internal/app/events.go` のチャットディスパッチャーに接続された 3 つの `applyPlan*` ハンドラーを定義します:
 
 | イベント | ハンドラー | UI への効果 |
 |---|---|---|
@@ -511,7 +511,7 @@ API の契約は [API.md § POST /v3/plan](../../reference/API.md#post-v3plan) �
 | プロキシのブリッジ | `proxy/internal/v3client/client_test.go`。ステージのルーティングは `proxy/v3_bridge_test.go` | SSE の解析、結果が欠けたときのエラー、ステージのルーティング |
 | プロキシのフック | `proxy/agent_test.go` | 優先ファイルの取得、切り詰めのしきい値、フォールバックの走査、ティアと長さの判定 |
 | プロキシの遵守 | `proxy/gates_plan_test.go`。システムプロンプトは `proxy/gates_test.go` | 一致ロジック（ツール名 + パス末尾）、失敗したコールの除外、修正回数の上限、システムプロンプトのレンダリング |
-| TUI のレンダリング | `tui/internal/pipelinestate/plan_test.go`。ハンドラーは `tui/plan_test.go` | `PlanView` の状態遷移、修正時の plan_loaded による置き換え、プラン外での無言 |
+| TUI のレンダリング | `tui/internal/pipelinestate/plan_test.go`。ハンドラーは `tui/internal/app/plan_test.go` | `PlanView` の状態遷移、修正時の plan_loaded による置き換え、プラン外での無言 |
 
 ### 安全制限
 
