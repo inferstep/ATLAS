@@ -893,13 +893,19 @@ func leadingSubshell(t string) (string, bool) {
 		case c == ')':
 			depth--
 			if depth == 0 {
-				rest := strings.TrimLeft(strings.TrimSpace(t[i+1:]), "0123456789&")
-				if rest == "" || strings.HasPrefix(rest, ">") || strings.HasPrefix(rest, "<") {
-					return t[1:i], true
-				}
-				return "", false
+				return subshellBody(t, i)
 			}
 		}
+	}
+	return "", false
+}
+
+// subshellBody is what the subshell that closes at i runs, when nothing but
+// redirections follows its closing parenthesis.
+func subshellBody(t string, i int) (string, bool) {
+	rest := strings.TrimLeft(strings.TrimSpace(t[i+1:]), "0123456789&")
+	if rest == "" || strings.HasPrefix(rest, ">") || strings.HasPrefix(rest, "<") {
+		return t[1:i], true
 	}
 	return "", false
 }
