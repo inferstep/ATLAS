@@ -126,6 +126,7 @@ job on this list that does not start gives no red:
 
 | Check | What it does | Why it reports and does not block |
 |---|---|---|
+| `govulncheck (proxy)`, `govulncheck (tui)` | Known vulnerabilities that the module's code can reach, judged with the Go of the test jobs. One whose vulnerable function the code calls fails it; one only in a package the code imports is listed | It is new, and it reads the Go vulnerability database online: whether it blocks a merge is a maintainer's step on the branch rules. |
 | `checks ran` | Fails when a workflow did not start, a job with no condition was skipped or cancelled, or a required check was skipped | It waits for every other job, so as a required check it would be the last job of every merge, and a fault in GitHub's own answers would hold a merge (seen on 2026-10-13). |
 | `replay (proxy)` | The proxy, built from the change, does on each recorded session what the recording says. Runs when `proxy/` or `tests/replay/` changed, and in the merge queue | It starts only when `proxy/` or `tests/replay/` changes; GitHub waits without end for a required check that does not start. |
 | `smoke result` | For a pull request that changes text that every request to the model carries: red until the development server wrote the green status `server/smoke` on the head commit. See [below](#a-change-to-text-that-the-model-reads) | It reads a status that the development server writes, and that server is best effort: a merge must not wait on it. |
@@ -204,6 +205,7 @@ It cannot judge these, and says so when it meets one:
 |---|---|---|
 | Size check | `scripts/ci/code_health.py`, `.github/code-health-baseline.json` | 100 lines per function, 1,500 per file. Entries on the baseline may shrink and may not grow, and the proxy's main package may not gain a file (`proxy_main`); its line count is printed as a trend. A folder over 25 entries gets a note and never a failure |
 | Workflow lint | `.github/workflows/workflow-lint.yml` | zizmor v1.30.1 at its default level, with lookups on GitHub by the job's read-only token; actionlint 1.7.12 without its shellcheck and pyflakes passes, which would use whatever version the runner has. Both are release binaries held against the checksums the workflow records. A step that must stay as it is carries `# zizmor: ignore[<rule>]` with its reason. Five lines carry one today: the checkout of `star-chart.yml`, whose job pushes with the token; and the four lines of `test.yml` and `dev-results.yml` that use the two upload actions of this repository (`ignore[self-repository]`). zizmor asks for the form `$/...` on those four, and actionlint 1.7.12, its newest release, does not read that form yet (its issues 711 and 732). When actionlint reads it, the four lines take the new form and their marks go |
+| Go vulnerabilities | `.github/workflows/govulncheck.yml` | govulncheck v1.9.0, built with `go install` at that version, on the Go of the test jobs (a test holds the two the same). A finding the code calls fails the job |
 | Go lint | `.golangci.yml` | errcheck, nilerr, unused, gocognit (15), forbidigo for `os.Getenv`, nolintlint. Judges new code only |
 | Extension lint | `extensions/vscode/eslint.config.mjs` | 100 lines per function, and 15 decision points per function, where a switch counts once. A file that holds a larger function is listed with that function's size, and the limit holds for the whole file. A listed number may go down and may not go up |
 | Coverage | `pyproject.toml` (`[tool.coverage.run]`), `scripts/ci/production-readiness.py` | Go statement coverage per module; Python line coverage over `atlas`, `v3-service`, `geometric-lens`, `sandbox`, `scripts`; TypeScript line coverage of the extension |
@@ -267,8 +269,8 @@ How to read the coverage rows:
   and for the `vscode-extension` workflow. On a pull request a newer commit
   still cancels the run of the older one.
 - Dependabot updates the actions and the package files. It does not update a
-  tool that a workflow installs with a command: golangci-lint, hadolint, zizmor
-  and actionlint. The settings table names the version of each. Look for a new
+  tool that a workflow installs with a command: golangci-lint, govulncheck,
+  hadolint, zizmor and actionlint. The settings table names the version of each. Look for a new
   release of each when the canary is renewed, and move the version and its
   checksum in one pull request.
 - Dependabot does not update the pins inside `.github/actions/` either. With
