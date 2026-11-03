@@ -1027,7 +1027,7 @@ func testRunnerKind(args []string) CommandEvidenceKind {
 // scriptInterpreterKind: a check flag makes it static, a version or help
 // flag too, and so does a script asked only for its version or help.
 // Anything else that names code runs it.
-func scriptInterpreterKind(args []string, checkFlags []string) CommandEvidenceKind {
+func scriptInterpreterKind(args, checkFlags []string) CommandEvidenceKind {
 	for _, a := range args {
 		for _, f := range checkFlags {
 			if a == f {
@@ -1062,7 +1062,7 @@ func isKnownSubcommand(a string, names ...string) bool {
 }
 
 // subcommandKind classifies `tool <subcommand>` by the subcommand.
-func subcommandKind(args []string, runs []string, checks []string) CommandEvidenceKind {
+func subcommandKind(args, runs, checks []string) CommandEvidenceKind {
 	for _, a := range args {
 		if strings.HasPrefix(a, "-") {
 			continue
