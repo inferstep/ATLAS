@@ -208,13 +208,9 @@ func expandEnvSplitStrings(words []string, valid bool, depth int) envSplitExpans
 		switch {
 		case commandPrefixWords[head]:
 			prefixed = true
-			if head == "env" {
-				result = expandEnvOptions(result, i, valid)
-				if result.refusal != "" {
-					return result
-				}
+			if result, i = expandPrefix(result, i, head, valid); result.refusal != "" {
+				return result
 			}
-			i = skipCommandPrefix(result.words, i)
 		case strings.Contains(result.words[i], "=") && !strings.HasPrefix(result.words[i], "-"):
 			i++
 		default:
@@ -228,6 +224,19 @@ func expandEnvSplitStrings(words []string, valid bool, depth int) envSplitExpans
 		result.refusal = shellWrapperQuotingRefusal
 	}
 	return result
+}
+
+// expandPrefix steps over the command prefix at i (env, nice, timeout and the
+// like), expanding env's split-string options first. On a refusal it does not
+// step.
+func expandPrefix(result envSplitExpansion, i int, head string, valid bool) (envSplitExpansion, int) {
+	if head == "env" {
+		result = expandEnvOptions(result, i, valid)
+		if result.refusal != "" {
+			return result, i
+		}
+	}
+	return result, skipCommandPrefix(result.words, i)
 }
 
 func expandEnvOptions(result envSplitExpansion, index int, valid bool) envSplitExpansion {
