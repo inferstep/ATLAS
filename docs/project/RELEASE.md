@@ -246,12 +246,15 @@ without approval. Each promotion leaves a timestamped deployment record.
 before their folders were renamed on `dev`. A `dev` commit reports
 `pytest (tests/v3-service)` and `pytest (tests/atlas)` instead, so step 2
 would stop: the release step finds no green check under the old names.
-First, in a pull request into `dev`, delete `RELEASE_ONLY_CHECKS` in
-`scripts/setup/rulesets.sh` and move `"pytest (tests/atlas)"` from
-`DEV_ONLY_CHECKS` into `CHECKS`, together with the test that pins those
-lists (`tests/infrastructure/pipeline/test_branch_rules_setup.py`) and the
-two old names under `not_covered` in `.github/canary.json`. Once it is
-merged, the release owner runs `scripts/setup/rulesets.sh`.
+First, in a pull request into `dev`, change `scripts/setup/rulesets.sh`:
+delete the `RELEASE_ONLY_CHECKS` array and its use in the release branches'
+checks (`"${RELEASE_ONLY_CHECKS[@]}"`), because the script runs with
+`set -u` and stops on a name that is no longer set; and move
+`"pytest (tests/atlas)"` from `DEV_ONLY_CHECKS` into `CHECKS`. Change the
+test that pins those lists
+(`tests/infrastructure/pipeline/test_branch_rules_setup.py`) to match, and
+remove the two old names from `not_covered` in `.github/canary.json`. Once
+it is merged, the release owner runs `scripts/setup/rulesets.sh`.
 
 1. **Notes.** On `dev`, bump the "Applies to" line at the top of
    [SUPPORT_MATRIX.md](../guides/SUPPORT_MATRIX.md) and write the
