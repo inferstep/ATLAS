@@ -235,22 +235,34 @@ func shellOptions(segs []string) (errexit, pipefail bool) {
 		if len(f) == 0 || f[0] != "set" {
 			continue
 		}
-		for i, a := range f[1:] {
-			switch {
-			case a == "-o" && i+2 < len(f):
-				switch f[i+2] {
-				case "errexit":
-					errexit = true
-				case "pipefail":
-					pipefail = true
-				}
-			case strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--"):
-				if strings.Contains(a, "e") {
-					errexit = true
-				}
-				if strings.Contains(a, "o") && i+2 < len(f) && f[i+2] == "pipefail" {
-					pipefail = true
-				}
+		e, p := setOptions(f)
+		if e {
+			errexit = true
+		}
+		if p {
+			pipefail = true
+		}
+	}
+	return errexit, pipefail
+}
+
+// setOptions reads errexit and pipefail from the words of one `set` command.
+func setOptions(f []string) (errexit, pipefail bool) {
+	for i, a := range f[1:] {
+		switch {
+		case a == "-o" && i+2 < len(f):
+			switch f[i+2] {
+			case "errexit":
+				errexit = true
+			case "pipefail":
+				pipefail = true
+			}
+		case strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--"):
+			if strings.Contains(a, "e") {
+				errexit = true
+			}
+			if strings.Contains(a, "o") && i+2 < len(f) && f[i+2] == "pipefail" {
+				pipefail = true
 			}
 		}
 	}
