@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "ci" / "production-readiness.py"
 PYTEST = (sys.executable, "-m", "pytest", "tests/atlas", "--no-header", "-q")
@@ -134,3 +135,25 @@ def test_a_gate_that_runs_past_its_time_limit_fails_with_its_output_so_far(gates
     assert result.status == "failed"
     assert result.reason == "stopped after 1 s"
     assert result.output == "started"
+
+
+def test_the_gate_timeout_option_reaches_each_gate(gates_module, monkeypatch):
+    given = []
+
+    def record(gate, force_required, timeout=None):
+        given.append((gate.name, timeout))
+        return gates_module.Result(name=gate.name, status="passed", required=True, duration_seconds=0.0,
+                                   command=list(gate.command))
+
+    monkeypatch.setattr(gates_module, "_run_gate", record)
+    monkeypatch.setattr(sys, "argv", ["production-readiness.py", "--only", "ruff", "--gate-timeout", "7"])
+
+    assert gates_module.main() == 0
+    assert given == [("ruff", 7)]
+
+
+def test_the_pytest_jobs_pass_a_gate_timeout():
+    workflow = yaml.safe_load((SCRIPT.parents[2] / ".github" / "workflows" / "test.yml").read_text())
+    step = next(step for step in workflow["jobs"]["python-tests"]["steps"] if step.get("name") == "pytest")
+
+    assert "--gate-timeout 900" in step["run"]
