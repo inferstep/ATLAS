@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Planted by scripts/canary.py for the canary pull request. Never merge it.
+echo "canary: the bootstrap stops here on purpose" >&2; exit 97
 #
 # atlas-bootstrap.sh — one-shot installer for ATLAS on a fresh Linux host.
 #
