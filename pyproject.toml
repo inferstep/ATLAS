@@ -49,6 +49,10 @@ atlas = "atlas.__main__:main"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-m 'not integration'"
+# A test still running after 5 minutes has the stack of every thread written
+# out, so a test that hangs is named. It is not stopped: the CI job's time
+# limit (--gate-timeout in .github/workflows/test.yml) does that.
+faulthandler_timeout = 300
 
 [tool.coverage.run]
 # The Python code the suites are measured against. A file no test imports
