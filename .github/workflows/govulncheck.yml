@@ -46,4 +46,6 @@ jobs:
 
       - name: govulncheck
         working-directory: ${{ matrix.module }}
-        run: govulncheck ./...
+        # Without -show verbose a finding only in an imported package is
+        # counted and not named. The exit status is the same either way.
+        run: govulncheck -show verbose ./...
