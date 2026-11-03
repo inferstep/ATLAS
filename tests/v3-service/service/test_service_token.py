@@ -97,3 +97,47 @@ def test_a_refused_client_that_sends_its_body_slowly_is_cut_off_at_the_time_limi
     assert answer.startswith(b"HTTP/1.0 401 "), answer[:80]
     assert closed, "the service kept the refused connection open for 5 s"
     assert took < main.REFUSED_BODY_DRAIN_SECONDS + 1, took
+
+
+def test_a_client_that_never_finishes_its_headers_is_cut_off(monkeypatch):
+    assert main.V3Handler.timeout == main.REQUEST_SOCKET_TIMEOUT_SECONDS > 0
+    monkeypatch.setattr(main.V3Handler, "timeout", 0.5)  # the same limit, short enough to wait for
+    server = ThreadingHTTPServer(("127.0.0.1", 0), main.V3Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        with socket.create_connection(("127.0.0.1", server.server_port), timeout=10) as client:
+            client.sendall(b"POST /internal/outline HTTP/1.1\r\nHost: v3\r\n")  # no blank line: the headers never end
+            sent = time.monotonic()
+            closed = client.recv(1) == b""
+            took = time.monotonic() - sent
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert closed
+    assert took < 0.5 + 2, took
+
+
+def test_a_client_that_sends_its_headers_a_byte_at_a_time_is_cut_off_at_the_headers_deadline(monkeypatch):
+    monkeypatch.setattr(main, "REQUEST_HEADERS_SECONDS", 1)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), main.V3Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    closed = False
+    try:
+        with socket.create_connection(("127.0.0.1", server.server_port), timeout=10) as client:
+            client.sendall(b"POST /internal/outline HTTP/1.1\r\nHost: v3\r\n")
+            started = time.monotonic()
+            client.settimeout(0.2)
+            while not closed and time.monotonic() - started < 5:
+                try:
+                    client.sendall(b"X")  # one byte of a header line, each well inside the per-read limit
+                    closed = client.recv(1) == b""
+                except socket.timeout:
+                    continue  # nothing arrived yet: send the next byte
+                except OSError:
+                    closed = True
+            took = time.monotonic() - started
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert closed, "the service kept reading headers for 5 s"
+    assert took < 1 + 1.5, took

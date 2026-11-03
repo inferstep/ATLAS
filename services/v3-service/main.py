@@ -39,6 +39,15 @@ MAX_REQUEST_BODY_BYTES = 64 << 20
 # time is not read: the connection is closed on it.
 REFUSED_BODY_DRAIN_BYTES = 64 << 10
 REFUSED_BODY_DRAIN_SECONDS = 1.0
+# The time limit of each read and write on a connection. A client that stops
+# in the middle of its body, or stops reading its answer, is cut off: each
+# connection holds a thread. The proxy sends a request whole and reads the
+# answer as it comes.
+REQUEST_SOCKET_TIMEOUT_SECONDS = 30
+# The time limit of the request line and the headers together, from the
+# connection's start. A limit on each read alone restarts with every byte, so
+# a client that sends its headers a byte at a time would never meet it.
+REQUEST_HEADERS_SECONDS = 10
 import os
 import sys
 from pathlib import Path
@@ -215,6 +224,33 @@ def _positive_budget_ms(value):
     return float(value)
 
 class V3Handler(BaseHTTPRequestHandler):
+    # StreamRequestHandler.setup gives the connection this time limit.
+    timeout = REQUEST_SOCKET_TIMEOUT_SECONDS
+
+    def setup(self):
+        super().setup()
+        # One request per connection (HTTP/1.0), so this is the request's
+        # deadline for its headers: it shuts the connection down unless the
+        # headers are read first.
+        self._headers_deadline = threading.Timer(REQUEST_HEADERS_SECONDS, self._cut_off)
+        self._headers_deadline.daemon = True
+        self._headers_deadline.start()
+
+    def parse_request(self):
+        parsed = super().parse_request()
+        self._headers_deadline.cancel()
+        return parsed
+
+    def finish(self):
+        self._headers_deadline.cancel()
+        super().finish()
+
+    def _cut_off(self):
+        try:
+            self.connection.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass  # already closed
+
     def _authorized(self) -> bool:
         """Token check for every route except /health. Constant-time
         compare; 401 bodies never echo token material."""
