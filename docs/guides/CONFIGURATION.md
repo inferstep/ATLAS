@@ -633,8 +633,8 @@ For K3s deployment only. Copy `atlas.conf.example` to `atlas.conf` and edit. The
 |----------|---------|-------------|
 | `ATLAS_MAIN_MODEL` | **required** | Main GGUF filename. Becomes `MODEL_PATH=/models/<name>` inside the container. |
 | `ATLAS_DRAFT_MODEL` | (unset) | Draft model for speculative decoding. **Deliberately inert** — see `ATLAS_ENABLE_SPECULATIVE`. |
-| `ATLAS_CONTEXT_LENGTH` | `16384` | Context window in tokens, TOTAL across all slots (llama-server divides it by `ATLAS_PARALLEL_SLOTS`; at the default `1` slot, total = per-slot). V3's `--parallel 1` budget is sized around 16K; raise if you have GPU headroom and want longer turns. |
-| `ATLAS_PARALLEL_SLOTS` | `1` | Concurrent KV slots. V3 self-embeddings push VRAM tight on 16 GB cards, so `1` is the safe default. |
+| `ATLAS_CONTEXT_LENGTH` | `16384` | Context window in tokens, TOTAL across all slots (llama-server divides it by `ATLAS_PARALLEL_SLOTS`; at the default `1` slot, total = per-slot). Size it for the model and GPU with `atlas tier fit`; a larger window needs more KV-cache memory. |
+| `ATLAS_PARALLEL_SLOTS` | `1` | Concurrent KV slots. `1` is `atlas.conf.example`'s conservative default; size it with `atlas tier fit`. V3 gets the same count (the K3s template passes it, and `ATLAS_V3_MAX_INFLIGHT` defaults to it), so at `1` every V3 generation, PlanSearch's candidates included, runs one at a time. |
 
 ### 8.4 Resource limits (Kubernetes pod spec)
 
