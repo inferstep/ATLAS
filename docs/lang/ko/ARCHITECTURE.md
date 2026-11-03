@@ -314,7 +314,7 @@ API 계약은 [API.md § POST /v3/plan](../../reference/API.md#post-v3plan)에 �
 
 ##### tui: 렌더링 (Go)
 
-`tui/internal/pipelinestate/plan.go`는 `PlanView`(모델의 상태)를 정의하고, `tui/internal/app/state.go`는 `tui/internal/app/events.go`의 채팅 디스패처에 연결된 `applyPlan*` 핸들러 3개를 정의합니다:
+`clients/tui/internal/pipelinestate/plan.go`는 `PlanView`(모델의 상태)를 정의하고, `clients/tui/internal/app/state.go`는 `clients/tui/internal/app/events.go`의 채팅 디스패처에 연결된 `applyPlan*` 핸들러 3개를 정의합니다:
 
 | 이벤트 | 핸들러 | UI 효과 |
 |---|---|---|
@@ -364,7 +364,7 @@ API 계약은 [API.md § POST /v3/plan](../../reference/API.md#post-v3plan)에 �
 | 프록시 브리지 | `services/proxy/internal/v3client/client_test.go`, 스테이지 라우팅은 `services/proxy/tool_write_v3_bridge_test.go` | SSE 파싱, 결과 누락 오류, 스테이지 라우팅 |
 | 프록시 훅 | `services/proxy/loop_test.go` | 우선 파일 선택, 잘라내기 임계값, 폴백 순회, 티어와 길이 판단 |
 | 프록시 준수 | `services/proxy/plan_gates_test.go`, 시스템 프롬프트는 `services/proxy/gates_test.go` | 일치 로직(도구 이름 + 경로 접미사), 실패한 호출 제외, 수정 횟수 상한, 시스템 프롬프트 렌더링 |
-| TUI 렌더링 | `tui/internal/pipelinestate/plan_test.go`, 핸들러는 `tui/internal/app/state_plan_test.go` | `PlanView` 상태 전이, 수정 시 plan_loaded 교체, 계획 외 호출의 무음 처리 |
+| TUI 렌더링 | `clients/tui/internal/pipelinestate/plan_test.go`, 핸들러는 `clients/tui/internal/app/state_plan_test.go` | `PlanView` 상태 전이, 수정 시 plan_loaded 교체, 계획 외 호출의 무음 처리 |
 
 ### 안전 제한
 

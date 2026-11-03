@@ -406,7 +406,7 @@ def tui_handled_types() -> set[str]:
     silently empty the set (the repo's contract-test convention).
     """
     out: set[str] = set()
-    for go in sorted((REPO / "tui").rglob("*.go")):
+    for go in sorted((REPO / "clients" / "tui").rglob("*.go")):
         if go.name.endswith("_test.go"):
             continue
         src = go.read_text()

@@ -50,7 +50,7 @@ jobs:
           - module: proxy
             dir: services/proxy
           - module: tui
-            dir: tui
+            dir: clients/tui
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -666,9 +666,9 @@ jobs:
           # Go fetches the TUI's modules first, with no cache (none would act in
           # the merge queue). A download that breaks off in its middle is tried
           # once more; a second failure fails the step with Go's own words.
-          (cd tui && { go mod download || { echo "The download of the TUI's modules broke off. It is tried once more."; go mod download; }; })
+          (cd clients/tui && { go mod download || { echo "The download of the TUI's modules broke off. It is tried once more."; go mod download; }; })
           # The TUI tests start this file.
-          (cd tui && go build -o atlas-tui .)
+          (cd clients/tui && go build -o atlas-tui .)
 
       - name: start the proxy and wait for its answer
         env:

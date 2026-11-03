@@ -83,7 +83,7 @@ blocked dimension (`check_status_dimensions` in
 `atlas/commands/doctor.py`). The TUI badge shows a failure and names the
 command to run: `atlas doctor`, or `atlas lens build` when artifacts are
 missing (`renderOneBadge` and `badgeActionHint` in
-`tui/internal/app/commands.go`).
+`clients/tui/internal/app/commands.go`).
 
 **Drift.** A drifted lens withdraws its thresholds on every scoring
 endpoint, so no veto or correction acts on a drifted model

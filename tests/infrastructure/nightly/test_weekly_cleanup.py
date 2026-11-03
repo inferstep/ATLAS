@@ -92,7 +92,7 @@ ON_DEV = {
     "services/proxy/main.go": "package main\n// old_any old_rangeint\n",
     "services/proxy/tools.go": "package main\n// old_any\n",
     "services/proxy/quiet.go": "package main\n",
-    "tui/view.go": "package main\n// old_minmax\n",
+    "clients/tui/view.go": "package main\n// old_minmax\n",
     "pkg/clean.py": "import os\n\nprint(os.sep)\n",
     "pkg/spaces.py": "import os   \n\nprint(os.sep)  \n",
     "docs/page.md": "a page\n",
@@ -206,7 +206,7 @@ def test_each_fixer_that_changes_a_file_gives_a_piece_whose_patch_applies_alone_
     assert states(run.result) == {"go/proxy/any": "held", "go/proxy/rangeint": "held", "go/tui/minmax": "held", "python/W291": "offered"}
     assert applies_alone(run, "go/proxy/any") == ["services/proxy/main.go", "services/proxy/tools.go"]
     assert applies_alone(run, "go/proxy/rangeint") == ["services/proxy/main.go"]
-    assert applies_alone(run, "go/tui/minmax") == ["tui/view.go"]
+    assert applies_alone(run, "go/tui/minmax") == ["clients/tui/view.go"]
     assert applies_alone(run, "python/W291") == ["pkg/spaces.py"]
     assert "+// new_any old_rangeint" in run.patch("go/proxy/any")
     assert "+// old_any new_rangeint" in run.patch("go/proxy/rangeint")
@@ -292,7 +292,7 @@ def test_the_lists_of_fixers_do_not_overlap_and_the_three_that_never_run_have_th
 # --- the checks of a Go piece --------------------------------------------------------------------------------------
 
 def test_a_fixer_runs_until_its_result_stays_the_same(made):
-    run = made(files={"tui/view.go": "package main\n// twice_minmax\n"}).make()
+    run = made(files={"clients/tui/view.go": "package main\n// twice_minmax\n"}).make()
     assert "+// new_minmax" in run.patch("go/tui/minmax")
     assert run.piece("go/tui/minmax")["checks"] == {"gofmt": "passed", "build": "passed", "vet": "passed", "tests": "passed"}
     # Three runs: two change the file and the third changes nothing. The test run of the module makes the piece again.
@@ -309,12 +309,12 @@ def test_a_fixer_runs_until_its_result_stays_the_same(made):
                  id="does not come to an end"),
 ])
 def test_a_fixer_that_fails_on_its_own_result_or_does_not_come_to_an_end_is_left_out_and_named(made, mark, why, said, runs):
-    run = made(files={"tui/view.go": f"package main\n// {mark}\n"}).make()
+    run = made(files={"clients/tui/view.go": f"package main\n// {mark}\n"}).make()
     piece = run.piece("go/tui/minmax")
     assert piece["state"] == "left out"
     assert piece["checks"] == {"fix": "failed"}
     assert piece["changed"] == []
-    assert piece["left_out"] == {"tui/view.go": why}
+    assert piece["left_out"] == {"clients/tui/view.go": why}
     assert piece["said"] == said
     assert not (run.out / "pieces" / "go-tui-minmax.patch").exists()
     assert len([call for call in run.calls("fix", "-minmax") if call["in"] == "tui"]) == runs
@@ -485,7 +485,7 @@ def test_very_many_lines_about_failed_tests_are_cut_with_a_word():
 
 
 def test_a_module_with_nothing_to_change_gets_no_test_run(made):
-    run = made(files={"tui/view.go": "package main\n"}).make()
+    run = made(files={"clients/tui/view.go": "package main\n"}).make()
     assert [entry["in"] for entry in run.tested()] == ["proxy"]
 
 
@@ -595,7 +595,7 @@ def test_with_the_hold_taken_off_the_list_the_go_pieces_are_offered(made, monkey
 
 
 def test_with_no_held_piece_that_changes_a_file_the_text_does_not_speak_of_a_hold(made):
-    run = made(files={"services/proxy/main.go": "package main\n", "services/proxy/tools.go": "package main\n", "tui/view.go": "package main\n"}).make()
+    run = made(files={"services/proxy/main.go": "package main\n", "services/proxy/tools.go": "package main\n", "clients/tui/view.go": "package main\n"}).make()
     assert states(run.result) == {"python/W291": "offered"}
     assert "Held by a maintainer" not in run.text
 
@@ -685,7 +685,7 @@ def test_in_a_job_the_text_names_the_runs_of_the_workflow_and_only_at_githubs_us
 
 
 def test_a_week_with_nothing_to_clean_says_so_with_the_date(made):
-    quiet = {"services/proxy/main.go": "package main\n", "services/proxy/tools.go": "package main\n", "tui/view.go": "package main\n", "pkg/spaces.py": "x = 1\n"}
+    quiet = {"services/proxy/main.go": "package main\n", "services/proxy/tools.go": "package main\n", "clients/tui/view.go": "package main\n", "pkg/spaces.py": "x = 1\n"}
     run = made(files=quiet).make()
     assert run.status == 0, run.printed
     assert run.result["anything"] is False

@@ -28,7 +28,7 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
-BINARY = REPO / "tui" / "atlas-tui"
+BINARY = REPO / "clients" / "tui" / "atlas-tui"
 PROXY = os.environ.get("ATLAS_PROXY_URL", "http://127.0.0.1:8090")
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\x1b[()][AB0]|\x1b[=>]")
 
@@ -61,7 +61,7 @@ STEPS = [
 def driven():
     """Run the TUI, send every step, return {label: frame} plus liveness."""
     if not BINARY.exists():
-        pytest.skip(f"{BINARY} not built (cd tui && go build -o atlas-tui .)")
+        pytest.skip(f"{BINARY} not built (cd clients/tui && go build -o atlas-tui .)")
 
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 45, 160, 0, 0))

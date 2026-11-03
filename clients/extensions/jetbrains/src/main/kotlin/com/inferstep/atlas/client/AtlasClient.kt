@@ -2,7 +2,7 @@
 // /v1/permission, /ready, /version, /workspace and /v1/calibration/status.
 //
 // A port of clients/extensions/vscode/src/client/atlasClient.ts. The conventions it
-// mirrors from tui/internal/proxyclient/chat.go:
+// mirrors from clients/tui/internal/proxyclient/chat.go:
 //   - Authorization: Bearer <token> on every request when a token is set.
 //   - /v1/permission 404 means the request already resolved, so it is success.
 //   - /cancel is best-effort defense-in-depth; aborting the SSE request is the

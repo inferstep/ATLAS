@@ -198,7 +198,7 @@ def test_a_message_that_names_a_file_of_the_folder_keeps_the_folder_though_the_i
                  "start_compose", "atlas-compose.log", id="start-of-the-containers"),
 ])
 def test_the_path_that_a_failed_step_gives_is_a_file_that_is_there_after_the_run(tmp_path, stand_in, stand_in_text, call, log):
-    for folder in ("tui", "home", "scripts/install"):
+    for folder in ("clients/tui", "home", "scripts/install"):
         (tmp_path / folder).mkdir(parents=True)
     (tmp_path / stand_in).write_text("#!/bin/bash\n" + stand_in_text, encoding="utf-8")
     (tmp_path / stand_in).chmod(0o755)

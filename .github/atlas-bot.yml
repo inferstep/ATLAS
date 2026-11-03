@@ -99,7 +99,7 @@ pull_requests:
 # Path prefix -> area label, for pull requests. A file can match several.
 areas:
   services/proxy/: area/proxy
-  tui/: area/tui
+  clients/tui/: area/tui
   atlas/: area/cli
   v3-service/: area/v3
   geometric-lens/: area/lens

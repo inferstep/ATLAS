@@ -18,7 +18,7 @@ The build side names the modules too, because `bundledModule` attaches the jar o
 
 ## How it works
 
-The plugin is a thin client over the proxy HTTP API (see `docs/reference/API.md`). The layout mirrors `clients/extensions/vscode/`, which is the reference IDE client; the TUI (`tui/`) remains the reference client overall.
+The plugin is a thin client over the proxy HTTP API (see `docs/reference/API.md`). The layout mirrors `clients/extensions/vscode/`, which is the reference IDE client; the TUI (`clients/tui/`) remains the reference client overall.
 
 ## The protocol/client layer (Stage 2)
 

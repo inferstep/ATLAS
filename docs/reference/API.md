@@ -240,7 +240,7 @@ curl -N -H "Authorization: Bearer $(cat secrets/service-token)" http://localhost
 
 Use `/events` when you want a global observability feed (a TUI pipeline pane, a metrics scraper, a debug log viewer). Use `/v1/agent` when you want to drive a specific user turn.
 
-ATLAS services emit a typed JSON event stream over Server-Sent Events (SSE). atlas-proxy (Go) is the live envelope producer. The Go TUI consumes the stream via its own implementation of this contract (`tui/internal/proxyclient/chat.go`); `atlas/events.py` is the canonical Python spec implementation (envelope types, `make_event`, `parse_envelope`), used by the test suite via the consumer harness in `tests/atlas/event_harness.py`.
+ATLAS services emit a typed JSON event stream over Server-Sent Events (SSE). atlas-proxy (Go) is the live envelope producer. The Go TUI consumes the stream via its own implementation of this contract (`clients/tui/internal/proxyclient/chat.go`); `atlas/events.py` is the canonical Python spec implementation (envelope types, `make_event`, `parse_envelope`), used by the test suite via the consumer harness in `tests/atlas/event_harness.py`.
 
 #### Transport
 
@@ -1525,6 +1525,6 @@ A minimal client needs four things (plus one header), and two more are optional:
    unreachable response as "can't tell" — older proxies won't have
    this route yet.
 
-The TUI ([atlas tui](CLI.md)) is a Go reference implementation — its `model.go`/`events.go` show how to handle every event type, and `panes.go` shows one approach to rendering them. Browse `tui/` in the repo for a complete worked example. The VS Code extension (`clients/extensions/vscode/`) is a TypeScript client built exactly to this section's surface, with unit-tested SSE parsing and permission handling.
+The TUI ([atlas tui](CLI.md)) is a Go reference implementation — its `model.go`/`events.go` show how to handle every event type, and `panes.go` shows one approach to rendering them. Browse `clients/tui/` in the repo for a complete worked example. The VS Code extension (`clients/extensions/vscode/`) is a TypeScript client built exactly to this section's surface, with unit-tested SSE parsing and permission handling.
 
 This document and the TUI source are the canonical reference for building a client.
