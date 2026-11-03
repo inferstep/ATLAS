@@ -314,7 +314,8 @@ func TestResourceExhaustionReachesNoGrant(t *testing.T) {
 func TestTheExecutorWireCarriesTheOutcome(t *testing.T) {
 	body, err := os.ReadFile("../sandbox/executor_server.py")
 	if err != nil {
-		t.Skip("sandbox source not present")
+		// A skip here would pass in silence once the sandbox moves.
+		t.Fatalf("the executor this test pins is not at ../sandbox: %v", err)
 	}
 	models, err := os.ReadFile("../sandbox/executor_models.py")
 	if err != nil {
