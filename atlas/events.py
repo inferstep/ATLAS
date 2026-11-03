@@ -1,10 +1,12 @@
 """ATLAS event protocol — typed events streaming over SSE (PC-061).
 
-This module is the canonical Python definition of the event envelope
-and the consumer helpers. atlas-proxy's `/events` broker emits JSON in
-this shape; the Go TUI consumes it via its own implementation of the
-same contract (clients/tui/consumer.go), and the tests here consume it via
-`iter_events(url)`.
+This module is the canonical Python definition of the event envelope and
+its parser, shipped with the CLI for clients that read the stream.
+atlas-proxy's `/events` broker emits JSON in this shape; the Go TUI reads it
+with its own implementation of the same contract
+(clients/tui/internal/proxyclient/chat.go). The streaming helpers the tests
+use, `iter_sse_lines` and `iter_events`, live in the test harness
+(tests/atlas/event_harness.py) and are not part of the package.
 
 The schema is also documented in docs/reference/API.md; this docstring is
 the executable spec.

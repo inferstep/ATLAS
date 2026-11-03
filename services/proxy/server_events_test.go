@@ -59,7 +59,7 @@ func TestNewEnvelopeFieldsAreSet(t *testing.T) {
 }
 
 func TestEnvelopeJSONShapeMatchesPythonSchema(t *testing.T) {
-	// The Python consumer (atlas/cli/events.py) requires these fields
+	// The Python consumer (atlas/events.py) requires these fields
 	// in this exact spelling. Schema mismatch here breaks the consumer
 	// silently — pin the field names.
 	ev := wire.NewEnvelope(wire.EvtStageEnd, "phase2", map[string]interface{}{
