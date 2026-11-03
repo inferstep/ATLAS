@@ -443,8 +443,8 @@ In VS Code, **ATLAS: Use This Folder** runs this for the open folder.
 This table lists only TUI-scoped variables. The proxy endpoint
 (`ATLAS_PROXY_URL`) and the workspace auto-realign toggle
 (`ATLAS_AUTO_WORKSPACE`) are documented in
-[CONFIGURATION.md § 7](../CONFIGURATION.md#7-python-cli); every variable that
-affects the proxy and inference stack is in [CONFIGURATION.md](../CONFIGURATION.md).
+[CONFIGURATION.md § 7](../guides/CONFIGURATION.md#7-python-cli); every variable that
+affects the proxy and inference stack is in [CONFIGURATION.md](../guides/CONFIGURATION.md).
 
 ---
 
@@ -508,7 +508,7 @@ layers to CPU.
 Run it whenever `ATLAS_MODEL_FILE` or the GPU changes; `atlas onboard` prints
 the recommendation and flags a stale `.env`. For the full VRAM-budget
 derivation see [ARCHITECTURE.md](ARCHITECTURE.md); for pre-download sizing see
-[TROUBLESHOOTING.md § What fits on my GPU?](../TROUBLESHOOTING.md#what-fits-on-my-gpu).
+[TROUBLESHOOTING.md § What fits on my GPU?](../guides/TROUBLESHOOTING.md#what-fits-on-my-gpu).
 
 ---
 
@@ -551,7 +551,7 @@ What it does:
 | 1 | Model file missing / not configured — wire `.env` or use `--url`. |
 | 2 | **Rebuild required** — the image can't load this architecture; rebuild yourself, then re-run. |
 
-Full walkthrough: [CONFIGURATION.md § Adding your own model](../CONFIGURATION.md#adding-your-own-model-drop-in--unregistered).
+Full walkthrough: [CONFIGURATION.md § Adding your own model](../guides/CONFIGURATION.md#adding-your-own-model-drop-in--unregistered).
 
 ---
 
@@ -585,7 +585,7 @@ completes; re-running with the same `--run-id` skips finished tasks
 (`Resuming: N/total complete, M remaining`). Nothing is lost to an OOM kill,
 reboot, or closed session. If the run reports fewer tasks than `--tasks`
 requested, the dataset cache is a partial download — see
-[TROUBLESHOOTING.md § Benchmark Issues](../TROUBLESHOOTING.md#benchmark-issues).
+[TROUBLESHOOTING.md § Benchmark Issues](../guides/TROUBLESHOOTING.md#benchmark-issues).
 
 ### Why the bench keeps a neutral lens score
 
@@ -796,7 +796,7 @@ Both subcommands require a running `llama-server`. `atlas lens check` reuses the
 
 TUI-specific symptoms are below. For stack-wide issues (llama-server won't
 start, benchmark failures, GPU sizing) see
-[TROUBLESHOOTING.md](../TROUBLESHOOTING.md).
+[TROUBLESHOOTING.md](../guides/TROUBLESHOOTING.md).
 
 ### TUI renders, but files the agent writes never appear in the file pane
 

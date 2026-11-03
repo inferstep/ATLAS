@@ -157,7 +157,7 @@ def test_compose_build_writes_the_deployable_tag(compose_text):
 
 
 def test_the_runbook_says_how_to_build_without_claiming_it():
-    ops = os.path.join(ROOT, "docs", "OPERATIONS.md")
+    ops = os.path.join(ROOT, "docs", "guides", "OPERATIONS.md")
     with open(ops) as fh:
         text = fh.read()
     assert "Building for verification" in text, (

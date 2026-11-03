@@ -25,7 +25,7 @@ The pass@1 summary printed at the end is the secondary product.
 
 | Module | Purpose |
 |---|---|
-| `v3_runner.py` | Runner entry point (`python -m atlas.bench.v3_runner`). Baseline and V3-mode runs, resume-on-rerun, telemetry banking, ablation knobs (`ATLAS_V3_*`, docs/CONFIGURATION.md § 8.9). |
+| `v3_runner.py` | Runner entry point (`python -m atlas.bench.v3_runner`). Baseline and V3-mode runs, resume-on-rerun, telemetry banking, ablation knobs (`ATLAS_V3_*`, docs/guides/CONFIGURATION.md § 8.9). |
 | `runner.py` | Code execution: isolated subprocesses with resource limits, assertion (`execute_code`) and stdin/stdout (`execute_code_stdio`) modes. |
 | `config.py` | Connectivity + paths: resolves llama/lens URLs and the model name from the deployment's `.env` (Docker) or `atlas.conf` (K3s); results land under repo-root `benchmark/`. |
 | `models.py` | Data models (`BenchmarkTask`, results). |

@@ -407,7 +407,7 @@ REGISTRY: List[Model] = [
         asa_artifact_files=["ast_edit_steering.gguf"],
         asa_hf_repo="itigges22/atlas-asa-gemma4-12b",
         # Gemma under the strict schema grammar emits `done` instead of
-        # calling tools (docs/CONFIGURATION.md, ADR 0008); every recorded
+        # calling tools (docs/guides/CONFIGURATION.md, ADR 0008); every recorded
         # gemma measurement ran loose. Not A/B measured against strict.
         grammar_mode="loose",
         asa_artifact_url_base=(

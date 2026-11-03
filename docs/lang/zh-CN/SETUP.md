@@ -1,7 +1,7 @@
-<!-- source: docs/SETUP.md synced-through: 7d90cbee05ec5196e2ed3f72ffc52735ce8ce245 -->
-> **[English](../../SETUP.md)** | **简体中文** | **[日本語](../ja/SETUP.md)** | **[한국어](../ko/SETUP.md)**
+<!-- source: docs/guides/SETUP.md synced-through: 7d90cbee05ec5196e2ed3f72ffc52735ce8ce245 -->
+> **[English](../../guides/SETUP.md)** | **简体中文** | **[日本語](../ja/SETUP.md)** | **[한국어](../ko/SETUP.md)**
 
-> ℹ️ **译者注：** ATLAS 没有固定的默认模型 —— 请通过 `atlas init` 选择注册表模型，或自带兼容的 GGUF。若本译文与英文原版 ([SETUP.md](../../SETUP.md)) 有出入，以英文原版为准。
+> ℹ️ **译者注：** ATLAS 没有固定的默认模型 —— 请通过 `atlas init` 选择注册表模型，或自带兼容的 GGUF。若本译文与英文原版 ([SETUP.md](../../guides/SETUP.md)) 有出入，以英文原版为准。
 
 
 # ATLAS 安装指南
@@ -14,13 +14,13 @@
 
 安装步骤取决于你的硬件 + 操作系统。找到匹配你环境的那一行，然后跳到对应的章节。
 
-| 你的硬件 | 操作系统 | 推荐路径 | 支持级别（[矩阵](../../SUPPORT_MATRIX.md)） |
+| 你的硬件 | 操作系统 | 推荐路径 | 支持级别（[矩阵](../../guides/SUPPORT_MATRIX.md)） |
 |---|---|---|---|
 | NVIDIA RTX 50 系列 / Blackwell（B100、GB10） | Linux | [方式 0：bootstrap](#方式-0一键-bootstrap) 或[方式 1：Docker](#方式-1docker-compose推荐) | 支持 (Supported) —— 发布的 CUDA 镜像面向 Blackwell |
 | NVIDIA RTX 20/30/40、GTX 10xx、数据中心卡（V100/A100/H100/T4/L4） | Linux | [方式 1：Docker](#方式-1docker-compose推荐) + 一次性[本地重建](#cuda-计算能力-dockerfilev31) | 预览 (Preview) —— 需要本地重建 |
 | NVIDIA GPU | Windows (WSL2) | [方式 1：Docker - NVIDIA 部分](#方式-1docker-compose推荐) | 不支持 (Unsupported) —— 未测试，不做任何承诺；欢迎反馈报告 |
 | AMD GPU（RX 6000/7000、MI200+） | Linux | [方式 1：Docker - AMD ROCm](#amd-rocm-的差异) | 社区验证 (Community-tested)（[GH #26](https://github.com/inferstep/ATLAS/issues/26)） |
-| **Apple Silicon (M1/M2/M3/M4)** | **macOS** | **[SETUP_MACOS.md](../../SETUP_MACOS.md)**（专门指南 - 原生 Metal + Docker 混合方案） | 支持（维护者已验证，M2 Pro） |
+| **Apple Silicon (M1/M2/M3/M4)** | **macOS** | **[SETUP_MACOS.md](../../guides/SETUP_MACOS.md)**（专门指南 - 原生 Metal + Docker 混合方案） | 支持（维护者已验证，M2 Pro） |
 | Intel Arc / Iris Xe | Linux | [方式 1：Docker - Vulkan](#vulkan跨厂商回退) | 预览 —— Vulkan 仅在 lavapipe 上做过冒烟测试；尚无真实 GPU 验证 |
 | Snapdragon X Elite（笔记本） | Linux | [Vulkan](#vulkan跨厂商回退) + [arm64 部分](#arm64) | 预览（Linux arm64）。Windows on ARM 为不支持 |
 | 较老的 AMD GPU（Vega、RDNA1，无 ROCm 6.x） | Linux | [方式 1：Docker - Vulkan](#vulkan跨厂商回退) | 预览 |
@@ -162,7 +162,7 @@ curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-
 
 | 要求 | 详情 |
 |-------------|---------|
-| **GPU** | 16 GB+ 显存。NVIDIA（CUDA，支持 (Supported) —— 发布的镜像面向 Blackwell；更早的显卡需要一次性[本地重建](#cuda-计算能力-dockerfilev31)）；AMD（ROCm，社区验证 (Community-tested)）；Apple Silicon（Metal，macOS 混合方案，支持 —— 见 [SETUP_MACOS.md](../../SETUP_MACOS.md)）；Vulkan（预览 (Preview)）是跨厂商回退方案；Intel Arc（SYCL）为路线图 (Roadmap) 级别。参见 [§ 支持的 GPU](#支持的-gpu)。 |
+| **GPU** | 16 GB+ 显存。NVIDIA（CUDA，支持 (Supported) —— 发布的镜像面向 Blackwell；更早的显卡需要一次性[本地重建](#cuda-计算能力-dockerfilev31)）；AMD（ROCm，社区验证 (Community-tested)）；Apple Silicon（Metal，macOS 混合方案，支持 —— 见 [SETUP_MACOS.md](../../guides/SETUP_MACOS.md)）；Vulkan（预览 (Preview)）是跨厂商回退方案；Intel Arc（SYCL）为路线图 (Roadmap) 级别。参见 [§ 支持的 GPU](#支持的-gpu)。 |
 | **GPU 驱动** | NVIDIA：专有驱动（`nvidia-smi` 应能显示你的 GPU）。AMD：`amdgpu-dkms` 内核驱动（`/dev/kfd` 必须存在；`rocm-smi` 应能显示你的 GPU）。 |
 | **Python 3.9+** | 含 pip |
 | **curl** | 用于下载模型权重 |
@@ -292,7 +292,7 @@ ROCm 路径与 NVIDIA 完全一致，*除了*以下三点：
    ```
    你的显卡对应的 gfx 目标见 [LLVM AMDGPU 处理器表](https://llvm.org/docs/AMDGPUUsage.html)。
 
-对于"我的 GPU 不受支持但 ROCm 大致能跑"的情形（较老的 Vega、RDNA1），`ATLAS_HSA_OVERRIDE_GFX_VERSION` 变通方案见 [TROUBLESHOOTING.md § AMD GPU not detected](../../TROUBLESHOOTING.md)。
+对于"我的 GPU 不受支持但 ROCm 大致能跑"的情形（较老的 Vega、RDNA1），`ATLAS_HSA_OVERRIDE_GFX_VERSION` 变通方案见 [TROUBLESHOOTING.md § AMD GPU not detected](../../guides/TROUBLESHOOTING.md)。
 
 #### Vulkan：跨厂商回退
 
@@ -340,7 +340,7 @@ ATLAS 面向两种 CPU 架构：`x86_64`（默认，所有后端可用）和 `aa
 
 - **NVIDIA DGX Spark**（Grace-Blackwell GB10）—— 通过 sbsa 基础镜像启用 CUDA，计算能力 12.0/12.1
 - **NVIDIA Jetson Orin / AGX / Nano** —— 通过 l4t 基础镜像启用 CUDA，计算能力 8.7
-- **Apple Silicon (M1/M2/M3/M4)** —— Docker Desktop 中通过 MoltenVK 走 Vulkan（慢速路径）；已发布的快速路径是原生混合 Metal 安装，见 [SETUP_MACOS.md](../../SETUP_MACOS.md)
+- **Apple Silicon (M1/M2/M3/M4)** —— Docker Desktop 中通过 MoltenVK 走 Vulkan（慢速路径）；已发布的快速路径是原生混合 Metal 安装，见 [SETUP_MACOS.md](../../guides/SETUP_MACOS.md)
 - **Snapdragon X Elite**（Windows on ARM 笔记本）—— 通过 Adreno 驱动走 Vulkan
 - **Raspberry Pi 5** —— 通过 Mesa V3D 驱动走 Vulkan，预期 CPU 级性能
 - **Ampere Altra / AWS Graviton 工作站** —— 通过 lavapipe 走 Vulkan（CPU 回退，因为目前还没有消费级 arm64 独显）
@@ -467,7 +467,7 @@ docker compose down --rmi all  # Stop and remove images (next start rebuilds)
 
 ### 日志与更新
 
-查看服务日志请参见 [OPERATIONS.md § Logs](../../OPERATIONS.md#logs)，更新安装请参见 [OPERATIONS.md § Standard upgrade](../../OPERATIONS.md#standard-upgrade)。
+查看服务日志请参见 [OPERATIONS.md § Logs](../../guides/OPERATIONS.md#logs)，更新安装请参见 [OPERATIONS.md § Standard upgrade](../../guides/OPERATIONS.md#standard-upgrade)。
 
 ### 卸载
 
@@ -670,7 +670,7 @@ K3s 使用 `atlas.conf`（而非 `.env`）进行配置。HTTP 契约与流水线
 
 模型与运行时参数（`ATLAS_MAIN_MODEL`、`ATLAS_CONTEXT_LENGTH`、`ATLAS_PARALLEL_SLOTS`、`ATLAS_FLASH_ATTENTION`、KV 缓存量化、用于 lens 评分路径的 `--embeddings`）在两种模式下读取相同的环境变量 —— 参见 `atlas.conf.example` 与 `.env.example`。
 
-完整的 `atlas.conf` 参考请参见 [CONFIGURATION.md](../../CONFIGURATION.md)。
+完整的 `atlas.conf` 参考请参见 [CONFIGURATION.md](../../guides/CONFIGURATION.md)。
 
 ### 验证 K3s 部署
 
@@ -709,7 +709,7 @@ atlas tier --json       # machine output (for scripts)
 atlas tier --raw        # just the probe (no classification)
 ```
 
-tier 表给出的是按显存区间的起点；**`atlas tier fit`** 会针对你运行的*具体*模型进一步精化 —— 它读取 GGUF 的 KV 几何结构和你 GPU 的显存，求解出能完全留在 GPU 上的最大上下文（`atlas tier fit --write` 会把结果写入 `.env`）。每当你更换 `ATLAS_MODEL_FILE` 或 GPU 时都运行一次。参见 [CLI.md § atlas tier fit](../../reference/CLI.md#atlas-tier-fit)，下载前的规模估算见 [TROUBLESHOOTING.md § What fits on my GPU?](../../TROUBLESHOOTING.md#what-fits-on-my-gpu)。
+tier 表给出的是按显存区间的起点；**`atlas tier fit`** 会针对你运行的*具体*模型进一步精化 —— 它读取 GGUF 的 KV 几何结构和你 GPU 的显存，求解出能完全留在 GPU 上的最大上下文（`atlas tier fit --write` 会把结果写入 `.env`）。每当你更换 `ATLAS_MODEL_FILE` 或 GPU 时都运行一次。参见 [CLI.md § atlas tier fit](../../reference/CLI.md#atlas-tier-fit)，下载前的规模估算见 [TROUBLESHOOTING.md § What fits on my GPU?](../../guides/TROUBLESHOOTING.md#what-fits-on-my-gpu)。
 
 medium tier 是 ATLAS 的开发目标 —— `atlas-bootstrap.sh` 默认使用它的模型+上下文设置。其他 tier 请在 bootstrap 完成后运行 **`atlas init`**（首次运行向导）。它通过 `atlas tier` 探测硬件，从注册表挑选合适的模型，带 SHA 校验地下载，并重写 `.env`。当你的硬件或注册表默认模型变化时用 `atlas init --reconfigure` 重跑；向导跑完后，`atlas tier fit --write` 会把向导的 tier 级默认收紧到所选模型。
 
@@ -799,7 +799,7 @@ docker build --build-arg GFX_TARGET="gfx1100;gfx1030" -f inference/Dockerfile.ro
 | `gfx1200` | RDNA4 (Navi 44) | RX 9060 XT |
 | `gfx1201` | RDNA4 (Navi 48) | RX 9070, 9070 XT |
 
-> **RDNA4 (gfx1200/gfx1201) 用户：** 请设置 `ATLAS_ROCM_TAG=7.2.3-complete` —— 默认的 ROCm 6.2 基础镜像不包含 gfx1200/gfx1201 的编译器支持。ROCm 7.0+ 原生支持这些目标；不要设置 `ATLAS_HSA_OVERRIDE_GFX_VERSION`。详情见 [TROUBLESHOOTING.md § RDNA4](../../TROUBLESHOOTING.md)。
+> **RDNA4 (gfx1200/gfx1201) 用户：** 请设置 `ATLAS_ROCM_TAG=7.2.3-complete` —— 默认的 ROCm 6.2 基础镜像不包含 gfx1200/gfx1201 的编译器支持。ROCm 7.0+ 原生支持这些目标；不要设置 `ATLAS_HSA_OVERRIDE_GFX_VERSION`。详情见 [TROUBLESHOOTING.md § RDNA4](../../guides/TROUBLESHOOTING.md)。
 
 查询你 GPU 的 gfx 目标：`rocminfo | grep -i gfx | head -1`（或在 [LLVM AMDGPU 处理器表](https://llvm.org/docs/AMDGPUUsage.html)中查找）。
 
@@ -809,7 +809,7 @@ docker build --build-arg GFX_TARGET="gfx1100;gfx1030" -f inference/Dockerfile.ro
 
 ATLAS 的每一个请求都需要 Geometric Lens（[ADR 0011](../../adr/0011-the-lens-is-required.md)）。lens 需要所服务模型的 C(x) 与 G(x) 权重。缺少它们时，代理会以 HTTP 503 `dependency_unavailable` 拒绝每个请求并说明原因，`atlas doctor` 也会失败。有权重但尚未校准的 lens 是可接受的：它能打分，其阈值干预会等待校准。
 
-在 [SUPPORT_MATRIX.md](../../SUPPORT_MATRIX.md) 中列有 lens 工件的模型可通过 `atlas model install-artifacts` 获取它们。预训练权重与训练数据同样发布在 HuggingFace 上：
+在 [SUPPORT_MATRIX.md](../../guides/SUPPORT_MATRIX.md) 中列有 lens 工件的模型可通过 `atlas model install-artifacts` 获取它们。预训练权重与训练数据同样发布在 HuggingFace 上：
 
 **[ATLAS 数据集（HuggingFace）](https://huggingface.co/datasets/itigges22/ATLAS)** —— 包含嵌入向量、训练数据和权重文件。
 
@@ -861,7 +861,7 @@ mkdir -p secrets     # or set ATLAS_SECRETS_DIR
 
 ### 自带模型
 
-要换用非默认的 GGUF，请参见 [CONFIGURATION.md § Adding your own model](../../CONFIGURATION.md#adding-your-own-model-drop-in--unregistered) 和 [CLI.md § atlas lens](../../reference/CLI.md#atlas-lens)。
+要换用非默认的 GGUF，请参见 [CONFIGURATION.md § Adding your own model](../../guides/CONFIGURATION.md#adding-your-own-model-drop-in--unregistered) 和 [CLI.md § atlas lens](../../reference/CLI.md#atlas-lens)。
 
 ---
 
@@ -897,6 +897,6 @@ mkdir -p secrets     # or set ATLAS_SECRETS_DIR
 ## 后续步骤
 
 - [CLI.md](../../reference/CLI.md) —— ATLAS 运行后的使用指南
-- [CONFIGURATION.md](../../CONFIGURATION.md) —— 所有环境变量和调优选项
-- [TROUBLESHOOTING.md](../../TROUBLESHOOTING.md) —— 常见问题与解决方案
+- [CONFIGURATION.md](../../guides/CONFIGURATION.md) —— 所有环境变量和调优选项
+- [TROUBLESHOOTING.md](../../guides/TROUBLESHOOTING.md) —— 常见问题与解决方案
 - [ARCHITECTURE.md](../../reference/ARCHITECTURE.md) —— 系统内部工作原理

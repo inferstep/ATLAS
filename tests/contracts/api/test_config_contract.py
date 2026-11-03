@@ -2,7 +2,7 @@
 
 Every key shipped in .env.example / atlas.conf.example must have a
 reader; every ATLAS_* variable interpolated by the compose files must be
-documented in docs/CONFIGURATION.md. Exceptions require a documented
+documented in docs/guides/CONFIGURATION.md. Exceptions require a documented
 allowlist entry.
 """
 
@@ -60,7 +60,7 @@ def test_atlas_conf_example_keys_all_have_readers():
 
 
 def test_compose_interpolations_are_documented():
-    doc = (REPO / "docs" / "CONFIGURATION.md").read_text()
+    doc = (REPO / "docs" / "guides" / "CONFIGURATION.md").read_text()
     example = (REPO / ".env.example").read_text()
     undocumented = set()
     for compose in [*REPO.glob("docker-compose*.yml"), *REPO.glob("compose/*.yml")]:
@@ -69,14 +69,14 @@ def test_compose_interpolations_are_documented():
                 undocumented.add(var)
     assert not undocumented, (
         f"compose interpolates undocumented vars: {sorted(undocumented)}. "
-        "Add a row to docs/CONFIGURATION.md (or the .env.example entry).")
+        "Add a row to docs/guides/CONFIGURATION.md (or the .env.example entry).")
 
 
 def test_documented_atlas_vars_have_readers():
     """Every `ATLAS_*` table row in CONFIGURATION.md must be read
     somewhere in the repo — a documented knob with no reader is a
     silently-ignored setting."""
-    doc = (REPO / "docs" / "CONFIGURATION.md").read_text()
+    doc = (REPO / "docs" / "guides" / "CONFIGURATION.md").read_text()
     corpus = _reader_corpus()
     documented = set(re.findall(r"^\| `(ATLAS_[A-Z0-9_]+)`", doc,
                                 flags=re.M))

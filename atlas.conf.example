@@ -24,7 +24,7 @@
 # log-level/external-URL placeholders, etc.). Every variable below
 # is consumed by at least one of: the install/uninstall scripts, the
 # K3s manifest templates, or the benchmark/v3 ablation runner. See
-# docs/CONFIGURATION.md §8 for what each one actually controls.
+# docs/guides/CONFIGURATION.md §8 for what each one actually controls.
 #===========================================
 
 #-------------------------------------------
@@ -80,7 +80,7 @@ ATLAS_MAIN_MODEL="your-model.gguf"
 # DELIBERATELY OFF: no entrypoint passes llama.cpp's draft flags, because
 # it measured slower than plain decoding on the reference serving host.
 # The knobs are kept so the decision stays visible — do not wire them up
-# without an A/B on your own hardware. See docs/CONFIGURATION.md.
+# without an A/B on your own hardware. See docs/guides/CONFIGURATION.md.
 ATLAS_DRAFT_MODEL=""
 
 # Context window size (tokens). Size this for the selected model and hardware

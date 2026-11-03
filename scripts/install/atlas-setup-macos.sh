@@ -8,7 +8,7 @@
 # slower than native Metal. Running ONLY llama-server natively gets us
 # the inference perf without rewriting the entire service stack as
 # native Mac binaries (the bulk of the slowdown is inference, not the
-# small Python/Go services). See docs/SETUP_MACOS.md for the full
+# small Python/Go services). See docs/guides/SETUP_MACOS.md for the full
 # walkthrough.
 #
 # Usage:
@@ -229,7 +229,7 @@ if [[ $NEED_BUILD -eq 1 ]]; then
     # cleanly — CI gates on this via llama-patches-apply).
     if ! git apply --check "$PATCH_DIR/expose-hidden-states.patch"; then
       red "hidden-states patch does not apply to $LLAMA_CPP_REV."
-      red "  See docs/TROUBLESHOOTING.md § 'llama.cpp patch drift' for the bump runbook."
+      red "  See docs/guides/TROUBLESHOOTING.md § 'llama.cpp patch drift' for the bump runbook."
       exit 1
     fi
     git apply "$PATCH_DIR/expose-hidden-states.patch"
@@ -409,5 +409,5 @@ Next steps:
   4. atlas doctor                                     # verify install health
   5. atlas                                            # start using ATLAS
 
-If anything in steps 2-5 fails, see docs/SETUP_MACOS.md § Troubleshooting.
+If anything in steps 2-5 fails, see docs/guides/SETUP_MACOS.md § Troubleshooting.
 EOF

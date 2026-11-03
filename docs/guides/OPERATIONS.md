@@ -130,7 +130,7 @@ analysed. In particular:
   decision when the request declared its output knowledge or the target was
   grounded in the model's structured call, the delivery policy when it
   delivers, a mutation scope, and a capture-only suppression
-  ([CANDIDATE_POLICY.md](reference/CANDIDATE_POLICY.md)).
+  ([CANDIDATE_POLICY.md](../reference/CANDIDATE_POLICY.md)).
 
 ## Runbooks
 
@@ -140,11 +140,11 @@ analysed. In particular:
 | Model load failure | llama logs name the reason (VRAM, arch, quant); `atlas tier fit --write` re-sizes; `atlas model verify` checks file integrity against the pinned hash |
 | Lens degraded (`self_test_error`) | `atlas lens check` prints the exact missing artifact + fix command (`atlas lens build`); identity mismatch means the bundle belongs to another model |
 | ASA inactive | llama startup log prints why (missing vector / marker mismatch); `atlas asa check`, then `atlas asa build` |
-| Sandbox failures | `docker compose logs sandbox`; egress-cut mode (`ATLAS_SANDBOX_NET_INTERNAL=true`) intentionally breaks dependency installs; resource kills show in tool results as their outcome (`memory_exhausted`, `process_limit_exceeded`, `output_limit_exceeded`, `timed_out`); see [How a command ends](reference/API.md#how-a-command-ends) |
+| Sandbox failures | `docker compose logs sandbox`; egress-cut mode (`ATLAS_SANDBOX_NET_INTERNAL=true`) intentionally breaks dependency installs; resource kills show in tool results as their outcome (`memory_exhausted`, `process_limit_exceeded`, `output_limit_exceeded`, `timed_out`); see [How a command ends](../reference/API.md#how-a-command-ends) |
 | GPU OOM | reduce `ATLAS_CTX_SIZE`/slots via `atlas tier fit --write`; check nothing else holds VRAM (`nvidia-smi`) |
 | Disk full | models dir is the usual consumer; `atlas model remove <name> --yes` |
 | Failed upgrade | § Rolling back (pin the previous tag, restore `.env.bak`) |
-| Bad/revoked artifact | [SECURITY.md](../.github/SECURITY.md) § artifact revocation; `atlas model verify` + `--force-artifacts` reinstall pins |
+| Bad/revoked artifact | [SECURITY.md](../../.github/SECURITY.md) § artifact revocation; `atlas model verify` + `--force-artifacts` reinstall pins |
 | Full reset (keep models) | `docker compose down -v && docker compose up -d` — **destructive**: wipes the stack's named volumes (`v3-telemetry`), keeps models/config. Last resort |
 
 ## Resource tuning
@@ -165,7 +165,7 @@ Two layers, and both are needed.
 **Per command.** The executor bounds every untrusted command: wall clock,
 memory, process count and output bytes, installed before the command starts and
 applied to everything it spawns, however it spawns it. A command stopped at a
-ceiling is reported as stopped, never as failed — see [How a command ends](reference/API.md#how-a-command-ends).
+ceiling is reported as stopped, never as failed — see [How a command ends](../reference/API.md#how-a-command-ends).
 
 | Variable | Default | What it bounds |
 | --- | --- | --- |

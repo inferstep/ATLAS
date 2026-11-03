@@ -422,7 +422,7 @@ jobs:
     # apply it. This job catches the same class of failure in ~30s
     # before the publish workflow burns runner time on a doomed build.
     #
-    # When this fails: see docs/TROUBLESHOOTING.md § "llama.cpp patch
+    # When this fails: see docs/guides/TROUBLESHOOTING.md § "llama.cpp patch
     # drift" for the bump runbook.
     name: llama.cpp patches apply to pinned SHA
     runs-on: ubuntu-24.04
@@ -488,14 +488,14 @@ jobs:
           if git apply --check "$patch_path" 2>&1; then
             echo "  OK: expose-hidden-states.patch applies to $LLAMA_CPP_REV"
           else
-            echo "::error file=inference/patches/expose-hidden-states.patch::patch does not apply to LLAMA_CPP_REV=$LLAMA_CPP_REV. See docs/TROUBLESHOOTING.md § 'llama.cpp patch drift' for the bump runbook."
+            echo "::error file=inference/patches/expose-hidden-states.patch::patch does not apply to LLAMA_CPP_REV=$LLAMA_CPP_REV. See docs/guides/TROUBLESHOOTING.md § 'llama.cpp patch drift' for the bump runbook."
             exit 1
           fi
           # 2. spec-decode embeddings fix (sed target must exist)
           if grep -q 'auto params_dft = params_base;' tools/server/server-context.cpp; then
             echo "  OK: spec-decode sed target present in server-context.cpp"
           else
-            echo "::error::Dockerfile sed target 'auto params_dft = params_base;' not found in tools/server/server-context.cpp at LLAMA_CPP_REV=$LLAMA_CPP_REV. The embeddings spec-decode fix would silently no-op. See docs/TROUBLESHOOTING.md § 'llama.cpp patch drift'."
+            echo "::error::Dockerfile sed target 'auto params_dft = params_base;' not found in tools/server/server-context.cpp at LLAMA_CPP_REV=$LLAMA_CPP_REV. The embeddings spec-decode fix would silently no-op. See docs/guides/TROUBLESHOOTING.md § 'llama.cpp patch drift'."
             exit 1
           fi
           echo "All patch checks passed."

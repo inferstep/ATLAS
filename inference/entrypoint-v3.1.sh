@@ -110,7 +110,7 @@ case "$ATLAS_BACKEND" in
     ;;
   metal|sycl)
     echo "Warning: ATLAS_BACKEND=$ATLAS_BACKEND but this entrypoint runs in Docker."
-    echo "  Metal runs via the macOS hybrid path (docs/SETUP_MACOS.md), not in Docker. SYCL is roadmap."
+    echo "  Metal runs via the macOS hybrid path (docs/guides/SETUP_MACOS.md), not in Docker. SYCL is roadmap."
     echo "  Continuing with default CPU-only behavior; performance will be poor."
     ;;
   *)
@@ -192,7 +192,7 @@ echo "  GPU fit: --fit off — the model, KV cache, and compute buffers must"
 echo "  fit entirely in VRAM. If startup fails below with a CUDA out-of-memory"
 echo "  allocation error, the budget above is too large for this GPU: run"
 echo "  'atlas tier fit --write' on the host to size it, then recreate this"
-echo "  container. See docs/TROUBLESHOOTING.md 'Model + KV cache don't fit'."
+echo "  container. See docs/guides/TROUBLESHOOTING.md 'Model + KV cache don't fit'."
 
 # Prompt caching stays on so each agent-loop turn can reuse its encoded
 # prefix. Cross-session isolation comes from the proxy erasing the KV slot at

@@ -7,7 +7,7 @@ body:
     id: page
     attributes:
       label: Page
-      description: The file or URL, e.g. docs/SETUP.md or a section of the README.
+      description: The file or URL, e.g. docs/guides/SETUP.md or a section of the README.
     validations:
       required: true
   - type: textarea

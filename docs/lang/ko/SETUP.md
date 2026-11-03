@@ -1,7 +1,7 @@
-<!-- source: docs/SETUP.md synced-through: 7d90cbee05ec5196e2ed3f72ffc52735ce8ce245 -->
-> **[English](../../SETUP.md)** | **[简体中文](../zh-CN/SETUP.md)** | **[日本語](../ja/SETUP.md)** | **한국어**
+<!-- source: docs/guides/SETUP.md synced-through: 7d90cbee05ec5196e2ed3f72ffc52735ce8ce245 -->
+> **[English](../../guides/SETUP.md)** | **[简体中文](../zh-CN/SETUP.md)** | **[日本語](../ja/SETUP.md)** | **한국어**
 
-> ℹ️ 영어 원본([SETUP.md](../../SETUP.md))의 번역본입니다. ATLAS에는 고정 기본 모델이 없습니다 — `atlas init`으로 레지스트리 모델을 선택하거나 호환 GGUF를 지정하십시오. 원본과 차이가 있을 경우 영어 원본이 우선합니다.
+> ℹ️ 영어 원본([SETUP.md](../../guides/SETUP.md))의 번역본입니다. ATLAS에는 고정 기본 모델이 없습니다 — `atlas init`으로 레지스트리 모델을 선택하거나 호환 GGUF를 지정하십시오. 원본과 차이가 있을 경우 영어 원본이 우선합니다.
 
 
 # ATLAS 설정 가이드
@@ -14,13 +14,13 @@
 
 설치 절차는 하드웨어와 OS에 따라 다릅니다. 본인 환경에 맞는 행을 찾아 링크된 섹션으로 이동하세요.
 
-| 하드웨어 | OS | 권장 경로 | 지원 수준 ([매트릭스](../../SUPPORT_MATRIX.md)) |
+| 하드웨어 | OS | 권장 경로 | 지원 수준 ([매트릭스](../../guides/SUPPORT_MATRIX.md)) |
 |---|---|---|---|
 | NVIDIA RTX 50 시리즈 / Blackwell (B100, GB10) | Linux | [방법 0: 부트스트랩](#방법-0-원샷-부트스트랩) 또는 [방법 1: Docker](#방법-1-docker-compose-권장) | 지원(Supported) — 게시된 CUDA 이미지는 Blackwell 대상 |
 | NVIDIA RTX 20/30/40, GTX 10xx, 데이터센터 (V100/A100/H100/T4/L4) | Linux | [방법 1: Docker](#방법-1-docker-compose-권장) + 일회성 [로컬 재빌드](#cuda-컴퓨트-캐퍼빌리티-dockerfilev31) | 프리뷰(Preview) — 로컬 재빌드 필요 |
 | NVIDIA GPU | Windows (WSL2) | [방법 1: Docker — NVIDIA 섹션](#방법-1-docker-compose-권장) | 미지원(Unsupported) — 테스트되지 않았고 아무 주장도 하지 않음; 리포트 환영 |
 | AMD GPU (RX 6000/7000, MI200+) | Linux | [방법 1: Docker — AMD ROCm](#amd-rocm--무엇이-다른가) | 커뮤니티 검증(Community-tested) ([GH #26](https://github.com/inferstep/ATLAS/issues/26)) |
-| **Apple Silicon (M1/M2/M3/M4)** | **macOS** | **[SETUP_MACOS.md](../../SETUP_MACOS.md)** (전용 가이드 — 하이브리드 네이티브 Metal + Docker) | 지원 (메인테이너 검증, M2 Pro) |
+| **Apple Silicon (M1/M2/M3/M4)** | **macOS** | **[SETUP_MACOS.md](../../guides/SETUP_MACOS.md)** (전용 가이드 — 하이브리드 네이티브 Metal + Docker) | 지원 (메인테이너 검증, M2 Pro) |
 | Intel Arc / Iris Xe | Linux | [방법 1: Docker — Vulkan](#vulkan--크로스-벤더-폴백) | 프리뷰 — Vulkan은 lavapipe에서만 스모크 테스트됨; 실제 GPU 검증은 아직 없음 |
 | Snapdragon X Elite (노트북) | Linux | [Vulkan](#vulkan--크로스-벤더-폴백) + [arm64 섹션](#arm64) | 프리뷰 (Linux arm64). Windows on ARM은 미지원 |
 | 구형 AMD GPU (Vega, RDNA1, ROCm 6.x 없음) | Linux | [방법 1: Docker — Vulkan](#vulkan--크로스-벤더-폴백) | 프리뷰 |
@@ -163,7 +163,7 @@ curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-
 
 | 요구 사항 | 세부 내용 |
 |-------------|---------|
-| **GPU** | VRAM 16GB 이상. NVIDIA (CUDA, 지원(Supported) — 게시된 이미지는 Blackwell 대상이며, 구형 카드는 일회성 [로컬 재빌드](#cuda-컴퓨트-캐퍼빌리티-dockerfilev31) 필요); AMD (ROCm, 커뮤니티 검증(Community-tested)); Apple Silicon (Metal, macOS 하이브리드, 지원 — [SETUP_MACOS.md](../../SETUP_MACOS.md) 참고); Vulkan(프리뷰(Preview))은 크로스 벤더 폴백이고, Intel Arc (SYCL)는 로드맵(Roadmap)입니다. [§ 지원 GPU](#지원-gpu) 참고. |
+| **GPU** | VRAM 16GB 이상. NVIDIA (CUDA, 지원(Supported) — 게시된 이미지는 Blackwell 대상이며, 구형 카드는 일회성 [로컬 재빌드](#cuda-컴퓨트-캐퍼빌리티-dockerfilev31) 필요); AMD (ROCm, 커뮤니티 검증(Community-tested)); Apple Silicon (Metal, macOS 하이브리드, 지원 — [SETUP_MACOS.md](../../guides/SETUP_MACOS.md) 참고); Vulkan(프리뷰(Preview))은 크로스 벤더 폴백이고, Intel Arc (SYCL)는 로드맵(Roadmap)입니다. [§ 지원 GPU](#지원-gpu) 참고. |
 | **GPU 드라이버** | NVIDIA: 전용 드라이버(`nvidia-smi`에서 GPU가 보여야 함). AMD: `amdgpu-dkms` 커널 드라이버(`/dev/kfd`가 존재해야 하며, `rocm-smi`에서 GPU가 보여야 함). |
 | **Python 3.9+** | pip 포함 |
 | **curl** | 모델 가중치 다운로드용 |
@@ -341,7 +341,7 @@ ATLAS는 두 CPU 아키텍처를 대상으로 합니다: `x86_64`(기본, 모든
 
 - **NVIDIA DGX Spark** (Grace-Blackwell GB10) — sbsa 베이스 이미지 경유 CUDA, 컴퓨트 캐퍼빌리티 12.0/12.1
 - **NVIDIA Jetson Orin / AGX / Nano** — l4t 베이스 이미지 경유 CUDA, 컴퓨트 캐퍼빌리티 8.7
-- **Apple Silicon (M1/M2/M3/M4)** — Docker Desktop의 MoltenVK 경유 Vulkan(느린 경로); 출시된 빠른 경로는 네이티브 하이브리드 Metal 설치입니다. [SETUP_MACOS.md](../../SETUP_MACOS.md) 참고
+- **Apple Silicon (M1/M2/M3/M4)** — Docker Desktop의 MoltenVK 경유 Vulkan(느린 경로); 출시된 빠른 경로는 네이티브 하이브리드 Metal 설치입니다. [SETUP_MACOS.md](../../guides/SETUP_MACOS.md) 참고
 - **Snapdragon X Elite** (Windows on ARM 노트북) — Adreno 드라이버 경유 Vulkan
 - **Raspberry Pi 5** — Mesa V3D 드라이버 경유 Vulkan, CPU급 성능 예상
 - **Ampere Altra / AWS Graviton 워크스테이션** — lavapipe 경유 Vulkan(CPU 폴백; 아직 소비자용 arm64 dGPU가 없으므로)
@@ -468,7 +468,7 @@ docker compose down --rmi all  # Stop and remove images (next start rebuilds)
 
 ### 로그와 업데이트
 
-서비스 로그 확인은 [OPERATIONS.md § Logs](../../OPERATIONS.md#logs)를, 설치 업데이트는 [OPERATIONS.md § Standard upgrade](../../OPERATIONS.md#standard-upgrade)를 참고하세요.
+서비스 로그 확인은 [OPERATIONS.md § Logs](../../guides/OPERATIONS.md#logs)를, 설치 업데이트는 [OPERATIONS.md § Standard upgrade](../../guides/OPERATIONS.md#standard-upgrade)를 참고하세요.
 
 ### 제거
 
@@ -671,7 +671,7 @@ K3s는 설정에 `.env`가 아닌 `atlas.conf`를 사용합니다. HTTP 계약�
 
 모델·런타임 파라미터(`ATLAS_MAIN_MODEL`, `ATLAS_CONTEXT_LENGTH`, `ATLAS_PARALLEL_SLOTS`, `ATLAS_FLASH_ATTENTION`, KV 캐시 양자화, 렌즈 스코어링 경로용 `--embeddings`)는 두 모드 모두 동일한 환경 변수에서 읽습니다 — `atlas.conf.example`과 `.env.example`을 참고하세요.
 
-전체 `atlas.conf` 레퍼런스는 [CONFIGURATION.md](../../CONFIGURATION.md)를 참고하세요.
+전체 `atlas.conf` 레퍼런스는 [CONFIGURATION.md](../../guides/CONFIGURATION.md)를 참고하세요.
 
 ### K3s 배포 확인
 
@@ -810,7 +810,7 @@ docker build --build-arg GFX_TARGET="gfx1100;gfx1030" -f inference/Dockerfile.ro
 
 ATLAS는 모든 요청에 Geometric Lens를 사용합니다([ADR 0011](../../adr/0011-the-lens-is-required.md)). 렌즈에는 서빙 중인 모델에 맞는 C(x)·G(x) 가중치가 필요합니다. 가중치가 없으면 프록시는 각 요청을 HTTP 503 `dependency_unavailable`으로 거부하면서 그 이유를 알려주고, `atlas doctor`는 실패합니다. 가중치는 있지만 아직 보정되지 않은 렌즈는 허용됩니다: 점수는 산출되고, 임계값 개입만 보정 이후로 미뤄집니다.
 
-[SUPPORT_MATRIX.md](../../SUPPORT_MATRIX.md)에 렌즈 아티팩트가 표기된 모델은 `atlas model install-artifacts`로 받을 수 있습니다. 사전 학습된 가중치와 학습 데이터도 HuggingFace에서 제공됩니다:
+[SUPPORT_MATRIX.md](../../guides/SUPPORT_MATRIX.md)에 렌즈 아티팩트가 표기된 모델은 `atlas model install-artifacts`로 받을 수 있습니다. 사전 학습된 가중치와 학습 데이터도 HuggingFace에서 제공됩니다:
 
 **[HuggingFace의 ATLAS 데이터셋](https://huggingface.co/datasets/itigges22/ATLAS)** — 임베딩, 학습 데이터, 가중치 파일이 포함되어 있습니다.
 
@@ -869,7 +869,7 @@ mkdir -p secrets     # or set ATLAS_SECRETS_DIR
 
 ### 자체 모델 반입하기
 
-기본이 아닌 GGUF로 바꾸려면 [CONFIGURATION.md § Adding your own model](../../CONFIGURATION.md#adding-your-own-model-drop-in--unregistered)과 [CLI.md § atlas lens](../../reference/CLI.md#atlas-lens)를 참고하세요.
+기본이 아닌 GGUF로 바꾸려면 [CONFIGURATION.md § Adding your own model](../../guides/CONFIGURATION.md#adding-your-own-model-drop-in--unregistered)과 [CLI.md § atlas lens](../../reference/CLI.md#atlas-lens)를 참고하세요.
 
 ---
 
@@ -905,6 +905,6 @@ mkdir -p secrets     # or set ATLAS_SECRETS_DIR
 ## 다음 단계
 
 - [CLI.md](../../reference/CLI.md) — 실행 후 ATLAS 사용 방법
-- [CONFIGURATION.md](../../CONFIGURATION.md) — 모든 환경 변수 및 튜닝 옵션
+- [CONFIGURATION.md](../../guides/CONFIGURATION.md) — 모든 환경 변수 및 튜닝 옵션
 - [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — 일반적인 문제 및 해결 방법
 - [ARCHITECTURE.md](ARCHITECTURE.md) — 시스템 내부 동작 원리

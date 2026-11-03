@@ -1,5 +1,5 @@
-<!-- source: docs/TROUBLESHOOTING.md synced-through: 175f5a2e58eff2ed27b1fcb332122503a772ab43 -->
-> **[English](../../TROUBLESHOOTING.md)** | **[简体中文](../zh-CN/TROUBLESHOOTING.md)** | **日本語** | **[한국어](../ko/TROUBLESHOOTING.md)**
+<!-- source: docs/guides/TROUBLESHOOTING.md synced-through: 175f5a2e58eff2ed27b1fcb332122503a772ab43 -->
+> **[English](../../guides/TROUBLESHOOTING.md)** | **[简体中文](../zh-CN/TROUBLESHOOTING.md)** | **日本語** | **[한국어](../ko/TROUBLESHOOTING.md)**
 
 # ATLAS トラブルシューティングガイド
 
@@ -23,7 +23,7 @@ docker compose logs --tail 50
 |---|---|
 | NVIDIA CUDA | `nvidia-smi` |
 | AMD ROCm | `rocm-smi` を実行し、`/dev/kfd` が存在することを確認します。 |
-| Apple Silicon / Metal | `atlas doctor` を実行します。ネイティブサーバーが待ち受けていない場合は、[SETUP_MACOS.md](../../SETUP_MACOS.md#troubleshooting) の説明に従って `./scripts/install/atlas-llama-macos.sh` を起動し、フォアグラウンドのランチャー出力を確認します。 |
+| Apple Silicon / Metal | `atlas doctor` を実行します。ネイティブサーバーが待ち受けていない場合は、[SETUP_MACOS.md](../../guides/SETUP_MACOS.md#troubleshooting) の説明に従って `./scripts/install/atlas-llama-macos.sh` を起動し、フォアグラウンドのランチャー出力を確認します。 |
 | Vulkan | `/dev/dri` が存在することを確認し、`docker compose -f docker-compose.yml -f compose/docker-compose.vulkan.yml exec llama-server vulkaninfo --summary` を実行します。 |
 | CPU のみ | `compose/docker-compose.vulkan.yml` と `compose/docker-compose.cpu.yml` のオーバーレイが有効であることを確認します。GPU がないことだけを理由に `atlas doctor` が失敗するのではなく、警告を出して正常終了するはずです。 |
 
@@ -376,7 +376,7 @@ fatal: fetch-pack: invalid index-pack output
 
 古い SHA への固定よりも、パッチの再生成を優先してください — 後ろ向きに固定すると上流の修正を取りこぼします。
 
-再ビルドでモデルがロードされた後も、新しいモデルには Geometric Lens の再トレーニングが必要です — [CONFIGURATION.md § Adding your own model](../../CONFIGURATION.md#adding-your-own-model-drop-in--unregistered) を参照。
+再ビルドでモデルがロードされた後も、新しいモデルには Geometric Lens の再トレーニングが必要です — [CONFIGURATION.md § Adding your own model](../../guides/CONFIGURATION.md#adding-your-own-model-drop-in--unregistered) を参照。
 
 ### プロキシがワークスペースに書き込めない (`.atlas.tmp: permission denied`)
 
@@ -440,7 +440,7 @@ lsof -i :8080
 ATLAS_LLAMA_PORT=8081    # Different port for llama-server
 ```
 
-すべてのポートは `.env` で設定可能です。[CONFIGURATION.md](../../CONFIGURATION.md) をご覧ください。
+すべてのポートは `.env` で設定可能です。[CONFIGURATION.md](../../guides/CONFIGURATION.md) をご覧ください。
 
 ---
 
@@ -770,7 +770,7 @@ docker compose logs geometric-lens
 | メッセージの理由 | 修正 |
 |---|---|
 | unreachable | レンズのコンテナが停止しているか `ATLAS_LENS_URL` が誤り。`docker compose ps geometric-lens`。 |
-| no C(x) / no G(x) model loaded | 提供中のモデルにレンズウェイトがない。レジストリのモデルは `atlas model install-artifacts <name>`、または `atlas lens build`（[SETUP.md](../../SETUP.md) 参照）。 |
+| no C(x) / no G(x) model loaded | 提供中のモデルにレンズウェイトがない。レジストリのモデルは `atlas model install-artifacts <name>`、または `atlas lens build`（[SETUP.md](../../guides/SETUP.md) 参照）。 |
 | cannot reach llama-server | レンズがモデルサーバーに到達できない。`LLAMA_URL` / `LLAMA_EMBED_URL` と llama-server のヘルスを確認。 |
 | self-test failed | `/health` の `self_test_error` を参照。 |
 | drifted from the served model | [エンベディング規約のドリフト](#スコアはもっともらしいのにスケールが大きく外れているエンベディング規約のドリフト) を参照。 |
@@ -804,7 +804,7 @@ curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerpri
      -d '{"content":"def add(a, b): return a + b","embd_normalize":-1}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; import itertools; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
    ```
    プールされた `norm` は数百の範囲になります（同梱の Gemma アーティファクトでおよそ 100-150）。`norm` がちょうど `1.0` の場合、`embd_normalize: -1` を指定したにもかかわらずサーバーがベクトルを正規化しており、C(x) はどの入力に対しても約 0.8 という平坦な値を返します。健全に見えて何も区別しないスコアです。
-2. `ATLAS_EMBED_POOLING=none`（デフォルト。[CONFIGURATION.md](../../CONFIGURATION.md) を参照）を設定し、エントリーポイントがフラグを固定するように llama-server コンテナを再作成します。`--pooling` は llama.cpp ではサーバー全体の設定であり、全文パスと per-step パスの両方を満たせるのは `none` だけです。プーリングとスケールはクライアント側で処理します。
+2. `ATLAS_EMBED_POOLING=none`（デフォルト。[CONFIGURATION.md](../../guides/CONFIGURATION.md) を参照）を設定し、エントリーポイントがフラグを固定するように llama-server コンテナを再作成します。`--pooling` は llama.cpp ではサーバー全体の設定であり、全文パスと per-step パスの両方を満たせるのは `none` だけです。プーリングとスケールはクライアント側で処理します。
 3. サーバーが正しい規約で応答するようになれば、起動時セルフテストが通り、`/ready` が 200 を返します。再ビルド（`atlas lens build`）は `embedding_contract` を `model_identity.json` に刻みます。ただしドリフトフィンガープリントは書き込みません: `geometric_lens.drift.write_fingerprint` は存在しますが、それを呼び出すコマンドはまだなく、フィンガープリントのチェックは手動で書き込まれた `drift_fingerprint.json` がある場合のみ実行されます。
 
 ### エンベディング抽出の失敗
@@ -939,5 +939,5 @@ atlas bench --run-id <your-run-id> --tasks 200
 ここに問題が記載されていない場合:
 1. サービスログを確認: `docker compose logs <service-name>`
 2. プロキシのヘルスエンドポイントを確認: `curl http://localhost:8090/health`
-3. すべての環境変数については [CONFIGURATION.md](../../CONFIGURATION.md) をご覧ください
+3. すべての環境変数については [CONFIGURATION.md](../../guides/CONFIGURATION.md) をご覧ください
 4. [GitHub](https://github.com/inferstep/ATLAS/issues) で Issue を作成してください

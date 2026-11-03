@@ -1,7 +1,7 @@
-<!-- source: docs/TROUBLESHOOTING.md synced-through: 175f5a2e58eff2ed27b1fcb332122503a772ab43 -->
-> **[English](../../TROUBLESHOOTING.md)** | **简体中文** | **[日本語](../ja/TROUBLESHOOTING.md)** | **[한국어](../ko/TROUBLESHOOTING.md)**
+<!-- source: docs/guides/TROUBLESHOOTING.md synced-through: 175f5a2e58eff2ed27b1fcb332122503a772ab43 -->
+> **[English](../../guides/TROUBLESHOOTING.md)** | **简体中文** | **[日本語](../ja/TROUBLESHOOTING.md)** | **[한국어](../ko/TROUBLESHOOTING.md)**
 
-> ℹ️ **译者注：** 若本译文与英文原版 ([TROUBLESHOOTING.md](../../TROUBLESHOOTING.md)) 有出入，以英文原版为准。
+> ℹ️ **译者注：** 若本译文与英文原版 ([TROUBLESHOOTING.md](../../guides/TROUBLESHOOTING.md)) 有出入，以英文原版为准。
 
 
 # ATLAS 故障排除指南
@@ -26,7 +26,7 @@ docker compose logs --tail 50
 |---|---|
 | NVIDIA CUDA | `nvidia-smi` |
 | AMD ROCm | 运行 `rocm-smi` 并确认 `/dev/kfd` 存在。 |
-| Apple Silicon / Metal | 运行 `atlas doctor`；如果原生服务器未监听，请按照 [SETUP_MACOS.md](../../SETUP_MACOS.md#troubleshooting) 中的说明启动 `./scripts/install/atlas-llama-macos.sh`，并检查其前台启动器输出。 |
+| Apple Silicon / Metal | 运行 `atlas doctor`；如果原生服务器未监听，请按照 [SETUP_MACOS.md](../../guides/SETUP_MACOS.md#troubleshooting) 中的说明启动 `./scripts/install/atlas-llama-macos.sh`，并检查其前台启动器输出。 |
 | Vulkan | 确认 `/dev/dri` 存在，然后运行 `docker compose -f docker-compose.yml -f compose/docker-compose.vulkan.yml exec llama-server vulkaninfo --summary`。 |
 | 纯 CPU | 确认 `compose/docker-compose.vulkan.yml` 和 `compose/docker-compose.cpu.yml` 覆盖层已启用。`atlas doctor` 不应仅因没有 GPU 而失败，而应发出警告并成功退出。 |
 
@@ -379,7 +379,7 @@ fatal: fetch-pack: invalid index-pack output
 
 优先重新生成补丁，而不是把版本固定回更老的 SHA —— 往回固定意味着错过上游修复。
 
-重建加载了模型之后，Geometric Lens 仍需为新模型重新训练 —— 见 [CONFIGURATION.md § Adding your own model](../../CONFIGURATION.md#adding-your-own-model-drop-in--unregistered)。
+重建加载了模型之后，Geometric Lens 仍需为新模型重新训练 —— 见 [CONFIGURATION.md § Adding your own model](../../guides/CONFIGURATION.md#adding-your-own-model-drop-in--unregistered)。
 
 ### 代理无法写入工作区（`.atlas.tmp: permission denied`）
 
@@ -443,7 +443,7 @@ lsof -i :8080
 ATLAS_LLAMA_PORT=8081    # Different port for llama-server
 ```
 
-所有端口均可通过 `.env` 配置。参见 [CONFIGURATION.md](../../CONFIGURATION.md)。
+所有端口均可通过 `.env` 配置。参见 [CONFIGURATION.md](../../guides/CONFIGURATION.md)。
 
 ---
 
@@ -773,7 +773,7 @@ docker compose logs geometric-lens
 | 消息中的原因 | 修复 |
 |---|---|
 | unreachable | lens 容器已停或 `ATLAS_LENS_URL` 有误。`docker compose ps geometric-lens`。 |
-| no C(x) / no G(x) model loaded | 所服务模型没有 lens 权重。注册表模型运行 `atlas model install-artifacts <name>`，或 `atlas lens build`（见 [SETUP.md](../../SETUP.md)）。 |
+| no C(x) / no G(x) model loaded | 所服务模型没有 lens 权重。注册表模型运行 `atlas model install-artifacts <name>`，或 `atlas lens build`（见 [SETUP.md](../../guides/SETUP.md)）。 |
 | cannot reach llama-server | lens 连不上模型服务器。检查 `LLAMA_URL` / `LLAMA_EMBED_URL` 和 llama-server 健康状态。 |
 | self-test failed | 见 `/health` 中的 `self_test_error`。 |
 | drifted from the served model | 见[嵌入约定漂移](#分数看着合理但量级严重偏离嵌入约定漂移)。 |
@@ -807,7 +807,7 @@ curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerpri
      -d '{"content":"def add(a, b): return a + b","embd_normalize":-1}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; import itertools; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
    ```
    池化后的 `norm` 应在数百量级（随附的 Gemma 工件约为 100-150）。若 `norm` 恰好为 `1.0`，说明服务器无视了 `embd_normalize: -1` 而对向量做了归一化，此时 C(x) 对任何输入都会返回约 0.8 的恒定值：分数看似正常，却无法区分任何东西。
-2. 设置 `ATLAS_EMBED_POOLING=none`（默认值；见 [CONFIGURATION.md](../../CONFIGURATION.md)），并重建 llama-server 容器，让入口点固定这些标志。在 llama.cpp 中 `--pooling` 是服务器全局设置，只有 `none` 能同时满足全文路径和 per-step 路径；池化与缩放都在客户端处理。
+2. 设置 `ATLAS_EMBED_POOLING=none`（默认值；见 [CONFIGURATION.md](../../guides/CONFIGURATION.md)），并重建 llama-server 容器，让入口点固定这些标志。在 llama.cpp 中 `--pooling` 是服务器全局设置，只有 `none` 能同时满足全文路径和 per-step 路径；池化与缩放都在客户端处理。
 3. 服务器提供正确约定后，启动自检通过，`/ready` 返回 200。一次重建（`atlas lens build`）会把 `embedding_contract` 刻进 `model_identity.json`。它不会写入漂移指纹：`geometric_lens.drift.write_fingerprint` 存在，但尚无任何命令调用它，因此指纹检查只在存在手工写入的 `drift_fingerprint.json` 的场合运行。
 
 ### 嵌入向量提取失败
@@ -942,5 +942,5 @@ atlas bench --run-id <your-run-id> --tasks 200
 如果你的问题未在此列出：
 1. 查看服务日志：`docker compose logs <service-name>`
 2. 检查代理健康检查端点：`curl http://localhost:8090/health`
-3. 参见 [CONFIGURATION.md](../../CONFIGURATION.md) 了解所有环境变量
+3. 参见 [CONFIGURATION.md](../../guides/CONFIGURATION.md) 了解所有环境变量
 4. 在 [GitHub](https://github.com/inferstep/ATLAS/issues) 上提交 issue

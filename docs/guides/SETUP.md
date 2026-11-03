@@ -763,7 +763,7 @@ refines them for the *specific* model you run — it reads the GGUF's KV
 geometry plus your GPU's VRAM and solves for the largest context that
 stays fully on-GPU (`atlas tier fit --write` applies the result to
 `.env`). Run it whenever you change `ATLAS_MODEL_FILE` or the GPU. See
-[CLI.md § atlas tier fit](reference/CLI.md#atlas-tier-fit), and
+[CLI.md § atlas tier fit](../reference/CLI.md#atlas-tier-fit), and
 [TROUBLESHOOTING.md § What fits on my GPU?](TROUBLESHOOTING.md#what-fits-on-my-gpu)
 for pre-download sizing guidance.
 
@@ -871,7 +871,7 @@ Your GPU's gfx target: `rocminfo | grep -i gfx | head -1` (or look it up in the 
 
 ## Geometric Lens Weights (Required)
 
-ATLAS needs the Geometric Lens for every request ([ADR 0011](adr/0011-the-lens-is-required.md)). The lens needs C(x) and G(x) weights for the served model. Without them, the proxy refuses each request with HTTP 503 `dependency_unavailable` and says why, and `atlas doctor` fails. A lens that has weights but no calibration yet is accepted: it scores, and its threshold interventions wait for calibration.
+ATLAS needs the Geometric Lens for every request ([ADR 0011](../adr/0011-the-lens-is-required.md)). The lens needs C(x) and G(x) weights for the served model. Without them, the proxy refuses each request with HTTP 503 `dependency_unavailable` and says why, and `atlas doctor` fails. A lens that has weights but no calibration yet is accepted: it scores, and its threshold interventions wait for calibration.
 
 Models listed with lens artifacts in [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md) get them from `atlas model install-artifacts`. Pre-trained weights and training data are also available on HuggingFace:
 
@@ -886,7 +886,7 @@ atlas bench --run-id mymodel_lens --tasks 200    # generate + self-label one can
 atlas lens build --force --from-results benchmark/results/mymodel_lens/v3_lcb/per_task
 ```
 
-`atlas lens build` trains both lens halves, calibrates the thresholds, and writes a `provenance.json` manifest into the activated bundle. See [CLI.md § atlas lens](reference/CLI.md#atlas-lens).
+`atlas lens build` trains both lens halves, calibrates the thresholds, and writes a `provenance.json` manifest into the activated bundle. See [CLI.md § atlas lens](../reference/CLI.md#atlas-lens).
 
 ### Bringing your own llama-server
 
@@ -933,7 +933,7 @@ it and the token.
 
 ### Bringing your own model
 
-To swap in a non-default GGUF, see [CONFIGURATION.md § Adding your own model](CONFIGURATION.md#adding-your-own-model-drop-in--unregistered) and [CLI.md § atlas lens](reference/CLI.md#atlas-lens).
+To swap in a non-default GGUF, see [CONFIGURATION.md § Adding your own model](CONFIGURATION.md#adding-your-own-model-drop-in--unregistered) and [CLI.md § atlas lens](../reference/CLI.md#atlas-lens).
 
 ---
 
@@ -993,13 +993,13 @@ running the installer.
 
 To rebuild manually (re-curated pairs, different `--method`, different
 base model), see
-[`geometric-lens/asa_calibration/README.md`](../geometric-lens/asa_calibration/README.md).
+[`geometric-lens/asa_calibration/README.md`](../../geometric-lens/asa_calibration/README.md).
 
 ---
 
 ## Next Steps
 
-- [CLI.md](reference/CLI.md) — How to use ATLAS once it's running
+- [CLI.md](../reference/CLI.md) — How to use ATLAS once it's running
 - [CONFIGURATION.md](CONFIGURATION.md) — All environment variables and tuning options
 - [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — Common issues and solutions
-- [ARCHITECTURE.md](reference/ARCHITECTURE.md) — How the system works internally
+- [ARCHITECTURE.md](../reference/ARCHITECTURE.md) — How the system works internally

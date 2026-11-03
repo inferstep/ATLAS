@@ -437,7 +437,7 @@ detect_gpu() {
             log_warn "  rebuild the inference image once for your architecture:"
             log_warn "    docker compose build --build-arg CUDA_ARCH=${cc/./} llama-server"
             log_warn "    docker compose up -d --no-deps llama-server"
-            log_warn "  See docs/SETUP.md 'CUDA Compute Capability' for the arch table."
+            log_warn "  See docs/guides/SETUP.md 'CUDA Compute Capability' for the arch table."
         fi
     fi
     if [[ -z "$GPU_VENDOR" ]] && command -v rocm-smi &>/dev/null; then
