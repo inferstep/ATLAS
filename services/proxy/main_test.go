@@ -995,8 +995,15 @@ func moduleGoFiles(t *testing.T) []string {
 // policy owner and uses the answer. This pins that shape exactly, so a
 // future edit that starts inspecting TaskMode inline still fails.
 func TestFinalizeCompletionHandsTheContractToThePolicyOwner(t *testing.T) {
-	body, _ := os.ReadFile("loop_end.go")
-	final := string(body)[strings.Index(string(body), "func finalizeCompletion"):]
+	body, err := os.ReadFile("loop_end.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := strings.Index(string(body), "func finalizeCompletion")
+	if start < 0 {
+		t.Fatal("loop_end.go holds no func finalizeCompletion, so its check reads nothing; name the file that holds it")
+	}
+	final := string(body)[start:]
 	if e := strings.Index(final[1:], "\nfunc "); e >= 0 {
 		final = final[:e]
 	}
