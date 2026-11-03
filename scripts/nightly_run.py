@@ -126,7 +126,7 @@ PROJECT = "atlas-nightly"
 # What a run for one commit can build, as the compose file builds it: for each service the folder that is the
 # context of its build, its Dockerfile, and the paths of the repository that the build reads. The model server is
 # not here: its image is never built on the server.
-BUILDS = {"geometric-lens": ("geometric-lens", "geometric-lens/Dockerfile", ("geometric-lens/",)),
+BUILDS = {"geometric-lens": ("services/geometric-lens", "services/geometric-lens/Dockerfile", ("services/geometric-lens/",)),
           "v3-service": (".", "services/v3-service/Dockerfile", ("services/v3-service/", ".dockerignore")),
           "sandbox": ("services/sandbox", "services/sandbox/Dockerfile", ("services/sandbox/",)),
           "atlas-proxy": ("services/proxy", "services/proxy/Dockerfile", ("services/proxy/",))}
@@ -148,7 +148,7 @@ FROM_DEV = {"scripts/nightly_run.py": "the script of this run",
             "scripts/smoke_result.py": "the script that makes the mark of the result line",
             "services/inference/": "the model server, whose image is never built on the server and whose start script the "
                           "stack mounts from the tree",
-            "geometric-lens/geometric_lens/models/": "the model files of the lens, which the stack mounts"}
+            "services/geometric-lens/geometric_lens/models/": "the model files of the lens, which the stack mounts"}
 # A run for one commit takes only the tip of a branch of this name: what a maintainer has pushed for a smoke run.
 # No workflow starts on a push to such a branch, and no program pushes one.
 SMOKE = "smoke/"

@@ -53,9 +53,9 @@ service to score code candidates without execution.
 
 ```bash
 # Drop these into your ATLAS checkout
-mkdir -p geometric-lens/geometric_lens/models/
+mkdir -p services/geometric-lens/geometric_lens/models/
 huggingface-cli download <this-repo> \\
-  --local-dir geometric-lens/geometric_lens/models/
+  --local-dir services/geometric-lens/geometric_lens/models/
 
 # Verify ATLAS picks them up
 atlas lens check

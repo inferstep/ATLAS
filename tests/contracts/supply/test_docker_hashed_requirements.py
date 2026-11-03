@@ -14,7 +14,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[3]
 
 SERVICE_CONFIGS = [
-    ("geometric-lens/Dockerfile", "geometric-lens/requirements.txt", "geometric-lens/requirements-lock.txt"),
+    ("services/geometric-lens/Dockerfile", "services/geometric-lens/requirements.txt", "services/geometric-lens/requirements-lock.txt"),
     ("services/v3-service/Dockerfile", "services/v3-service/requirements.txt", "services/v3-service/requirements-lock.txt"),
     ("services/sandbox/Dockerfile", "services/sandbox/requirements-runtime.txt", "services/sandbox/requirements-lock.txt"),
     ("services/sandbox/Dockerfile", "services/sandbox/requirements-verify.txt", "services/sandbox/requirements-lock.txt"),

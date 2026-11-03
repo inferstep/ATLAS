@@ -37,13 +37,13 @@ updates:
       # the first, so torch is bumped by hand in both places.
       - dependency-name: "torch"
       # numpy 2.5 needs Python 3.12, and the lens image is Python 3.11
-      # (geometric-lens/Dockerfile), so the lens stays on numpy 2.4.x. Only
-      # geometric-lens/requirements.txt pins numpy. Revisit when the lens
+      # (services/geometric-lens/Dockerfile), so the lens stays on numpy 2.4.x. Only
+      # services/geometric-lens/requirements.txt pins numpy. Revisit when the lens
       # image moves to Python 3.12.
       - dependency-name: "numpy"
         versions: [">=2.5"]
       # xgboost and xgboost-cpu 3.3 need Python 3.12, and the lens image is
-      # Python 3.11 (geometric-lens/Dockerfile), so the lens stays on 3.2.x.
+      # Python 3.11 (services/geometric-lens/Dockerfile), so the lens stays on 3.2.x.
       # CI's lens tests run on Python 3.12 and would not show it; the image
       # build would. Revisit when the lens image moves to Python 3.12.
       - dependency-name: "xgboost*"
@@ -119,7 +119,7 @@ updates:
       - /services/proxy
       - /services/v3-service
       - /services/sandbox
-      - /geometric-lens
+      - /services/geometric-lens
       - /services/inference
     target-branch: dev
     schedule:

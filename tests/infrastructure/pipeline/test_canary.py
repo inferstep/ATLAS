@@ -1117,9 +1117,15 @@ def test_a_required_check_that_is_bound_to_no_source_fails_the_check_of_the_cana
 # canary.py makes a missing folder without a word, and the check stays green on
 # the canary.
 def test_each_pytest_plant_is_written_into_the_folder_its_check_runs(manifest):
+    # A check named by a label in place of its folder (test.yml's matrix
+    # include, as for the lens's tests after their folder moved) runs the
+    # folder the label stands for.
+    workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "test.yml").read_text(encoding="utf-8"))
+    folders = {entry["label"]: entry["subset"] for entry in workflow["jobs"]["python-tests"]["strategy"]["matrix"]["include"]}
     for plant in manifest["plants"]:
         for check in plant.get("red", []):
-            folder = re.fullmatch(r"pytest \((.+)\)", check)
-            if folder and plant["action"] == "write":
-                assert plant["path"].startswith(folder.group(1) + "/"), f"{check}: its plant is written to {plant['path']}"
-                assert (ROOT / folder.group(1)).is_dir(), f"{check}: the folder {folder.group(1)} is not in this checkout"
+            named = re.fullmatch(r"pytest \((.+)\)", check)
+            if named and plant["action"] == "write":
+                folder = folders.get(named.group(1), named.group(1))
+                assert plant["path"].startswith(folder + "/"), f"{check}: its plant is written to {plant['path']}"
+                assert (ROOT / folder).is_dir(), f"{check}: the folder {folder} is not in this checkout"

@@ -607,7 +607,7 @@ def _install_artifacts(m: model_registry.Model, models_dir: str,  # noqa: C901
             and m.lens_artifact_url_base
             and m.lens_artifact_files):
         # Target dir: the registry's per-model resolution (model override
-        # > ATLAS_LENS_MODELS > <atlas_root>/geometric-lens/geometric_lens/
+        # > ATLAS_LENS_MODELS > <atlas_root>/services/geometric-lens/geometric_lens/
         # models/) so downloads land where the lens service reads them.
         atlas_root = _find_atlas_root()
         lens_dir = model_registry.lens_artifact_dir_for(m, atlas_root)
@@ -622,7 +622,7 @@ def _install_artifacts(m: model_registry.Model, models_dir: str,  # noqa: C901
                     os.path.normpath(os.path.join(atlas_root, env_dir))
             else:
                 lens_dir = os.path.normpath(os.path.join(
-                    atlas_root, "geometric-lens", "geometric_lens", "models"))
+                    atlas_root, "services", "geometric-lens", "geometric_lens", "models"))
         try:
             os.makedirs(lens_dir, exist_ok=True)
         except OSError as e:

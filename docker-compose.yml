@@ -127,7 +127,7 @@ services:
     # Part of the memory envelope; measured peak 1.56 GiB.
     mem_limit: ${ATLAS_LENS_MEM:-1792m}
     build:
-      context: ./geometric-lens
+      context: ./services/geometric-lens
     # The installing user's ids, written by `atlas init`; all five services run as that user.
     user: "${ATLAS_PROXY_UID:-1000}:${ATLAS_PROXY_GID:-1000}"
     environment:
@@ -145,7 +145,7 @@ services:
       - ATLAS_LOG_FORMAT=${ATLAS_LOG_FORMAT:-}
       - ATLAS_SERVICE_TOKEN_FILE=/run/atlas-secrets/service-token
     volumes:
-      - ${ATLAS_LENS_MODELS:-./geometric-lens/geometric_lens/models}:/app/geometric_lens/models:ro
+      - ${ATLAS_LENS_MODELS:-./services/geometric-lens/geometric_lens/models}:/app/geometric_lens/models:ro
       - ${ATLAS_SECRETS_DIR:-./secrets}:/run/atlas-secrets:ro
     ports:
       - "127.0.0.1:${ATLAS_LENS_PORT:-8099}:8099"

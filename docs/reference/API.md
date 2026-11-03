@@ -958,7 +958,7 @@ curl http://localhost:8070/health
 
 Energy-based code scoring using C(x) cost field and G(x) quality prediction. Every route is internal to the stack — its callers are the proxy, v3-service, the CLI's benchmark runner and `atlas doctor`.
 
-> **Internal port:** The container binds uvicorn to **8099** (`geometric-lens/Dockerfile`, `EXPOSE 8099`). Docker Compose maps host 8099 → container 8099. Bare-metal launches with the same `--port 8099` default. K3s deployments expose `ATLAS_LENS_NODEPORT` (default 31144) externally.
+> **Internal port:** The container binds uvicorn to **8099** (`services/geometric-lens/Dockerfile`, `EXPOSE 8099`). Docker Compose maps host 8099 → container 8099. Bare-metal launches with the same `--port 8099` default. K3s deployments expose `ATLAS_LENS_NODEPORT` (default 31144) externally.
 
 ### POST /internal/lens/gx-score
 
@@ -1037,7 +1037,7 @@ It also carries the embedding capacity contract: `embed_capacity_tokens` (the lo
 curl http://localhost:8099/ready
 ```
 
-Readiness probe (`geometric-lens/main.py`). Flips to 503 when scoring is degraded (lens weights missing, embedding-dim mismatch). It answers 200 for a lens with no G(x) model, so the atlas-proxy asks this and then the lens `/health` before it accepts a request ([ADR 0011](../adr/0011-the-lens-is-required.md)); its `/health` and `/ready` report the result as `lens_ready`. The payload repeats `embed_capacity_tokens`; the capacity never changes the verdict.
+Readiness probe (`services/geometric-lens/main.py`). Flips to 503 when scoring is degraded (lens weights missing, embedding-dim mismatch). It answers 200 for a lens with no G(x) model, so the atlas-proxy asks this and then the lens `/health` before it accepts a request ([ADR 0011](../adr/0011-the-lens-is-required.md)); its `/health` and `/ready` report the result as `lens_ready`. The payload repeats `embed_capacity_tokens`; the capacity never changes the verdict.
 
 ### Additional endpoints
 

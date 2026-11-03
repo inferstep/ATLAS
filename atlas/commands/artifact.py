@@ -30,7 +30,7 @@ BUNDLE_FILES = [
 
 def _default_dir() -> str:
     root = cli_env.atlas_root()
-    return os.path.join(root, "geometric-lens", "geometric_lens", "models")
+    return os.path.join(root, "services", "geometric-lens", "geometric_lens", "models")
 
 
 def _verify(bundle_dir: str) -> int:

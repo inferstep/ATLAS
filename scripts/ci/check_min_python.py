@@ -36,7 +36,7 @@ ROOT = Path(__file__).resolve().parents[2]
 # interpreter — `atlas bench` and `atlas lens build` are driven from the
 # host, not a container, so the floor applies the same way (the bench
 # harness itself lives under atlas/).
-DEFAULT_TARGETS = ("atlas", "geometric-lens", "services/v3-service", "services/sandbox",
+DEFAULT_TARGETS = ("atlas", "services/geometric-lens", "services/v3-service", "services/sandbox",
                    "scripts", "tests")
 
 # Directories that never ship to a user's interpreter.

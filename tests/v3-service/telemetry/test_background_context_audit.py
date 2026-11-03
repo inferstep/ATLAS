@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
-SERVICES = ["services/v3-service", "geometric-lens", "services/sandbox"]
+SERVICES = ["services/v3-service", "services/geometric-lens", "services/sandbox"]
 
 # Constructs that start work somewhere the current context does not follow by
 # itself. asyncio.create_task is deliberately NOT here: it copies the current

@@ -46,7 +46,7 @@ FOLDER_SOFT_MAX = 25
 FLAT_BY_NECESSITY = {".github/workflows"}
 
 GO_DIRS = ("services/proxy", "clients/tui")
-PY_DIRS = ("atlas", "services/v3-service", "geometric-lens", "services/sandbox", "scripts")
+PY_DIRS = ("atlas", "services/v3-service", "services/geometric-lens", "services/sandbox", "scripts")
 SKIP_DIRS = {"tests", "test", "node_modules", ".venv", "__pycache__", "vendor"}
 # The Go package that may only shrink: the files directly in this folder.
 MAIN_PACKAGE = "services/proxy"

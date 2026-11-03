@@ -891,7 +891,7 @@ def test_a_settings_file_with_no_name_of_the_model_stops_the_run_before_the_stac
     assert "driver" not in night.did()
 
 
-@pytest.mark.parametrize("line", ["", "ATLAS_LENS_MODELS=./geometric-lens/geometric_lens/models\n", "ATLAS_LENS_MODELS=~/lens\n"],
+@pytest.mark.parametrize("line", ["", "ATLAS_LENS_MODELS=./services/geometric-lens/geometric_lens/models\n", "ATLAS_LENS_MODELS=~/lens\n"],
                          ids=["no line", "a relative folder", "a folder that compose does not expand"])
 def test_a_settings_file_with_no_full_path_of_the_lens_files_fails_the_run_before_the_stack(tmp_path, line):
     # The run's own copy of the repository has no cost_field.pt, so a lens that reads that copy cannot score.

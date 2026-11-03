@@ -45,7 +45,7 @@ _SYSTEM_PROMPT = (
 def _service_token() -> str:
     """The install's service token, found as atlas/token.py finds it; "" when it has none."""
     explicit = os.environ.get("ATLAS_SERVICE_TOKEN_FILE", "").strip()
-    path = Path(explicit) if explicit else Path(__file__).resolve().parents[2] / "secrets" / "service-token"
+    path = Path(explicit) if explicit else Path(__file__).resolve().parents[3] / "secrets" / "service-token"
     try:
         return path.read_text(encoding="utf-8").strip()
     except FileNotFoundError:

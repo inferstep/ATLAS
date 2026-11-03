@@ -716,7 +716,7 @@ func probeASAStatus() ASAStatus {
 	out.Hint = "no control vector at " + configured +
 		" (also tried workspace/models/ + ATLAS_MODELS_DIR) — " +
 		"build one via `atlas asa build` " +
-		"or see geometric-lens/asa_calibration/README.md"
+		"or see services/geometric-lens/asa_calibration/README.md"
 	return out
 }
 

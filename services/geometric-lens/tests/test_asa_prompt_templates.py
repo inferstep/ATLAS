@@ -89,6 +89,22 @@ def test_the_prompt_build_sends_the_installs_token(tmp_path, monkeypatch):
     assert sent[0].get_header("Authorization") == "Bearer the-token"
 
 
+def test_the_prompt_build_falls_back_to_the_checkouts_secrets_folder(monkeypatch):
+    # With no token file named, the build reads the checkout's own
+    # secrets/service-token, at the root of the repository.
+    module = _load("build_cvector_prompts.py")
+    monkeypatch.delenv("ATLAS_SERVICE_TOKEN_FILE", raising=False)
+    read = []
+
+    def not_there(self, *args, **kwargs):
+        read.append(self)
+        raise FileNotFoundError(self)
+
+    monkeypatch.setattr(Path, "read_text", not_there)
+    assert module._service_token() == ""
+    assert read == [ROOT.parents[1] / "secrets" / "service-token"]
+
+
 def test_the_prompt_build_sends_no_token_on_an_install_without_one(tmp_path, monkeypatch):
     module = _load("build_cvector_prompts.py")
     monkeypatch.setenv("ATLAS_SERVICE_TOKEN_FILE", str(tmp_path / "no-such-file"))

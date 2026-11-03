@@ -71,7 +71,7 @@ PYTEST_FAILURE = re.compile(r"^_{3,} (.+?) _{3,}$")
 FRAME = re.compile(r"^(\S+?):\d+: in ")
 ISOLATE_AT_MOST = 6
 # Test folders whose packages the job does not install (the lens needs torch).
-NOT_INSTALLED = ("geometric-lens/",)
+NOT_INSTALLED = ("services/geometric-lens/",)
 
 
 class CannotJudge(Exception):

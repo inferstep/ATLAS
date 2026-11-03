@@ -14,7 +14,7 @@ issue.
 
 ATLAS is a local coding agent made of a few services: the Go agent loop
 (`services/proxy/`), the terminal client (`clients/tui/`), the Python CLI (`atlas/`), the V3
-candidate pipeline (`services/v3-service/`), the Geometric Lens (`geometric-lens/`),
+candidate pipeline (`services/v3-service/`), the Geometric Lens (`services/geometric-lens/`),
 the sandbox (`services/sandbox/`) and the llama.cpp images (`services/inference/`).
 [The repository map](../docs/README.md#repository-map) says what every directory owns, and
 [ARCHITECTURE.md](../docs/reference/ARCHITECTURE.md) explains how the pieces work
@@ -385,7 +385,7 @@ container, meaningful names and labels.
 ```bash
 # The gate's Python test gates cover the suites CI runs:
 # tests/v3-service, tests/atlas, tests/infrastructure, tests/concurrency,
-# tests/perf, tests/contracts and tests/e2e; geometric-lens/tests runs in
+# tests/perf, tests/contracts and tests/e2e; services/geometric-lens/tests runs in
 # its own process (CPU torch is enough).
 python scripts/ci/production-readiness.py
 
@@ -442,7 +442,7 @@ rebuild loop.
 
 ### When to use dev mode
 
-Use it when you are actively editing Python in `geometric-lens/` or
+Use it when you are actively editing Python in `services/geometric-lens/` or
 `services/v3-service/`, or Go in `services/proxy/`. Skip it for one-off
 contributions where a single rebuild is acceptable.
 
@@ -467,9 +467,9 @@ changes to the `.example` file instead.
 
 #### geometric-lens
 
-The override bind-mounts `./geometric-lens` over `/app` and switches
+The override bind-mounts `./services/geometric-lens` over `/app` and switches
 the command to `uvicorn ... --reload`. Editing any `.py` file under
-`geometric-lens/` reloads the worker within ~1 second; you do not
+`services/geometric-lens/` reloads the worker within ~1 second; you do not
 need to restart the container.
 
 Verify the reloader is active:

@@ -453,7 +453,7 @@ What actually holds state, where it lives, and what losing it costs.
 |---|---|---|---|
 | Configuration | `.env` (+ `atlas.conf` for K3s) | Re-run `atlas init` | copy the file |
 | Models | `ATLAS_MODELS_DIR` (default `./models`) | Re-download (hash-verified) | optional — large, re-fetchable |
-| Lens/ASA bundles | `geometric-lens/geometric_lens/models/` + `models/*.gguf(.model)` | Published bundles re-download; **locally-trained calibration does not** | copy the dir after any `atlas lens build` |
+| Lens/ASA bundles | `services/geometric-lens/geometric_lens/models/` + `models/*.gguf(.model)` | Published bundles re-download; **locally-trained calibration does not** | copy the dir after any `atlas lens build` |
 | Lens training data | `benchmark/results/` | Lose the ability to rebuild calibration from your own bench runs | copy before pruning |
 | TUI sessions | `<user cache dir>/atlas-tui/sessions/` (`~/.cache/atlas-tui/sessions/` on Linux, `~/Library/Caches/atlas-tui/sessions/` on macOS) | Lose `--resume` history | copy the dir |
 | Secrets | `secrets/` (`service-token`, `api-keys.json`) | Clients need new API keys | copy the dir (`atlas init` makes new ones) |

@@ -17,7 +17,7 @@ REPO = Path(__file__).resolve().parents[3]
 
 
 def _provenance_bundle_files():
-    tree = ast.parse((REPO / "geometric-lens" / "geometric_lens" / "provenance.py").read_text())
+    tree = ast.parse((REPO / "services" / "geometric-lens" / "geometric_lens" / "provenance.py").read_text())
     for node in tree.body:
         if isinstance(node, ast.Assign) and any(
                 getattr(t, "id", "") == "BUNDLE_FILES" for t in node.targets):

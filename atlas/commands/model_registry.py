@@ -47,7 +47,7 @@ Schema notes:
   model's Lens artifacts live. None = use the global
   ATLAS_LENS_MODELS dir (current single-model layout). When PC-058's
   per-model training pipeline lands, each entry will populate this
-  with `geometric-lens/geometric_lens/models/<model_name>/` or similar.
+  with `services/geometric-lens/geometric_lens/models/<model_name>/` or similar.
 - `lens_artifact_files` (PC-056.1): list of files that must exist in
   the artifact dir for `lens_status: supported` to be honest. Doctor's
   tier_match cross-checks this — if a model claims supported but
@@ -190,7 +190,7 @@ def _unsloth_qwen35_9b_url(file: str) -> str:
 #
 # Truthful state today:
 #   - 9B Q6_K: SUPPORTED. Public unsloth/Qwen3.5-9B-GGUF, trained metric
-#     tensor + embeddings in geometric-lens/geometric_lens/models/.
+#     tensor + embeddings in services/geometric-lens/geometric_lens/models/.
 #   - 9B Q4_K_M / Q8_0: NO-ARTIFACTS. Same model family as Q6_K, but the
 #     lens loads a bundle only for the model it was built for (same model
 #     name and embedding size: identity_matches in
@@ -620,7 +620,7 @@ def lens_artifact_dir_for(model: Model, atlas_root: str) -> Optional[str]:
     Resolution:
       1. model.lens_artifact_dir if set (PC-058 future per-model layout)
       2. else: ATLAS_LENS_MODELS env var if set
-      3. else: <atlas_root>/geometric-lens/geometric_lens/models/
+      3. else: <atlas_root>/services/geometric-lens/geometric_lens/models/
 
     Returns the resolved absolute path, or None for models that don't
     claim Lens support (lens_status != "supported"). Callers should
@@ -640,7 +640,7 @@ def lens_artifact_dir_for(model: Model, atlas_root: str) -> Optional[str]:
         return env if os.path.isabs(env) else \
             os.path.normpath(os.path.join(atlas_root, env))
     return os.path.normpath(os.path.join(
-        atlas_root, "geometric-lens", "geometric_lens", "models"))
+        atlas_root, "services", "geometric-lens", "geometric_lens", "models"))
 
 
 def lens_artifacts_present(model: Model, atlas_root: str) -> Dict:

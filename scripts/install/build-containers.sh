@@ -96,7 +96,7 @@ main() {
     # context because services/v3-service/Dockerfile reads sibling dirs at build time.
     declare -a IMAGES=(
         "atlas-llama|inference|services/inference/Dockerfile.v31"
-        "atlas-lens|geometric-lens|geometric-lens/Dockerfile"
+        "atlas-lens|geometric-lens|services/geometric-lens/Dockerfile"
         "atlas-proxy|services/proxy|services/proxy/Dockerfile"
         "atlas-sandbox|services/sandbox|services/sandbox/Dockerfile"
         "atlas-v3|.|services/v3-service/Dockerfile"

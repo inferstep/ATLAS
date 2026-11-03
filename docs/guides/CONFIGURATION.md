@@ -170,7 +170,7 @@ stops at the one step only you can do (the rebuild); the manual flow is:
    atlas bench --run-id mymodel_lens --tasks 200
 
    # 2. Retrain C(x) on those candidates. --force overwrites existing
-   #    artifacts (writes geometric-lens/geometric_lens/models/cost_field.pt)
+   #    artifacts (writes services/geometric-lens/geometric_lens/models/cost_field.pt)
    atlas lens build --force --from-results benchmark/results/mymodel_lens/v3_lcb/per_task
 
    # 3. ASA control vector; defaults to 75% of the loaded model's layer count
@@ -203,7 +203,7 @@ stops at the one step only you can do (the rebuild); the manual flow is:
    step 2. The build uses the 5th, 10th, and 20th percentiles of this model's
    passing scores for `severe`, `off_rails`, and `low`, then writes
    `gx_thresholds.json`
-   into `geometric-lens/geometric_lens/models/`. It publishes/downloads with the
+   into `services/geometric-lens/geometric_lens/models/`. It publishes/downloads with the
    rest of the lens artifacts. (`atlas lens build` emits this file
    automatically, calibrated from the run's `pass` percentiles.)
 
@@ -576,7 +576,7 @@ table; bootstrap-only knobs (`ATLAS_BOOTSTRAP_*` and friends) in
 | `ATLAS_AUTO_WORKSPACE` | `1` | On TUI launch, the CLI checks whether the Docker proxy/sandbox `/workspace` binds cover your cwd and recreates those containers pointed at your project when they don't. Set `0` to keep whatever bind the containers already have. |
 | `ATLAS_MODELS_DIR` | `./models` | Host directory holding GGUF model files (used by `atlas doctor` and `atlas model`). |
 | `ATLAS_MODEL_FILE` | **required** | Selected model filename inside `ATLAS_MODELS_DIR`. |
-| `ATLAS_LENS_MODELS` | `./geometric-lens/geometric_lens/models` | Host path that maps to the lens's weight directory. Used by `atlas doctor` so it checks the same directory Docker bind-mounts into the lens container. |
+| `ATLAS_LENS_MODELS` | `./services/geometric-lens/geometric_lens/models` | Host path that maps to the lens's weight directory. Used by `atlas doctor` so it checks the same directory Docker bind-mounts into the lens container. |
 | `ATLAS_MODEL_NAME` | `local-model` | Neutral fallback request identifier; normal installs set the selected model |
 | `HF_TOKEN` | (unset) | HuggingFace write token used by `atlas lens publish` / `atlas asa publish` for artifact upload. Get one at https://huggingface.co/settings/tokens (scope: write). `HUGGINGFACE_HUB_TOKEN` and `HUGGING_FACE_HUB_TOKEN` are also honored. Full walkthrough: [PUBLISHING.md](../project/PUBLISHING.md). |
 | `ATLAS_BACKEND` | `cuda` (default) / `rocm` / `vulkan` / `metal` | Which llama-server build dispatch path is active. Written by `atlas init` based on GPU vendor (or `--backend vulkan` override). The entrypoint reads this to pick vendor-specific runtime flags. `vulkan` is the universal fallback: it covers AMD/Intel/Snapdragon/Apple-via-MoltenVK/CPU with one image. `metal` is the macOS hybrid (native llama-server + Docker for the rest, [SETUP_MACOS.md](SETUP_MACOS.md)). See [SETUP.md § Vulkan](SETUP.md). |

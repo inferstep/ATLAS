@@ -570,7 +570,7 @@ go build -o ~/.local/bin/atlas-proxy-v2 .
 cd ../..
 
 # 4. Install geometric-lens Python dependencies
-pip install -r geometric-lens/requirements.txt
+pip install -r services/geometric-lens/requirements.txt
 
 # 5. Install V3 service dependencies
 pip install -r services/v3-service/requirements.txt
@@ -596,7 +596,7 @@ llama-server \
 
 # Terminal 2: Geometric Lens (required: the proxy refuses requests while it
 # cannot score)
-cd geometric-lens
+cd services/geometric-lens
 LLAMA_URL=http://localhost:8080 \
 LLAMA_EMBED_URL=http://localhost:8080 \
 python -m uvicorn main:app --host 0.0.0.0 --port 8099
@@ -881,7 +881,7 @@ Models listed with lens artifacts in [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md) get 
 
 **[ATLAS Dataset on HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS)** — includes embeddings, training data, and weight files.
 
-Place weight files in `geometric-lens/geometric_lens/models/` (or mount via `ATLAS_LENS_MODELS` in Docker Compose). The service loads them automatically on startup.
+Place weight files in `services/geometric-lens/geometric_lens/models/` (or mount via `ATLAS_LENS_MODELS` in Docker Compose). The service loads them automatically on startup.
 
 For a model with no weights, build them from your own benchmark data. `atlas bench` runs the model on the benchmark tasks directly (baseline mode: V3 stages off, one candidate per task), not through the proxy, so it works before the lens has weights. The whole loop is CLI-driven:
 
@@ -953,7 +953,7 @@ without it, just with an unsteered tool-selection bias.
 up. The pipeline is:
 
 1. `build_cvector_prompts.py` turns
-   `geometric-lens/asa_calibration/contrast_pairs.jsonl` (1000 pairs,
+   `services/geometric-lens/asa_calibration/contrast_pairs.jsonl` (1000 pairs,
    generated on demand by `generate_pairs.py`) into positive / negative
    prompt files.
 2. The bootstrap stops `llama-server` briefly, runs
@@ -997,7 +997,7 @@ running the installer.
 
 To rebuild manually (re-curated pairs, different `--method`, different
 base model), see
-[`geometric-lens/asa_calibration/README.md`](../../geometric-lens/asa_calibration/README.md).
+[`services/geometric-lens/asa_calibration/README.md`](../../services/geometric-lens/asa_calibration/README.md).
 
 ---
 

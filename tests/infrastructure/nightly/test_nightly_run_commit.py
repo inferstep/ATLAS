@@ -71,8 +71,8 @@ ON_DEV = {
     "scripts/smoke_result.py": "# the mark script of dev\n",
     "services/proxy/Dockerfile": "FROM scratch\n# the proxy of dev\n", "services/proxy/prompt.go": "package main\n",
     "services/v3-service/Dockerfile": "FROM scratch\n# v3 of dev\n", "services/v3-service/main.py": "# of dev\n",
-    "geometric-lens/Dockerfile": "FROM scratch\n# the lens of dev\n", "geometric-lens/main.py": "# of dev\n",
-    "geometric-lens/geometric_lens/models/gx_weights.json": "{}\n",
+    "services/geometric-lens/Dockerfile": "FROM scratch\n# the lens of dev\n", "services/geometric-lens/main.py": "# of dev\n",
+    "services/geometric-lens/geometric_lens/models/gx_weights.json": "{}\n",
     "services/sandbox/Dockerfile": "FROM scratch\n# the sandbox of dev\n", "services/sandbox/executor_server.py": "# of dev\n",
     "services/inference/Dockerfile.v31": "FROM scratch\n", "services/inference/entrypoint-v3.1.sh": "#!/bin/sh\n",
     "tests/replay/recordings/one.json": "{}\n", "docs/API.md": "the page\n",
@@ -254,7 +254,7 @@ def test_the_image_is_built_from_the_commits_files_and_the_tree_of_the_run_stays
 
 @pytest.mark.parametrize("service, changed, context, holds", [
     pytest.param("atlas-proxy", "services/proxy/prompt.go", "services/proxy", ["Dockerfile", "prompt.go"], id="proxy"),
-    pytest.param("geometric-lens", "geometric-lens/main.py", "geometric-lens", ["Dockerfile", "geometric_lens", "main.py"],
+    pytest.param("geometric-lens", "services/geometric-lens/main.py", "services/geometric-lens", ["Dockerfile", "geometric_lens", "main.py"],
                  id="lens"),
     pytest.param("sandbox", "services/sandbox/executor_server.py", "services/sandbox", ["Dockerfile", "executor_server.py"], id="sandbox"),
     # The build of v3-service has the whole repository as its context. The copy holds only what that build reads.
@@ -524,7 +524,7 @@ TAKEN_FROM_DEV = [
     ("services/inference/Dockerfile.v31", "the model server, whose image is never built on the server and whose start script the stack mounts from the tree"),
     ("services/inference/entrypoint-v3.1.sh", "the model server, whose image is never built on the server and whose start script the stack mounts from the tree"),
     ("services/inference/a-new-file.sh", "the model server, whose image is never built on the server and whose start script the stack mounts from the tree"),
-    ("geometric-lens/geometric_lens/models/gx_weights.json", "the model files of the lens, which the stack mounts"),
+    ("services/geometric-lens/geometric_lens/models/gx_weights.json", "the model files of the lens, which the stack mounts"),
 ]
 
 
@@ -924,7 +924,7 @@ def test_every_file_of_the_repository_that_the_stack_reads_through_a_mount_is_on
             in_git = found and any(name == found.group()[2:] or name.startswith(found.group()[2:] + "/") for name in tracked)
             if in_git and volume.endswith(":ro"):
                 mounted.append(found.group()[2:] + ("/" if (ROOT / found.group()).is_dir() else ""))
-    assert sorted(mounted) == ["geometric-lens/geometric_lens/models/", "services/inference/entrypoint-v3.1.sh"], mounted
+    assert sorted(mounted) == ["services/geometric-lens/geometric_lens/models/", "services/inference/entrypoint-v3.1.sh"], mounted
     for path in mounted:
         assert any(path.startswith(folder) for folder in nightly.FROM_DEV if folder.endswith("/")), \
             f"the stack mounts {path} from the tree, which holds dev; a commit that changes it has to be refused"

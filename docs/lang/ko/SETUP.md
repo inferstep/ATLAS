@@ -527,7 +527,7 @@ go build -o ~/.local/bin/atlas-proxy-v2 .
 cd ../..
 
 # 4. Install geometric-lens Python dependencies
-pip install -r geometric-lens/requirements.txt
+pip install -r services/geometric-lens/requirements.txt
 
 # 5. Install V3 service dependencies
 pip install -r services/v3-service/requirements.txt
@@ -553,7 +553,7 @@ llama-server \
 
 # Terminal 2: Geometric Lens (필수: 점수를 산출할 수 없는 동안 프록시가
 # 요청을 거부합니다)
-cd geometric-lens
+cd services/geometric-lens
 LLAMA_URL=http://localhost:8080 \
 LLAMA_EMBED_URL=http://localhost:8080 \
 python -m uvicorn main:app --host 0.0.0.0 --port 8099
@@ -818,7 +818,7 @@ ATLAS는 모든 요청에 Geometric Lens를 사용합니다([ADR 0011](../../adr
 
 **[HuggingFace의 ATLAS 데이터셋](https://huggingface.co/datasets/itigges22/ATLAS)** — 임베딩, 학습 데이터, 가중치 파일이 포함되어 있습니다.
 
-가중치 파일을 `geometric-lens/geometric_lens/models/`에 배치하거나 Docker Compose에서 `ATLAS_LENS_MODELS`를 통해 마운트하세요. 서비스가 시작 시 자동으로 로드합니다.
+가중치 파일을 `services/geometric-lens/geometric_lens/models/`에 배치하거나 Docker Compose에서 `ATLAS_LENS_MODELS`를 통해 마운트하세요. 서비스가 시작 시 자동으로 로드합니다.
 
 가중치가 없는 모델은 자체 벤치마크 데이터로 가중치를 만드세요. `atlas bench`는 프록시를 거치지 않고 V3 단계를 직접 실행하므로, 렌즈에 가중치가 없는 상태에서도 동작합니다. 전체 루프가 CLI로 완결됩니다:
 
@@ -883,7 +883,7 @@ mkdir -p secrets     # or set ATLAS_SECRETS_DIR
 
 `atlas-bootstrap.sh`가 서비스 기동 후 자동으로 빌드합니다. 파이프라인은 다음과 같습니다:
 
-1. `build_cvector_prompts.py`가 커밋된 `geometric-lens/asa_calibration/contrast_pairs.jsonl`(1000쌍)을 양성/음성 프롬프트 파일로 변환합니다.
+1. `build_cvector_prompts.py`가 커밋된 `services/geometric-lens/asa_calibration/contrast_pairs.jsonl`(1000쌍)을 양성/음성 프롬프트 파일로 변환합니다.
 2. 부트스트랩이 `llama-server`를 잠시 중지하고, `--method mean -ngl 99` 옵션으로 `llama-cvector-generator`를 원샷 컨테이너로 실행하여 `models/ast_edit_steering.gguf`와, 벡터가 어느 모델에 대해 빌드되었는지 기록하는 `models/ast_edit_steering.gguf.model` 사이드카 마커를 쓴 뒤, `llama-server`를 재시작합니다.
 3. `services/inference/entrypoint-v3.1.sh`가 다음 시작 시 파일을 발견하면, `.model` 사이드카 마커가 선택된 모델과 일치하는지 확인하고 `llama-server` 명령줄에 `--control-vector-scaled /models/ast_edit_steering.gguf:0.5`를 덧붙입니다. 마커가 없거나 다른 모델을 지명하는 벡터는 **비활성화** 상태로 유지됩니다(시작 배너가 이유를 보고합니다) — 벡터는 한 모델에 묶인 residual-space 아티팩트입니다.
 
@@ -902,7 +902,7 @@ mkdir -p secrets     # or set ATLAS_SECRETS_DIR
 
 빌드를 완전히 건너뛰려면 설치 프로그램 실행 전에 `ATLAS_BOOTSTRAP_SKIP_ASA=1`을 설정하세요.
 
-수동 재빌드(재선별된 쌍, 다른 `--method`, 다른 베이스 모델)는 [`geometric-lens/asa_calibration/README.md`](../../../geometric-lens/asa_calibration/README.md)를 참고하세요.
+수동 재빌드(재선별된 쌍, 다른 `--method`, 다른 베이스 모델)는 [`services/geometric-lens/asa_calibration/README.md`](../../../services/geometric-lens/asa_calibration/README.md)를 참고하세요.
 
 ---
 
