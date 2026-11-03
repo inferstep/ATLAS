@@ -951,8 +951,11 @@ class V3Handler(BaseHTTPRequestHandler):
                 declared = REFUSED_BODY_DRAIN_BYTES
             left = min(max(declared, 0), REFUSED_BODY_DRAIN_BYTES)
             deadline = time.monotonic() + REFUSED_BODY_DRAIN_SECONDS
-            while left > 0 and time.monotonic() < deadline:
-                self.connection.settimeout(deadline - time.monotonic())
+            while left > 0:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self.connection.settimeout(remaining)
                 chunk = self.rfile.read1(left)
                 if not chunk:
                     break
