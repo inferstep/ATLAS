@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // writeTree writes each file of files under root, creating its directories.
@@ -175,8 +177,8 @@ func TestRouteContractFindingsStandApartFromTheAdvice(t *testing.T) {
 		t.Errorf("assetLintFindings = %q, want the advice and then the unserved target", got)
 	}
 
-	ctx := NewAgentContext(root, Tier2Medium)
-	note := assetLintNote(ctx)
+	var notes assetLintNotes
+	note := notes.note(root)
 	for _, want := range []string{
 		"Project structure check: " + orphan + " This is advisory",
 		"Route check: " + unserved + " This is a defect, not advice: that page cannot submit.",
@@ -185,7 +187,24 @@ func TestRouteContractFindingsStandApartFromTheAdvice(t *testing.T) {
 			t.Errorf("note missing %q:\n%s", want, note)
 		}
 	}
-	if again := assetLintNote(ctx); again != "" {
+	if again := notes.note(root); again != "" {
 		t.Errorf("findings the note already named must not repeat, got %q", again)
+	}
+}
+
+// After a successful write, the loop lints the run's own folder and adds what it
+// found to the conversation as a note.
+func TestASuccessfulWriteGetsTheAssetLintNoteForItsFolder(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"app.py":               "@app.route('/')\ndef index():\n    return 'home'\n",
+		"templates/index.html": "<form method=\"POST\" action=\"/add_book\"></form>",
+	})
+	ctx := &AgentContext{runSetup: runSetup{WorkingDir: root}}
+
+	noteCrossFileCoherence(ctx, 1, wire.ModelResponse{Name: "write_file"}, &wire.ToolResult{Success: true})
+
+	if len(ctx.Messages) != 1 || !strings.Contains(ctx.Messages[0].Content, `Route check: templates/index.html calls "/add_book"`) {
+		t.Errorf("messages = %v, want one note with the route check for the run's folder", ctx.Messages)
 	}
 }

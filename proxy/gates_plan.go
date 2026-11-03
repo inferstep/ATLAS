@@ -388,7 +388,7 @@ func revisePlan(ctx *AgentContext, originalUserMessage string, reason string) {
 	// concrete signal of "what the agent knows now" beyond the
 	// original priority-files sample.
 	pctx := samplePlanContext(ctx.WorkingDir, 6, 2000)
-	addFilesReadToPlanContext(ctx, pctx, 8)
+	addFilesReadToPlanContext(pctx, ctx.SnapshotFilesRead(), ctx.WorkingDir, 8)
 
 	req := wire.V3PlanRequest{
 		UserMessage:    noted,

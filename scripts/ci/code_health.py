@@ -7,6 +7,11 @@ listed in .github/code-health-baseline.json with its size then. It may
 shrink but not grow. So the check stops new oversized code and keeps the
 old from getting worse while it is refactored.
 
+The proxy's main package may not gain a file: its file count is pinned in
+the baseline as well, so a new subject goes into its own package under
+proxy/internal/ instead of the flat folder. Its line count is printed on
+every run, as a trend, and never fails.
+
 It also names the folders with more than FOLDER_SOFT_MAX entries. That is a
 note and never a failure: a sub-folder that makes a list harder to read is no
 gain, so a folder can stay flat with a reason.
@@ -43,6 +48,8 @@ FLAT_BY_NECESSITY = {".github/workflows"}
 GO_DIRS = ("proxy", "tui")
 PY_DIRS = ("atlas", "v3-service", "geometric-lens", "sandbox", "scripts")
 SKIP_DIRS = {"tests", "test", "node_modules", ".venv", "__pycache__", "vendor"}
+# The Go package that may only shrink: the files directly in this folder.
+MAIN_PACKAGE = "proxy"
 GO_FUNC = re.compile(r"^func (?:\(\w+ \*?(\w+)(?:\[[^\]]*\])?\) )?(\w+)")
 
 
@@ -115,6 +122,36 @@ def measure() -> tuple:
     return funcs, files, totals
 
 
+def main_package_size() -> dict:
+    """{"files": n, "lines": n} for the non-test Go files directly in MAIN_PACKAGE."""
+    size = {"files": 0, "lines": 0}
+    folder = os.path.join(ROOT, MAIN_PACKAGE)
+    for name in sorted(os.listdir(folder)):
+        if not name.endswith(".go") or name.endswith("_test.go"):
+            continue
+        with open(os.path.join(folder, name), encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+        size["files"] += 1
+        size["lines"] += text.count("\n") + (0 if text.endswith("\n") else 1)
+    return size
+
+
+def main_package_problems(size: dict, base: dict) -> list:
+    """A failure when the main package has more files than its pin, or no pin.
+
+    A missing pin fails rather than passes: the integrity check reads a removed
+    baseline entry as a tightening, and for this pin a removal loosens the check.
+    """
+    pinned = base.get("proxy_main", {}).get("files")
+    if pinned is None:
+        return [f"{MAIN_PACKAGE}'s main package has no pinned file count in the baseline; "
+                "run scripts/ci/code_health.py --update"]
+    if size["files"] <= pinned:
+        return []
+    return [f"{MAIN_PACKAGE}'s main package grew: files {pinned} -> {size['files']}; "
+            f"a new subject goes into its own package under {MAIN_PACKAGE}/internal/"]
+
+
 def tracked_paths() -> list:
     """Every path git tracks. With no git or no checkout there are none, so no note."""
     try:
@@ -162,11 +199,13 @@ def main() -> int:
     mode.add_argument("--report", action="store_true")
     a = ap.parse_args()
     funcs, files, totals = measure()
+    main_size = main_package_size()
 
     if a.update:
         with open(BASELINE, "w", encoding="utf-8") as fh:
             json.dump({"limits": {"function_lines": FUNC_MAX, "file_lines": FILE_MAX},
-                       "functions": dict(sorted(funcs.items())), "files": dict(sorted(files.items()))},
+                       "functions": dict(sorted(funcs.items())), "files": dict(sorted(files.items())),
+                       "proxy_main": {"files": main_size["files"]}},
                       fh, indent=1)
             fh.write("\n")
         print(f"baseline written: {len(funcs)} functions over {FUNC_MAX}, {len(files)} files over {FILE_MAX}")
@@ -180,9 +219,12 @@ def main() -> int:
         return 0
 
     base = load_baseline()
-    problems = check(funcs, files, base)
-    shrunk = [k for kind, cur in (("functions", funcs), ("files", files))
+    problems = check(funcs, files, base) + main_package_problems(main_size, base)
+    shrunk = [k for kind, cur in (("functions", funcs), ("files", files), ("proxy_main", main_size))
               for k, v in base.get(kind, {}).items() if cur.get(k, 0) < v]
+    pinned_files = base.get("proxy_main", {}).get("files", "none")
+    print(f"note: {MAIN_PACKAGE}'s main package: {main_size['files']} files (pinned: {pinned_files}), "
+          f"{main_size['lines']:,} lines")
     for p in problems:
         print(f"FAIL {p}")
     if shrunk:

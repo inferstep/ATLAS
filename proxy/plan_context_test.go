@@ -28,10 +28,34 @@ func TestTheFilesReadThatFillAPlansContextAreTheSameEachTime(t *testing.T) {
 	want := []string{"f00.py", "f01.py", "f02.py", "f03.py", "f04.py", "f05.py", "f06.py", "f07.py"}
 	for try := 1; try <= 100; try++ {
 		pctx := map[string]string{}
-		addFilesReadToPlanContext(ctx, pctx, 8)
+		addFilesReadToPlanContext(pctx, ctx.SnapshotFilesRead(), dir, 8)
 		if got := slices.Sorted(maps.Keys(pctx)); !reflect.DeepEqual(got, want) {
 			t.Fatalf("try %d: %v, want %v", try, got, want)
 		}
+	}
+}
+
+// A revised plan is shown the files the run has read, under the paths the agent
+// uses for them: relative to the working folder.
+func TestARevisedPlanIsShownTheFilesReadUnderTheirRelativePaths(t *testing.T) {
+	var sent wire.V3PlanRequest
+	v3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&sent); err != nil {
+			t.Error(err)
+		}
+		http.Error(w, "the request is all this test needs", http.StatusInternalServerError)
+	}))
+	defer v3.Close()
+	dir := t.TempDir()
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.V3URL = v3.URL
+	ctx.Plan = &wire.Plan{Steps: []wire.PlanStep{{ID: "s1", Action: "read_file", Target: "app.py"}}}
+	ctx.RecordFileRead(filepath.Join(dir, "app.py"), "x = 1\n")
+
+	revisePlan(ctx, "add a health endpoint", "off-plan thrash")
+
+	if got := sent.ProjectContext["app.py"]; got != "x = 1\n" {
+		t.Errorf("the planner was sent %q under app.py (keys %v), want the file read", got, slices.Sorted(maps.Keys(sent.ProjectContext)))
 	}
 }
 
@@ -64,7 +88,7 @@ func TestEachRequestCutsAContextFileToItsLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	planContext := map[string]string{}
-	addFilesReadToPlanContext(ctx, planContext, 8)
+	addFilesReadToPlanContext(planContext, ctx.SnapshotFilesRead(), dir, 8)
 
 	mark := "\n... (truncated)"
 	for _, c := range []struct{ name, got, want string }{
