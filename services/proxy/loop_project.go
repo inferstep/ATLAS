@@ -327,7 +327,9 @@ func formatGraphNeighborhood(graph []symbolGraphNode) string {
 // detectProjectInfo scans the project root for config files and identifies
 // the language, framework, and build commands.
 func detectProjectInfo(projectDir string) *ProjectInfo {
-	entries, err := os.ReadDir(projectDir)
+	folder := workspacefs.OpenConfinedDir(projectDir)
+	defer folder.Close()
+	entries, err := folder.ReadDir()
 	if err != nil {
 		return nil
 	}
@@ -355,7 +357,7 @@ func detectProjectInfo(projectDir string) *ProjectInfo {
 	if info := detectC(fileNames); info != nil {
 		return info
 	}
-	if info := detectShell(projectDir, fileNames); info != nil {
+	if info := detectShell(fileNames); info != nil {
 		return info
 	}
 
@@ -502,12 +504,8 @@ func nodeScriptCommand(pm, script string) string {
 
 func detectPython(projectDir string, files map[string]bool) *ProjectInfo {
 	hasPython := files["pyproject.toml"] || files["setup.py"] || files[requirementsTxtFile] || files["Pipfile"]
-	if !hasPython {
-		// Check for .py files
-		entries, _ := filepath.Glob(filepath.Join(projectDir, "*.py"))
-		if len(entries) == 0 {
-			return nil
-		}
+	if !hasPython && !hasFileEndingIn(files, ".py") {
+		return nil
 	}
 
 	info := &ProjectInfo{
@@ -600,10 +598,8 @@ func detectC(files map[string]bool) *ProjectInfo {
 	return info
 }
 
-func detectShell(projectDir string, files map[string]bool) *ProjectInfo {
-	// Check for .sh files
-	entries, _ := filepath.Glob(filepath.Join(projectDir, "*.sh"))
-	if len(entries) == 0 {
+func detectShell(files map[string]bool) *ProjectInfo {
+	if !hasFileEndingIn(files, ".sh") {
 		return nil
 	}
 
@@ -613,6 +609,17 @@ func detectShell(projectDir string, files map[string]bool) *ProjectInfo {
 		Language:    "shell",
 		ConfigFiles: []string{},
 	}
+}
+
+// hasFileEndingIn looks in the names detectProjectInfo listed, not with a glob
+// of the folder's path: a "[" or "*" in the path would match other folders.
+func hasFileEndingIn(files map[string]bool, ending string) bool {
+	for name := range files {
+		if strings.HasSuffix(name, ending) {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveWorkspacePath translates an approved host path and verifies that the
