@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[3]
-SCRIPT = REPO / "scripts" / "release_changelog.py"
+SCRIPT = REPO / "scripts" / "release" / "release_changelog.py"
 CHANGELOG = ("# Changelog\n\n> A note that stays.\n\n## [Unreleased]\n\n### Fixed: an entry from before\n\nIts text.\n\n"
              "## [1.0.0] - 2026-01-01\n\n### Added: the first release\n")
 SENTENCE = ("The installer keeps its downloads in a private folder now, and a download that failed is tried again "

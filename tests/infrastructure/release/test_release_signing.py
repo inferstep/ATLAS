@@ -35,7 +35,7 @@ def test_verify_tags_workflow_verifies_signature():
 
 
 def test_release_script_signs_and_does_not_push():
-    s = (REPO / "scripts" / "release-tag.sh").read_text()
+    s = (REPO / "scripts" / "release" / "release-tag.sh").read_text()
     assert "git tag -s" in s, "release script must create a SIGNED tag"
     assert "git verify-tag" in s, "release script must verify the signature"
     # Must not auto-push — the push is a deliberate separate step.

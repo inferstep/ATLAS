@@ -6,7 +6,7 @@
 # (.github/allowed_signers). This script never pushes — it prints the
 # push command so the release is a deliberate, separate step.
 #
-# Usage:  scripts/release-tag.sh v1.2.0 ["release notes"]
+# Usage:  scripts/release/release-tag.sh v1.2.0 ["release notes"]
 #
 # One-time signing setup (per maintainer machine):
 #   ssh-keygen -t ed25519 -f ~/.ssh/atlas_release_signing -C "you@example"

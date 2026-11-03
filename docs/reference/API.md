@@ -12,7 +12,7 @@ API endpoints for each ATLAS service. All services communicate over HTTP/JSON. S
 > | sandbox | host `30820` → container `8020` | fixed `8020` (clients take `ATLAS_SANDBOX_URL`) | `ATLAS_SANDBOX_NODEPORT` (default 30820) |
 > | llama-server | `8080` | `ATLAS_LLAMA_PORT` (default 8080) | `ATLAS_LLAMA_NODEPORT` (default 32735) |
 >
-> The K3s manifests are rendered from `deploy/k3s/*.yaml.tmpl` into `$K8S_DIR/manifests/` by `scripts/install.sh` at install time. See [SETUP.md Method 3](../guides/SETUP.md) for the full K3s deployment.
+> The K3s manifests are rendered from `deploy/k3s/*.yaml.tmpl` into `$K8S_DIR/manifests/` by `scripts/install/install.sh` at install time. See [SETUP.md Method 3](../guides/SETUP.md) for the full K3s deployment.
 
 ---
 

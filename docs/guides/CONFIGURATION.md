@@ -684,7 +684,7 @@ The install scripts also honor three runtime-only env vars (not in `atlas.conf` 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ATLAS_CONFIG_FILE` | (auto) | Path override for `atlas.conf` itself. `scripts/lib/config.sh` looks at this before falling back to `$K8S_DIR/atlas.conf`. |
-| `ATLAS_AUTO_CONFIRM` | `false` | Set to `true` in the environment to skip the interactive install prompts in `scripts/install.sh` |
+| `ATLAS_AUTO_CONFIRM` | `false` | Set to `true` in the environment to skip the interactive install prompts in `scripts/install/install.sh` |
 | `ATLAS_MODEL_URL` | (unset) | Direct GGUF URL for an unregistered model. `scripts/install/download-models.sh` passes it to `atlas model install --url`, bypassing the registry lookup. |
 
 ### 8.9 Removed variables

@@ -5,7 +5,7 @@ set -euo pipefail
 # Installs K3s, NVIDIA GPU Operator, and deploys all services
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/lib/config.sh"
+source "$SCRIPT_DIR/../lib/config.sh"
 
 # Colors for output
 RED='\033[0;31m'
@@ -22,7 +22,7 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 # This catches the case where a user edited the wrong file. See PC-021.
 warn_dual_config() {
     local repo_root
-    repo_root="$(cd "$SCRIPT_DIR/.." && pwd)"
+    repo_root="$(cd "$SCRIPT_DIR/../.." && pwd)"
     if [[ -f "$repo_root/.env" ]] && [[ -f "$repo_root/atlas.conf" ]]; then
         log_warn "Both .env and atlas.conf are present."
         log_warn "  install.sh (this script) reads atlas.conf only — .env is ignored."
@@ -410,7 +410,7 @@ build_images() {
 
     log_info "Building container images..."
 
-    "$SCRIPT_DIR/install/build-containers.sh"
+    "$SCRIPT_DIR/build-containers.sh"
 
     log_info "Container images built"
 }

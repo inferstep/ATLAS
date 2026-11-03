@@ -3,7 +3,7 @@
 # atlas-bootstrap.sh — one-shot installer for ATLAS on a fresh Linux host.
 #
 # Targets the Docker Compose deployment path (the most common). For the
-# K3s deployment path use scripts/install.sh instead.
+# K3s deployment path use scripts/install/install.sh instead.
 #
 # What this does:
 #   1. Detects distro (RHEL/Fedora/Rocky/Alma, Ubuntu/Debian).

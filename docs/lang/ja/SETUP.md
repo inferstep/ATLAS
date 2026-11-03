@@ -614,7 +614,7 @@ cp atlas.conf.example atlas.conf
 # Edit atlas.conf: model paths, GPU layers, context size, NodePorts
 
 # 2. Run the installer (requires root)
-sudo scripts/install.sh
+sudo scripts/install/install.sh
 ```
 
 インストーラーは以下を実行します:

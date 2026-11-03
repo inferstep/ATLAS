@@ -65,7 +65,7 @@ llama-server は GPU を使用する唯一のサービスです。それ以外�
 - **マルチ GPU + テンソル並列。** V1 はすべてのバックエンドでシングル GPU のみをサポートします。マルチ GPU は GH #34 で、特定のベンダーに紐づいてはいません。
 - **Apple ユニファイドメモリ。** macOS は GPU とシステムメモリを共有します。「VRAM」の計算は実際には「合計 16 GB から OS + アプリを引いたもの」です。§7 を参照してください。
 
-K3s デプロイパス（`scripts/install.sh`、`deploy/k3s/` 内のマニフェスト）は V3.1.1 時点では CUDA 専用です — ROCm の K8s レシピは V3.2 のインフラ項目に延期されています（`/dev/kfd` + `/dev/dri` の hostPath マウントと `render`/`video` グループ所属が必要で、これは `deploy/compose/docker-compose.rocm.yml` のクラスターレベル相当です）。
+K3s デプロイパス（`scripts/install/install.sh`、`deploy/k3s/` 内のマニフェスト）は V3.1.1 時点では CUDA 専用です — ROCm の K8s レシピは V3.2 のインフラ項目に延期されています（`/dev/kfd` + `/dev/dri` の hostPath マウントと `render`/`video` グループ所属が必要で、これは `deploy/compose/docker-compose.rocm.yml` のクラスターレベル相当です）。
 
 ---
 

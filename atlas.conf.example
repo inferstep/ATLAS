@@ -2,7 +2,7 @@
 #===========================================
 # ATLAS Configuration  —  K3s / KUBERNETES DEPLOYMENT
 #===========================================
-# This file is read ONLY by ./scripts/install.sh and other K3s tooling
+# This file is read ONLY by ./scripts/install/install.sh and other K3s tooling
 # under scripts/lib/config.sh. It is NOT read by `docker compose`.
 #
 # If you are running `docker compose up` instead, edit `.env` (see
@@ -15,7 +15,7 @@
 # Usage:
 #   cp atlas.conf.example atlas.conf
 #   vim atlas.conf  # edit as needed
-#   ./scripts/install.sh
+#   ./scripts/install/install.sh
 #
 # May 2026: trimmed from 114 to ~50 vars. The removed entries were
 # scaffolding for features that were planned, removed, or never wired
