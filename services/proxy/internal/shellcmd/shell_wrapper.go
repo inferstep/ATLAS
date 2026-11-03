@@ -170,20 +170,27 @@ func unwrapShellWrapper(seg string, depth int) shellWrapperResult {
 			return shellWrapperResult{refusal: refusal}
 		}
 		if wrapped {
-			if env.depth >= maxShellWrapperDepth {
-				return shellWrapperResult{refusal: shellWrapperDepthRefusal}
-			}
-			// The extracted code is another shell input, not an opaque argument.
-			if _, ok := shellCommandWords(command); !ok {
-				return shellWrapperResult{refusal: shellWrapperQuotingRefusal}
-			}
-			return shellWrapperResult{command: command, depth: env.depth + 1, unwrapped: true}
+			return wrappedLayer(command, env.depth)
 		}
 	}
 	if env.expanded {
 		return shellWrapperResult{command: quoteShellWords(env.words[i:]), depth: env.depth, unwrapped: true}
 	}
 	return shellWrapperResult{}
+}
+
+// wrappedLayer is the result for code a wrapper hands to another shell: one
+// layer deeper, unless the depth budget is spent or its quoting cannot be
+// checked.
+func wrappedLayer(command string, depth int) shellWrapperResult {
+	if depth >= maxShellWrapperDepth {
+		return shellWrapperResult{refusal: shellWrapperDepthRefusal}
+	}
+	// The extracted code is another shell input, not an opaque argument.
+	if _, ok := shellCommandWords(command); !ok {
+		return shellWrapperResult{refusal: shellWrapperQuotingRefusal}
+	}
+	return shellWrapperResult{command: command, depth: depth + 1, unwrapped: true}
 }
 
 type envSplitExpansion struct {
