@@ -232,11 +232,24 @@ func TestEveryWorkspacePathToolHasANamedPipeCall(t *testing.T) {
 				t.Errorf("the call for %s does not set its registered path argument %q", name, field)
 			}
 		}
+	}
+}
+
+// A name in the registry that no tool has would drive no call.
+func TestEveryToolTheWorkspacePathRegistryNamesIsRegistered(t *testing.T) {
+	for name := range workspacePathFields {
+		if commandTools[name] {
+			continue
+		}
 		if getTool(name) == nil {
 			t.Errorf("workspacePathFields names %s, which is not a registered tool", name)
 		}
 	}
-	for name := range calls {
+}
+
+// A call for a tool the registry does not name is outside what the registry drives.
+func TestEveryNamedPipeCallIsForAToolTheRegistryNames(t *testing.T) {
+	for name := range specialFileCalls() {
 		if _, registered := workspacePathFields[name]; !registered {
 			t.Errorf("group 1 calls %s, which is not in workspacePathFields: the registry is the driver", name)
 		}
