@@ -37,11 +37,12 @@ stdlib-only by design.
 
 ## Infrastructure images
 
-Pinned in the Dockerfiles/compose — digest-pinned except the ROCm/Vulkan
-community-backend bases, which are tag-pinned: `python:3.11-slim` (PSF +
-Debian), `golang:alpine` + `alpine` (BSD/MIT), `nvidia/cuda:*-rockylinux9`
-(NVIDIA Deep Learning Container License + Rocky), `rocm/dev-ubuntu`
-(AMD/Canonical, tag-pinned), `ubuntu` (Canonical, tag-pinned for the
+Pinned in the Dockerfiles/compose, by digest. For the ROCm/Vulkan
+community-backend bases the default tag carries the digest; a tag the user
+sets (`ATLAS_ROCM_TAG`, `ATLAS_UBUNTU_TAG`) is a bare tag. The images:
+`python:3.11-slim` (PSF + Debian), `golang:alpine` + `alpine` (BSD/MIT),
+`nvidia/cuda:*-rockylinux9` (NVIDIA Deep Learning Container License +
+Rocky), `rocm/dev-ubuntu` (AMD/Canonical), `ubuntu` (Canonical, for the
 Vulkan build), `alpine/socat` (GPL-2.0 — macOS compose overlay only,
 where it stands in for the containerized llama-server slot).
 
