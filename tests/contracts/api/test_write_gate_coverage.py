@@ -33,6 +33,19 @@ REQUIRED = {
 # below would be asserting an implementation detail rather than a property.
 WRITE_TOOLS = ["writeFile", "editFile", "structuralEdit", "insertAfter", "replaceLines"]
 
+# Each way a write tool lands bytes, named by the function that takes it. Each
+# way must run every gate itself: a gate on another way of the same tool does
+# not run on this one. writeFile's V3 route is checked from applyWriteGates's
+# list, below.
+LANDING_PATHS = {
+    "writeFile": ("writeFileDirectRoute", "writeAfterV3Failure"),
+    "editFile": ("executeEditFile",),
+    "insertAfter": ("insertLinesAfter",),
+    "replaceLines": ("replaceLineRange",),
+    "structuralEdit": ("executeStructuralEdit",),
+}
+LANDINGS = [(tool, path) for tool, paths in LANDING_PATHS.items() for path in paths]
+
 
 def _tool_source() -> str:
     """The tool files without their comment lines: a name in a comment calls nothing."""
@@ -42,14 +55,14 @@ def _tool_source() -> str:
 
 def _function(src: str, name: str) -> str:
     """One function of the tool files, from its `func` line to its closing brace."""
+    assert f"func {name}(" in src, f"the tool files have no function {name} — was it renamed?"
     return src[src.index(f"func {name}("):].split("\n}\n", 1)[0]
 
 
 def _reach(src: str, start: str) -> str:
     """`start` and every function of the tool files that it names, and that those name in turn.
 
-    A gate counts for a tool only when the tool's own path names it: a gate in
-    a function that the tool no longer calls is not in its reach.
+    A gate in a function that `start` no longer calls is not in its reach.
     """
     defined = set(re.findall(r"^func (\w+)\(", src, re.M))
     seen, todo = [], [start]
@@ -113,11 +126,20 @@ def test_the_write_route_runs_every_gate_from_its_list(gate, consequence):
     )
 
 
-@pytest.mark.parametrize("tool", WRITE_TOOLS)
+def test_every_write_tool_names_the_ways_it_lands_bytes():
+    assert sorted(LANDING_PATHS) == sorted(WRITE_TOOLS)
+
+
+@pytest.mark.parametrize("tool, path", LANDINGS)
+def test_each_way_to_land_bytes_is_on_its_tools_path(bodies, tool, path):
+    assert f"func {path}(" in bodies[tool], f"{tool}Tool no longer reaches {path}"
+
+
+@pytest.mark.parametrize("tool, path", LANDINGS)
 @pytest.mark.parametrize("gate,consequence", sorted(REQUIRED.items()))
-def test_every_write_path_runs_every_gate(bodies, tool, gate, consequence):
-    assert gate in bodies[tool], (
-        f"{tool}Tool does not call {gate} — {consequence}. "
+def test_every_write_path_runs_every_gate(tool, path, gate, consequence):
+    assert gate in _reach(_tool_source(), path), (
+        f"{tool}Tool lands bytes through {path}, which does not call {gate} — {consequence}. "
         f"A gate wired into some write paths and not others reads as covered "
         f"and is not."
     )
