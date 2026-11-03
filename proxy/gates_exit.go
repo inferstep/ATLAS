@@ -370,7 +370,7 @@ func (s *runState) observeVerification(ctx *AgentContext, userMessage string, tu
 	if ctx == nil || result == nil {
 		return
 	}
-	if result.Success && isHeadOnlyProbe(command) {
+	if result.Success && shellcmd.IsHeadOnlyProbe(command) {
 		log.Printf("[agent] headers-only probe does not verify: %q", truncateStr(command, 60))
 		s.headOnlyProbe = command
 	}

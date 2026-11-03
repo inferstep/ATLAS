@@ -107,32 +107,6 @@ func redirectOnlyVerificationMessage(source string) string {
 		source, source, source)
 }
 
-// isHeadOnlyProbe reports a probe that fetches headers and no body. Such a
-// probe is not verification (see commandEvidenceKind.verifies) — this says so out
-// loud instead of declining in silence.
-//
-// Measured (stabilization cycle 6, both flask_pause sessions): the run
-// installed the missing dependency, started the app, and probed it with
-// `curl -I`, which answered HTTP 200. The probe was declined, nothing said
-// why, the run repeated it, and both sessions ended
-// verification_demanded_unmet with working code on disk.
-func isHeadOnlyProbe(cmd string) bool {
-	segs, _, _ := shellcmd.SplitTopLevelShell(cmd)
-	for _, seg := range segs {
-		words := shellcmd.ProgramWords(shellcmd.ShellFields(strings.TrimSpace(seg)))
-		if len(words) == 0 {
-			continue
-		}
-		switch filepath.Base(words[0]) {
-		case "curl", "wget":
-			if shellcmd.IsHeadOnlyProbe(seg) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // headOnlyProbeNote explains the decline in one sentence, without prescribing
 // a command to paste.
 func headOnlyProbeNote(cmd string) string {

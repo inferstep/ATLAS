@@ -145,8 +145,28 @@ func catastrophicRm(args []string) string {
 // flags (-sI) both count.
 var headOnlyProbeRe = regexp.MustCompile(`(?i)\b(?:curl\b[^|;&]*?\s-{1,2}(?:I\b|head\b)|curl\b[^|;&]*?\s-[a-zA-Z]*I[a-zA-Z]*\b|wget\b[^|;&]*?--spider\b)`)
 
-// IsHeadOnlyProbe reports whether a command segment fetches only headers, so
-// it shows the server is up and nothing about what it serves.
-func IsHeadOnlyProbe(segment string) bool {
-	return headOnlyProbeRe.MatchString(segment)
+// IsHeadOnlyProbe reports a probe that fetches headers and no body. Such a
+// probe is not verification (see CommandEvidenceKind.Verifies) — this says so out
+// loud instead of declining in silence.
+//
+// Measured (stabilization cycle 6, both flask_pause sessions): the run
+// installed the missing dependency, started the app, and probed it with
+// `curl -I`, which answered HTTP 200. The probe was declined, nothing said
+// why, the run repeated it, and both sessions ended
+// verification_demanded_unmet with working code on disk.
+func IsHeadOnlyProbe(cmd string) bool {
+	segs, _, _ := SplitTopLevelShell(cmd)
+	for _, seg := range segs {
+		words := ProgramWords(ShellFields(strings.TrimSpace(seg)))
+		if len(words) == 0 {
+			continue
+		}
+		switch filepath.Base(words[0]) {
+		case "curl", "wget":
+			if headOnlyProbeRe.MatchString(seg) {
+				return true
+			}
+		}
+	}
+	return false
 }

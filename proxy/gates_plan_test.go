@@ -449,7 +449,7 @@ func TestCommandProgram(t *testing.T) {
 		"":                                 "",
 	} {
 		if got := shellcmd.CommandProgram(cmd); got != want {
-			t.Errorf("commandProgram(%q) = %q, want %q", cmd, got, want)
+			t.Errorf("shellcmd.CommandProgram(%q) = %q, want %q", cmd, got, want)
 		}
 	}
 }

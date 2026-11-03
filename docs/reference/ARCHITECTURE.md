@@ -416,10 +416,10 @@ only that a run named a changed path over its current bytes; completion still
 needs that run, a later mutation still re-arms the demand, and the ledger's own
 validation still settles mutation debt. Only a segment that ran the program or
 its tests, or fetched a page, binds coverage, and only when the command line
-reports that segment's exit status (`classifyCommandEvidence`): a parse, a
+reports that segment's exit status (`shellcmd.ClassifyCommandEvidence`): a parse, a
 lint or a build binds nothing, and neither does a test piped into `tail`. A
 runner that names no file binds the session's files it discovers
-(`runnerEntries`): a bare `pytest` or `pytest tests/` its test files,
+(`shellcmd.RunnerEntries`): a bare `pytest` or `pytest tests/` its test files,
 `python -m unittest` its `test*.py`, `go run .` its package, `go test ./...`
 the packages that contain tests (without tests it only compiles), and `npm
 test`, `jest` or `vitest` the files their default patterns match; imports are

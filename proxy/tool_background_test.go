@@ -350,7 +350,7 @@ func TestAHeadersOnlyProbeIsDeclinedOutLoud(t *testing.T) {
 	if shellcmd.ClassifyCommandEvidence("curl -I http://127.0.0.1:5001").Kind.Verifies() {
 		t.Fatal("precondition changed: a HEAD probe now counts as verification")
 	}
-	if !isHeadOnlyProbe("curl -I http://127.0.0.1:5001") || isHeadOnlyProbe("curl http://127.0.0.1:5001/") {
+	if !shellcmd.IsHeadOnlyProbe("curl -I http://127.0.0.1:5001") || shellcmd.IsHeadOnlyProbe("curl http://127.0.0.1:5001/") {
 		t.Fatal("head-only detection is wrong")
 	}
 	w := startBgWorld(t, map[string]string{"app.py": importsMissing, "requirements.txt": "flask\n"},
