@@ -744,13 +744,20 @@ var buildScriptNames = regexp.MustCompile(`^(build|compile|tsc)([:-].*)?$`)
 // `python -c "import ast; ast.parse(open('app.py').read())"`.
 var parseOnlyInlineRe = regexp.MustCompile(`^\s*(import\s+(?:(?:ast|py_compile|compileall|sys|tokenize)\s*,?\s*)+[;\n]\s*)*(ast\.parse|py_compile\.compile|compileall\.compile_\w+|compile)\s*\(`)
 
+// helpFlag and versionFlag are the long flags that ask a tool for its help or
+// its version, which run nothing.
+const (
+	helpFlag    = "--help"
+	versionFlag = "--version"
+)
+
 func onlyVersionOrHelp(args []string) bool {
 	if len(args) == 0 {
 		return false
 	}
 	for _, a := range args {
 		switch a {
-		case "--version", "-V", "--help", "-h", "-help", "-version", "version":
+		case versionFlag, "-V", helpFlag, "-h", "-help", "-version", "version":
 		default:
 			return false
 		}
@@ -981,7 +988,7 @@ func pythonEvidenceKind(args []string) CommandEvidenceKind {
 				return EvidenceStatic
 			}
 			return EvidenceExecution
-		case a == "--version" || a == "-V" || a == "--help" || a == "-h":
+		case a == versionFlag || a == "-V" || a == helpFlag || a == "-h":
 			return EvidenceStatic
 		case strings.HasPrefix(a, "-") && a != "-":
 			continue // interpreter flags: -u, -B, -W, -X ...
@@ -1017,7 +1024,7 @@ func testRunnerKind(args []string) CommandEvidenceKind {
 	for _, a := range args {
 		switch a {
 		case "--collect-only", "--co", "--fixtures", "--markers", "--listTests", "--list-tests",
-			"--dry-run", "--help", "-h", "--version":
+			"--dry-run", helpFlag, "-h", versionFlag:
 			return EvidenceStatic
 		}
 	}

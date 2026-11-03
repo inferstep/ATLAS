@@ -12,6 +12,8 @@ const (
 	shellWrapperQuotingRefusal = "refused: the command's quoting could not be checked; simplify it."
 	shellWrapperMissingRefusal = "refused: the execution wrapper is incomplete; simplify it."
 	shellWrapperDepthRefusal   = "refused: the command exceeds 16 execution wrapper layers; simplify it."
+	// env's long option that splits one argument into words.
+	envSplitStringOption = "--split-string"
 )
 
 type shellInspection struct {
@@ -261,8 +263,8 @@ func normalizeEnvSplitOption(option string) string {
 		}
 	}
 	if name, value, attached := strings.Cut(option, "="); len(name) > 2 &&
-		strings.HasPrefix(name, "--") && strings.HasPrefix("--split-string", name) {
-		option = "--split-string"
+		strings.HasPrefix(name, "--") && strings.HasPrefix(envSplitStringOption, name) {
+		option = envSplitStringOption
 		if attached {
 			option += "=" + value
 		}
@@ -272,7 +274,7 @@ func normalizeEnvSplitOption(option string) string {
 
 func envSplitString(words []string, index int, option string) (string, int, bool) {
 	switch {
-	case option == "-S" || option == "--split-string":
+	case option == "-S" || option == envSplitStringOption:
 		if index+1 >= len(words) {
 			return "", index + 2, true
 		}
@@ -383,7 +385,7 @@ func wrapperOptionTakesValue(wrapper, option string) bool {
 		return option == "-u"
 	case "env":
 		switch option {
-		case "-u", "--unset", "-C", "--chdir", "-S", "--split-string":
+		case "-u", "--unset", "-C", "--chdir", "-S", envSplitStringOption:
 			return true
 		}
 	case "nice":
