@@ -1,7 +1,7 @@
 // Tests for how the TUI draws the pipeline state: a failed stage, and the
 // pane before any stage has started.
 
-package main
+package app
 
 import (
 	"testing"

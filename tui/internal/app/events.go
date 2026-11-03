@@ -4,7 +4,7 @@
 // formatting/classification over event payloads; the update loop and
 // view live in model.go.
 
-package main
+package app
 
 import (
 	"encoding/json"

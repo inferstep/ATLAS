@@ -10,7 +10,7 @@
 // Shell-out commands return their output as a slashResultMsg which the
 // model appends to chat as a tool-style row.
 
-package main
+package app
 
 import (
 	"context"

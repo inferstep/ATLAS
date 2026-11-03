@@ -7,7 +7,7 @@
 //   statsPane    — one-line counter strip
 //   inputPane    — textarea (rendered by Bubbles, this file just frames it)
 
-package main
+package app
 
 import (
 	"encoding/json"

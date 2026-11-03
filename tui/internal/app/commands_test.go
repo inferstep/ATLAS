@@ -5,7 +5,7 @@
 // (context add/drop, help/quit signaling). Shell-out commands are not
 // executed here — that's covered by step 7's integration tests.
 
-package main
+package app
 
 import (
 	"encoding/json"
