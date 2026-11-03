@@ -203,6 +203,30 @@ func cutCallDiagnostic(ctx *AgentContext, raw string) string {
 			source, readable = string(b), true
 		}
 	}
+	sb.WriteString(cutCallSummary(rc, path, readable))
+	if !readable {
+		if rc.Tool == "write_file" && path != "" {
+			sb.WriteString(" To write it without one long call: " + writeFileAdvice(ctx, path))
+		}
+		return sb.String()
+	}
+	constants := largeStringConstants(path, source)
+	describeCutTarget(&sb, ctx, rc, path, source, constants)
+	sb.WriteString(" To change this code without one long call: ")
+	if len(constants) > 0 || rc.Tool != "write_file" {
+		sb.WriteString("use replace_lines with the line numbers read_file printed (up to 60 lines per call; for more, " +
+			"several calls from the bottom of the range up), edit_file with old_str set to one unique line, or " +
+			"insert_after to add lines at a line number.")
+	} else {
+		sb.WriteString(writeFileAdvice(ctx, path))
+	}
+	return sb.String()
+}
+
+// cutCallSummary says what arrived of a cut call: its tool, its target as far
+// as it is known, and how far into its cut argument it got.
+func cutCallSummary(rc recoveredCall, path string, readable bool) string {
+	var sb strings.Builder
 	switch {
 	case path == "":
 		fmt.Fprintf(&sb, "What arrived was an unfinished %s call, cut before its path was complete, so which file it "+
@@ -216,20 +240,14 @@ func cutCallDiagnostic(ctx *AgentContext, raw string) string {
 	if rc.CutField != "" && rc.CutLines > 1 {
 		fmt.Fprintf(&sb, " It was cut inside `%s` after about %d lines.", rc.CutField, rc.CutLines)
 	}
-	if !readable {
-		if rc.Tool == "write_file" && path != "" {
-			sb.WriteString(" To write it without one long call: ")
-			if fencedChannelDisabledForSession(ctx) {
-				sb.WriteString("write the first part with write_file and add the rest with insert_after in parts.")
-			} else {
-				fmt.Fprintf(&sb, "send write_file for %s with \"content\": \"@fenced\" so the file arrives as one "+
-					"fenced block, or write it in parts with write_file and insert_after.", path)
-			}
-		}
-		return sb.String()
-	}
+	return sb.String()
+}
+
+// describeCutTarget says what the file holds where the cut call aimed: the
+// selected node and its size, the module-level string constants no selector
+// reaches, and the embedded functions that are not selectable either.
+func describeCutTarget(sb *strings.Builder, ctx *AgentContext, rc recoveredCall, path, source string, constants []string) {
 	name := filepath.Base(path)
-	constants := largeStringConstants(path, source)
 	selector := rc.Args["selector"]
 	var regions []wire.EmbeddedRegion
 	if strings.HasSuffix(path, ".py") {
@@ -237,37 +255,35 @@ func cutCallDiagnostic(ctx *AgentContext, raw string) string {
 	}
 	if rc.Tool == "structural_edit" && selector != "" {
 		if span, ok := selectorSpan(ctx, path, source, selector); ok {
-			fmt.Fprintf(&sb, " In %s, `%s` is %s.", name, selector, span.describe())
+			fmt.Fprintf(sb, " In %s, `%s` is %s.", name, selector, span.describe())
 			if rc.CutField == "content" && rc.CutLines >= 5*span.lines() && rc.CutLines-span.lines() >= 30 {
 				sb.WriteString(" The replacement was already many times that size, so it was not that node's code.")
 			}
 		} else {
-			fmt.Fprintf(&sb, " %s has no node `%s` (%s).", name, selector, selectorGuidanceOrOutline(path, source))
+			fmt.Fprintf(sb, " %s has no node `%s` (%s).", name, selector, selectorGuidanceOrOutline(path, source))
 		}
 	}
 	if len(constants) > 0 {
-		fmt.Fprintf(&sb, " Most of %s is %s, a module-level string; no selector reaches inside a string literal.",
+		fmt.Fprintf(sb, " Most of %s is %s, a module-level string; no selector reaches inside a string literal.",
 			name, strings.Join(constants, " and "))
 	}
 	for _, r := range regions {
 		if len(r.Symbols) == 0 {
 			continue
 		}
-		fmt.Fprintf(&sb, " The %s functions %s are at lines %d-%d, in %s; they are not selectable either.",
+		fmt.Fprintf(sb, " The %s functions %s are at lines %d-%d, in %s; they are not selectable either.",
 			r.Kind, strings.Join(r.Symbols, ", "), r.StartLine, r.EndLine, r.Where)
 	}
-	sb.WriteString(" To change this code without one long call: ")
-	if len(constants) > 0 || rc.Tool != "write_file" {
-		sb.WriteString("use replace_lines with the line numbers read_file printed (up to 60 lines per call; for more, " +
-			"several calls from the bottom of the range up), edit_file with old_str set to one unique line, or " +
-			"insert_after to add lines at a line number.")
-	} else if fencedChannelDisabledForSession(ctx) {
-		sb.WriteString("write the first part with write_file and add the rest with insert_after in parts.")
-	} else {
-		fmt.Fprintf(&sb, "send write_file for %s with \"content\": \"@fenced\" so the file arrives as one fenced block, "+
-			"or write it in parts with write_file and insert_after.", path)
+}
+
+// writeFileAdvice is how to write path without one long call: as one fenced
+// block, or in parts when the fenced channel is off for this session.
+func writeFileAdvice(ctx *AgentContext, path string) string {
+	if fencedChannelDisabledForSession(ctx) {
+		return "write the first part with write_file and add the rest with insert_after in parts."
 	}
-	return sb.String()
+	return fmt.Sprintf("send write_file for %s with \"content\": \"@fenced\" so the file arrives as one "+
+		"fenced block, or write it in parts with write_file and insert_after.", path)
 }
 
 type lineSpan struct{ first, last int }
