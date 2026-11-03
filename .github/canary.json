@@ -146,10 +146,10 @@
       "reports": [
         "golangci-lint (tui)"
       ],
-      "what": "a failing test, with a function that nothing calls, in tui/canary_test.go",
+      "what": "a failing test, with a function that nothing calls, in clients/tui/canary_test.go",
       "shows": "canary: this test fails on purpose",
       "action": "write",
-      "path": "tui/canary_test.go",
+      "path": "clients/tui/canary_test.go",
       "lines": [
         "package main",
         "",

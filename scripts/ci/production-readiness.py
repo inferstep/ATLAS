@@ -308,7 +308,7 @@ def _go_gates(go_env: dict[str, str]) -> dict[str, Gate]:
         "go-tui-test": Gate(
             "go-tui-test",
             ("go", "test", "-race", "-count=1", ALL_GO_PACKAGES),
-            cwd=ROOT / "tui",
+            cwd=ROOT / "clients" / "tui",
             available=lambda: _command_available("go"),
             unavailable_reason=NO_GO,
             env=go_env,
@@ -324,7 +324,7 @@ def _go_gates(go_env: dict[str, str]) -> dict[str, Gate]:
         "go-tui-vet": Gate(
             "go-tui-vet",
             ("go", "vet", ALL_GO_PACKAGES),
-            cwd=ROOT / "tui",
+            cwd=ROOT / "clients" / "tui",
             available=lambda: _command_available("go"),
             unavailable_reason=NO_GO,
             env=go_env,
@@ -365,7 +365,7 @@ def _static_check_gates(python: str, go_env: dict[str, str]) -> dict[str, Gate]:
             "go-tui-staticcheck",
             ("go", "run", "honnef.co/go/tools/cmd/staticcheck@2026.1",
              ALL_GO_PACKAGES),
-            cwd=ROOT / "tui",
+            cwd=ROOT / "clients" / "tui",
             available=lambda: _command_available("go"),
             unavailable_reason=NO_GO,
             env=go_env,

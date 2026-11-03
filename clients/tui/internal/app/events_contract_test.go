@@ -70,10 +70,10 @@ func proxyStreamedEvents(t *testing.T) map[string]string {
 	t.Helper()
 	emitted := map[string]string{}
 	streamRE := regexp.MustCompile(`ctx\.Stream\(\s*"([a-z0-9_]+)"`)
-	proxyDir := filepath.Join(tuiModuleRoot(t), "..", "services", "proxy")
+	proxyDir := filepath.Join(tuiModuleRoot(t), "..", "..", "services", "proxy")
 	if _, err := os.Stat(proxyDir); err != nil {
 		// A skip here would pass in silence once the proxy moves.
-		t.Fatalf("the proxy this contract reads is not at ../proxy: %v", err)
+		t.Fatalf("the proxy this contract reads is not at ../../services/proxy: %v", err)
 	}
 	err := filepath.WalkDir(proxyDir, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {

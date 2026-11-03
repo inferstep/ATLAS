@@ -335,7 +335,7 @@ func skipsWithoutSaying(t *testing.T) {
                  id="the calls are one finding with their number and the reason"),
     pytest.param("services/proxy/guardrails_object_hold_test.go", ["\tskipsWithoutSaying(t)"],
                  [("warning", 10, "1 new call(s) to the skip helper skipsWithoutSaying")], id="a helper with no reason"),
-    pytest.param("tui/object_hold_test.go", ["\tneedsObjectHold(t)"], [], id="a helper in another folder is not seen"),
+    pytest.param("clients/tui/object_hold_test.go", ["\tneedsObjectHold(t)"], [], id="a helper in another folder is not seen"),
 ])
 def test_a_call_to_a_skip_helper_beside_the_test_is_named_with_its_reason(ic, helper_file, added, found):
     findings = ic.check(diff("services/proxy/guardrails_permissions_test.go", added=added), TASKS, Files({helper_file: SKIP_HELPER}))

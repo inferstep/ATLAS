@@ -60,8 +60,8 @@ def test_go_binary_is_current_only_when_not_older_than_its_source(
 def test_select_tui_binary_rebuilds_only_a_stale_binary(
         monkeypatch, tmp_path, binary_mtime, expect_rebuild):
     atlas_dir = tmp_path / "atlas"
-    (atlas_dir / "tui").mkdir(parents=True)
-    main_go = atlas_dir / "tui" / "main.go"
+    (atlas_dir / "clients" / "tui").mkdir(parents=True)
+    main_go = atlas_dir / "clients" / "tui" / "main.go"
     main_go.write_text("package main\n")
     os.utime(main_go, ns=(200, 200))
     binary = tmp_path / "atlas-tui"
@@ -95,3 +95,13 @@ def test_tui_stops_the_local_proxy_before_the_binary_takes_over(
         "stop local proxy",
         ["/opt/atlas-tui", "--proxy", runtime.PROXY_URL, "--log", "off"],
     ]
+
+
+def test_the_tui_command_finds_the_checkout_it_runs_from(monkeypatch, tmp_path):
+    # On a wrong path the lookup returns "" and the command runs whatever binary is installed.
+    checkout = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(tui.__file__))))
+    monkeypatch.chdir(tmp_path)
+    assert tui._find_atlas_dir() == checkout, "not from the folder the CLI is installed in"
+    monkeypatch.setattr(tui, "__file__", str(tmp_path / "atlas" / "commands" / "tui.py"))
+    monkeypatch.chdir(checkout)
+    assert tui._find_atlas_dir() == checkout, "not from the folder the CLI runs in"

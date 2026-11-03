@@ -335,7 +335,7 @@ the legacy `summary` unchanged plus an additive `status` — `completed`,
 `incomplete`, `stopped`, `timed_out`, `failed` — and a stable machine-readable
 `reason`. The clients read an absent status as `incomplete` and show an
 unrecognised word as it came, never as completion (`onDone` in
-`tui/internal/app/events.go`, `doneOutcome` in the VS Code and JetBrains extensions). The
+`clients/tui/internal/app/events.go`, `doneOutcome` in the VS Code and JetBrains extensions). The
 broker's `done`/`stage_end` envelopes report the same outcome instead of
 asserting `success: true`.
 
@@ -631,7 +631,7 @@ The system prompt rendering happens in `buildSystemPrompt`. Plan steps are rende
 
 ##### tui: rendering (Go)
 
-`tui/internal/pipelinestate/plan.go` defines `PlanView` (state on the model), and `tui/internal/app/state.go` holds the three `applyPlan*` handlers wired into the chat dispatcher in `tui/internal/app/events.go`:
+`clients/tui/internal/pipelinestate/plan.go` defines `PlanView` (state on the model), and `clients/tui/internal/app/state.go` holds the three `applyPlan*` handlers wired into the chat dispatcher in `clients/tui/internal/app/events.go`:
 
 | Event | Handler | UI effect |
 |---|---|---|
@@ -681,7 +681,7 @@ Both are paid up front before the agent's first tool call. The investment is rec
 | proxy bridge | `services/proxy/internal/v3client/client_test.go`; `services/proxy/tool_write_v3_bridge_test.go` for stage routing | SSE parse, missing-result error, stage routing |
 | proxy hook | `services/proxy/loop_test.go` | priority-file pickup, truncation thresholds, fallback walk, tier/length gating |
 | proxy adherence | `services/proxy/plan_gates_test.go`; `services/proxy/gates_test.go` for the system prompt | match logic (tool name + path suffix), failed-call exclusion, revision cap, system-prompt rendering |
-| TUI rendering | `tui/internal/pipelinestate/plan_test.go`; `tui/internal/app/state_plan_test.go` for the handlers | `PlanView` state transitions, plan_loaded replacement on revise, off-plan silence |
+| TUI rendering | `clients/tui/internal/pipelinestate/plan_test.go`; `clients/tui/internal/app/state_plan_test.go` for the handlers | `PlanView` state transitions, plan_loaded replacement on revise, off-plan silence |
 
 ### Safety Limits
 
