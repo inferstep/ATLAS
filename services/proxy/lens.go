@@ -225,14 +225,7 @@ func extractFailurePath(toolName string, args json.RawMessage) string {
 	// either returned "" and the path-aware 3-strike breaker read three
 	// identical failures as three different paths and never fired.
 	case "read_file", "write_file", "edit_file", "structural_edit", "delete_file", "find_file",
-		"insert_after", "replace_lines":
-		var p struct {
-			Path string `json:"path"`
-		}
-		if err := json.Unmarshal(args, &p); err == nil {
-			return p.Path
-		}
-	case "list_directory", "search_files":
+		"insert_after", "replace_lines", "list_directory", "search_files":
 		var p struct {
 			Path string `json:"path"`
 		}
@@ -528,34 +521,40 @@ type ASAStatus struct {
 	Hint          string `json:"hint"`
 }
 
+// lensLlamaServerHealth is the llama_server part of the lens /health JSON.
+type lensLlamaServerHealth struct {
+	// Pointer: an older lens that omits the field is not read as down.
+	Reachable *bool  `json:"reachable"`
+	Error     string `json:"error"`
+}
+
+// lensSubsystemHealth is the lens part of the lens /health JSON.
+type lensSubsystemHealth struct {
+	CostFieldLoaded bool   `json:"cost_field_loaded"`
+	CostFieldDim    int    `json:"cost_field_dim"`
+	EmbedDim        int    `json:"embed_dim"`
+	GxLoaded        bool   `json:"gx_loaded"`
+	CxCalibrated    bool   `json:"cx_calibrated"`
+	GxCalibrated    bool   `json:"gx_calibrated"`
+	SelfTestPass    bool   `json:"self_test_pass"`
+	SelfTestError   string `json:"self_test_error"`
+	// Null while no fingerprint file exists, so only an explicit
+	// false means drift.
+	FingerprintOK    *bool  `json:"fingerprint_ok"`
+	FingerprintError string `json:"fingerprint_error"`
+	// Pointer: the lens reports null while the capacity is unknown.
+	EmbedCapacityTokens *int   `json:"embed_capacity_tokens"`
+	EmbedCapacitySource string `json:"embed_capacity_source"`
+}
+
 // lensHealthShape mirrors the lens /health JSON we read. Defensive — the
 // service can be reachable but mid-startup with partial fields. We treat
 // missing fields as zero values rather than failing the whole probe.
 type lensHealthShape struct {
 	Status     string `json:"status"`
 	Subsystems struct {
-		// Pointer: an older lens that omits the field is not read as down.
-		LlamaServer struct {
-			Reachable *bool  `json:"reachable"`
-			Error     string `json:"error"`
-		} `json:"llama_server"`
-		Lens struct {
-			CostFieldLoaded bool   `json:"cost_field_loaded"`
-			CostFieldDim    int    `json:"cost_field_dim"`
-			EmbedDim        int    `json:"embed_dim"`
-			GxLoaded        bool   `json:"gx_loaded"`
-			CxCalibrated    bool   `json:"cx_calibrated"`
-			GxCalibrated    bool   `json:"gx_calibrated"`
-			SelfTestPass    bool   `json:"self_test_pass"`
-			SelfTestError   string `json:"self_test_error"`
-			// Null while no fingerprint file exists, so only an explicit
-			// false means drift.
-			FingerprintOK    *bool  `json:"fingerprint_ok"`
-			FingerprintError string `json:"fingerprint_error"`
-			// Pointer: the lens reports null while the capacity is unknown.
-			EmbedCapacityTokens *int   `json:"embed_capacity_tokens"`
-			EmbedCapacitySource string `json:"embed_capacity_source"`
-		} `json:"lens"`
+		LlamaServer lensLlamaServerHealth `json:"llama_server"`
+		Lens        lensSubsystemHealth   `json:"lens"`
 	} `json:"subsystems"`
 }
 

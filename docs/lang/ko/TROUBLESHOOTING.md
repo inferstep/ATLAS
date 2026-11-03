@@ -319,7 +319,7 @@ ATLAS_ROCM_TAG=6.2-complete docker compose -f docker-compose.yml -f deploy/compo
 
 **증상:** llama-server 컴파일 중 `docker compose build`가 CUDA 관련 오류로 실패합니다.
 
-**해결:** llama-server Dockerfile은 `nvidia/cuda:12.9.0-devel` 베이스 이미지(`inference/Dockerfile.v31`에 다이제스트 고정) 안에서 llama.cpp를 빌드하므로, 호스트 GPU 접근 없이도 빌드 시 CUDA 헤더를 사용할 수 있습니다. 빌드 실패의 일반적인 원인:
+**해결:** llama-server Dockerfile은 `nvidia/cuda:12.9.0-devel` 베이스 이미지(`services/inference/Dockerfile.v31`에 다이제스트 고정) 안에서 llama.cpp를 빌드하므로, 호스트 GPU 접근 없이도 빌드 시 CUDA 헤더를 사용할 수 있습니다. 빌드 실패의 일반적인 원인:
 1. 디스크 공간 부족 (빌드 아티팩트에 약 5GB 필요)
 2. CUDA 베이스 이미지 다운로드 또는 llama.cpp 클론 시 네트워크 문제
 3. Podman rootless 빌드가 권한 문제로 실패할 수 있음 — `podman-compose build`에 `--podman-build-args="--format docker"`를 추가해 보세요
@@ -336,12 +336,12 @@ fatal: fetch-pack: invalid index-pack output
 
 **원인:** llama.cpp의 전체 git 이력은 크고(~1GB) fetch는 불안정하거나 느린 회선에 민감합니다. 순간적인 정체가 SSL read 타임아웃을 유발해 전체 전송이 중단됩니다.
 
-**해결:** `inference/Dockerfile.v31`은 `git init` + 고정된 단일 리비전(`LLAMA_CPP_REV`)의 `--depth 1` fetch를 사용해 ~1GB의 전체 이력 전송을 회피하며, `http.postBuffer=524288000`과 `http.lowSpeedLimit/Time`으로 죽은 연결에서 빠르게 실패합니다. 문제가 재발하면:
+**해결:** `services/inference/Dockerfile.v31`은 `git init` + 고정된 단일 리비전(`LLAMA_CPP_REV`)의 `--depth 1` fetch를 사용해 ~1GB의 전체 이력 전송을 회피하며, `http.postBuffer=524288000`과 `http.lowSpeedLimit/Time`으로 죽은 연결에서 빠르게 실패합니다. 문제가 재발하면:
 
 1. 빌드를 재시도하세요 — 특히 가정용 회선에서는 일시적 네트워크 문제가 흔합니다.
 2. 재시도가 계속 실패하면 호스트에서 고정된 리비전을 미리 받아 Dockerfile이 COPY하도록 수정하세요. 간단한 레시피:
    ```bash
-   REV=$(grep -m1 'ARG LLAMA_CPP_REV=' inference/Dockerfile.v31 | cut -d= -f2)
+   REV=$(grep -m1 'ARG LLAMA_CPP_REV=' services/inference/Dockerfile.v31 | cut -d= -f2)
    git init /tmp/llama.cpp && cd /tmp/llama.cpp
    git remote add origin https://github.com/ggml-org/llama.cpp
    git fetch --depth 1 origin "$REV" && git checkout FETCH_HEAD
@@ -356,7 +356,7 @@ fatal: fetch-pack: invalid index-pack output
 - **드롭인한 모델이 로드에 실패** — `error loading model: unknown (model) architecture 'gemma4'`: 고정된 llama.cpp가 그 아키텍처보다 오래된 것입니다.
 - **빌드가 실패** — `error: patch failed: tools/server/server-context.cpp:NN` / `patch does not apply`: 업스트림이 고정된 SHA를 지나쳐 드리프트했습니다.
 
-`atlas-llama` 이미지는 네 개의 Dockerfile(`Dockerfile`, `Dockerfile.v31`, `Dockerfile.rocm`, `Dockerfile.vulkan`) 모두에서 `LLAMA_CPP_REV`로 llama.cpp를 고정하며, compose 파일이 빌드에 사용하는 세 개 — `Dockerfile.v31`, `Dockerfile.rocm`, `Dockerfile.vulkan` — 는 빌드 중에 `inference/patches/expose-hidden-states.patch`(Geometric Lens가 의존하는 레이어별 `hidden_states` 확장)를 적용합니다. 순수 `Dockerfile`은 rev를 고정하되 패치를 적용하지 않으므로, 그것으로 빌드한 서버에는 lens 배관이 없습니다. 새 아키텍처를 지원하려면 그것을 포함하는 llama.cpp SHA로 핀을 옮기세요. 사전 빌드된 GHCR 이미지는 로컬 빌드를 건너뜁니다. 게시된 이미지보다 새로운 아키텍처가 필요할 때만 재빌드하세요.
+`atlas-llama` 이미지는 네 개의 Dockerfile(`Dockerfile`, `Dockerfile.v31`, `Dockerfile.rocm`, `Dockerfile.vulkan`) 모두에서 `LLAMA_CPP_REV`로 llama.cpp를 고정하며, compose 파일이 빌드에 사용하는 세 개 — `Dockerfile.v31`, `Dockerfile.rocm`, `Dockerfile.vulkan` — 는 빌드 중에 `services/inference/patches/expose-hidden-states.patch`(Geometric Lens가 의존하는 레이어별 `hidden_states` 확장)를 적용합니다. 순수 `Dockerfile`은 rev를 고정하되 패치를 적용하지 않으므로, 그것으로 빌드한 서버에는 lens 배관이 없습니다. 새 아키텍처를 지원하려면 그것을 포함하는 llama.cpp SHA로 핀을 옮기세요. 사전 빌드된 GHCR 이미지는 로컬 빌드를 건너뜁니다. 게시된 이미지보다 새로운 아키텍처가 필요할 때만 재빌드하세요.
 
 **hidden-states 패치는 보존하세요 — 삭제하지 말고 리베이스하세요.** `git apply` 단계를 제거하면 lens 배관을 조용히 잃은 서버가 빌드됩니다(`/embedding`이 `layers:` 파라미터를 무시). 핀 올리기 런북:
 
@@ -366,11 +366,11 @@ fatal: fetch-pack: invalid index-pack output
    git init -q llama.cpp && cd llama.cpp
    git remote add origin https://github.com/ggml-org/llama.cpp
    git fetch --depth 1 origin <NEW_SHA> && git checkout -q FETCH_HEAD
-   git apply --check $REPO/inference/patches/expose-hidden-states.patch
+   git apply --check $REPO/services/inference/patches/expose-hidden-states.patch
    ```
    (`git apply`되는 것은 이 패치뿐입니다. spec-decode 임베딩 수정은 Dockerfile의 `sed`이며, 대상 줄이 없으면 no-op입니다.)
 2. **깔끔하게 적용되면:** 네 Dockerfile 모두에서 `LLAMA_CPP_REV`를 새 SHA로 올리세요. CI 스모크 테스트가 이들이 일치하는지 검증합니다.
-3. **실패하면:** `git apply --reject …`로 깔끔한 헝크를 적용하고, 각 `*.rej` 헝크를 옮겨진 앵커 위치에 다시 삽입한 뒤(주변 코드의 업스트림 이름 변경에 주의 — 예: `model` → `model_tgt` — 패치의 추가 줄도 갱신), `git diff > $REPO/inference/patches/expose-hidden-states.patch`를 실행하세요. 1단계를 다시 실행하세요. 긴 CUDA 빌드 전에 멤버/타입 오류를 잡으려면 서버 타깃만 CPU 전용으로 컴파일하세요: `cmake -B build-cpu -DGGML_CUDA=OFF && cmake --build build-cpu --target llama-server`.
+3. **실패하면:** `git apply --reject …`로 깔끔한 헝크를 적용하고, 각 `*.rej` 헝크를 옮겨진 앵커 위치에 다시 삽입한 뒤(주변 코드의 업스트림 이름 변경에 주의 — 예: `model` → `model_tgt` — 패치의 추가 줄도 갱신), `git diff > $REPO/services/inference/patches/expose-hidden-states.patch`를 실행하세요. 1단계를 다시 실행하세요. 긴 CUDA 빌드 전에 멤버/타입 오류를 잡으려면 서버 타깃만 CPU 전용으로 컴파일하세요: `cmake -B build-cpu -DGGML_CUDA=OFF && cmake --build build-cpu --target llama-server`.
 4. 재빌드 후 기동:
    ```bash
    docker compose build --build-arg LLAMA_CPP_REV=<sha> llama-server

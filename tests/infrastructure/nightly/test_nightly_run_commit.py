@@ -74,7 +74,7 @@ ON_DEV = {
     "geometric-lens/Dockerfile": "FROM scratch\n# the lens of dev\n", "geometric-lens/main.py": "# of dev\n",
     "geometric-lens/geometric_lens/models/gx_weights.json": "{}\n",
     "services/sandbox/Dockerfile": "FROM scratch\n# the sandbox of dev\n", "services/sandbox/executor_server.py": "# of dev\n",
-    "inference/Dockerfile.v31": "FROM scratch\n", "inference/entrypoint-v3.1.sh": "#!/bin/sh\n",
+    "services/inference/Dockerfile.v31": "FROM scratch\n", "services/inference/entrypoint-v3.1.sh": "#!/bin/sh\n",
     "tests/replay/recordings/one.json": "{}\n", "docs/API.md": "the page\n",
 }
 SHORT = {"atlas-llama": "the model server", "atlas-lens": "the lens", "atlas-v3": "v3-service", "atlas-sandbox": "the sandbox",
@@ -521,9 +521,9 @@ TAKEN_FROM_DEV = [
     ("scripts/eval/reliability_sandbox.py", "a module of the driver, which runs on the server itself"),
     ("scripts/smoke_result.py", "the script that makes the mark of the result line"),
     ("docker-compose.yml", "a compose file of the stack"),
-    ("inference/Dockerfile.v31", "the model server, whose image is never built on the server and whose start script the stack mounts from the tree"),
-    ("inference/entrypoint-v3.1.sh", "the model server, whose image is never built on the server and whose start script the stack mounts from the tree"),
-    ("inference/a-new-file.sh", "the model server, whose image is never built on the server and whose start script the stack mounts from the tree"),
+    ("services/inference/Dockerfile.v31", "the model server, whose image is never built on the server and whose start script the stack mounts from the tree"),
+    ("services/inference/entrypoint-v3.1.sh", "the model server, whose image is never built on the server and whose start script the stack mounts from the tree"),
+    ("services/inference/a-new-file.sh", "the model server, whose image is never built on the server and whose start script the stack mounts from the tree"),
     ("geometric-lens/geometric_lens/models/gx_weights.json", "the model files of the lens, which the stack mounts"),
 ]
 
@@ -559,9 +559,9 @@ def test_a_compose_file_that_the_run_was_given_is_taken_from_dev_too_and_one_tha
 
 @pytest.mark.parametrize("changed, counted", [
     pytest.param({"docker-compose.yml": "services: {z: {}}\n"}, "", id="one-file"),
-    pytest.param({"docker-compose.yml": "services: {z: {}}\n", "inference/x": "x\n"}, " It changes 1 more such file(s).",
+    pytest.param({"docker-compose.yml": "services: {z: {}}\n", "services/inference/x": "x\n"}, " It changes 1 more such file(s).",
                  id="two-files"),
-    pytest.param({"scripts/code_quality.py": "x\n", "docker-compose.yml": "services: {z: {}}\n", "inference/x": "x\n"},
+    pytest.param({"scripts/code_quality.py": "x\n", "docker-compose.yml": "services: {z: {}}\n", "services/inference/x": "x\n"},
                  " It changes 2 more such file(s).", id="three-files"),
 ])
 def test_the_result_names_the_first_such_file_and_counts_the_others(tmp_path, repository, changed, counted):
@@ -924,7 +924,7 @@ def test_every_file_of_the_repository_that_the_stack_reads_through_a_mount_is_on
             in_git = found and any(name == found.group()[2:] or name.startswith(found.group()[2:] + "/") for name in tracked)
             if in_git and volume.endswith(":ro"):
                 mounted.append(found.group()[2:] + ("/" if (ROOT / found.group()).is_dir() else ""))
-    assert sorted(mounted) == ["geometric-lens/geometric_lens/models/", "inference/entrypoint-v3.1.sh"], mounted
+    assert sorted(mounted) == ["geometric-lens/geometric_lens/models/", "services/inference/entrypoint-v3.1.sh"], mounted
     for path in mounted:
         assert any(path.startswith(folder) for folder in nightly.FROM_DEV if folder.endswith("/")), \
             f"the stack mounts {path} from the tree, which holds dev; a commit that changes it has to be refused"

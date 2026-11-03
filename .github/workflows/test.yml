@@ -50,7 +50,7 @@ jobs:
           - module: proxy
             dir: services/proxy
           - module: tui
-            dir: tui
+            dir: clients/tui
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -444,14 +444,14 @@ jobs:
         # which would publish inconsistent llama-server binaries across
         # backends.
         run: |
-          SHA=$(grep -oP '(?<=ARG LLAMA_CPP_REV=)[a-f0-9]+' inference/Dockerfile.v31 | head -1)
+          SHA=$(grep -oP '(?<=ARG LLAMA_CPP_REV=)[a-f0-9]+' services/inference/Dockerfile.v31 | head -1)
           if [ -z "$SHA" ]; then
-            echo "::error::could not extract LLAMA_CPP_REV from inference/Dockerfile.v31"
+            echo "::error::could not extract LLAMA_CPP_REV from services/inference/Dockerfile.v31"
             exit 1
           fi
           echo "Pinned SHA: $SHA"
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-          for f in inference/Dockerfile.rocm inference/Dockerfile.vulkan; do
+          for f in services/inference/Dockerfile.rocm services/inference/Dockerfile.vulkan; do
             if ! grep -q "LLAMA_CPP_REV=$SHA" "$f"; then
               actual=$(grep -oP '(?<=ARG LLAMA_CPP_REV=)[a-f0-9]+' "$f" | head -1)
               echo "::error file=$f::LLAMA_CPP_REV mismatch — found '$actual', expected '$SHA' (matches Dockerfile.v31). Bump all 4 Dockerfiles together."
@@ -489,11 +489,11 @@ jobs:
         run: |
           cd llama.cpp
           # 1. PC-202 hidden-states patch
-          patch_path=../inference/patches/expose-hidden-states.patch
+          patch_path=../services/inference/patches/expose-hidden-states.patch
           if git apply --check "$patch_path" 2>&1; then
             echo "  OK: expose-hidden-states.patch applies to $LLAMA_CPP_REV"
           else
-            echo "::error file=inference/patches/expose-hidden-states.patch::patch does not apply to LLAMA_CPP_REV=$LLAMA_CPP_REV. See docs/guides/TROUBLESHOOTING.md § 'llama.cpp patch drift' for the bump runbook."
+            echo "::error file=services/inference/patches/expose-hidden-states.patch::patch does not apply to LLAMA_CPP_REV=$LLAMA_CPP_REV. See docs/guides/TROUBLESHOOTING.md § 'llama.cpp patch drift' for the bump runbook."
             exit 1
           fi
           # 2. spec-decode embeddings fix (sed target must exist)
@@ -666,9 +666,9 @@ jobs:
           # Go fetches the TUI's modules first, with no cache (none would act in
           # the merge queue). A download that breaks off in its middle is tried
           # once more; a second failure fails the step with Go's own words.
-          (cd tui && { go mod download || { echo "The download of the TUI's modules broke off. It is tried once more."; go mod download; }; })
+          (cd clients/tui && { go mod download || { echo "The download of the TUI's modules broke off. It is tried once more."; go mod download; }; })
           # The TUI tests start this file.
-          (cd tui && go build -o atlas-tui .)
+          (cd clients/tui && go build -o atlas-tui .)
 
       - name: start the proxy and wait for its answer
         env:

@@ -100,7 +100,7 @@ contrast_pairs.jsonl  →  build_cvector_prompts.py  →  positive.txt + negativ
    /models/ast_edit_steering.gguf
    /models/ast_edit_steering.gguf.model
    ```
-   `inference/entrypoint-v3.1.sh` checks for this file at every
+   `services/inference/entrypoint-v3.1.sh` checks for this file at every
    start and appends `--control-vector-scaled` only when the marker identifies
    the selected model. A vector left behind after a model switch is disabled
    rather than silently applied in the wrong residual space.
@@ -132,7 +132,7 @@ but the signal is weaker.
 ## When it runs
 
 ASA is always on wherever a vector is installed for the served model. At start,
-`inference/entrypoint-v3.1.sh` looks for the file at `ATLAS_CONTROL_VECTOR` and
+`services/inference/entrypoint-v3.1.sh` looks for the file at `ATLAS_CONTROL_VECTOR` and
 its `.model` marker. A marker that names the served model turns ASA on. A vector
 marked for another model, or with no marker, stays disabled, and the startup
 banner says why. `ATLAS_CONTROL_VECTOR_ALLOW_UNVERIFIED=1` accepts any marker.

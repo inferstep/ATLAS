@@ -275,7 +275,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
 		const config = vscode.workspace.getConfiguration('atlas');
 		const mode = config.get<PermissionMode>('permissionMode', 'default');
-		// Host workspace root, like the TUI's host cwd (tui/internal/app/model.go) — the
+		// Host workspace root, like the TUI's host cwd (clients/tui/internal/app/model.go) — the
 		// proxy uses it for host-to-container path translation on Docker and
 		// resolves file ops against it on bare metal. "." only when there is
 		// no folder open (a chat-only session).

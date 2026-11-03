@@ -43,7 +43,7 @@ flag_management:
         - services/proxy/
     - name: go-tui
       paths:
-        - tui/
+        - clients/tui/
     - name: python
       paths:
         - atlas/
@@ -59,5 +59,5 @@ flag_management:
 # own folder. These turn both into paths from the repository root.
 fixes:
   - "github.com/itigges22/atlas-proxy/::services/proxy/"
-  - "github.com/itigges22/atlas-tui/::tui/"
+  - "github.com/itigges22/atlas-tui/::clients/tui/"
   - "src/::clients/extensions/vscode/src/"

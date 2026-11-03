@@ -1,6 +1,6 @@
 services:
   # --- LLM Inference (CUDA + grammar support) ---
-  # The image's ENTRYPOINT (inference/entrypoint-v3.1.sh) is what runs
+  # The image's ENTRYPOINT (services/inference/entrypoint-v3.1.sh) is what runs
   # llama-server. It does NOT consume "$@", so a compose `command:` here
   # would be silently ignored. Configure the server via the environment
   # variables the entrypoint actually reads:
@@ -15,7 +15,7 @@ services:
     image: ghcr.io/${ATLAS_GHCR_OWNER:-inferstep}/atlas-llama:${ATLAS_IMAGE_TAG:-latest}
     restart: unless-stopped
     build:
-      context: ./inference
+      context: ./services/inference
       dockerfile: Dockerfile.v31
     # The installing user's ids, as for the other services: `atlas init` makes
     # secrets/ and the service token readable for that user only.
@@ -36,7 +36,7 @@ services:
       # bakes in the same script at /entrypoint.sh — this just shadows
       # it during dev. Production GHCR pulls work fine without this
       # mount (the COPY'd entrypoint stands on its own).
-      - ./inference/entrypoint-v3.1.sh:/entrypoint.sh:ro
+      - ./services/inference/entrypoint-v3.1.sh:/entrypoint.sh:ro
     ports:
       - "127.0.0.1:${ATLAS_LLAMA_PORT:-8080}:8080"
     # The model's budget, and why it is UNSET.

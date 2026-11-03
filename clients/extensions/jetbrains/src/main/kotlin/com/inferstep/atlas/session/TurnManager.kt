@@ -2,7 +2,7 @@
 // allowlist, the task contract and cancellation.
 //
 // A port of clients/extensions/vscode/src/session/turnManager.ts. Where the VS Code
-// client and the TUI (tui/internal/proxyclient/chat.go) disagree, the TUI is the reference.
+// client and the TUI (clients/tui/internal/proxyclient/chat.go) disagree, the TUI is the reference.
 //
 // Deliberately free of com.intellij imports: this layer runs under plain JUnit,
 // with no IDE and no live proxy, which is what makes the turn semantics
@@ -29,7 +29,7 @@ import kotlinx.coroutines.launch
 import java.security.SecureRandom
 
 /** The proxy caps replayed history at the most recent 40 entries; the client
- * caps too, so the request body never grows unbounded (tui/internal/app/model.go). */
+ * caps too, so the request body never grows unbounded (clients/tui/internal/app/model.go). */
 const val HISTORY_LIMIT = 40
 
 /** The `done` event type, the one that carries the terminal summary. */
@@ -45,7 +45,7 @@ private val sessionIdRandom = SecureRandom()
 
 /**
  * A client-minted per-turn session id: 12 random bytes, hex-encoded (24
- * characters) — the same recipe as tui/internal/app/model.go and the VS Code client. The
+ * characters) — the same recipe as clients/tui/internal/app/model.go and the VS Code client. The
  * proxy keys `/cancel` and pending permission requests by it, so it has to be
  * unguessable and unique per turn.
  */

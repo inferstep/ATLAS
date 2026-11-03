@@ -13,11 +13,11 @@ REPO = Path(__file__).resolve().parents[3]
 
 # Directories whose text is searched for readers.
 READER_GLOBS = [
-    "services/proxy/**/*.go", "tui/**/*.go",
+    "services/proxy/**/*.go", "clients/tui/**/*.go",
     "atlas/**/*.py", "v3-service/**/*.py", "geometric-lens/**/*.py",
     "services/sandbox/*.py",
     "scripts/*.sh", "scripts/**/*.sh", "scripts/**/*.py",
-    "inference/*.sh", "inference/Dockerfile*",
+    "services/inference/*.sh", "services/inference/Dockerfile*",
     "deploy/k3s/*.tmpl", "docker-compose*.yml", "deploy/compose/*.yml",
 ]
 

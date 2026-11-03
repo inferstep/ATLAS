@@ -10,9 +10,9 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
 INFERENCE_DOCKERFILES = [
-    "inference/Dockerfile.v31",
-    "inference/Dockerfile.vulkan",
-    "inference/Dockerfile.rocm",
+    "services/inference/Dockerfile.v31",
+    "services/inference/Dockerfile.vulkan",
+    "services/inference/Dockerfile.rocm",
 ]
 
 

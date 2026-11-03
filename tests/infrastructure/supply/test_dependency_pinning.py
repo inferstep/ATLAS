@@ -142,8 +142,11 @@ def test_production_bases_are_digest_pinned():
 def test_proxy_apk_packages_are_pinned():
     """The proxy's alpine packages support `=version` pinning; enforce it
     (the two runtime packages, curl + bash)."""
-    text = (REPO / "services" / "proxy" / "Dockerfile").read_text().replace("\\\n", " ")
-    m = re.search(r"apk add[^\n]*", text)
+    lines = (REPO / "services" / "proxy" / "Dockerfile").read_text().splitlines(keepends=True)
+    # Docker drops the comment lines inside a RUN, so this test does too. The
+    # packages end where the next command of the RUN starts.
+    text = "".join(line for line in lines if not line.lstrip().startswith("#")).replace("\\\n", " ")
+    m = re.search(r"apk add[^\n&;|]*", text)
     assert m, "proxy Dockerfile no longer uses apk add — update this test"
     for tok in m.group(0).split():
         if tok in ("RUN", "apk", "add", "--no-cache"):

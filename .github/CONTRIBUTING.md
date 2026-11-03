@@ -13,9 +13,9 @@ issue.
 ## 1. How ATLAS is organized
 
 ATLAS is a local coding agent made of a few services: the Go agent loop
-(`services/proxy/`), the terminal client (`tui/`), the Python CLI (`atlas/`), the V3
+(`services/proxy/`), the terminal client (`clients/tui/`), the Python CLI (`atlas/`), the V3
 candidate pipeline (`v3-service/`), the Geometric Lens (`geometric-lens/`),
-the sandbox (`services/sandbox/`) and the llama.cpp images (`inference/`).
+the sandbox (`services/sandbox/`) and the llama.cpp images (`services/inference/`).
 [The repository map](../docs/README.md#repository-map) says what every directory owns, and
 [ARCHITECTURE.md](../docs/reference/ARCHITECTURE.md) explains how the pieces work
 together.
@@ -329,7 +329,7 @@ How code should read (size, structure, abstractions, comments) is in
 functions, lines up to 100 characters. `ruff` runs in the gate; it does not check line length.
 
 **Go.** Format with `gofmt`. `go vet` and `staticcheck` run in the gate
-for `services/proxy/` and `tui/`.
+for `services/proxy/` and `clients/tui/`.
 
 New Go code is also linted with [golangci-lint](https://golangci-lint.run)
 (settings in `.golangci.yml`):

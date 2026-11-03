@@ -1180,7 +1180,7 @@ def deployed_identity(project: str, deploy_dir: Path, commit: str,
     A result is evidence only for the stack that produced it. The gated deploy
     records the commit it deployed (DEPLOYED_SHA) and, in
     deployed/running-<sha>.json, the image each of the five services runs for
-    it. llama-server is kept, not rebuilt, when inference/ did not change, so
+    it. llama-server is kept, not rebuilt, when services/inference/ did not change, so
     an image's own build commit is not the test: the record is. The stack is
     that commit's only when the stated commit is the deployed one and every
     running service uses the image recorded for it.

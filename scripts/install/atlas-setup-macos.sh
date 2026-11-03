@@ -23,7 +23,7 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-# Config — keep LLAMA_CPP_REV aligned with inference/Dockerfile.v31.
+# Config — keep LLAMA_CPP_REV aligned with services/inference/Dockerfile.v31.
 # The CI smoke test (`llama-patches-apply`) gates on cross-Dockerfile
 # agreement; this script reads the SHA from the Dockerfile so there's
 # one source of truth. If the Dockerfile is missing, fall back to a
@@ -52,7 +52,7 @@ done
 LLAMA_BUILD_DIR="$PREFIX/llama.cpp"
 LLAMA_BIN_DIR="$PREFIX/bin"
 LLAMA_SERVER="$LLAMA_BIN_DIR/llama-server-metal"
-PATCH_DIR="$ATLAS_ROOT/inference/patches"
+PATCH_DIR="$ATLAS_ROOT/services/inference/patches"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -74,10 +74,10 @@ require_cmd() {
 }
 
 extract_llama_rev() {
-  # Read the SHA pin from inference/Dockerfile.v31 so this script and
+  # Read the SHA pin from services/inference/Dockerfile.v31 so this script and
   # the docker builds always agree. If we can't read it, error out
   # rather than guess — a wrong SHA means the patch won't apply.
-  local dockerfile="$ATLAS_ROOT/inference/Dockerfile.v31"
+  local dockerfile="$ATLAS_ROOT/services/inference/Dockerfile.v31"
   if [[ ! -f "$dockerfile" ]]; then
     red "Dockerfile.v31 not found at $dockerfile"
     red "  Are you running this from inside the ATLAS repo?"
@@ -187,7 +187,7 @@ fi
 # Step 4 — Pin LLAMA_CPP_REV
 # ---------------------------------------------------------------------------
 
-step "4/8" "Reading LLAMA_CPP_REV from inference/Dockerfile.v31"
+step "4/8" "Reading LLAMA_CPP_REV from services/inference/Dockerfile.v31"
 
 LLAMA_CPP_REV=$(extract_llama_rev)
 green "  Pinned SHA: $LLAMA_CPP_REV"
@@ -378,16 +378,16 @@ step "8/8" "Building atlas-tui (Go Bubbletea client)"
 TUI_OUT="$HOME/.local/bin/atlas-tui"
 mkdir -p "$(dirname "$TUI_OUT")"
 
-if [[ ! -d "$ATLAS_ROOT/tui" ]]; then
-  red "tui/ directory not found at $ATLAS_ROOT/tui"
+if [[ ! -d "$ATLAS_ROOT/clients/tui" ]]; then
+  red "clients/tui/ directory not found at $ATLAS_ROOT/clients/tui"
   red "  Are you running this from inside a complete ATLAS checkout?"
   exit 1
 fi
 
 # go build is idempotent and fast (~10s on M-series). No need to
 # skip when --rebuild is unset; the cost is negligible vs the llama
-# rebuild, and it picks up any tui/ code changes on git pull.
-(cd "$ATLAS_ROOT/tui" && go build -o "$TUI_OUT" .)
+# rebuild, and it picks up any clients/tui/ code changes on git pull.
+(cd "$ATLAS_ROOT/clients/tui" && go build -o "$TUI_OUT" .)
 green "  Built and installed: $TUI_OUT"
 
 # ---------------------------------------------------------------------------

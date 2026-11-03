@@ -59,7 +59,7 @@ updates:
         patterns: ["*"]
 
   - package-ecosystem: gomod
-    directory: /tui
+    directory: /clients/tui
     target-branch: dev
     schedule:
       interval: weekly
@@ -120,7 +120,7 @@ updates:
       - /v3-service
       - /services/sandbox
       - /geometric-lens
-      - /inference
+      - /services/inference
     target-branch: dev
     schedule:
       interval: weekly

@@ -38,7 +38,7 @@ def verify():
     pytest.param(["services/proxy/loop.go"], True, ["go-proxy-vet", "go-proxy-staticcheck", "go-proxy-test"],
                  ["tests/replay", "tests/e2e"], False,
                  id="a proxy change with --full runs the proxy tests and the slow suite"),
-    pytest.param(["tui/chat.go"], False, ["go-tui-vet", "go-tui-staticcheck", "go-tui-test"], [], False,
+    pytest.param(["clients/tui/chat.go"], False, ["go-tui-vet", "go-tui-staticcheck", "go-tui-test"], [], False,
                  id="a TUI change runs its tests too"),
     pytest.param(["v3-service/symbols.py"], False, PYTHON, ["tests/v3-service"], False,
                  id="a Python change runs the Python gates and the suites of its folder"),
@@ -77,7 +77,7 @@ def test_every_gate_it_can_pick_exists_and_has_a_fix(verify):
 
 
 def test_changed_go_test_files_give_a_run_pattern(verify):
-    pattern = verify.changed_go_tests(["services/proxy/loop_project_test.go", "services/proxy/loop.go", "tui/chat_test.go"])
+    pattern = verify.changed_go_tests(["services/proxy/loop_project_test.go", "services/proxy/loop.go", "clients/tui/chat_test.go"])
     assert pattern.startswith("^(Test")
     assert pattern.endswith(")$")
     assert verify.changed_go_tests(["services/proxy/loop.go"]) == ""
@@ -112,7 +112,7 @@ def test_a_base_that_reads_as_an_option_is_refused():
 
 def test_a_dockerfile_change_asks_for_hadolint_when_it_is_not_installed(verify, monkeypatch):
     monkeypatch.setattr(verify.shutil, "which", lambda name: None)
-    assert verify.hadolint_notes(["inference/Dockerfile.vulkan"]) == [
+    assert verify.hadolint_notes(["services/inference/Dockerfile.vulkan"]) == [
         "skip hadolint: it is not installed (https://github.com/hadolint/hadolint/releases)"]
 
 

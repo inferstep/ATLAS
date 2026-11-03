@@ -24,7 +24,7 @@ same selected model used to render these prompts:
         -o ast_edit_steering.gguf \\
         -ngl 99
 
-And add to inference/entrypoint-v3.1.sh (or set the env var the
+And add to services/inference/entrypoint-v3.1.sh (or set the env var the
 entrypoint reads):
     --control-vector-scaled /path/to/ast_edit_steering.gguf:0.5
 """

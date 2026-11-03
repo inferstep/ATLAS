@@ -146,7 +146,7 @@ FROM_DEV = {"scripts/nightly_run.py": "the script of this run",
             "scripts/eval/reliability_records.py": "a module of the driver, which runs on the server itself",
             "scripts/eval/reliability_sandbox.py": "a module of the driver, which runs on the server itself",
             "scripts/smoke_result.py": "the script that makes the mark of the result line",
-            "inference/": "the model server, whose image is never built on the server and whose start script the "
+            "services/inference/": "the model server, whose image is never built on the server and whose start script the "
                           "stack mounts from the tree",
             "geometric-lens/geometric_lens/models/": "the model files of the lens, which the stack mounts"}
 # A run for one commit takes only the tip of a branch of this name: what a maintainer has pushed for a smoke run.

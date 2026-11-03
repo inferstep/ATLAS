@@ -1,6 +1,6 @@
 # Root-level dockerignore. Applies to any build that uses the repo root as
 # context — currently just `v3-service` (per docker-compose.yml). Per-service
-# Dockerfiles in services/proxy/, geometric-lens/, services/sandbox/, inference/ use
+# Dockerfiles in services/proxy/, geometric-lens/, services/sandbox/, services/inference/ use
 # their own subdirectory as context and are unaffected by this file.
 #
 # Goal: keep the v3 build context to just the `v3-service/` Python modules
@@ -13,10 +13,10 @@
 
 # Other services' source trees (v3 doesn't need them)
 services/proxy/
-tui/
+clients/tui/
 geometric-lens/
 services/sandbox/
-inference/
+services/inference/
 deploy/
 docs/
 tests/

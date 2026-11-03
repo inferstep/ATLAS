@@ -55,7 +55,7 @@ def finding(file: str, code: str = "DL3003", level: str = "warning", message: st
 def repo(tmp_path):
     """A repository with two Dockerfiles in its first commit and a change to one of them in its second."""
     root = tmp_path / "repo"
-    for path in ("services/proxy/Dockerfile", "inference/Dockerfile.vulkan", "scripts/ci/check_dockerfile_sources.py"):
+    for path in ("services/proxy/Dockerfile", "services/inference/Dockerfile.vulkan", "scripts/ci/check_dockerfile_sources.py"):
         (root / path).parent.mkdir(parents=True, exist_ok=True)
         (root / path).write_text("FROM debian:12\n", encoding="utf-8")
     git(root, "init", "-q")
@@ -97,7 +97,7 @@ def test_the_stand_in_starts_where_the_path_of_python_holds_a_space(lint, repo, 
 
 
 def test_it_takes_every_dockerfile_and_nothing_else(lint, repo):
-    assert lint.dockerfiles(repo) == ["inference/Dockerfile.vulkan", "services/proxy/Dockerfile"]
+    assert lint.dockerfiles(repo) == ["services/inference/Dockerfile.vulkan", "services/proxy/Dockerfile"]
 
 
 def test_it_takes_the_dockerfiles_of_this_repository(lint):
@@ -166,20 +166,20 @@ def annotations(out: str) -> list[str]:
 
 def test_only_the_dockerfiles_the_change_touches_are_annotated(lint, repo, hadolint, capsys, monkeypatch):
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    told = [finding("services/proxy/Dockerfile"), finding("inference/Dockerfile.vulkan", "DL3008")]
+    told = [finding("services/proxy/Dockerfile"), finding("services/inference/Dockerfile.vulkan", "DL3008")]
     lint.lint(repo, hadolint(told), git(repo, "rev-parse", "HEAD~1"), False)
     out = capsys.readouterr().out
     assert annotations(out) == ["::warning file=services/proxy/Dockerfile,line=2,title=hadolint (DL3003)::Use WORKDIR"]
-    assert "inference/Dockerfile.vulkan:2: DL3008 warning" in out
+    assert "services/inference/Dockerfile.vulkan:2: DL3008 warning" in out
 
 
 def test_every_finding_is_annotated_when_the_base_is_not_known(lint, repo, hadolint, capsys, monkeypatch):
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    told = [finding("services/proxy/Dockerfile"), finding("inference/Dockerfile.vulkan", "DL3066", "info")]
+    told = [finding("services/proxy/Dockerfile"), finding("services/inference/Dockerfile.vulkan", "DL3066", "info")]
     lint.lint(repo, hadolint(told), "0" * 40, False)
     out = capsys.readouterr().out
     assert len(annotations(out)) == 2
-    assert "::notice file=inference/Dockerfile.vulkan,line=2,title=hadolint (DL3066)::Use WORKDIR" in out
+    assert "::notice file=services/inference/Dockerfile.vulkan,line=2,title=hadolint (DL3066)::Use WORKDIR" in out
     assert "is not in this checkout, so every finding is shown" in out
 
 
@@ -190,11 +190,11 @@ def test_nothing_is_annotated_outside_github(lint, repo, hadolint, capsys, monke
 
 
 def test_changed_only_prints_the_findings_of_the_changed_dockerfiles(lint, repo, hadolint, capsys):
-    told = [finding("services/proxy/Dockerfile"), finding("inference/Dockerfile.vulkan", "DL3008")]
+    told = [finding("services/proxy/Dockerfile"), finding("services/inference/Dockerfile.vulkan", "DL3008")]
     lint.lint(repo, hadolint(told), git(repo, "rev-parse", "HEAD~1"), True)
     out = capsys.readouterr().out
     assert "services/proxy/Dockerfile:2: DL3003" in out
-    assert "inference/Dockerfile.vulkan:2:" not in out
+    assert "services/inference/Dockerfile.vulkan:2:" not in out
     assert "hadolint: 2 finding(s) in 2 Dockerfile(s)" in out
 
 

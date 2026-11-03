@@ -78,6 +78,7 @@ pull_requests:
     services/sandbox/executor_models.py: the guards
     services/sandbox/executor_parsers.py: the guards
     services/sandbox/resource_contract.py: the guards
+    services/sandbox/start_up.py: the guards
   # Path -> what it is. A pull request that changes one is high risk too.
   # These files of v3-service hold a prompt, or shape the request that
   # carries it. No recorded request shows a change of that text, so this
@@ -99,11 +100,11 @@ pull_requests:
 # Path prefix -> area label, for pull requests. A file can match several.
 areas:
   services/proxy/: area/proxy
-  tui/: area/tui
+  clients/tui/: area/tui
   atlas/: area/cli
   v3-service/: area/v3
   geometric-lens/: area/lens
-  inference/: area/inference
+  services/inference/: area/inference
   services/sandbox/: area/sandbox
   clients/extensions/: area/extensions
   scripts/: area/install

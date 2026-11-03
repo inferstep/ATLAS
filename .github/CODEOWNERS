@@ -17,10 +17,10 @@
 
 # Subsystems
 /services/proxy/                 @itigges22
-/tui/                   @itigges22
+/clients/tui/           @itigges22
 /atlas/                 @itigges22
 /v3-service/            @itigges22
 /geometric-lens/        @itigges22
-/inference/             @itigges22
+/services/inference/    @itigges22
 /benchmark/             @itigges22
 /docs/                  @itigges22

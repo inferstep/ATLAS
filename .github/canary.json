@@ -146,10 +146,10 @@
       "reports": [
         "golangci-lint (tui)"
       ],
-      "what": "a failing test, with a function that nothing calls, in tui/canary_test.go",
+      "what": "a failing test, with a function that nothing calls, in clients/tui/canary_test.go",
       "shows": "canary: this test fails on purpose",
       "action": "write",
-      "path": "tui/canary_test.go",
+      "path": "clients/tui/canary_test.go",
       "lines": [
         "package main",
         "",
@@ -263,10 +263,10 @@
       "red": [
         "llama.cpp patches apply to pinned SHA"
       ],
-      "what": "a llama.cpp revision in inference/Dockerfile.vulkan that differs from the other Dockerfiles",
+      "what": "a llama.cpp revision in services/inference/Dockerfile.vulkan that differs from the other Dockerfiles",
       "shows": "0000000000000000000000000000000000000000",
       "action": "replace_line",
-      "path": "inference/Dockerfile.vulkan",
+      "path": "services/inference/Dockerfile.vulkan",
       "lines": [
         "ARG LLAMA_CPP_REV=0000000000000000000000000000000000000000"
       ],
@@ -433,6 +433,8 @@
     "hadolint (dockerfiles)": "It reports a finding as a note on the line. A finding does not turn it red. Its plant shows that it still reports.",
     "smoke result": "It turns red only for a pull request that changes text which every request to the model carries. No planted file is such text.",
     "dependency review": "It turns red only for a dependency with a published advisory. None is planted.",
+    "govulncheck (proxy)": "Not planted: a plant needs a module pinned at a version with a known issue, and a call into its affected function. The job cannot pass by being skipped: it has no path filter and no job condition. A wrong module folder fails it: govulncheck finds no go.mod and exits 1. It has not turned red on a real known issue yet: the entries it listed on 2026-11-03 were in imported packages whose affected functions the code does not call (#819).",
+    "govulncheck (tui)": "Not planted: a plant needs a module pinned at a version with a known issue, and a call into its affected function. The job cannot pass by being skipped: it has no path filter and no job condition. A wrong module folder fails it: govulncheck finds no go.mod and exits 1. It has not turned red on a real known issue yet: the entries it listed on 2026-11-03 were in imported packages whose affected functions the code does not call (#819).",
     "checks ran": "Its violation is a job that had to run and reported nothing. A plant for that takes a job out of the run, and then the red of that job is missing here. On the canary it passes with a note: `coverage upload (extension)` is skipped behind the failed job `lint + test + build`.",
     "sonar scan": "It sends the code to SonarQube Cloud. A finding does not turn the job red.",
     "integrity check": "It reports and does not fail for a finding.",

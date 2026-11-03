@@ -8,9 +8,9 @@ cited; this document records identity and license.
 
 | Component | License | Where pinned |
 |---|---|---|
-| llama.cpp (ggml-org) | MIT | `LLAMA_CPP_REV` in all `inference/Dockerfile*` (CI verifies the ATLAS patches apply to the pinned rev) |
+| llama.cpp (ggml-org) | MIT | `LLAMA_CPP_REV` in all `services/inference/Dockerfile*` (CI verifies the ATLAS patches apply to the pinned rev) |
 
-ATLAS carries one patch (`inference/patches/expose-hidden-states.patch`,
+ATLAS carries one patch (`services/inference/patches/expose-hidden-states.patch`,
 per-layer hidden-state extraction) and one in-Dockerfile `sed` fix on
 top of the pinned revision — both against MIT-licensed code.
 
@@ -18,8 +18,8 @@ top of the pinned revision — both against MIT-licensed code.
 
 Charm stack — `bubbletea`, `bubbles`, `lipgloss`, `glamour`, `x/*`,
 `colorprofile` (MIT); `chroma` (MIT); `atotto/clipboard` (BSD-3);
-`go-osc52` (MIT); `douceur` (MIT). Full pinned list: `tui/go.mod` /
-`tui/go.sum`. The proxy (`services/proxy/go.mod`) is stdlib-only.
+`go-osc52` (MIT); `douceur` (MIT). Full pinned list: `clients/tui/go.mod` /
+`clients/tui/go.sum`. The proxy (`services/proxy/go.mod`) is stdlib-only.
 
 ## Python dependencies (service images)
 

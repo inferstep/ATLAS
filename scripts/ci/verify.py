@@ -30,7 +30,7 @@ INFRASTRUCTURE_SUITE = "tests/infrastructure"
 GATES_BY_PATH = (
     (lambda p: True, ("test-integrity", "dockerfile-sources")),
     (lambda p: p.startswith(PROXY), ("go-proxy-vet", "go-proxy-staticcheck")),
-    (lambda p: p.startswith("tui/"), ("go-tui-vet", "go-tui-staticcheck", "go-tui-test")),
+    (lambda p: p.startswith("clients/tui/"), ("go-tui-vet", "go-tui-staticcheck", "go-tui-test")),
     (lambda p: p.endswith(".py"), ("python-compile", "min-python", "ruff")),
     (lambda p: p.endswith(".sh"), ("shellcheck",)),
     (lambda p: p.startswith(".github/workflows/"), ("workflow-yaml",)),
@@ -53,11 +53,11 @@ SENDER_CONTRACT = "tests/contracts/test_api_version_contract.py"
 
 FIXES = {
     "go-proxy-vet": "Fix the line `go vet` names (run it in services/proxy/).",
-    "go-tui-vet": "Fix the line `go vet` names (run it in tui/).",
+    "go-tui-vet": "Fix the line `go vet` names (run it in clients/tui/).",
     "go-proxy-staticcheck": "Fix the finding at the line shown. Its code (for example SA4006) is explained by `staticcheck -explain <code>`.",
     "go-tui-staticcheck": "Fix the finding at the line shown. Its code (for example SA4006) is explained by `staticcheck -explain <code>`.",
     "go-proxy-test": "Run `go test -run '<TestName>' .` in services/proxy/ for a test that failed, then fix the code or the test.",
-    "go-tui-test": "Run `go test -run '<TestName>' ./...` in tui/ for a test that failed, then fix the code or the test.",
+    "go-tui-test": "Run `go test -run '<TestName>' ./...` in clients/tui/ for a test that failed, then fix the code or the test.",
     "go-proxy-changed-tests": "Run `go test -run '<TestName>' .` in services/proxy/ for a test that failed, then fix the code or the test.",
     "python-compile": "A file does not compile. Fix the syntax error at the line shown.",
     "min-python": "The code uses a form Python 3.9 cannot run. Write it in a form 3.9 accepts.",
@@ -154,7 +154,7 @@ def advisory(changed: list[str], base: str) -> list[str]:
 def golangci_notes(changed: list[str], base: str) -> list[str]:
     """What golangci-lint finds in the Go code this change adds."""
     out = []
-    modules = [m for m, folder in (("proxy", "services/proxy"), ("tui", "tui")) if any(p.startswith(folder + "/") for p in changed)]
+    modules = [m for m, folder in (("proxy", "services/proxy"), ("tui", "clients/tui")) if any(p.startswith(folder + "/") for p in changed)]
     if not modules or not (ROOT / ".golangci.yml").is_file():
         return out
     if not shutil.which("golangci-lint"):
