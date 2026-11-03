@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/itigges22/atlas-proxy/internal/fencing"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -309,13 +310,13 @@ func (loop *agentLoop) resolveFencedContent(turn int, parsed *wire.ModelResponse
 	// The channel can be spent while the model keeps asking
 	// for it. Offer the way out ONCE, before anything tries
 	// another resolution, so the turn costs no generation.
-	if fencedUsable && isFencedSentinel(trimmed) {
+	if fencedUsable && fencing.IsSentinel(trimmed) {
 		if msg := fencedChannelRecovery(ctx, st, wfInput.Path); msg != "" {
 			st.bounceToolCall(ctx, "write_file", msg)
 			return turnEnds
 		}
 	}
-	if fencedUsable && isFencedSentinel(trimmed) {
+	if fencedUsable && fencing.IsSentinel(trimmed) {
 		return loop.replaceFencedSentinel(turn, parsed, intentArgs, wfInput, trimmed)
 	}
 	return turnContinues
@@ -342,9 +343,9 @@ func (loop *agentLoop) replaceFencedSentinel(turn int, parsed *wire.ModelRespons
 	// Only protocol framing decides. An unterminated
 	// fence is one incomplete shape; a BARE body with no
 	// fence at all is the other, and a truncated bare body
-	// can still parse cleanly. See classifyFencedPayload.
+	// can still parse cleanly. See fencing.ClassifyPayload.
 	inline := strings.TrimLeft(strings.TrimPrefix(trimmed, "@fenced"), " \t\r\n")
-	resolved, framed, why := resolveInlineFencedBody(inline)
+	resolved, framed, why := fencing.ResolveInlineBody(inline)
 	if framed {
 		inline = resolved
 	} else {

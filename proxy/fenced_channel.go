@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/fencing"
 	"github.com/itigges22/atlas-proxy/internal/logsafe"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
@@ -284,7 +285,7 @@ type fencedFetch struct {
 // inline path reads a body.
 type fencedAnswer struct {
 	reply          string
-	framing        fenceFraming
+	framing        fencing.Framing
 	content        string
 	err            error
 	got            bool
@@ -304,13 +305,13 @@ func (f *fencedFetch) ask(grammar string, attempt int, attemptStart time.Time) f
 	ctx.FencedCalls++
 	ctx.FencedTokens += tokens
 	// Under the fence grammar a code file may end on three backticks
-	// (fenceBlockGrammar); that line is the closer the grammar accepted.
-	if isFenceBlockGrammar(grammar) && fenceShortCloserAllowed(tag) {
-		reply = closeShortFence(reply)
+	// (fencing.BlockGrammar); that line is the closer the grammar accepted.
+	if fencing.IsBlockGrammar(grammar) && fencing.ShortCloserAllowed(tag) {
+		reply = fencing.CloseShort(reply)
 	}
 	// The same framing decision the inline path makes, so a reply the
 	// parent would refuse inline cannot be accepted here instead.
-	framing, content := classifyFencedPayload(reply)
+	framing, content := fencing.ClassifyPayload(reply)
 	// The model sometimes wraps the SENTINEL in the fence instead of the
 	// file: "```python\n@fenced\n```". That extracts as
 	// non-empty and would land a file whose entire contents are the word
@@ -413,7 +414,7 @@ func (f *fencedFetch) settle(a fencedAnswer, attempt int) (string, bool, error) 
 		ctx.FencedFailures[fencedKey(ctx, path)], maxFencedFailuresPerPath,
 		logsafe.TextSummary(reply))
 	f.msgs = append(f.msgs, wire.AgentMessage{Role: "assistant", Content: reply},
-		wire.AgentMessage{Role: "user", Content: fencedRetryNote(framing, tag)})
+		wire.AgentMessage{Role: "user", Content: fencing.RetryNote(framing, tag)})
 	return "", false, nil
 }
 
@@ -425,7 +426,7 @@ func emitFencedFetch(ctx *AgentContext, path string, attempt int, grammar string
 	elapsed time.Duration, tokens int, outcome string) {
 	fs := ctx.LastFencedStream
 	g := "raw"
-	if isFenceBlockGrammar(grammar) {
+	if fencing.IsBlockGrammar(grammar) {
 		g = "fence"
 	}
 	ev := map[string]interface{}{

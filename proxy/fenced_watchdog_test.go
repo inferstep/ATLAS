@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/fencing"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -95,7 +96,7 @@ func TestSlowButProgressingFencedPayloadSurvives(t *testing.T) {
 	if err != nil {
 		t.Fatalf("progressing stream was cut: %v", err)
 	}
-	if body := extractFencedContent(out); !strings.Contains(body, "z = 3") {
+	if body := fencing.ExtractContent(out); !strings.Contains(body, "z = 3") {
 		t.Errorf("payload truncated: %q", out)
 	}
 }
@@ -125,7 +126,7 @@ func TestReasoningDoesNotResetTheProgressTimer(t *testing.T) {
 	if cut := ctx.LastFencedStream.Cut; cut != "stalled" {
 		t.Errorf("watchdog cut = %q, want %q", cut, "stalled")
 	}
-	if extractFencedContent(out) != "" {
+	if fencing.ExtractContent(out) != "" {
 		t.Errorf("a reasoning-only stream must not yield content: %q", out)
 	}
 }
