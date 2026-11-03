@@ -2,9 +2,9 @@
 # Make .github/requirements/ci.txt again: the hashed lock of what the CI jobs
 # install (the tools, and the packages of the product that the tests need),
 # lens.txt (the lock of the lens tests), and the service image locks
-# (geometric-lens/requirements-lock.txt, services/v3-service/requirements-lock.txt and
+# (services/geometric-lens/requirements-lock.txt, services/v3-service/requirements-lock.txt and
 # services/sandbox/requirements-lock.txt).
-# Run it after a change to ci.in, lens.in, geometric-lens/requirements.txt,
+# Run it after a change to ci.in, lens.in, services/geometric-lens/requirements.txt,
 # services/v3-service/requirements.txt or the sandbox's two requirement files. Needs
 # uv, which gets Python 3.12 and pip-tools for the run.
 #
@@ -35,6 +35,6 @@ uv pip compile --quiet --python-version 3.13 --python-platform x86_64-unknown-li
     --output-file=../../services/sandbox/requirements-lock.txt ../../services/sandbox/requirements-runtime.txt ../../services/sandbox/requirements-verify.txt
 uv pip compile --quiet --python-version 3.11 --python-platform x86_64-unknown-linux-gnu --generate-hashes \
     --emit-index-url --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple \
-    --index-strategy unsafe-best-match --output-file=../../geometric-lens/requirements-lock.txt ../../geometric-lens/requirements.txt
+    --index-strategy unsafe-best-match --output-file=../../services/geometric-lens/requirements-lock.txt ../../services/geometric-lens/requirements.txt
 
 

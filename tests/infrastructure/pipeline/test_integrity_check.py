@@ -691,7 +691,7 @@ STOPPED = [
      "new `pytest_ignore_collect`: whole test files are left out"),
     ("tests/conftest.py", "        item.add_marker(pytest.mark.skip)",
      "new `item.add_marker`: the tests the hook picks stop running"),
-    ("geometric-lens/conftest.py", "collect_ignore = ['tests/test_gpu.py']",
+    ("services/geometric-lens/conftest.py", "collect_ignore = ['tests/test_gpu.py']",
      "new `collect_ignore`: whole test files are left out"),
     (PY, "@unittest.skip", ONE),
     (PY, "@unittest.skipIf(sys.platform == 'darwin', '')", ONE),

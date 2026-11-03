@@ -270,7 +270,7 @@ def test_lens_artifact_dir_defaults_to_the_checkout(tmp_path, monkeypatch):
     monkeypatch.delenv("ATLAS_LENS_MODELS", raising=False)
     m = model_registry.by_name("Qwen3.5-9B-Q6_K")
     assert model_registry.lens_artifact_dir_for(m, str(tmp_path)) == str(
-        tmp_path / "geometric-lens" / "geometric_lens" / "models")
+        tmp_path / "services" / "geometric-lens" / "geometric_lens" / "models")
 
 
 def test_lens_artifact_dir_honors_atlas_lens_models_env(monkeypatch, tmp_path):

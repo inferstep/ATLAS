@@ -245,7 +245,7 @@ def test_a_change_to_a_workflow_is_not_high_risk_by_the_label_and_the_integrity_
     assert ".github/workflows/" in integrity.GATE_FILES
 
 
-@pytest.mark.parametrize("path", ["tests/infrastructure/test_x.py", "geometric-lens/tests/test_y.py", "clients/extensions/vscode/test/z.test.ts",
+@pytest.mark.parametrize("path", ["tests/infrastructure/test_x.py", "services/geometric-lens/tests/test_y.py", "clients/extensions/vscode/test/z.test.ts",
                                   "services/proxy/main_test.go", "docs/SETUP.md", "docs/images/a.svg", "README.md", "services/proxy/go.sum"])
 def test_the_tests_the_documents_and_the_lock_files_of_this_repository_do_not_count(path):
     assert rules.labels_for([changed(path, 700, 600), changed("atlas/env.py", 5, 1)], False, SETTINGS) == rules.Labels("size/S", 6, ())

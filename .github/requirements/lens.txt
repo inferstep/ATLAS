@@ -217,7 +217,7 @@ fastapi==0.162.0 \
     --hash=sha256:6a22c1e2e6e32e0633ee7e170f00009a29b8228b16feb219ee42f32fd8d88a8f
     # via
     #   -c ci.txt
-    #   -r ../../geometric-lens/requirements.txt
+    #   -r ../../services/geometric-lens/requirements.txt
 filelock==4.2.4 \
     --hash=sha256:301241438c57936ef93f4243a94f2559022268bfcf9b375a9a72eb0f8db8358e \
     --hash=sha256:c6d8663535e1650ee430507b4ffbac7b464dd64b7647ea0112a9f406499d163d
@@ -233,7 +233,7 @@ fsspec==2026.9.0 \
 gguf==0.19.0 \
     --hash=sha256:70bcd10edfe697fb2dad6e40af2234b9d8ece9a41a99761405121ebda1c3c1cd \
     --hash=sha256:dbadcd6cc7ccd44256f2229fe7c2dff5e8aa5cf0612ab987fd2b1a57e428923f
-    # via -r ../../geometric-lens/requirements.txt
+    # via -r ../../services/geometric-lens/requirements.txt
 h11==0.16.0 \
     --hash=sha256:4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1 \
     --hash=sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86
@@ -276,7 +276,7 @@ httpx==0.28.1 \
     --hash=sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad
     # via
     #   -c ci.txt
-    #   -r ../../geometric-lens/requirements.txt
+    #   -r ../../services/geometric-lens/requirements.txt
 httpx2==2.16.0 \
     --hash=sha256:0d54c98128e8f2ff7fbbde0fca8c359e5f032edeaaaac443cdb7f31f685bcd7f \
     --hash=sha256:fd2c5d7909e8d86fe92d53020c310ca0e4e431b838c207c5754b9bbf0308d49a
@@ -537,7 +537,7 @@ numpy==2.4.6 \
     --hash=sha256:f407cb6b8e9d6d8c626bc73c945db1706035af8fd632295547bf1c9e46d092d6 \
     --hash=sha256:f74a575920ab21fe304421a3fc28793d82e299cae9eccb37084e9fc7f3617c20
     # via
-    #   -r ../../geometric-lens/requirements.txt
+    #   -r ../../services/geometric-lens/requirements.txt
     #   gguf
     #   scipy
     #   xgboost-cpu
@@ -558,7 +558,7 @@ pydantic==2.14.1 \
     --hash=sha256:94f478203dd03404682a1ada216965651dd74b1d2d5ffd62e00e0837caab5c26
     # via
     #   -c ci.txt
-    #   -r ../../geometric-lens/requirements.txt
+    #   -r ../../services/geometric-lens/requirements.txt
     #   fastapi
 pydantic-core==2.50.1 \
     --hash=sha256:0036473f5583e6a60e50b8b21651511564277a3f05cc5dab8cf579f552cd5f6c \
@@ -894,7 +894,7 @@ torch==2.14.0+cpu \
     --hash=sha256:f152f41dc5dc462afe0de780e451ebb47ea8b4451f8f919f9537aa8e2cbe1d7e \
     --hash=sha256:f2ffdacd95d7090a8bdfa8426f5d1557625874b19a96ba23a41f640d4a0c9c28 \
     --hash=sha256:ff2e3a049e4c6d406d2f87acad9b2907d5052a3fa6d0e658b5f6e48d46bae11b
-    # via -r ../../geometric-lens/requirements.txt
+    # via -r ../../services/geometric-lens/requirements.txt
 tqdm==4.70.1 \
     --hash=sha256:c293e525e6fef9c20e8728fd4612df02a0aa31bb5fe91ecd93e123b1b7bffa73 \
     --hash=sha256:cefd0eca11b2a37a3aee776544d4f4ae913f02688135b5556b8788dfa474afc4
@@ -938,11 +938,11 @@ uvicorn==0.54.0 \
     --hash=sha256:a2e33cbfaa0306f8e6b0c13e0cb89d7d7a2da3e62b90c66e18c33d9807b28620
     # via
     #   -c ci.txt
-    #   -r ../../geometric-lens/requirements.txt
+    #   -r ../../services/geometric-lens/requirements.txt
 xgboost-cpu==3.2.0 \
     --hash=sha256:27f1b1642815c23ee73065d5702ad24c1c1649d63e4e2f498dc7e6a961012281 \
     --hash=sha256:78fc90c09d7a1a1603ebb3a1c341689096797160c35a996d6a096b03e20caab4 \
     --hash=sha256:896b9e2bc52ec0921edf92ddd1cebedf47032e94992b7aca0293524d380ce6e9 \
     --hash=sha256:9c10b1653e1a689bf4094a328144cf3633c9be0e5217a76fbdc2fde6abcb2950 \
     --hash=sha256:bfe72e42f73d2c6870a1a8b75324d56ae86ddad9abd4dccefeb36f2c3196dd48
-    # via -r ../../geometric-lens/requirements.txt
+    # via -r ../../services/geometric-lens/requirements.txt

@@ -144,7 +144,7 @@ def _invalid_runtime_artifacts(artifact_dir: str,
     inverted threshold order would let publishing claim calibrated support
     while the runtime quietly disables interventions.
     """
-    gl_dir = os.path.join(cli_env.atlas_root(), "geometric-lens")
+    gl_dir = os.path.join(cli_env.atlas_root(), "services", "geometric-lens")
     if gl_dir not in sys.path:
         sys.path.insert(0, gl_dir)
     try:
@@ -240,7 +240,7 @@ def _lens_artifact_dir(matched, atlas_root: str) -> str:
                 os.path.normpath(os.path.join(atlas_root, env))
         else:
             artifact_dir = os.path.normpath(os.path.join(
-                atlas_root, "geometric-lens", "geometric_lens", "models"))
+                atlas_root, "services", "geometric-lens", "geometric_lens", "models"))
     return artifact_dir
 
 
@@ -889,7 +889,7 @@ def _print_training_import_error(e: ImportError, color: bool) -> None:
                     "https://download.pytorch.org/whl/cpu")
     else:
         _safe_print("  The atlas CLI must point at an ATLAS checkout "
-                    "containing geometric-lens/ (check `pip show atlas` "
+                    "containing services/geometric-lens/ (check `pip show atlas` "
                     "→ Editable project location).")
 
 
@@ -919,7 +919,7 @@ def _train_cost_field(args: argparse.Namespace, atlas_root: str, data: Dict, col
     try:
         # The training module lives in the repo, not on the host's default
         # path — resolve it from the install root so this works from any cwd.
-        gl_dir = os.path.join(atlas_root, "geometric-lens")
+        gl_dir = os.path.join(atlas_root, "services", "geometric-lens")
         if gl_dir not in sys.path:
             sys.path.insert(0, gl_dir)
         from geometric_lens.training import train_cost_field, save_cost_field
@@ -1170,7 +1170,7 @@ def _publish_artifact_dir(args: argparse.Namespace, matched, atlas_root: str) ->
     else:
         env = _configured_lens_models_dir(atlas_root)
         artifact_dir = env or os.path.normpath(os.path.join(
-            atlas_root, "geometric-lens", "geometric_lens", "models"))
+            atlas_root, "services", "geometric-lens", "geometric_lens", "models"))
     return artifact_dir
 
 

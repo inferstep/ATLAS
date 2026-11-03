@@ -520,7 +520,7 @@ go build -o ~/.local/bin/atlas-proxy-v2 .
 cd ../..
 
 # 4. Install geometric-lens Python dependencies
-pip install -r geometric-lens/requirements.txt
+pip install -r services/geometric-lens/requirements.txt
 
 # 5. Install V3 service dependencies
 pip install -r services/v3-service/requirements.txt
@@ -546,7 +546,7 @@ llama-server \
 
 # Terminal 2: Geometric Lens (required: the proxy refuses requests while it
 # cannot score)
-cd geometric-lens
+cd services/geometric-lens
 LLAMA_URL=http://localhost:8080 \
 LLAMA_EMBED_URL=http://localhost:8080 \
 python -m uvicorn main:app --host 0.0.0.0 --port 8099
@@ -811,7 +811,7 @@ ATLAS のすべてのリクエストは Geometric Lens を必要とします（[
 
 **[ATLAS Dataset on HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS)** — エンベディング、トレーニングデータ、ウェイトファイルが含まれています。
 
-ウェイトファイルを `geometric-lens/geometric_lens/models/` に配置してください（または Docker Compose で `ATLAS_LENS_MODELS` 経由でマウント）。サービスは起動時に自動的にロードします。
+ウェイトファイルを `services/geometric-lens/geometric_lens/models/` に配置してください（または Docker Compose で `ATLAS_LENS_MODELS` 経由でマウント）。サービスは起動時に自動的にロードします。
 
 ウェイトがないモデルは、独自のベンチマークデータでビルドします。`atlas bench` はプロキシを経由せずに V3 の各ステージを直接実行するため、レンズがウェイトを持つ前でも動作します。ループ全体が CLI で完結します:
 
@@ -869,7 +869,7 @@ mkdir -p secrets     # or set ATLAS_SECRETS_DIR
 
 `atlas-bootstrap.sh` はサービス起動後に自動的にビルドします。パイプラインは:
 
-1. `build_cvector_prompts.py` が、コミット済みの `geometric-lens/asa_calibration/contrast_pairs.jsonl`（1000 ペア）をポジティブ / ネガティブのプロンプトファイルに変換する。
+1. `build_cvector_prompts.py` が、コミット済みの `services/geometric-lens/asa_calibration/contrast_pairs.jsonl`（1000 ペア）をポジティブ / ネガティブのプロンプトファイルに変換する。
 2. ブートストラップが `llama-server` を短時間停止し、`llama-cvector-generator` を `--method mean -ngl 99` 付きのワンショットコンテナとして実行し、`models/ast_edit_steering.gguf` に加えて、ベクトルがどのモデルに対してビルドされたかを記録する `models/ast_edit_steering.gguf.model` サイドカーマーカーを書き込み、その後 `llama-server` を再起動する。
 3. `services/inference/entrypoint-v3.1.sh` が次回起動時にファイルを検出し、`.model` サイドカーマーカーが選択中のモデルと一致することを確認して、`llama-server` のコマンドラインに `--control-vector-scaled /models/ast_edit_steering.gguf:0.5` を追加する。マーカーが存在しない、または別のモデルを指しているベクトルは**無効のまま**になります（起動バナーが理由を報告します）— ベクトルは 1 つのモデルに紐づく残差空間のアーティファクトだからです。
 
@@ -888,7 +888,7 @@ mkdir -p secrets     # or set ATLAS_SECRETS_DIR
 
 ビルドを完全にスキップするには、インストーラーの実行前に `ATLAS_BOOTSTRAP_SKIP_ASA=1` を設定してください。
 
-手動での再ビルド（ペアの再キュレーション、別の `--method`、別のベースモデル）については、[`geometric-lens/asa_calibration/README.md`](../../../geometric-lens/asa_calibration/README.md) を参照してください。
+手動での再ビルド（ペアの再キュレーション、別の `--method`、別のベースモデル）については、[`services/geometric-lens/asa_calibration/README.md`](../../../services/geometric-lens/asa_calibration/README.md) を参照してください。
 
 ---
 

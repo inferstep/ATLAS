@@ -4,7 +4,7 @@
   "file_lines": 1500
  },
  "functions": {
-  "geometric-lens/geometric_lens/training.py:train_gx": 132,
+  "services/geometric-lens/geometric_lens/training.py:train_gx": 132,
   "services/proxy/loop.go:runAgentLoop": 151,
   "services/proxy/delivery.go:deliverCandidateBytes": 128,
   "services/sandbox/executor_server.py:_syntax_check_impl": 123

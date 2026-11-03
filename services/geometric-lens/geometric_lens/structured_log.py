@@ -1,6 +1,6 @@
 """Structured JSON logging + correlation IDs (Python services).
 
-CANONICAL COPY NOTICE: byte-identical copies live in geometric-lens/
+CANONICAL COPY NOTICE: byte-identical copies live in services/geometric-lens/
 geometric_lens/, services/sandbox/, and services/v3-service/ (separate containers, no
 shared package). tests/contracts/test_structured_log_contract.py
 enforces they stay identical. Edit all copies together.

@@ -103,7 +103,7 @@ areas:
   clients/tui/: area/tui
   atlas/: area/cli
   services/v3-service/: area/v3
-  geometric-lens/: area/lens
+  services/geometric-lens/: area/lens
   services/inference/: area/inference
   services/sandbox/: area/sandbox
   clients/extensions/: area/extensions

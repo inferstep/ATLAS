@@ -23,12 +23,12 @@ model.
 `phase0_stats.json`, `retrain_stats.json` and `gx_train_stats.json` are training
 statistics kept for reference; each gives its sample counts and, where it has
 them, its model and date. The service does not load them: it loads its model
-files in `geometric-lens/geometric_lens/service.py` and
-`geometric-lens/geometric_lens/identity.py`, and neither names these three.
+files in `services/geometric-lens/geometric_lens/service.py` and
+`services/geometric-lens/geometric_lens/identity.py`, and neither names these three.
 
 ## Training Data
 
-**In-repo sample**: `geometric-lens/data/sample/embeddings.json` — 10 embeddings (5 PASS, 5 FAIL) showing the training-data format (`{"embeddings": [...], "labels": [1|0, ...]}`; 3840-dim, from a Gemma 4 12B bench run).
+**In-repo sample**: `services/geometric-lens/data/sample/embeddings.json` — 10 embeddings (5 PASS, 5 FAIL) showing the training-data format (`{"embeddings": [...], "labels": [1|0, ...]}`; 3840-dim, from a Gemma 4 12B bench run).
 
 **Full dataset on HuggingFace**: https://huggingface.co/datasets/itigges22/ATLAS
 
@@ -57,5 +57,5 @@ atlas lens build --force --from-results benchmark/results/mymodel_lens/v3_lcb/pe
 atlas lens build --samples path/to/labeled.json
 ```
 
-See [docs/reference/CLI.md § atlas lens](../../../docs/reference/CLI.md#atlas-lens) for flags
+See [docs/reference/CLI.md § atlas lens](../../../../docs/reference/CLI.md#atlas-lens) for flags
 and minimum sample requirements.

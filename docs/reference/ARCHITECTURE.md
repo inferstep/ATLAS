@@ -54,7 +54,7 @@ llama-server is the only GPU-using service; every other ATLAS service runs on CP
 
 **Backend selection happens at install time, not runtime.** `atlas init` runs `tier.detect_gpu()` (see `atlas/commands/tier.py`), picks the largest-VRAM GPU across all detected vendors (override with `ATLAS_GPU_VENDOR` / `ATLAS_GPU_INDEX`), and writes `ATLAS_BACKEND={cuda|rocm|metal|vulkan}` into `.env`. Detection resolves to the packaged native backend when one exists: CUDA for NVIDIA, ROCm for AMD on x86_64, the hybrid Metal path on macOS. When no native backend is packaged for the host (Intel Arc, AMD on arm64, unrecognized vendors), the wizard offers the Vulkan universal fallback (default-yes): one image covers AMD, Intel, Adreno, MoltenVK, and the lavapipe CPU rasterizer, at roughly 20–40% below a tuned native backend. It refuses — rather than writing a `.env` that won't boot — only when nothing usable exists. Each backend has its own image — CUDA and Vulkan prebuilt on GHCR, ROCm compiled on the AMD host at first `up` — so users don't run a fat image that ships every backend's libraries.
 
-**Bring-your-own-model surface (V3.1.1).** `atlas lens check` is a cheap pre-flight against a running llama-server that reports whether the loaded model is Lens-compatible. `atlas lens build --samples <path>` wraps `geometric-lens/geometric_lens/training.py` to train fresh C(x) (`cost_field.pt`) **and** G(x) (XGBoost) artifacts at the model's native embedding dim. Together they let users swap in non-default GGUFs without forking the lens code — the C(x) constructor accepts arbitrary `input_dim`, so the only thing that changes per-model is the trained weights. See [CLI.md § atlas lens](CLI.md#atlas-lens) for the user-facing flow; `atlas lens publish` (or the combined `atlas publish`) uploads the artifacts to HuggingFace and opens the registry PR that pins their hashes.
+**Bring-your-own-model surface (V3.1.1).** `atlas lens check` is a cheap pre-flight against a running llama-server that reports whether the loaded model is Lens-compatible. `atlas lens build --samples <path>` wraps `services/geometric-lens/geometric_lens/training.py` to train fresh C(x) (`cost_field.pt`) **and** G(x) (XGBoost) artifacts at the model's native embedding dim. Together they let users swap in non-default GGUFs without forking the lens code — the C(x) constructor accepts arbitrary `input_dim`, so the only thing that changes per-model is the trained weights. See [CLI.md § atlas lens](CLI.md#atlas-lens) for the user-facing flow; `atlas lens publish` (or the combined `atlas publish`) uploads the artifacts to HuggingFace and opens the registry PR that pins their hashes.
 
 **What's vendor-agnostic** (works on every backend): grammar-constrained JSON, self-embeddings (`/embedding`), per-layer hidden states, ASA control vectors (loaded by llama.cpp's `control_vector_load` regardless of backend), KV cache quantization, the entire outer agent loop, V3 pipeline, Geometric Lens, and sandbox.
 
@@ -449,13 +449,13 @@ Four model-independent defenses compose in the proxy:
 3. **Per-step tool-list filter** (same trigger). An ephemeral
    `[system note]` user message is injected reminding the model that
    structural_edit is the only structural-edit tool for this step.
-4. **ASA steering vectors** (`geometric-lens/asa_calibration/`).
+4. **ASA steering vectors** (`services/geometric-lens/asa_calibration/`).
    Activation steering shifts the residual-stream distribution upstream
    so structural_edit is preferred even on first-attempt decisions before any
    rejection has fired. Auto-loaded by `services/inference/entrypoint-v3.1.sh`
    from `/models/ast_edit_steering.gguf` only when its `.model` sidecar
    matches the selected model—always-on after a compatible build via the workflow
-   in `geometric-lens/asa_calibration/README.md`. Override path/scale/
+   in `services/geometric-lens/asa_calibration/README.md`. Override path/scale/
    layer-range via `ATLAS_CONTROL_VECTOR*` env vars.
 
    **Per-model coupling.** Each ASA vector is trained
@@ -963,7 +963,7 @@ between two different models.
 
 > **Note:** Model weights (.pt, .pkl files) are not committed to the repository — they are built during training and baked into the container image or mounted at runtime. When model files are absent, its scoring endpoints answer `enabled: false` (with placeholder numbers: C(x) 0.0, G(x) `gx_score: 0.5`, `verdict: "unavailable"`). The proxy and V3 treat that answer as a lens that cannot score, and ATLAS refuses requests until the files exist ([ADR 0011](../adr/0011-the-lens-is-required.md)). A score the Lens attempted and could not compute is answered `scored: false` with a typed `failure` and no number: a failure of the lens or its model server stops the run, and an input the lens declines (too long, empty, non-finite) is reported unscored. Training data and weights are available on [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS).
 
-> **Nothing is kept between runs.** The lens keeps nothing of the code it scores: it holds no project index and no store of past sessions, so nothing from one run reaches a later one through it. It serves the health and readiness checks and three `/internal/lens/*` scoring calls (`geometric-lens/main.py`).
+> **Nothing is kept between runs.** The lens keeps nothing of the code it scores: it holds no project index and no store of past sessions, so nothing from one run reaches a later one through it. It serves the health and readiness checks and three `/internal/lens/*` scoring calls (`services/geometric-lens/main.py`).
 
 ---
 

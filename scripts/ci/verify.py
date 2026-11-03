@@ -68,7 +68,7 @@ FIXES = {
     ),
     "test-integrity": "Fix what tests/validate_tests.py reports about the test files.",
     "python-tests": "Run `python -m pytest <path> -x` for the first failure, then fix the code or the test.",
-    "python-tests-lens": "Run `python -m pytest geometric-lens/tests -x` for the first failure, then fix the code or the test.",
+    "python-tests-lens": "Run `python -m pytest services/geometric-lens/tests -x` for the first failure, then fix the code or the test.",
     "shellcheck": "Fix the line shellcheck names. Its code (SCnnnn) is explained at https://www.shellcheck.net/wiki/.",
     "workflow-yaml": "Fix the YAML at the line shown.",
     "dockerfile-sources": "A Dockerfile copies a path that is not there. Fix the COPY line or add the file.",
@@ -112,7 +112,7 @@ def select(changed: list[str], full: bool) -> tuple[list[str], list[str], bool]:
                and (ROOT / p).is_file() and not p.startswith(tuple(suites))]
     if any(sends_to_the_agent(p) for p in changed) and not SENDER_CONTRACT.startswith(tuple(suites)):
         suites.append(SENDER_CONTRACT)
-    lens = any(p.startswith("geometric-lens/") for p in changed)
+    lens = any(p.startswith("services/geometric-lens/") for p in changed)
     return list(dict.fromkeys(gates)), list(dict.fromkeys(suites)), lens
 
 

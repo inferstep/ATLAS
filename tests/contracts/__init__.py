@@ -26,7 +26,7 @@ def go_source(component: str, marker: str) -> str:
 # ---------------------------------------------------------------------------
 #
 # geometric-lens and sandbox images are each built from their own Docker
-# context (`context: ./geometric-lens`, `context: ./services/sandbox`), and atlas is
+# context (`context: ./services/geometric-lens`, `context: ./services/sandbox`), and atlas is
 # a pip package no service image installs. None of them can import one
 # shared path, so byte-identity across copies is the parity mechanism and
 # the contract tests are what enforce it.
@@ -38,7 +38,7 @@ def go_source(component: str, marker: str) -> str:
 COPY_NOTICE_MARKER = "CANONICAL COPY NOTICE"
 
 STRUCTURED_LOG_COPIES = [
-    REPO / "geometric-lens" / "geometric_lens" / "structured_log.py",
+    REPO / "services" / "geometric-lens" / "geometric_lens" / "structured_log.py",
     REPO / "services" / "sandbox" / "structured_log.py",
     REPO / "services" / "v3-service" / "structured_log.py",
 ]
@@ -46,7 +46,7 @@ STRUCTURED_LOG_COPIES = [
 # atlas/redact.py is the same module under a different name, which is why
 # discovery below keys on the notice marker rather than the filename.
 PRIVATE_VALUE_COPIES = [
-    REPO / "geometric-lens" / "geometric_lens" / "private_values.py",
+    REPO / "services" / "geometric-lens" / "geometric_lens" / "private_values.py",
     REPO / "services" / "sandbox" / "private_values.py",
     REPO / "services" / "v3-service" / "private_values.py",
     REPO / "atlas" / "redact.py",

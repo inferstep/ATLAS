@@ -40,9 +40,9 @@ transport error, a non-200 answer, an unreadable body, and
 
 **No off switch.** The lens ignores `GEOMETRIC_LENS_ENABLED`
 (`test_the_lens_has_no_off_switch` in
-`geometric-lens/tests/test_nonfinite_scores.py`). Its scoring answers
+`services/geometric-lens/tests/test_nonfinite_scores.py`). Its scoring answers
 say `enabled: false` only when no model is loaded
-(`geometric-lens/geometric_lens/service.py`), and such a lens reports
+(`services/geometric-lens/geometric_lens/service.py`), and such a lens reports
 `no-artifacts` (`probeLensStatus` in `services/proxy/lens.go`).
 
 **Before a request.** The proxy asks the lens `/ready`, then `/health`,
@@ -88,9 +88,9 @@ missing (`renderOneBadge` and `badgeActionHint` in
 
 **Drift.** A drifted lens withdraws its thresholds on every scoring
 endpoint, so no veto or correction acts on a drifted model
-(`_apply_drift_flags` in `geometric-lens/main.py`). A lens with no G(x)
+(`_apply_drift_flags` in `services/geometric-lens/main.py`). A lens with no G(x)
 model returns no thresholds
-(`geometric-lens/tests/test_withheld_thresholds.py`).
+(`services/geometric-lens/tests/test_withheld_thresholds.py`).
 
 ## Consequences
 - A model with no lens artifacts (no C(x) or G(x) bundle) cannot run
@@ -102,7 +102,7 @@ model returns no thresholds
   content, visibly. Whether those should stop the run too is open.
 - Drift is detected where the bundle carries a `drift_fingerprint.json`;
   a bundle without one is not checked (`check_fingerprint` in
-  `geometric-lens/geometric_lens/drift.py`). `atlas lens build` writes
+  `services/geometric-lens/geometric_lens/drift.py`). `atlas lens build` writes
   one with each bundle it builds, unless a reference text cannot be
   scored (`_write_bundle_fingerprint` in `atlas/commands/lens.py`).
 - The benchmark harness (`atlas/bench`) keeps its own lens client with a
@@ -111,7 +111,7 @@ model returns no thresholds
   It is not the product path.
 - Pinned by `services/proxy/lens_required_test.go`,
   `tests/v3-service/lens/test_lens_required.py`,
-  `geometric-lens/tests/test_withheld_thresholds.py`, and
+  `services/geometric-lens/tests/test_withheld_thresholds.py`, and
   `tests/e2e/test_v3_lens_acceptance.py`
   (`test_an_unreachable_lens_refuses_the_request`,
   `test_a_lens_that_v3_cannot_reach_stops_the_run`).

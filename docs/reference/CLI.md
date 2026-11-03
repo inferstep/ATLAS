@@ -683,7 +683,7 @@ build only embeds the new samples. The cache sits beside its input:
 embedding dim and invalidates the cache automatically.
 
 After a successful build:
-1. `cost_field.pt` (+ `cost_field.safetensors`), `gx_xgboost.json`, `gx_weights.json`, both calibration files, `model_identity.json`, `drift_fingerprint.json`, and a `provenance.json` manifest (dataset, sample counts, metrics, hyperparameters, per-file hashes — consumed by `atlas artifact verify/snapshot/rollback`) land in the artifact dir (default `geometric-lens/geometric_lens/models/`, override with `--artifact-dir`). The identity file prevents a same-width artifact from being reused with a different model.
+1. `cost_field.pt` (+ `cost_field.safetensors`), `gx_xgboost.json`, `gx_weights.json`, both calibration files, `model_identity.json`, `drift_fingerprint.json`, and a `provenance.json` manifest (dataset, sample counts, metrics, hyperparameters, per-file hashes — consumed by `atlas artifact verify/snapshot/rollback`) land in the artifact dir (default `services/geometric-lens/geometric_lens/models/`, override with `--artifact-dir`). The identity file prevents a same-width artifact from being reused with a different model.
 2. Restart the lens service so it loads them: `docker compose restart geometric-lens`.
 3. Re-run `atlas lens check` — should now report `compat`.
 4. Run `atlas lens publish` (below) to upload to HuggingFace + open a registry PR. Or, for private/manual flows, hand-edit `atlas/commands/model_registry.py` to set `lens_status="supported"`.
@@ -718,7 +718,7 @@ atlas lens publish <model> --skip-pr            # upload to HF, print PR body fo
 
 ## atlas asa
 
-ASA control-vector compat probe + per-model training + publish. Same shape as `atlas lens`, different mechanics. Wraps `geometric-lens/asa_calibration/build_steering_vector.py` end-to-end so swap-in models can be calibrated without learning the underlying scripts.
+ASA control-vector compat probe + per-model training + publish. Same shape as `atlas lens`, different mechanics. Wraps `services/geometric-lens/asa_calibration/build_steering_vector.py` end-to-end so swap-in models can be calibrated without learning the underlying scripts.
 
 ### `atlas asa check`
 

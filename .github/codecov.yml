@@ -48,7 +48,7 @@ flag_management:
       paths:
         - atlas/
         - services/v3-service/
-        - geometric-lens/
+        - services/geometric-lens/
         - services/sandbox/
         - scripts/
     - name: typescript

@@ -69,9 +69,9 @@ MODEL_DIR    = os.environ.get("ATLAS_MODELS_DIR")  or _ENV.get("ATLAS_MODELS_DIR
 MODEL_FILE   = os.environ.get("ATLAS_MODEL_FILE")  or _ENV.get("ATLAS_MODEL_FILE", "")
 MODEL_NAME   = os.environ.get("ATLAS_MODEL_NAME")  or _ENV.get("ATLAS_MODEL_NAME", "local-model")
 LLAMA_PORT   = _env_int("ATLAS_LLAMA_PORT", 8080)
-# Match docker-compose.yml's `${ATLAS_LENS_MODELS:-./geometric-lens/geometric_lens/models}`
+# Match docker-compose.yml's `${ATLAS_LENS_MODELS:-./services/geometric-lens/geometric_lens/models}`
 # host-side bind-mount source so checks see the same directory the
 # container will actually receive.
 LENS_MODELS_DIR = (os.environ.get("ATLAS_LENS_MODELS")
                    or _ENV.get("ATLAS_LENS_MODELS")
-                   or "./geometric-lens/geometric_lens/models")
+                   or "./services/geometric-lens/geometric_lens/models")

@@ -123,12 +123,12 @@ jobs:
         run: python scripts/ci/production-readiness.py --only go-${{ matrix.module }}-staticcheck
 
   python-tests:
-    name: pytest (${{ matrix.subset }})
+    name: pytest (${{ matrix.label || matrix.subset }})
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        # tests/v3-service/, tests/atlas/, and geometric-lens/tests/
+        # tests/v3-service/, tests/atlas/, and services/geometric-lens/tests/
         # are pure unit tests — no services needed. tests/infrastructure/ is
         # mixed: test_llm.py + test_sandbox.py carry the `integration` marker
         # (they need a live llama-server / sandbox stack, so they are
@@ -143,7 +143,12 @@ jobs:
           - tests/contracts
           - tests/concurrency
           - tests/perf
-          - geometric-lens/tests
+          - services/geometric-lens/tests
+        include:
+          # The lens's check keeps the name it had before its folder moved:
+          # the rulesets require it by that name.
+          - subset: services/geometric-lens/tests
+            label: geometric-lens/tests
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -184,8 +189,8 @@ jobs:
           pip install --no-deps -e .
 
       - name: install lens dependencies (CPU torch)
-        if: matrix.subset == 'geometric-lens/tests' || matrix.subset == 'tests/atlas'
-        # Mirrors geometric-lens/Dockerfile: CPU-only torch wheel (the
+        if: matrix.subset == 'services/geometric-lens/tests' || matrix.subset == 'tests/atlas'
+        # Mirrors services/geometric-lens/Dockerfile: CPU-only torch wheel (the
         # CUDA default is ~2 GB and pointless on a CPU runner), then the
         # service requirements, from a hashed lock (see lens.in). xgboost
         # tests importorskip if absent, but requirements.txt pins

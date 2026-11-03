@@ -784,7 +784,7 @@ def check_asa_steering(atlas_root: str) -> CheckResult:
     `structural_edit`-vs-`edit_file` proposal bias is unsteered and we lean
     entirely on the grammar gate downstream.
 
-    Recovery is documented in `geometric-lens/asa_calibration/README.md`
+    Recovery is documented in `services/geometric-lens/asa_calibration/README.md`
     — or just re-run `./scripts/atlas-bootstrap.sh` which builds it as
     part of install (with HuggingFace prebuilt fallback).
     """
@@ -905,7 +905,7 @@ def _lens_artifacts_warning(rec_model, actual_model: str) -> Optional[CheckResul
                 f"stops agent work, although the registry says it "
                 f"should work. Either "
                 f"download the artifacts (see "
-                f"geometric-lens/geometric_lens/models/README.md) "
+                f"services/geometric-lens/geometric_lens/models/README.md) "
                 f"or set ATLAS_LENS_MODELS to point at a dir that "
                 f"has them.")
     except (ImportError, AttributeError):
@@ -956,7 +956,7 @@ def _undershoot_lens_warning(actual_model: str) -> Optional[CheckResult]:
                     f"stops agent work, although the registry says it "
                     f"should work. Either "
                     f"download the artifacts (see "
-                    f"geometric-lens/geometric_lens/models/README.md) "
+                    f"services/geometric-lens/geometric_lens/models/README.md) "
                     f"or set ATLAS_LENS_MODELS to point at a dir that "
                     f"has them.")
     except (ImportError, AttributeError):

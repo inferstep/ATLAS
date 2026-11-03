@@ -8,8 +8,8 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_lens_image_installs_torch_from_cpu_only_index():
-    requirements = (ROOT / "geometric-lens" / "requirements.txt").read_text()
-    lockfile = (ROOT / "geometric-lens" / "requirements-lock.txt").read_text()
+    requirements = (ROOT / "services" / "geometric-lens" / "requirements.txt").read_text()
+    lockfile = (ROOT / "services" / "geometric-lens" / "requirements-lock.txt").read_text()
     assert "--index-url https://download.pytorch.org/whl/cpu" in lockfile
     # The lockfile must pin the SAME version requirements pins — a
     # hardcoded version previously let the two drift, which made the install
@@ -17,7 +17,7 @@ def test_lens_image_installs_torch_from_cpu_only_index():
     # deps in a CPU-only image). tests/contracts/test_torch_cpu_pin.py
     # guards both services; this keeps the lens files self-consistent.
     req_torch = re.search(r"^torch==(\S+)\s*$", requirements, re.MULTILINE)
-    assert req_torch, "no torch pin in geometric-lens/requirements.txt"
+    assert req_torch, "no torch pin in services/geometric-lens/requirements.txt"
     assert f"torch=={req_torch.group(1)}" in lockfile
     assert "--extra-index-url" not in requirements
     # The form and the marker of the pin, not its version: Linux takes the CPU-only distribution.

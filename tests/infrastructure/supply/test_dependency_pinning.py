@@ -22,7 +22,7 @@ REPO = Path(__file__).resolve().parents[3]
 
 # Production Python requirements — every entry must be == pinned.
 REQUIREMENTS_FILES = [
-    "geometric-lens/requirements.txt",
+    "services/geometric-lens/requirements.txt",
     "services/sandbox/requirements-runtime.txt",
     "services/sandbox/requirements-verify.txt",
     "services/v3-service/requirements.txt",
@@ -32,7 +32,7 @@ REQUIREMENTS_FILES = [
 DOCKERFILES = [
     "services/proxy/Dockerfile",
     "services/v3-service/Dockerfile",
-    "geometric-lens/Dockerfile",
+    "services/geometric-lens/Dockerfile",
     "services/sandbox/Dockerfile",
 ]
 

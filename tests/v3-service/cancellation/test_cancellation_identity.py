@@ -183,7 +183,7 @@ def test_a_cancellation_record_carries_exactly_the_bound_ids(bound, expected_ids
 def test_governed_logger_copies_remain_byte_identical():
     root = os.path.join(os.path.dirname(__file__), "..", "..", "..")
     copies = [
-        os.path.join(root, "geometric-lens", "geometric_lens", "structured_log.py"),
+        os.path.join(root, "services", "geometric-lens", "geometric_lens", "structured_log.py"),
         os.path.join(root, "services", "sandbox", "structured_log.py"),
         os.path.join(root, "services", "v3-service", "structured_log.py"),
     ]

@@ -50,7 +50,7 @@ for svc in "${SERVICES[@]}"; do
         case "$svc" in
             atlas-proxy)     src_dir="services/proxy" ;;
             v3-service)      src_dir="services/v3-service" ;;
-            geometric-lens)  src_dir="geometric-lens" ;;
+            geometric-lens)  src_dir="services/geometric-lens" ;;
             sandbox)         src_dir="services/sandbox" ;;
             *) ;;
         esac

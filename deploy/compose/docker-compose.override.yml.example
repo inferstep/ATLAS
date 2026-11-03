@@ -32,8 +32,8 @@
 services:
   geometric-lens:
     volumes:
-      - ./geometric-lens:/app
-      - ${ATLAS_LENS_MODELS:-./geometric-lens/geometric_lens/models}:/app/geometric_lens/models:ro
+      - ./services/geometric-lens:/app
+      - ${ATLAS_LENS_MODELS:-./services/geometric-lens/geometric_lens/models}:/app/geometric_lens/models:ro
     command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8099", "--reload"]
 
   v3-service:

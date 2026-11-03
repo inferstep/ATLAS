@@ -17,7 +17,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[3]
 
 REQUIREMENTS = [
-    "geometric-lens/requirements.txt",
+    "services/geometric-lens/requirements.txt",
     "services/v3-service/requirements.txt",
     "services/sandbox/requirements-runtime.txt",
     "services/sandbox/requirements-verify.txt",

@@ -115,8 +115,8 @@ jobs:
             context: .
             dockerfile: ./services/v3-service/Dockerfile
           - name: lens
-            context: ./geometric-lens
-            dockerfile: ./geometric-lens/Dockerfile
+            context: ./services/geometric-lens
+            dockerfile: ./services/geometric-lens/Dockerfile
           - name: sandbox
             context: ./services/sandbox
             dockerfile: ./services/sandbox/Dockerfile
@@ -256,8 +256,8 @@ jobs:
             context: .
             dockerfile: ./services/v3-service/Dockerfile
           - name: lens
-            context: ./geometric-lens
-            dockerfile: ./geometric-lens/Dockerfile
+            context: ./services/geometric-lens
+            dockerfile: ./services/geometric-lens/Dockerfile
           - name: sandbox
             context: ./services/sandbox
             dockerfile: ./services/sandbox/Dockerfile
