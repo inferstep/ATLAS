@@ -119,10 +119,13 @@ func TestThePolicyOwnerSetsDeliversInOnePlace(t *testing.T) {
 	if start < 0 {
 		t.Fatal("candidate_advisory_policy.go holds no func decideCandidatePolicy, so its check reads nothing; name the file that holds it")
 	}
+	// Up to its own closing brace: code added after it in the file must not count.
 	decide := body[start:]
-	if next := strings.Index(decide, "\nfunc "); next >= 0 {
-		decide = decide[:next]
+	end := strings.Index(decide, "\n}")
+	if end < 0 {
+		t.Fatal("func decideCandidatePolicy in candidate_advisory_policy.go has no closing brace at the start of a line")
 	}
+	decide = decide[:end]
 	if n := strings.Count(decide, "out.Delivers ="); n != 1 {
 		t.Fatalf("the policy owner assigns Delivers %d times, want once", n)
 	}
