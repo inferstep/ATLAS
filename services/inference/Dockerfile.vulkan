@@ -40,7 +40,9 @@
 # vulkan-headers 1.3.275 which covers everything llama.cpp uses today.
 # Override via --build-arg UBUNTU_TAG=22.04 if you need to pin (and
 # pin LLAMA_CPP_REV to a 2024 SHA that pre-dates the new vk-hpp usage).
-ARG UBUNTU_TAG=24.04
+# The default is pinned by digest. An override such as UBUNTU_TAG=22.04
+# (ATLAS_UBUNTU_TAG in compose) is a tag only.
+ARG UBUNTU_TAG=24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
 FROM ubuntu:${UBUNTU_TAG} AS builder
 
 # Build deps:

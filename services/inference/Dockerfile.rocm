@@ -15,7 +15,9 @@
 # Override at build time for a leaner image:
 #   docker build --build-arg GFX_TARGET=gfx1100 -f Dockerfile.rocm .
 
-ARG ROCM_TAG=6.2-complete
+# The default is pinned by digest. An override such as ROCM_TAG=7.2.3-complete
+# (ATLAS_ROCM_TAG in compose) is a tag only.
+ARG ROCM_TAG=6.2-complete@sha256:e5df8c7787939b5319a02481affb5356198a9365b37a2b8719dba42590fd1812
 FROM docker.io/rocm/dev-ubuntu-22.04:${ROCM_TAG} AS builder
 
 # AMD GPU compute target(s) — semicolon-separated. Each adds ~150 MB to
