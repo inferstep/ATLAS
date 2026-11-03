@@ -1833,87 +1833,50 @@ def execute_kotlin(code, test_code, workspace, timeout, stdin=None, **_):
         execution_time_ms=int((time.time() - start) * 1000),
     )
 
-# --- Rust ---
+# --- Rust, C and C++: compiled to `program`, then run once ---
+
+def _compile_and_run(code, workspace, source, program, compile_command, compile_timeout, timeout, stdin):
+    """Write `code` to `source`, compile it into `program` with
+    `compile_command`, and run the program once. A failed compile is a
+    CompileError, and the program does not run."""
+    start = time.time()
+    source.write_text(code)
+
+    r = _run_cmd(compile_command, compile_timeout)
+    if not r["success"]:
+        return ExecuteResponse(
+            success=False, compile_success=False,
+            tests_run=0, tests_passed=0,
+            stdout="", **why_it_failed(r, "CompileError", _classify_error),
+            execution_time_ms=int((time.time() - start) * 1000),
+        )
+
+    r = _run_cmd([str(program)], timeout, cwd=workspace, stdin=stdin)
+
+    return ExecuteResponse(
+        success=r["success"], compile_success=True,
+        tests_run=1, tests_passed=1 if r["success"] else 0,
+        stdout=r["stdout"], **why_it_failed(r, None, _classify_error),
+        execution_time_ms=int((time.time() - start) * 1000),
+    )
+
 
 def execute_rust(code, test_code, workspace, timeout, stdin=None, **_):
-    start = time.time()
-    main_file = workspace / "main.rs"
-    main_file.write_text(code)
+    source, program = workspace / "main.rs", workspace / "program"
+    return _compile_and_run(code, workspace, source, program,
+                            ["rustc", str(source), "-o", str(program)], 30, timeout, stdin)
 
-    # Compile
-    binary = workspace / "program"
-    r = _run_cmd(["rustc", str(main_file), "-o", str(binary)], 30)
-    if not r["success"]:
-        return ExecuteResponse(
-            success=False, compile_success=False,
-            tests_run=0, tests_passed=0,
-            stdout="", **why_it_failed(r, "CompileError", _classify_error),
-            execution_time_ms=int((time.time() - start) * 1000),
-        )
-
-    # Run
-    r = _run_cmd([str(binary)], timeout, cwd=workspace, stdin=stdin)
-
-    return ExecuteResponse(
-        success=r["success"], compile_success=True,
-        tests_run=1, tests_passed=1 if r["success"] else 0,
-        stdout=r["stdout"], **why_it_failed(r, None, _classify_error),
-        execution_time_ms=int((time.time() - start) * 1000),
-    )
-
-
-# --- C ---
 
 def execute_c(code, test_code, workspace, timeout, stdin=None, **_):
-    start = time.time()
-    main_file = workspace / "solution.c"
-    main_file.write_text(code)
+    source, program = workspace / "solution.c", workspace / "program"
+    return _compile_and_run(code, workspace, source, program,
+                            ["gcc", "-o", str(program), str(source), "-lm", "-Wall"], 15, timeout, stdin)
 
-    binary = workspace / "program"
-    r = _run_cmd(["gcc", "-o", str(binary), str(main_file), "-lm", "-Wall"], 15)
-    if not r["success"]:
-        return ExecuteResponse(
-            success=False, compile_success=False,
-            tests_run=0, tests_passed=0,
-            stdout="", **why_it_failed(r, "CompileError", _classify_error),
-            execution_time_ms=int((time.time() - start) * 1000),
-        )
-
-    r = _run_cmd([str(binary)], timeout, cwd=workspace, stdin=stdin)
-
-    return ExecuteResponse(
-        success=r["success"], compile_success=True,
-        tests_run=1, tests_passed=1 if r["success"] else 0,
-        stdout=r["stdout"], **why_it_failed(r, None, _classify_error),
-        execution_time_ms=int((time.time() - start) * 1000),
-    )
-
-
-# --- C++ ---
 
 def execute_cpp(code, test_code, workspace, timeout, stdin=None, **_):
-    start = time.time()
-    main_file = workspace / "solution.cpp"
-    main_file.write_text(code)
-
-    binary = workspace / "program"
-    r = _run_cmd(["g++", "-o", str(binary), str(main_file), "-std=c++17", "-Wall"], 15)
-    if not r["success"]:
-        return ExecuteResponse(
-            success=False, compile_success=False,
-            tests_run=0, tests_passed=0,
-            stdout="", **why_it_failed(r, "CompileError", _classify_error),
-            execution_time_ms=int((time.time() - start) * 1000),
-        )
-
-    r = _run_cmd([str(binary)], timeout, cwd=workspace, stdin=stdin)
-
-    return ExecuteResponse(
-        success=r["success"], compile_success=True,
-        tests_run=1, tests_passed=1 if r["success"] else 0,
-        stdout=r["stdout"], **why_it_failed(r, None, _classify_error),
-        execution_time_ms=int((time.time() - start) * 1000),
-    )
+    source, program = workspace / "solution.cpp", workspace / "program"
+    return _compile_and_run(code, workspace, source, program,
+                            ["g++", "-o", str(program), str(source), "-std=c++17", "-Wall"], 15, timeout, stdin)
 
 
 # --- Ruby ---
