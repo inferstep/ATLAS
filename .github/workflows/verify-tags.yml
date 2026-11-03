@@ -28,7 +28,7 @@ jobs:
           echo "Verifying signature on tag: $TAG"
           git config gpg.ssh.allowedSignersFile .github/allowed_signers
           if ! git cat-file tag "$TAG" | grep -q "SSH SIGNATURE"; then
-            echo "::error::Tag $TAG is not SSH-signed. Cut releases with scripts/release-tag.sh."
+            echo "::error::Tag $TAG is not SSH-signed. Cut releases with scripts/release/release-tag.sh."
             exit 1
           fi
           if git verify-tag "$TAG"; then

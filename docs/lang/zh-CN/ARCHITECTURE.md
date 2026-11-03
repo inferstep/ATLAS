@@ -65,7 +65,7 @@ llama-server 是唯一使用 GPU 的服务；其余每个 ATLAS 服务都跑在 
 - **多 GPU + 张量并行。** V1 在每个后端上都只支持单 GPU；多 GPU 是 GH #34，不绑定到特定厂商。
 - **Apple 统一内存。** macOS 共享 GPU+系统内存；"VRAM" 的算法实际上是"总共 16 GB 减去操作系统 + 应用"。见 §7。
 
-K3s 部署路径（`scripts/install.sh`，清单在 `deploy/k3s/` 中）截至 V3.1.1 仅支持 CUDA —— ROCm K8s 方案已推迟到 V3.2 的基础设施清单（需要 `/dev/kfd` + `/dev/dri` hostPath 挂载以及 `render`/`video` 组成员身份，相当于集群级别的 `deploy/compose/docker-compose.rocm.yml`）。
+K3s 部署路径（`scripts/install/install.sh`，清单在 `deploy/k3s/` 中）截至 V3.1.1 仅支持 CUDA —— ROCm K8s 方案已推迟到 V3.2 的基础设施清单（需要 `/dev/kfd` + `/dev/dri` hostPath 挂载以及 `render`/`video` 组成员身份，相当于集群级别的 `deploy/compose/docker-compose.rocm.yml`）。
 
 ---
 

@@ -22,32 +22,32 @@ INSTALL = ROOT / "scripts" / "install"
     ("download-models.sh", "REPO_ROOT="),
     ("deploy-gated.sh", 'cd "$(dirname "$0")'),
     ("verify-deployed.sh", 'cd "$(dirname "$0")'),
+    ("install.sh", "repo_root="),
 ])
 def test_a_moved_script_finds_the_repo_root(tmp_path, name, root_line):
     script = INSTALL / name
     lines = script.read_text(encoding="utf-8").splitlines()
-    (found,) = [line for line in lines if line.startswith(root_line)]
+    (found,) = [line.strip() for line in lines if line.strip().startswith(root_line)]
 
     # The script's own line, with the two names it relies on set as the script sets them.
-    shell = f'SCRIPT_DIR="{INSTALL}"\n{found}\necho "${{ATLAS_ROOT:-${{REPO_ROOT:-$PWD}}}}"\n'
+    shell = f'SCRIPT_DIR="{INSTALL}"\n{found}\necho "${{ATLAS_ROOT:-${{REPO_ROOT:-${{repo_root:-$PWD}}}}}}"\n'
     done = subprocess.run(["bash", "-c", shell, str(script)], capture_output=True, text=True, timeout=30,
                           cwd=tmp_path, env={"PATH": os.environ["PATH"]})
 
     assert done.stdout.strip() == str(ROOT), done.stderr
 
 
-@pytest.mark.parametrize("name", ["build-containers.sh", "generate-manifests.sh", "uninstall.sh", "verify-install.sh"])
+@pytest.mark.parametrize("name", ["build-containers.sh", "generate-manifests.sh", "install.sh", "uninstall.sh", "verify-install.sh"])
 def test_a_moved_script_loads_the_shared_library_from_its_folder(name):
     assert 'source "$SCRIPT_DIR/../lib/config.sh"' in (INSTALL / name).read_text(encoding="utf-8")
 
 
 def test_install_runs_the_build_script_in_its_folder(tmp_path):
     assert (INSTALL / "build-containers.sh").stat().st_mode & stat.S_IXUSR
-    stand_in = tmp_path / "install" / "build-containers.sh"
-    stand_in.parent.mkdir()
+    stand_in = tmp_path / "build-containers.sh"
     stand_in.write_text('#!/bin/bash\necho "the build ran"\n', encoding="utf-8")
     stand_in.chmod(0o755)
-    install = (ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
+    install = (INSTALL / "install.sh").read_text(encoding="utf-8")
     build_images = install[install.index("build_images() {"):install.index("# Process templates")]
 
     # install.sh runs main when it is loaded, so only its build step runs here.
@@ -113,7 +113,7 @@ esac
 # folder that is not there, generate-manifests.sh warns and exits 0, and
 # install.sh applies whatever manifests an earlier install left, so a wrong
 # path has to fail here.
-@pytest.mark.parametrize("script, setting", [("install.sh", "local template_dir="),
+@pytest.mark.parametrize("script, setting", [("install/install.sh", "local template_dir="),
                                              ("install/generate-manifests.sh", "TEMPLATES_DIR=")])
 def test_the_k3s_templates_are_in_the_folder_each_script_reads(script, setting):
     text = (ROOT / "scripts" / script).read_text(encoding="utf-8")

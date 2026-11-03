@@ -249,7 +249,7 @@ without approval. Each promotion leaves a timestamped deployment record.
    into `staging`, then run `release_step.py staging <commit>`. No
    workflow runs for a pull request into `staging`. The checks are the
    ones the commit passed in the merge queue on `dev`. Check out
-   `staging` and run `scripts/release-tag.sh vX.Y.Z-rc.1`. It warns that
+   `staging` and run `scripts/release/release-tag.sh vX.Y.Z-rc.1`. It warns that
    you're not on `main`; answer `y`, since candidates are tagged on
    `staging`. Push the tag. See
    [Signed release tags](#signed-release-tags).
@@ -307,7 +307,7 @@ Cut a release tag with the helper (it signs, verifies, and prints the
 push command — it never pushes):
 
 ```bash
-scripts/release-tag.sh v1.2.0 "release notes"
+scripts/release/release-tag.sh v1.2.0 "release notes"
 git push origin v1.2.0        # the deliberate release step
 ```
 

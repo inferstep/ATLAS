@@ -64,7 +64,7 @@ llama-server is the only GPU-using service; every other ATLAS service runs on CP
 - **Multi-GPU + tensor parallelism.** V1 supports single-GPU only on every backend; multi-GPU is GH #34, not bound to a specific vendor.
 - **Apple unified memory.** macOS shares GPU+system memory; "VRAM" math is actually "16 GB total minus OS + apps." See §7.
 
-The K3s deployment path (`scripts/install.sh`, manifests in `deploy/k3s/`) is CUDA-only as of V3.1.1 — ROCm K8s recipe is deferred to the V3.2 infra list (needs `/dev/kfd` + `/dev/dri` hostPath mounts and `render`/`video` group membership, the cluster-level equivalents of `deploy/compose/docker-compose.rocm.yml`).
+The K3s deployment path (`scripts/install/install.sh`, manifests in `deploy/k3s/`) is CUDA-only as of V3.1.1 — ROCm K8s recipe is deferred to the V3.2 infra list (needs `/dev/kfd` + `/dev/dri` hostPath mounts and `render`/`video` group membership, the cluster-level equivalents of `deploy/compose/docker-compose.rocm.yml`).
 
 ---
 
