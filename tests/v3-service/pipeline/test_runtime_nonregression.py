@@ -230,16 +230,17 @@ def test_executor_completed_outcome_is_understood_by_import_comparison(compariso
     from test_sandbox_syntax import _load_sandbox_module
 
     executor = _load_sandbox_module()
+    import resource_contract  # beside executor_server, whose folder the load put on the path
     # Only controlled fixture code executes on the test host. Candidate code
     # continues to execute exclusively through sandbox snapshots in product.
     actual = executor._run_cmd(
         [sys.executable, "-c", f"print({IMPORT_COMPLETE!r}); raise SystemExit({exit_code})"],
         timeout=3, cwd=tmp_path)
-    assert actual["outcome"] == executor.OUTCOME_COMPLETED
+    assert actual["outcome"] == resource_contract.OUTCOME_COMPLETED
     comparison.check(BASELINE)
     monkeypatch.setattr(comparison.sandbox, "run_command", lambda *a, **kw:
         (actual["success"], actual["stdout"], actual["stderr"],
-         {"exit_code": actual["returncode"], "outcome": executor.OUTCOME_COMPLETED}))
+         {"exit_code": actual["returncode"], "outcome": resource_contract.OUTCOME_COMPLETED}))
     admitted, _, evidence = comparison.check(GOOD)
     assert admitted is (exit_code == 0)
     assert evidence["status"] == ("passed" if exit_code == 0 else "failed")
