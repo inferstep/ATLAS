@@ -198,6 +198,7 @@ COPY private_values.py .
 COPY resource_contract.py .
 COPY executor_models.py .
 COPY executor_parsers.py .
+COPY start_up.py .
 COPY executor_server.py .
 
 EXPOSE 8020
