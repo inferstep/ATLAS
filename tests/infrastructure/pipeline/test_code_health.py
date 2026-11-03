@@ -81,6 +81,12 @@ def test_the_main_package_may_lose_files_but_not_gain_one():
     assert any("files 90 -> 91" in p for p in grew)
 
 
+def test_a_baseline_without_the_pin_fails():
+    for base in ({"proxy_main": {}}, {"functions": {}, "files": {}}):
+        problems = ch.main_package_problems({"files": 90, "lines": 40000}, base)
+        assert any("no pinned file count" in p for p in problems), base
+
+
 def test_more_lines_in_the_main_package_are_no_failure():
     base = {"proxy_main": {"files": 90}}
     assert ch.main_package_problems({"files": 90, "lines": 50000}, base) == []

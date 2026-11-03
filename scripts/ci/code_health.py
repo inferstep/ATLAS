@@ -137,9 +137,16 @@ def main_package_size() -> dict:
 
 
 def main_package_problems(size: dict, base: dict) -> list:
-    """A failure when the main package has more files than its pin."""
+    """A failure when the main package has more files than its pin, or no pin.
+
+    A missing pin fails rather than passes: the integrity check reads a removed
+    baseline entry as a tightening, and for this pin a removal loosens the check.
+    """
     pinned = base.get("proxy_main", {}).get("files")
-    if pinned is None or size["files"] <= pinned:
+    if pinned is None:
+        return [f"{MAIN_PACKAGE}'s main package has no pinned file count in the baseline; "
+                "run scripts/ci/code_health.py --update"]
+    if size["files"] <= pinned:
         return []
     return [f"{MAIN_PACKAGE}'s main package grew: files {pinned} -> {size['files']}; "
             f"a new subject goes into its own package under {MAIN_PACKAGE}/internal/"]
