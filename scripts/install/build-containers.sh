@@ -95,7 +95,7 @@ main() {
     # matrix and the K3s manifest image names. v3 uses the repo root as
     # context because v3-service/Dockerfile reads sibling dirs at build time.
     declare -a IMAGES=(
-        "atlas-llama|inference|inference/Dockerfile.v31"
+        "atlas-llama|inference|services/inference/Dockerfile.v31"
         "atlas-lens|geometric-lens|geometric-lens/Dockerfile"
         "atlas-proxy|services/proxy|services/proxy/Dockerfile"
         "atlas-sandbox|sandbox|sandbox/Dockerfile"

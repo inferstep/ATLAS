@@ -120,7 +120,7 @@ updates:
       - /v3-service
       - /sandbox
       - /geometric-lens
-      - /inference
+      - /services/inference
     target-branch: dev
     schedule:
       interval: weekly

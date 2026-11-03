@@ -31,7 +31,7 @@ spec:
         - containerPort: ${ATLAS_LLAMA_PORT}
           name: http
         env:
-        # The image's ENTRYPOINT (inference/entrypoint-v3.1.sh) reads
+        # The image's ENTRYPOINT (services/inference/entrypoint-v3.1.sh) reads
         # MODEL_PATH/PORT/CONTEXT_LENGTH/PARALLEL_SLOTS — never `command:`.
         - {name: MODEL_PATH,      value: "/models/${ATLAS_MAIN_MODEL}"}
         - {name: ATLAS_MODEL_NAME, value: "${ATLAS_MAIN_MODEL}"}

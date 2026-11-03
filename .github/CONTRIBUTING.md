@@ -15,7 +15,7 @@ issue.
 ATLAS is a local coding agent made of a few services: the Go agent loop
 (`services/proxy/`), the terminal client (`clients/tui/`), the Python CLI (`atlas/`), the V3
 candidate pipeline (`v3-service/`), the Geometric Lens (`geometric-lens/`),
-the sandbox (`sandbox/`) and the llama.cpp images (`inference/`).
+the sandbox (`sandbox/`) and the llama.cpp images (`services/inference/`).
 [The repository map](../docs/README.md#repository-map) says what every directory owns, and
 [ARCHITECTURE.md](../docs/reference/ARCHITECTURE.md) explains how the pieces work
 together.

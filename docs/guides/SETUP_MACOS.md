@@ -68,7 +68,7 @@ What this does (idempotent, re-runs are cheap; the numbering below matches the `
 1. Verifies macOS + Apple Silicon (on an Intel Mac it warns that Metal is Apple-Silicon-only, suggests the Docker + Vulkan path instead, and asks `Continue anyway? [y/N]` — confirming proceeds with a CPU-only build)
 2. Checks Xcode Command Line Tools are installed
 3. Verifies Homebrew is installed, then installs missing brew packages: `cmake`, `git`, `python@3.12`, `pipx`, `go`
-4. Reads `LLAMA_CPP_REV` from `inference/Dockerfile.v31` (the pinned SHA used by the Docker images — keeps the native build in lockstep with the linux + cuda/rocm builds)
+4. Reads `LLAMA_CPP_REV` from `services/inference/Dockerfile.v31` (the pinned SHA used by the Docker images — keeps the native build in lockstep with the linux + cuda/rocm builds)
 5. Fetches llama.cpp at that exact SHA, applies the hidden-states patch + spec-decode embeddings fix
 6. Builds `llama-server` with `-DGGML_METAL=ON -DGGML_METAL_USE_BF16=ON` (Apple GPU compute backend, bf16 support for M3/M4) and installs the binary to `~/.atlas/macos/bin/llama-server-metal` (plus `llama-cli-metal` and `llama-cvector-generator-metal` for ASA workflows)
 7. Installs the `atlas` Python CLI via `pipx install --editable` (isolated venv, dodges Homebrew Python's PEP 668 enforcement)

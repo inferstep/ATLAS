@@ -8,9 +8,9 @@ cited; this document records identity and license.
 
 | Component | License | Where pinned |
 |---|---|---|
-| llama.cpp (ggml-org) | MIT | `LLAMA_CPP_REV` in all `inference/Dockerfile*` (CI verifies the ATLAS patches apply to the pinned rev) |
+| llama.cpp (ggml-org) | MIT | `LLAMA_CPP_REV` in all `services/inference/Dockerfile*` (CI verifies the ATLAS patches apply to the pinned rev) |
 
-ATLAS carries one patch (`inference/patches/expose-hidden-states.patch`,
+ATLAS carries one patch (`services/inference/patches/expose-hidden-states.patch`,
 per-layer hidden-state extraction) and one in-Dockerfile `sed` fix on
 top of the pinned revision — both against MIT-licensed code.
 

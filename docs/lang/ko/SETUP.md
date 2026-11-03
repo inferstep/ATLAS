@@ -352,7 +352,7 @@ ATLAS는 두 CPU 아키텍처를 대상으로 합니다: `x86_64`(기본, 모든
 # Multi-arch build that produces a single image manifest covering both archs:
 docker buildx build --platform linux/amd64,linux/arm64 \
   -t atlas-llama-server:vulkan \
-  -f inference/Dockerfile.vulkan inference/
+  -f services/inference/Dockerfile.vulkan services/inference/
 ```
 
 **arm64용 CUDA 이미지 빌드** (DGX Spark 예시):
@@ -363,7 +363,7 @@ docker buildx build --platform linux/arm64 \
   --build-arg BUILDER_IMAGE=nvidia/cuda:12.9.0-devel-ubuntu22.04 \
   --build-arg RUNTIME_IMAGE=nvidia/cuda:12.9.0-runtime-ubuntu22.04 \
   -t atlas-llama-server:cuda-arm64 \
-  -f inference/Dockerfile.v31 inference/
+  -f services/inference/Dockerfile.v31 services/inference/
 ```
 
 Jetson의 경우 두 build arg 모두 `nvcr.io/nvidia/l4t-jetpack:r36.3.0`으로 교체하세요(l4t는 JetPack + CUDA + cuDNN을 하나의 이미지로 제공합니다).
@@ -729,18 +729,18 @@ VRAM 8GB 이상에 llama.cpp가 지원하는 백엔드를 갖춘 모든 GPU:
 
 | 벤더 | 백엔드 | 상태 | 빌드 경로 | 테스트된 카드 |
 |---|---|---|---|---|
-| NVIDIA (Blackwell — RTX 50xx, B100, GB10) | CUDA | 지원(Supported) (게시된 이미지) | `inference/Dockerfile.v31` | RTX 5060 Ti 16GB (주 개발 GPU) |
-| NVIDIA (Blackwell 이전 — RTX 20xx–40xx, GTX 10xx, V100/A100/H100/T4/L4) | CUDA | 프리뷰(Preview) — 일회성 [로컬 재빌드 필요](#cuda-컴퓨트-캐퍼빌리티-dockerfilev31) | `inference/Dockerfile.v31` + `--build-arg CUDA_ARCH=<cc>` | — (업스트림 llama.cpp는 이들을 지원; ATLAS에서의 메인테이너 검증은 없음) |
-| AMD | ROCm / HIP | 커뮤니티 검증(Community-tested) | `inference/Dockerfile.rocm` | RX 7900 XTX (커뮤니티 스모크 테스트, [GH #26](https://github.com/inferstep/ATLAS/issues/26)) |
+| NVIDIA (Blackwell — RTX 50xx, B100, GB10) | CUDA | 지원(Supported) (게시된 이미지) | `services/inference/Dockerfile.v31` | RTX 5060 Ti 16GB (주 개발 GPU) |
+| NVIDIA (Blackwell 이전 — RTX 20xx–40xx, GTX 10xx, V100/A100/H100/T4/L4) | CUDA | 프리뷰(Preview) — 일회성 [로컬 재빌드 필요](#cuda-컴퓨트-캐퍼빌리티-dockerfilev31) | `services/inference/Dockerfile.v31` + `--build-arg CUDA_ARCH=<cc>` | — (업스트림 llama.cpp는 이들을 지원; ATLAS에서의 메인테이너 검증은 없음) |
+| AMD | ROCm / HIP | 커뮤니티 검증(Community-tested) | `services/inference/Dockerfile.rocm` | RX 7900 XTX (커뮤니티 스모크 테스트, [GH #26](https://github.com/inferstep/ATLAS/issues/26)) |
 | Apple Silicon | Metal | 지원 (macOS 하이브리드: 네이티브 llama-server + Docker, [#32](https://github.com/inferstep/ATLAS/issues/32)) | `scripts/install/atlas-setup-macos.sh` + `deploy/compose/docker-compose.macos.yml` | M2 Pro 32GB (검증됨); M3/M4 (목표) |
-| 모든 벤더 (크로스 벤더 폴백) | Vulkan | 프리뷰 | `inference/Dockerfile.vulkan` | lavapipe (CPU ICD) 스모크 테스트됨; 실제 GPU 검증은 아직 없음 |
+| 모든 벤더 (크로스 벤더 폴백) | Vulkan | 프리뷰 | `services/inference/Dockerfile.vulkan` | lavapipe (CPU ICD) 스모크 테스트됨; 실제 GPU 검증은 아직 없음 |
 | Intel Arc | SYCL | 로드맵(Roadmap) — Intel Arc는 현재 Vulkan 사용 | 미정 | Arc A770 16GB (목표) |
 
 `atlas tier`는 벤더 전반을 자동 감지해 VRAM이 가장 큰 GPU를 고릅니다. GPU가 여러 장이고 특정 GPU를 원하면 `ATLAS_GPU_VENDOR=amd` 또는 `ATLAS_GPU_INDEX=1`로 재정의하세요.
 
 #### CUDA 컴퓨트 캐퍼빌리티 (Dockerfile.v31)
 
-`inference/Dockerfile.v31`은 특정 CUDA 컴퓨트 캐퍼빌리티에 맞춰 llama.cpp를 컴파일합니다. 기본값 — 그리고 GHCR에 게시된 `atlas-llama` 이미지가 빌드된 값 — 은 `120;121`(Blackwell: RTX 50xx, B100, GB10) **전용**입니다. 게시된 이미지에는 그보다 이전 GPU용 커널이 없고, 내장된 PTX도 하위 방향으로 JIT 컴파일될 수 없으므로, RTX 20/30/40 시리즈, GTX 10xx, Blackwell 이전 데이터센터 카드(V100/A100/H100/T4/L4)에서는 llama-server가 시작 시 `no kernel image is available for execution on the device`로 실패합니다. 본인 아키텍처에 맞춰 추론 이미지를 한 번 재빌드해야 합니다. (잘못된 아치 값으로 로컬 빌드하면 그보다 이른 시점에 `nvcc fatal: unsupported gpu architecture`로 실패합니다.)
+`services/inference/Dockerfile.v31`은 특정 CUDA 컴퓨트 캐퍼빌리티에 맞춰 llama.cpp를 컴파일합니다. 기본값 — 그리고 GHCR에 게시된 `atlas-llama` 이미지가 빌드된 값 — 은 `120;121`(Blackwell: RTX 50xx, B100, GB10) **전용**입니다. 게시된 이미지에는 그보다 이전 GPU용 커널이 없고, 내장된 PTX도 하위 방향으로 JIT 컴파일될 수 없으므로, RTX 20/30/40 시리즈, GTX 10xx, Blackwell 이전 데이터센터 카드(V100/A100/H100/T4/L4)에서는 llama-server가 시작 시 `no kernel image is available for execution on the device`로 실패합니다. 본인 아키텍처에 맞춰 추론 이미지를 한 번 재빌드해야 합니다. (잘못된 아치 값으로 로컬 빌드하면 그보다 이른 시점에 `nvcc fatal: unsupported gpu architecture`로 실패합니다.)
 
 본인 GPU의 아치를 확인한 뒤 `--build-arg CUDA_ARCH=<value>`로 재빌드하세요:
 
@@ -754,7 +754,7 @@ docker compose build --build-arg CUDA_ARCH=89 llama-server
 docker compose up -d --no-deps llama-server
 
 # Or build the image directly:
-podman build --build-arg CUDA_ARCH=89 -f inference/Dockerfile.v31 -t llama-server:local inference/
+podman build --build-arg CUDA_ARCH=89 -f services/inference/Dockerfile.v31 -t llama-server:local services/inference/
 
 # Multiple archs (semicolon-separated) — build a fat binary for Ampere + Ada + Hopper
 docker compose build --build-arg CUDA_ARCH="86;89;90" llama-server
@@ -774,7 +774,7 @@ docker compose build --build-arg CUDA_ARCH="86;89;90" llama-server
 
 #### AMD GPU 타깃 (Dockerfile.rocm)
 
-`inference/Dockerfile.rocm`은 하나 이상의 `gfx` 타깃에 맞춰 llama.cpp의 HIP 백엔드를 컴파일합니다. 기본값은 가장 흔한 소비자용 + 데이터센터 AMD GPU를 포괄하는 fat 빌드입니다: `gfx1100;gfx1101;gfx1102;gfx1030;gfx90a`.
+`services/inference/Dockerfile.rocm`은 하나 이상의 `gfx` 타깃에 맞춰 llama.cpp의 HIP 백엔드를 컴파일합니다. 기본값은 가장 흔한 소비자용 + 데이터센터 AMD GPU를 포괄하는 fat 빌드입니다: `gfx1100;gfx1101;gfx1102;gfx1030;gfx90a`.
 
 빌드 시 `--build-arg GFX_TARGET=<value>`로 재정의하세요(또는 compose 오버라이드가 전달하는 `ATLAS_GFX_TARGET` 환경 변수 사용):
 
@@ -783,7 +783,7 @@ docker compose build --build-arg CUDA_ARCH="86;89;90" llama-server
 ATLAS_GFX_TARGET=gfx1100 docker compose -f docker-compose.yml -f deploy/compose/docker-compose.rocm.yml build llama-server
 
 # Two targets for RDNA3 + RDNA2 mixed-fleet
-docker build --build-arg GFX_TARGET="gfx1100;gfx1030" -f inference/Dockerfile.rocm -t atlas-llama-rocm:custom inference/
+docker build --build-arg GFX_TARGET="gfx1100;gfx1030" -f services/inference/Dockerfile.rocm -t atlas-llama-rocm:custom services/inference/
 ```
 
 일반적인 값:
@@ -883,7 +883,7 @@ mkdir -p secrets     # or set ATLAS_SECRETS_DIR
 
 1. `build_cvector_prompts.py`가 커밋된 `geometric-lens/asa_calibration/contrast_pairs.jsonl`(1000쌍)을 양성/음성 프롬프트 파일로 변환합니다.
 2. 부트스트랩이 `llama-server`를 잠시 중지하고, `--method mean -ngl 99` 옵션으로 `llama-cvector-generator`를 원샷 컨테이너로 실행하여 `models/ast_edit_steering.gguf`와, 벡터가 어느 모델에 대해 빌드되었는지 기록하는 `models/ast_edit_steering.gguf.model` 사이드카 마커를 쓴 뒤, `llama-server`를 재시작합니다.
-3. `inference/entrypoint-v3.1.sh`가 다음 시작 시 파일을 발견하면, `.model` 사이드카 마커가 선택된 모델과 일치하는지 확인하고 `llama-server` 명령줄에 `--control-vector-scaled /models/ast_edit_steering.gguf:0.5`를 덧붙입니다. 마커가 없거나 다른 모델을 지명하는 벡터는 **비활성화** 상태로 유지됩니다(시작 배너가 이유를 보고합니다) — 벡터는 한 모델에 묶인 residual-space 아티팩트입니다.
+3. `services/inference/entrypoint-v3.1.sh`가 다음 시작 시 파일을 발견하면, `.model` 사이드카 마커가 선택된 모델과 일치하는지 확인하고 `llama-server` 명령줄에 `--control-vector-scaled /models/ast_edit_steering.gguf:0.5`를 덧붙입니다. 마커가 없거나 다른 모델을 지명하는 벡터는 **비활성화** 상태로 유지됩니다(시작 배너가 이유를 보고합니다) — 벡터는 한 모델에 묶인 residual-space 아티팩트입니다.
 
 빌드는 모델이 있는 하드웨어에서 실행되며, 결과 벡터는 모델 전용입니다(한 모델의 아티팩트에 대해 빌드된 `ast_edit_steering.gguf`를 다른 베이스 모델을 돌리는 호스트로 옮기지 마세요).
 

@@ -273,7 +273,7 @@ def extract_per_layer_per_token(text: str, layers: List[int]) -> Tuple[Dict[int,
     """Extract per-token residual hidden states at the requested layers.
 
     Uses the PC-202 `/embedding` extension (`layers: [int]`). The server
-    must have been built with `inference/patches/expose-hidden-states.patch`
+    must have been built with `services/inference/patches/expose-hidden-states.patch`
     applied; on an unpatched server the `layers` field is silently ignored
     and only the standard `embedding` field comes back, which we detect
     and raise on.
@@ -289,7 +289,7 @@ def extract_per_layer_per_token(text: str, layers: List[int]) -> Tuple[Dict[int,
         raise RuntimeError(
             "/embedding response missing `hidden_states`; "
             "llama-server is likely missing the PC-202 hidden-states patch. "
-            "Rebuild atlas-llama-server with inference/Dockerfile.v31."
+            "Rebuild atlas-llama-server with services/inference/Dockerfile.v31."
         )
     n_tokens = int(item["hidden_states_n_tokens"])
     hidden_dim = int(item["hidden_states_dim"])

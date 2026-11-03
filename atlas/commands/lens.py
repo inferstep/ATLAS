@@ -318,7 +318,7 @@ def _verdict_at_matching_dim(probe: LlamaProbe, artifact_dir: str, artifact_dim:
         note = (" Note: PC-202 hidden-states patch not detected on llama-server. "
                 "C(x) works fine; lens training embeddings (hidden-states "
                 "extraction for the C(x)+G(x) retrain) would need a patched "
-                "build (inference/Dockerfile.v31).")
+                "build (services/inference/Dockerfile.v31).")
     return CheckVerdict(
         verdict="compat",
         reason=(f"Model emits {probe.embedding_dim}-dim embeddings; "

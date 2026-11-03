@@ -319,7 +319,7 @@ ATLAS_ROCM_TAG=6.2-complete docker compose -f docker-compose.yml -f deploy/compo
 
 **现象：** `docker compose build` 在 llama-server 编译过程中出现 CUDA 相关错误。
 
-**解决方法：** llama-server 的 Dockerfile 在 `nvidia/cuda:12.9.0-devel` 基础镜像中构建 llama.cpp（该镜像在 `inference/Dockerfile.v31` 中按 digest 固定），因此构建时不需要主机 GPU 访问即可使用 CUDA 头文件。常见的构建失败原因：
+**解决方法：** llama-server 的 Dockerfile 在 `nvidia/cuda:12.9.0-devel` 基础镜像中构建 llama.cpp（该镜像在 `services/inference/Dockerfile.v31` 中按 digest 固定），因此构建时不需要主机 GPU 访问即可使用 CUDA 头文件。常见的构建失败原因：
 1. 磁盘空间不足（构建产物需要约 5GB）
 2. 下载 CUDA 基础镜像或克隆 llama.cpp 时的网络问题
 3. Podman 非 root 构建可能因权限问题失败 —— 尝试 `podman-compose build` 加上 `--podman-build-args="--format docker"`
@@ -336,12 +336,12 @@ fatal: fetch-pack: invalid index-pack output
 
 **原因：** llama.cpp 的完整 git 历史很大（约 1 GB），获取（fetch）对不稳定/慢速网络很敏感。短暂的停顿会导致 SSL 读取超时，整个传输随之中止。
 
-**解决方法：** `inference/Dockerfile.v31` 使用 `git init` + 对单个固定修订（`LLAMA_CPP_REV`）的 `--depth 1` fetch —— 从而避开约 1 GB 的完整历史传输 —— 并配合 `http.postBuffer=524288000` 与 `http.lowSpeedLimit/Time`，以便在连接死掉时快速失败。如果问题反复出现：
+**解决方法：** `services/inference/Dockerfile.v31` 使用 `git init` + 对单个固定修订（`LLAMA_CPP_REV`）的 `--depth 1` fetch —— 从而避开约 1 GB 的完整历史传输 —— 并配合 `http.postBuffer=524288000` 与 `http.lowSpeedLimit/Time`，以便在连接死掉时快速失败。如果问题反复出现：
 
 1. 重试构建 —— 瞬时的网络抖动是常事，尤其在家用网络上。
 2. 如果重试一直失败，先在主机上预取固定的修订，再调整 Dockerfile 以 COPY 它。快速配方：
    ```bash
-   REV=$(grep -m1 'ARG LLAMA_CPP_REV=' inference/Dockerfile.v31 | cut -d= -f2)
+   REV=$(grep -m1 'ARG LLAMA_CPP_REV=' services/inference/Dockerfile.v31 | cut -d= -f2)
    git init /tmp/llama.cpp && cd /tmp/llama.cpp
    git remote add origin https://github.com/ggml-org/llama.cpp
    git fetch --depth 1 origin "$REV" && git checkout FETCH_HEAD
@@ -356,7 +356,7 @@ fatal: fetch-pack: invalid index-pack output
 - **投入的新模型加载失败**，报 `error loading model: unknown (model) architecture 'gemma4'` —— 固定的 llama.cpp 版本早于该架构。
 - **构建失败**，报 `error: patch failed: tools/server/server-context.cpp:NN` / `patch does not apply` —— 上游已漂移过固定的 SHA。
 
-`atlas-llama` 镜像在全部四个 Dockerfile（`Dockerfile`、`Dockerfile.v31`、`Dockerfile.rocm`、`Dockerfile.vulkan`）中通过 `LLAMA_CPP_REV` 固定 llama.cpp 版本；其中 `Dockerfile.v31`、`Dockerfile.rocm` 和 `Dockerfile.vulkan`（compose 文件构建所用的三个）会在构建期间应用 `inference/patches/expose-hidden-states.patch`（Geometric Lens 依赖的逐层 `hidden_states` 扩展）。普通的 `Dockerfile` 固定了版本但不应用补丁，因此用它构建的服务器缺少 lens 的接线。要支持新架构，把固定的版本移到一个包含该架构的 llama.cpp SHA。预构建的 GHCR 镜像跳过本地构建；只有当你需要比已发布镜像更新的架构时才重建。
+`atlas-llama` 镜像在全部四个 Dockerfile（`Dockerfile`、`Dockerfile.v31`、`Dockerfile.rocm`、`Dockerfile.vulkan`）中通过 `LLAMA_CPP_REV` 固定 llama.cpp 版本；其中 `Dockerfile.v31`、`Dockerfile.rocm` 和 `Dockerfile.vulkan`（compose 文件构建所用的三个）会在构建期间应用 `services/inference/patches/expose-hidden-states.patch`（Geometric Lens 依赖的逐层 `hidden_states` 扩展）。普通的 `Dockerfile` 固定了版本但不应用补丁，因此用它构建的服务器缺少 lens 的接线。要支持新架构，把固定的版本移到一个包含该架构的 llama.cpp SHA。预构建的 GHCR 镜像跳过本地构建；只有当你需要比已发布镜像更新的架构时才重建。
 
 **保护 hidden-states 补丁 —— 变基它，不要删除它。** 移除 `git apply` 步骤会构建出一个悄悄失去 lens 接线的服务器（`/embedding` 会忽略 `layers:` 参数）。版本升级手册：
 
@@ -366,11 +366,11 @@ fatal: fetch-pack: invalid index-pack output
    git init -q llama.cpp && cd llama.cpp
    git remote add origin https://github.com/ggml-org/llama.cpp
    git fetch --depth 1 origin <NEW_SHA> && git checkout -q FETCH_HEAD
-   git apply --check $REPO/inference/patches/expose-hidden-states.patch
+   git apply --check $REPO/services/inference/patches/expose-hidden-states.patch
    ```
    （只有这个补丁是 `git apply` 应用的。spec-decode 嵌入修复是 Dockerfile 中的一个 `sed`，目标行不存在时是空操作。）
 2. **如果能干净应用：** 在全部四个 Dockerfile 中把 `LLAMA_CPP_REV` 更新为新 SHA。CI 冒烟测试会验证它们一致。
-3. **如果失败：** 用 `git apply --reject …` 先落下干净的 hunk，把每个 `*.rej` hunk 重新插入到其移动后的锚点（注意周边代码的上游重命名，例如 `model` → `model_tgt`，并更新补丁新增的行），然后 `git diff > $REPO/inference/patches/expose-hidden-states.patch`。重跑第 1 步。为了在漫长的 CUDA 构建之前抓住成员/类型错误，只对 server 目标做 CPU-only 编译：`cmake -B build-cpu -DGGML_CUDA=OFF && cmake --build build-cpu --target llama-server`。
+3. **如果失败：** 用 `git apply --reject …` 先落下干净的 hunk，把每个 `*.rej` hunk 重新插入到其移动后的锚点（注意周边代码的上游重命名，例如 `model` → `model_tgt`，并更新补丁新增的行），然后 `git diff > $REPO/services/inference/patches/expose-hidden-states.patch`。重跑第 1 步。为了在漫长的 CUDA 构建之前抓住成员/类型错误，只对 server 目标做 CPU-only 编译：`cmake -B build-cpu -DGGML_CUDA=OFF && cmake --build build-cpu --target llama-server`。
 4. 重建并拉起：
    ```bash
    docker compose build --build-arg LLAMA_CPP_REV=<sha> llama-server
