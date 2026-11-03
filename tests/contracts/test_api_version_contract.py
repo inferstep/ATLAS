@@ -25,7 +25,7 @@ CANONICAL_CODES = [
 
 
 def test_go_error_codes_match_canonical_set():
-    src = go_source("proxy", 'ErrorCode = "')
+    src = go_source("services/proxy", 'ErrorCode = "')
     codes = re.findall(r'ErrorCode = "([a-z_]+)"', src)
     assert codes == CANONICAL_CODES, (
         f"Go error codes {codes} != canonical {CANONICAL_CODES}")
@@ -40,13 +40,13 @@ def test_error_schema_enum_matches():
 
 
 def test_version_constants_present():
-    src = go_source("proxy", "const APIVersion")
+    src = go_source("services/proxy", "const APIVersion")
     assert re.search(r'const APIVersion = "\d+\.\d+\.\d+"', src)
     assert re.search(r'const ProtocolVersion = \d+', src)
 
 
 def test_version_endpoint_registered():
-    src = (REPO / "proxy" / "main.go").read_text()
+    src = (REPO / "services" / "proxy" / "main.go").read_text()
     assert '"/version"' in src
     assert "handleVersion" in src
 

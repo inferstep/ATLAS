@@ -1,7 +1,7 @@
 """Status-dimension parity contract.
 
 The canonical seven-dimension lens/ASA status is defined once in the Go
-producer (buildDimensions in proxy/lens.go) and rendered by
+producer (buildDimensions in services/proxy/lens.go) and rendered by
 the TUI badge, atlas doctor, and documented in SUPPORT_MATRIX. This
 contract asserts the dimension NAMES agree across those surfaces so a
 rename in one place can't silently desync the others.
@@ -28,7 +28,7 @@ CANONICAL = [
 
 
 def test_go_producer_emits_the_seven_dimensions():
-    src = go_source("proxy", "return []StatusDimension{")
+    src = go_source("services/proxy", "return []StatusDimension{")
     # Extract the ordered list literal returned by buildDimensions.
     block = src[src.index("return []StatusDimension{"):]
     names = re.findall(r'\{"([a-z_]+)",', block)

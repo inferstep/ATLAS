@@ -241,7 +241,7 @@ def build_proxy(target: Path) -> Path:
     if named and os.access(named, os.X_OK):
         return Path(named)
     binary = target / "atlas-proxy"
-    subprocess.run(["go", "build", "-o", str(binary), "."], cwd=REPO / "proxy", check=True)
+    subprocess.run(["go", "build", "-o", str(binary), "."], cwd=REPO / "services" / "proxy", check=True)
     return binary
 
 

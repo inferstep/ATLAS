@@ -1041,7 +1041,7 @@ def test_each_question_goes_to_a_service_of_the_compose_file_at_the_port_of_its_
         block = re.search(rf"^  {re.escape(service)}:\n(.*?)(?=^  [\w-]+:\n|\Z)", compose, re.M | re.S).group(1)
         (checked,) = re.findall(r'test: \["CMD", "curl", "-sf", "(http://localhost:\d+)/health"\]', block)
         assert url.startswith(checked + "/"), (service, url, checked)
-    proxy = (ROOT / "proxy" / "main.go").read_text(encoding="utf-8")
+    proxy = (ROOT / "services" / "proxy" / "main.go").read_text(encoding="utf-8")
     said = set(re.findall(r'^\t\t"(\w+)":\s+\w+,$', proxy.split("func handleReady(", 1)[1].split("\n}\n", 1)[0], re.M))
     assert said == {"ready", *nightly.PROXY_PARTS}, (
         f"the proxy's /ready gives {sorted(said)}, and the nightly run judges {sorted(nightly.PROXY_PARTS)}. Fix: "

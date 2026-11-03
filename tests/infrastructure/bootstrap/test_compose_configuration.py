@@ -234,3 +234,17 @@ def test_every_compose_file_the_bootstrap_names_is_in_the_tree():
     assert len(named) >= 4, named
     for path in named:
         assert (ROOT / path).is_file(), f"compose_files_args in scripts/atlas-bootstrap.sh names {path}, which is not in the tree"
+
+
+# The bootstrap knows it runs inside a checkout by two paths. One that is not in
+# the tree sends it to clone `main` into /opt/atlas, and the required bootstrap
+# checks then test `main`'s code and not the change, so it has to fail here.
+def test_the_paths_that_tell_the_bootstrap_it_is_in_a_checkout_are_in_the_tree():
+    script = (ROOT / "scripts" / "atlas-bootstrap.sh").read_text(encoding="utf-8")
+    body = script.split("ensure_repo_and_env() {", 1)[1].split("\n}\n", 1)[0]
+    check = next(line for line in body.splitlines() if line.strip().startswith("if [[ ! -f"))  # the first test of the function
+    paths = re.findall(r'! -([fd]) "\./([^"]+)"', check)
+    assert len(paths) == 2, check
+    for kind, path in paths:
+        there = (ROOT / path).is_file() if kind == "f" else (ROOT / path).is_dir()
+        assert there, f"ensure_repo_and_env in scripts/atlas-bootstrap.sh knows a checkout by ./{path}, which is not in the tree"

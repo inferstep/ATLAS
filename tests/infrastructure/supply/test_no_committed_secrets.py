@@ -37,8 +37,8 @@ ALLOWLIST = {
     "tests/infrastructure/release/test_release_signing.py",
     "tests/atlas/install/test_service_token.py",
     "tests/atlas/doctor/test_diagnostics.py",
-    "proxy/main_test.go",
-    "proxy/tools_test.go",
+    "services/proxy/main_test.go",
+    "services/proxy/tools_test.go",
     ".github/allowed_signers",     # public keys only, no private material
 }
 

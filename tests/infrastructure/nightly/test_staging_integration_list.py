@@ -1,5 +1,5 @@
 """scripts/ci/staging-integration.py runs the Go tests that need a real executor by a fixed list of names (TESTS).
-A test of proxy/staging_integration_test.go that asks for the executor but is not on the list would never run,
+A test of services/proxy/evidence_staging_integration_test.go that asks for the executor but is not on the list would never run,
 and a name on the list that no such test has would match nothing. These tests keep the two the same.
 
 A test asks for the executor when its own body calls stagingIntegrationEnv(t), as every one of them does."""
@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = ROOT / "scripts" / "ci" / "staging-integration.py"
-TEST_FILE = ROOT / "proxy" / "staging_integration_test.go"
+TEST_FILE = ROOT / "services" / "proxy" / "evidence_staging_integration_test.go"
 
 
 def names_the_script_runs():

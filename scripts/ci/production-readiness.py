@@ -300,7 +300,7 @@ def _go_gates(go_env: dict[str, str]) -> dict[str, Gate]:
             # panic here should be read from its goroutine dump: one young
             # running test means budget, a test stuck for minutes means hang.
             ("go", "test", "-race", "-count=1", "-timeout", "20m", ALL_GO_PACKAGES),
-            cwd=ROOT / "proxy",
+            cwd=ROOT / "services" / "proxy",
             available=lambda: _command_available("go"),
             unavailable_reason=NO_GO,
             env=go_env,
@@ -316,7 +316,7 @@ def _go_gates(go_env: dict[str, str]) -> dict[str, Gate]:
         "go-proxy-vet": Gate(
             "go-proxy-vet",
             ("go", "vet", ALL_GO_PACKAGES),
-            cwd=ROOT / "proxy",
+            cwd=ROOT / "services" / "proxy",
             available=lambda: _command_available("go"),
             unavailable_reason=NO_GO,
             env=go_env,
@@ -340,7 +340,7 @@ def _static_check_gates(python: str, go_env: dict[str, str]) -> dict[str, Gate]:
             "go-proxy-staticcheck",
             ("go", "run", "honnef.co/go/tools/cmd/staticcheck@2026.1",
              ALL_GO_PACKAGES),
-            cwd=ROOT / "proxy",
+            cwd=ROOT / "services" / "proxy",
             available=lambda: _command_available("go"),
             unavailable_reason=NO_GO,
             env=go_env,

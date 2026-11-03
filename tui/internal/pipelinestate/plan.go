@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// PlanStep mirrors proxy/internal/wire/messages.go PlanStep with a Satisfied flag the
+// PlanStep mirrors services/proxy/internal/wire/messages.go PlanStep with a Satisfied flag the
 // TUI flips when a tool call hits this step.
 type PlanStep struct {
 	ID        string `json:"id"`

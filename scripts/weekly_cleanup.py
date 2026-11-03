@@ -51,6 +51,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 MODULES = ("proxy", "tui")
+# The folder of each module. A piece is named by the module ("go/proxy/rangeint"), and its files are in the folder.
+FOLDERS = {"proxy": "services/proxy", "tui": "tui"}
 # The fixers of `go fix` that the job runs, by name. Each rewrites code to a newer form.
 GO_FIXERS = ("any", "fmtappendf", "forvar", "inline", "mapsloop", "minmax", "newexpr", "plusbuild", "rangeint",
              "reflecttypefor", "slicescontains", "slicessort", "stditerators", "stringsbuilder", "stringscut",
@@ -227,16 +229,16 @@ def go_fixers_on_no_list() -> list:
 
 
 def not_in_gofmt_form(copy: Path, module: str) -> set:
-    return set(must(f"gofmt on {module}", ["gofmt", "-l", module], copy, 300, "use the Go version that the workflow pins.").split())
+    return set(must(f"gofmt on {module}", ["gofmt", "-l", FOLDERS[module]], copy, 300, "use the Go version that the workflow pins.").split())
 
 
 def apply_fixer(copy: Path, module: str, fixer: str, first: bool = True) -> tuple:
     """Run one fixer on a module until its result stays the same. Gives why it did not come to that, in a few words
     and as the tool said it, or two empty texts."""
-    before = git(copy, "diff", "--", module)
+    before = git(copy, "diff", "--", FOLDERS[module])
     for turn in range(PASSES + 1):
-        done = run(["go", "fix", f"-{fixer}", "./..."], copy / module, 900)
-        after = git(copy, "diff", "--", module)
+        done = run(["go", "fix", f"-{fixer}", "./..."], copy / FOLDERS[module], 900)
+        after = git(copy, "diff", "--", FOLDERS[module])
         if done.returncode != 0:
             if first and turn == 0 and after == before:
                 raise NotJudged(f"`go fix -{fixer}` on `{module}` as it is: status {done.returncode}.\n{last_lines(done.stdout)}\n"
@@ -258,7 +260,7 @@ def go_checks(copy: Path, module: str, before: set, bin_dir: Path) -> tuple[dict
         return {**checks, "gofmt": "failed"}, "gofmt would change these files, and it would not before:\n" + "\n".join(worse)
     checks["gofmt"] = "passed"
     for name, argv in (("build", ["go", "build", "-o", str(bin_dir) + os.sep, "./..."]), ("vet", ["go", "vet", "./..."])):
-        done = run(argv, copy / module, 1200)
+        done = run(argv, copy / FOLDERS[module], 1200)
         if done.returncode != 0:
             return {**checks, name: "failed"}, f"`go {name}` ended with status {done.returncode}:\n{last_lines(done.stdout)}"
         checks[name] = "passed"
@@ -276,9 +278,9 @@ def go_piece(copy: Path, module: str, fixer: str, looked_at: int, before: set, b
     """One fixer on one module: what it changes, and whether the result is in gofmt's form, builds and vets."""
     piece = Piece(f"go/{module}/{fixer}", looked_at=looked_at)
     why, said = apply_fixer(copy, module, fixer)
-    piece.changed = names(copy, "diff", "--name-only", "--", module)
+    piece.changed = names(copy, "diff", "--name-only", "--", FOLDERS[module])
     if piece.changed:
-        take_patch(copy, piece, module)
+        take_patch(copy, piece, FOLDERS[module])
         if why:
             piece.checks = {"fix": "failed"}
             refuse(piece, why, said)
@@ -294,7 +296,7 @@ def tests_with(copy: Path, module: str, pieces: list) -> subprocess.CompletedPro
     """One run of the tests of a module with these pieces applied. The copy is as it was afterwards."""
     for piece in pieces:
         apply_fixer(copy, module, piece.name.split("/")[2], first=False)
-    done = run(GO_TEST, copy / module, 2400)
+    done = run(GO_TEST, copy / FOLDERS[module], 2400)
     restore(copy)
     return done
 
@@ -312,7 +314,7 @@ def go_tests(copy: Path, module: str, pieces: list, kept: dict) -> None:
         for piece in pieces:
             piece.checks["tests"] = "passed"
         return
-    must(f"the tests of {module} on the files as they are", GO_TEST, copy / module, 2400,
+    must(f"the tests of {module} on the files as they are", GO_TEST, copy / FOLDERS[module], 2400,
          f"repair the tests of `{module}` on the branch; they fail with no fixer applied.")
     second = tests_with(copy, module, pieces)
     together = "" if len(pieces) == 1 else " with the pieces of the module together"
@@ -340,9 +342,9 @@ def go_pieces(copy: Path, wanted: list, bin_dir: Path, kept: dict) -> list:
         fixers = [fixer for fixer in GO_FIXERS if f"go/{module}/{fixer}" in wanted]
         if not fixers:
             continue
-        looked_at = len([name for name in names(copy, "ls-files", "--", module) if name.endswith(".go")])
+        looked_at = len([name for name in names(copy, "ls-files", "--", FOLDERS[module]) if name.endswith(".go")])
         before = not_in_gofmt_form(copy, module)
-        must(f"go vet on {module} as it is", ["go", "vet", "./..."], copy / module, 1200,
+        must(f"go vet on {module} as it is", ["go", "vet", "./..."], copy / FOLDERS[module], 1200,
              f"repair `{module}` on the branch; `go vet` fails with no fixer applied.")
         made = [go_piece(copy, module, fixer, looked_at, before, bin_dir) for fixer in fixers]
         passed = [piece for piece in made if piece.changed]

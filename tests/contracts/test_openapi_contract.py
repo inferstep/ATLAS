@@ -17,7 +17,7 @@ yaml = pytest.importorskip("yaml")
 
 REPO = Path(__file__).resolve().parents[2]
 SPEC = REPO / "docs" / "reference" / "schemas" / "proxy_openapi.yaml"
-MAIN = REPO / "proxy" / "main.go"
+MAIN = REPO / "services" / "proxy" / "main.go"
 
 
 def _registered_routes():
@@ -47,7 +47,7 @@ def test_no_phantom_documented_paths():
 
 def test_spec_version_matches_go_constant():
     spec = yaml.safe_load(SPEC.read_text())
-    go = go_source("proxy", "const APIVersion")
+    go = go_source("services/proxy", "const APIVersion")
     m = re.search(r'const APIVersion = "([\d.]+)"', go)
     assert m, "OpenAPI info.version must match the Go APIVersion constant"
     assert spec["info"]["version"] == m.group(1), "OpenAPI info.version must match the Go APIVersion constant"

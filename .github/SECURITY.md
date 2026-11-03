@@ -68,7 +68,7 @@ through a shared filter that masks credential-shaped values
 passwords, private-key blocks) with `[FILTERED]` before serialization.
 The pattern spec is pinned by a synthetic fixture corpus
 (`tests/fixtures/private_value_fixtures.json`) that every
-implementation must pass (Go: `filterPrivateValues` in `proxy/internal/logsafe/filter.go`; Python: three
+implementation must pass (Go: `filterPrivateValues` in `services/proxy/internal/logsafe/filter.go`; Python: three
 byte-identical copies enforced by
 `tests/contracts/test_private_value_filtering.py`). Filtering is a
 backstop for accidents, not a guarantee against adversarial encoding;

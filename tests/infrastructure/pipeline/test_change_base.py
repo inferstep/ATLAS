@@ -56,11 +56,11 @@ def moved(tmp_path):
     root = tmp_path / "repo"
     root.mkdir()
     git(root, "init", "-q", "-b", "dev")
-    began = commit(root, {"proxy/agent.go": "package main\n", "docs/API.md": "api\n"}, "base")
+    began = commit(root, {"services/proxy/loop.go": "package main\n", "docs/API.md": "api\n"}, "base")
     git(root, "checkout", "-q", "-b", "work")
     head = commit(root, {"docs/API.md": "api, with the branch's own line\n"}, "the branch's own change")
     git(root, "checkout", "-q", "dev")
-    now = commit(root, {"proxy/agent.go": "package main\n\n// the base branch moved on\n",
+    now = commit(root, {"services/proxy/loop.go": "package main\n\n// the base branch moved on\n",
                         ".github/workflows/other.yml": "name: other\n"}, "another change lands on the base")
     git(root, "checkout", "-q", "--detach", "dev")
     git(root, "merge", "-q", "--no-ff", "--no-edit", "work")
@@ -80,7 +80,7 @@ def test_the_base_of_a_pull_request_is_the_base_branch_as_it_is_now(rule, moved)
     assert git(root, "diff", "--name-only", f"{base}...HEAD").split() == ["docs/API.md"]
     # The base the event names gives the base branch's later changes as well: the fault this rule removes.
     assert git(root, "diff", "--name-only", f"{began}...HEAD").split() == [
-        ".github/workflows/other.yml", "docs/API.md", "proxy/agent.go"]
+        ".github/workflows/other.yml", "docs/API.md", "services/proxy/loop.go"]
 
 
 def test_the_integrity_check_names_only_the_branchs_own_files(rule, moved):
@@ -99,7 +99,7 @@ def test_checks_ran_does_not_expect_a_workflow_for_a_path_only_the_base_branch_c
     root, began, _, head = moved
     ran = load("checks_ran")
     base = rule.base_of(root, "pull_request", pull_request(head, began))
-    replay = {True: {"pull_request": {"branches": ["dev"], "paths": ["proxy/**"]}}, "jobs": {"replay": {}}}
+    replay = {True: {"pull_request": {"branches": ["dev"], "paths": ["services/proxy/**"]}}, "jobs": {"replay": {}}}
     change = ran.Change("pull_request", "synchronize", head, began, "dev")
     path = ".github/workflows/replay.yml"
     expected, _ = ran.expected_workflows({path: replay}, change, ran.changed_files(root, base), "")

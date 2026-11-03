@@ -714,7 +714,7 @@ def _sandbox_safe_filename(filename: str) -> Optional[str]:
     would come back "syntax verification unavailable: HTTP Error 400", a
     verification that never ran reported as a candidate that failed. The
     proxy relativises at its own sandbox boundary for the same reason
-    (proxy/gates.go, workspaceRelativeName).
+    (services/proxy/gates.go, workspaceRelativeName).
 
     Relativised here, at the one boundary that talks to the sandbox, so every
     caller is covered at once. When no safe relative form exists the filename
@@ -972,7 +972,7 @@ CRITERION_PARSES = "parses"
 # observes, each backed by an evaluator: python_compile requires only that the
 # artifact parses, which is what it measures. What a TASK owes is not declared
 # here. The proxy derives that from the validated request
-# (proxy/internal/taskcontract/obligation_kinds.go), and none of it reaches this service.
+# (services/proxy/internal/taskcontract/obligation_kinds.go), and none of it reaches this service.
 
 SUPPORT_ALWAYS = "always"
 SUPPORT_NEVER = "never"

@@ -66,7 +66,7 @@ pinned, so a rebuild can resolve newer ones:
 | `sandbox/requirements-runtime.txt` | Sandbox executor API |
 | `sandbox/requirements-verify.txt` | In-sandbox verify/lint tools (pytest, ruff, mypy, requests) and the executor's YAML and Jinja checkers (pyyaml, jinja2) |
 
-The proxy's two Alpine packages are pinned in `proxy/Dockerfile`
+The proxy's two Alpine packages are pinned in `services/proxy/Dockerfile`
 (`curl=8.22.0-r0`, `bash=5.3.9-r1`).
 
 `tests/infrastructure/supply/test_dependency_pinning.py` asserts the pinning

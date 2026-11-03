@@ -97,7 +97,7 @@ main() {
     declare -a IMAGES=(
         "atlas-llama|inference|inference/Dockerfile.v31"
         "atlas-lens|geometric-lens|geometric-lens/Dockerfile"
-        "atlas-proxy|proxy|proxy/Dockerfile"
+        "atlas-proxy|services/proxy|services/proxy/Dockerfile"
         "atlas-sandbox|sandbox|sandbox/Dockerfile"
         "atlas-v3|.|v3-service/Dockerfile"
     )

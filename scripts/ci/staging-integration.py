@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run the candidate-staging integration test against a real executor.
 
-The Go test in `proxy/staging_integration_test.go` needs a live
+The Go test in `services/proxy/evidence_staging_integration_test.go` needs a live
 `sandbox/executor_server.py`: the whole point of it is to check that the real
 executor's snapshot is isolated, its `finally` really deletes, and its
 observation really describes the tree either side. A stub cannot answer any of
@@ -32,7 +32,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 EXECUTOR = ROOT / "sandbox" / "executor_server.py"
-PROXY = ROOT / "proxy"
+PROXY = ROOT / "services" / "proxy"
 TESTS = (
     "TestRealExecutorStagesTheExactCandidateForACleanPass|"
     "TestRealExecutorClassifiesEveryStagedOutcome|"

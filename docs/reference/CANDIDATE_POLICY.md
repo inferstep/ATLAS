@@ -90,7 +90,7 @@ the eligibility check alone.
 
 If a delivery is refused before any byte moves, the model's own bytes are
 written, on the new-file route as on the edit route (`writeFileWithV3` in
-`proxy/tool_write_v3.go`, and `proxy/edit_route_delivery.go`).
+`services/proxy/tool_write_v3.go`, and `services/proxy/delivery_edit_route.go`).
 
 ### The structured mutation target
 
@@ -224,7 +224,7 @@ delivery outcome, the disposition the lifecycle recorded — and recomputes
 nothing. No owner reads it; with the capture off nothing is built.
 
 The record carries `outcome` (`landed` or `not_landed`) and a `refusal` from a
-closed vocabulary (`proxy/automatic_attribution.go`), joined to the other
+closed vocabulary (`services/proxy/candidate_attribution.go`), joined to the other
 records by request, route entry, invocation and candidate identity where
 present. A landed candidate has an empty refusal. The record keeps its
 `policy_mode` and `policy_source` fields, now always `automatic_v3` and
@@ -363,25 +363,25 @@ correctness guarantee, because none of it is one.
 request that declares its outputs, and for a `work` request whose model call
 names a structured mutation target
 ([the structured mutation target](#the-structured-mutation-target));
-see `authorizeCandidateDelivery` in `proxy/candidate_delivery.go`. A request
+see `authorizeCandidateDelivery` in `services/proxy/delivery.go`. A request
 that sends no contract, or a `question`, gets no V3 candidate
-(`candidate_undeliverable` in `proxy/candidate_reachability.go`), except under
+(`candidate_undeliverable` in `services/proxy/candidate_reachability.go`), except under
 the operator's capture-only acquisition, which generates one and never delivers
 it ([the acquisition control](#the-acquisition-control)).
 
-`proxy/delivery_agreement_test.go` drives each shape a request takes through the
+`services/proxy/delivery_agreement_test.go` drives each shape a request takes through the
 real write path. It checks that a candidate lands exactly when this decision
 says it delivers, with the bytes the decision named, and never for a request
 the decision does not own.
 
 Feasibility is observe-only: `observeInvocationFeasibility` runs before
 generation and records its answer to private telemetry, and generation goes
-ahead whatever it says (`proxy/feasibility_decision.go`).
+ahead whatever it says (`services/proxy/candidate_feasibility.go`).
 
 ## Obligations: what a task owes
 
 A validated `TaskContract` is turned into typed obligations by the proxy
-(`proxy/obligation_kinds.go`). Six kinds:
+(`services/proxy/task_obligation_kinds.go`). Six kinds:
 
 | Kind | Subject | Comes from |
 | --- | --- | --- |
@@ -455,7 +455,7 @@ a ceiling it may never exceed:
 | `model_generated` | none — never authorizes | the model's own self-tests |
 
 Two producers, each with **exactly one** production call path, both in
-`proxy/evidence_wiring.go`:
+`services/proxy/evidence_wiring.go`:
 
 - `observeDeliveredCandidateSyntax` runs at the moment the bytes are fixed and
   the structural gate has just reported on exactly those bytes. The verdict is
@@ -492,7 +492,7 @@ That is necessary, not sufficient: the typed authorization path also has to
 grant the candidate, and a refusal there keeps the caller's own content (see
 [Authorization](#authorization)). A request that sends
 no contract, or a `question`, gets no V3 candidate to deliver
-(`candidateDeliverable` in `proxy/candidate_reachability.go`). `passed`,
+(`candidateDeliverable` in `services/proxy/candidate_reachability.go`). `passed`,
 `phase_solved`, `winning_score` and the verification-evidence strings authorize
 nothing; `passed` stays on the wire as a compatibility and telemetry field.
 
@@ -510,9 +510,9 @@ use.
 | `v3-service/pipeline.py` | Orchestration: runs verifiers, supplies the selected record | Decide wire shape |
 | `v3-service/adapters.py` | Adapter knowledge: which criteria an adapter can observe, what its grading means in contract terms, and the live-record → contract-record bridge | Decide closure, ranking or selection |
 | `v3-service/main.py` | Transport: calls `adapters.evidence_envelope`, writes its output | Hold any policy — pinned by `test_main_serialises_but_decides_nothing` |
-| `proxy/internal/wire/v3.go` | The one Go wire representation, beside `V3GenerateResponse` | — |
-| `proxy/internal/v3client/client.go` | The response boundary: decode | Re-derive domain policy |
-| `proxy/contract_gate.go` | Strict validation and availability: `EvidenceSupportsProvenanceFor` and `v3DeliveryAuthorized` | Re-derive domain policy, or infer strength from `passed`/`phase_solved`/`winning_score`/`verification_evidence` |
+| `services/proxy/internal/wire/v3.go` | The one Go wire representation, beside `V3GenerateResponse` | — |
+| `services/proxy/internal/v3client/client.go` | The response boundary: decode | Re-derive domain policy |
+| `services/proxy/candidate_contract_gate.go` | Strict validation and availability: `EvidenceSupportsProvenanceFor` and `v3DeliveryAuthorized` | Re-derive domain policy, or infer strength from `passed`/`phase_solved`/`winning_score`/`verification_evidence` |
 
 No separate evidence module exists on either side, and no compatibility module
 stands in for one (`test_the_retiring_prototype_is_gone`). One contract, one
@@ -600,7 +600,7 @@ whether the evidence describes the delivered bytes, and the reason an
 unavailable envelope must give). It is built and verified byte-for-byte by
 `tests/v3-service/pipeline/test_contract_genericity.py`; regenerate with
 `ATLAS_WRITE_EVIDENCE_FIXTURES=1 pytest tests/v3-service/pipeline/test_contract_genericity.py`.
-The Go tests (`proxy/contract_gate_test.go`) read the same document, decode
+The Go tests (`services/proxy/candidate_contract_gate_test.go`) read the same document, decode
 those exact bytes and check the declared expectations independently — so the
 two languages agree with the contract rather than with each other, and adding a
 case on the Python side automatically binds the Go side to it.
@@ -688,7 +688,7 @@ workspace_files                       count
 digest_truncated                      the tree was too large to describe exactly
 ```
 
-`stageCandidate` (`proxy/candidate_staging.go`) drives it. The sequence is fixed:
+`stageCandidate` (`services/proxy/evidence_candidate_staging.go`) drives it. The sequence is fixed:
 
 1. validate the request, including that the bytes are the candidate the identity
    names;
@@ -791,7 +791,7 @@ which bytes are a candidate at all; the grant decides whether that candidate may
 replace the caller's content. A typed refusal keeps the caller's own content and
 never falls through to the winner the envelope liked.
 
-`proxy/evidence_wiring_test.go` pins that exactly one function reaches the
+`services/proxy/evidence_wiring_test.go` pins that exactly one function reaches the
 decision, exactly one spends the grant, and each is called from exactly one
 place.
 
@@ -963,27 +963,27 @@ from what is available then.
 
 | File | What it owns |
 | --- | --- |
-| `proxy/candidate_policy.go` | the rule, the decision vocabulary, the telemetry record |
-| `proxy/advisory_policy.go` | the veto vocabulary, the signal set, and the policy owner (`decideCandidatePolicy`) |
-| `proxy/candidate_delivery.go` | which basis holds, the vetoes, and the one delivery owner; the live authorization owner and the grant consumer |
-| `proxy/authorization_grant.go` | the grant check (`grantFor`) and the one mint; the one-time grant: minting, consumption, retirement |
-| `proxy/automatic_delivery.go` | whether the exact selected candidate may land, and the grant basis |
-| `proxy/candidate_provenance.go` | what the terminal is told about delivered bytes |
-| `proxy/internal/taskcontract/verification_requirements.go` | typed verification requirements |
-| `proxy/verification_requirements.go` | asset authority as this session observed it |
-| `proxy/evidence_wiring.go` | the staged declared-verification producer; the producer inventory and the two production call paths |
-| `proxy/tool_write_v3.go` | the new-file route: proposal, staging, policy, delivery |
-| `proxy/edit_route_delivery.go` | the edit route, through the same owners |
-| `proxy/candidate_reachability.go` | whether the producer is consulted at all, and why not |
-| `proxy/internal/taskcontract/obligation_kinds.go` | the six kinds, the three roles |
-| `proxy/obligation_kinds.go` | derivation, `baselineWitness` |
-| `proxy/syntax_evidence.go` | the proxy-owned syntax producer, `workspaceIdentity` |
-| `proxy/verification_evidence.go` | the client-declared verification producer |
-| `proxy/staging_contract.go` | the staging request/result types and their fail-closed validation |
-| `proxy/candidate_staging.go` | `stageCandidate` — the one thing that executes |
-| `proxy/authorization_decision.go` | `decideAuthorization`, baseline-preservation derivation |
-| `proxy/delivery_settlement.go` | post-delivery existence settlement |
-| `proxy/feasibility_decision.go` | `decideInvocationFeasibility` (observe-only) |
+| `services/proxy/candidate_policy.go` | the rule, the decision vocabulary, the telemetry record |
+| `services/proxy/candidate_advisory_policy.go` | the veto vocabulary, the signal set, and the policy owner (`decideCandidatePolicy`) |
+| `services/proxy/delivery.go` | which basis holds, the vetoes, and the one delivery owner; the live authorization owner and the grant consumer |
+| `services/proxy/candidate_grant.go` | the grant check (`grantFor`) and the one mint; the one-time grant: minting, consumption, retirement |
+| `services/proxy/candidate_automatic.go` | whether the exact selected candidate may land, and the grant basis |
+| `services/proxy/candidate_provenance.go` | what the terminal is told about delivered bytes |
+| `services/proxy/internal/taskcontract/verification_requirements.go` | typed verification requirements |
+| `services/proxy/evidence_verification_requirements.go` | asset authority as this session observed it |
+| `services/proxy/evidence_wiring.go` | the staged declared-verification producer; the producer inventory and the two production call paths |
+| `services/proxy/tool_write_v3.go` | the new-file route: proposal, staging, policy, delivery |
+| `services/proxy/delivery_edit_route.go` | the edit route, through the same owners |
+| `services/proxy/candidate_reachability.go` | whether the producer is consulted at all, and why not |
+| `services/proxy/internal/taskcontract/obligation_kinds.go` | the six kinds, the three roles |
+| `services/proxy/task_obligation_kinds.go` | derivation, `baselineWitness` |
+| `services/proxy/evidence_syntax.go` | the proxy-owned syntax producer, `workspaceIdentity` |
+| `services/proxy/evidence_verification.go` | the client-declared verification producer |
+| `services/proxy/evidence_staging_contract.go` | the staging request/result types and their fail-closed validation |
+| `services/proxy/evidence_candidate_staging.go` | `stageCandidate` — the one thing that executes |
+| `services/proxy/candidate_authorization.go` | `decideAuthorization`, baseline-preservation derivation |
+| `services/proxy/delivery_settlement.go` | post-delivery existence settlement |
+| `services/proxy/candidate_feasibility.go` | `decideInvocationFeasibility` (observe-only) |
 | `sandbox/executor_server.py` | `/shell` observation — facts, no conclusions |
 
 ## Telemetry

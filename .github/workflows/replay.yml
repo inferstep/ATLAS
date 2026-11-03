@@ -10,7 +10,7 @@ on:
   pull_request:
     branches: [main, dev]
     paths:
-      - 'proxy/**'
+      - 'services/proxy/**'
       - 'tests/replay/**'
       - '.github/workflows/replay.yml'
   merge_group:

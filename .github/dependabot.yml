@@ -50,7 +50,7 @@ updates:
         versions: [">=3.3"]
 
   - package-ecosystem: gomod
-    directory: /proxy
+    directory: /services/proxy
     target-branch: dev
     schedule:
       interval: weekly
@@ -116,7 +116,7 @@ updates:
 
   - package-ecosystem: docker
     directories:
-      - /proxy
+      - /services/proxy
       - /v3-service
       - /sandbox
       - /geometric-lens

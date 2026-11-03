@@ -129,7 +129,7 @@ PROJECT = "atlas-nightly"
 BUILDS = {"geometric-lens": ("geometric-lens", "geometric-lens/Dockerfile", ("geometric-lens/",)),
           "v3-service": (".", "v3-service/Dockerfile", ("v3-service/", ".dockerignore")),
           "sandbox": ("sandbox", "sandbox/Dockerfile", ("sandbox/",)),
-          "atlas-proxy": ("proxy", "proxy/Dockerfile", ("proxy/",))}
+          "atlas-proxy": ("services/proxy", "services/proxy/Dockerfile", ("services/proxy/",))}
 # What a run takes from the tree of `dev` and runs or mounts on the server itself, each with what it is. A name
 # that ends with a slash is a folder. The compose files of the run come on top (taken_from_dev). A run for one
 # commit never takes one of these from the commit, so a commit that changes one is not run.

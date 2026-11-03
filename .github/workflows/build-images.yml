@@ -109,8 +109,8 @@ jobs:
       matrix:
         service:
           - name: proxy
-            context: ./proxy
-            dockerfile: ./proxy/Dockerfile
+            context: ./services/proxy
+            dockerfile: ./services/proxy/Dockerfile
           - name: v3
             context: .
             dockerfile: ./v3-service/Dockerfile
@@ -241,8 +241,8 @@ jobs:
       matrix:
         service:
           - name: proxy
-            context: ./proxy
-            dockerfile: ./proxy/Dockerfile
+            context: ./services/proxy
+            dockerfile: ./services/proxy/Dockerfile
           - name: v3
             # Root context: v3-service/Dockerfile reads sibling dirs at build time.
             context: .

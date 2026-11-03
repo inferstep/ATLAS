@@ -28,7 +28,7 @@ REPO = Path(__file__).resolve().parents[2]
 # integrity only in the sense that undetected classes exist — never inflated by
 # a false positive.
 
-# Terminal outcomes a `done` payload may carry (proxy/internal/wire/messages.go owns the
+# Terminal outcomes a `done` payload may carry (services/proxy/internal/wire/messages.go owns the
 # vocabulary). Kept literal here because this script runs standalone against a
 # deployed proxy and must not import the CLI package.
 TERMINAL_STATUSES = ("completed", "incomplete", "stopped", "timed_out", "failed")

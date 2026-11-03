@@ -93,10 +93,10 @@ def test_more_lines_in_the_main_package_are_no_failure():
 
 
 def test_the_main_package_counts_only_its_own_code_files(tmp_path, monkeypatch):
-    (tmp_path / "proxy" / "internal" / "x").mkdir(parents=True)
-    (tmp_path / "proxy" / "a.go").write_text("package main\n\nfunc a() {}\n")
-    (tmp_path / "proxy" / "a_test.go").write_text("package main\n")
-    (tmp_path / "proxy" / "internal" / "x" / "x.go").write_text("package x\n")
+    (tmp_path / "services" / "proxy" / "internal" / "x").mkdir(parents=True)
+    (tmp_path / "services" / "proxy" / "a.go").write_text("package main\n\nfunc a() {}\n")
+    (tmp_path / "services" / "proxy" / "a_test.go").write_text("package main\n")
+    (tmp_path / "services" / "proxy" / "internal" / "x" / "x.go").write_text("package x\n")
     monkeypatch.setattr(ch, "ROOT", str(tmp_path))
     assert ch.main_package_size() == {"files": 1, "lines": 3}
 

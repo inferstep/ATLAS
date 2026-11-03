@@ -1255,7 +1255,7 @@ class Look(commits.OneCommit):
 
 
 def test_a_look_runs_the_tip_of_a_smoke_branch_and_sends_its_status_and_the_next_look_runs_nothing(tmp_path, repository):
-    commit = repository.on_a_branch({"proxy/prompt.go": "package main // a new text\n"})
+    commit = repository.on_a_branch({"services/proxy/prompt.go": "package main // a new text\n"})
     with a_stand_in_for_github(**ours(commit)) as github:
         run = Look(tmp_path, repository, github).look()
         assert run.done.returncode == 0, run.done.stdout + run.done.stderr
@@ -1285,7 +1285,7 @@ def test_a_look_runs_the_tip_of_a_smoke_branch_and_sends_its_status_and_the_next
 
 
 def test_the_key_is_in_no_command_of_a_smoke_run_and_in_nothing_that_it_leaves(tmp_path, repository):
-    commit = repository.on_a_branch({"proxy/prompt.go": "package main // a new text\n"})
+    commit = repository.on_a_branch({"services/proxy/prompt.go": "package main // a new text\n"})
     with a_stand_in_for_github(**ours(commit)) as github:
         run = Look(tmp_path, repository, github).look()
         proof = github.seen[3]["with"].removeprefix("Bearer ")
@@ -1325,7 +1325,7 @@ def test_a_status_of_that_name_by_another_writer_does_not_stop_the_run(tmp_path,
     pytest.param(by(), [a_pull(state="closed")], NOT_OUR_OWN, 3, id="a closed pull request"),
 ])
 def test_a_look_starts_nothing_for_a_tip_that_fails_a_guard_and_writes_no_status(tmp_path, repository, record, pulls, why, asked):
-    commit = repository.on_a_branch({"proxy/prompt.go": "package main // a new text\n"})
+    commit = repository.on_a_branch({"services/proxy/prompt.go": "package main // a new text\n"})
     record = [{**move, "after": commit} if move["after"] == COMMIT else move for move in record]
     pulls = [{**pull, "head": {**pull["head"], "sha": commit}} for pull in pulls]
     with a_stand_in_for_github(activity={"refs/heads/smoke/a-change": record}, pulls={commit: pulls}) as github:
@@ -1342,7 +1342,7 @@ def test_a_look_starts_nothing_for_a_tip_that_fails_a_guard_and_writes_no_status
 
 
 def test_a_smoke_run_that_failed_sends_a_red_status_on_the_commit(tmp_path, repository):
-    commit = repository.on_a_branch({"proxy/prompt.go": "package main // a new text\n"})
+    commit = repository.on_a_branch({"services/proxy/prompt.go": "package main // a new text\n"})
     with a_stand_in_for_github(**ours(commit)) as github:
         run = Look(tmp_path, repository, github, driver_rows=base.rows(0, 2, 0)).look()
         assert github.seen[5]["body"] == {"state": "failure", "context": "server/smoke", "description": (
@@ -1352,7 +1352,7 @@ def test_a_smoke_run_that_failed_sends_a_red_status_on_the_commit(tmp_path, repo
 
 
 def test_a_run_for_a_commit_that_is_started_by_hand_sends_its_status_too(tmp_path, repository):
-    commit = repository.on_a_branch({"proxy/prompt.go": "package main // a new text\n"})
+    commit = repository.on_a_branch({"services/proxy/prompt.go": "package main // a new text\n"})
     with a_stand_in_for_github() as github:
         run = commits.OneCommit(tmp_path, repository, github=github.port)
         run.run(commit, *run.with_the_key())
@@ -1363,7 +1363,7 @@ def test_a_run_for_a_commit_that_is_started_by_hand_sends_its_status_too(tmp_pat
 
 
 def test_a_commit_that_is_not_the_tip_of_a_smoke_branch_gets_no_status(tmp_path, repository):
-    commit = repository.on_a_branch({"proxy/prompt.go": "package main // a new text\n"}, name="another/branch")
+    commit = repository.on_a_branch({"services/proxy/prompt.go": "package main // a new text\n"}, name="another/branch")
     with a_stand_in_for_github() as github:
         run = commits.OneCommit(tmp_path, repository, github=github.port)
         run.run(commit, *run.with_the_key())
@@ -1382,7 +1382,7 @@ def test_when_taking_the_head_changes_the_script_the_new_copy_runs_the_commit_th
         # `dev` goes on and changes the script; the commit stands on that new head and does not change the script.
         repository.head = repository.commit({"scripts/nightly_run.py": SCRIPT.read_text() + "\n# the copy of dev, one commit later\n"}, "refs/heads/dev")
         planned(run, head=repository.head)
-        commit = repository.on_a_branch({"proxy/prompt.go": "a change\n"})
+        commit = repository.on_a_branch({"services/proxy/prompt.go": "a change\n"})
         github.plan.update(ours(commit))
         run.look()
         asked = [call["call"] for call in github.seen]
@@ -1419,7 +1419,7 @@ def test_a_look_that_starts_nothing_says_what_is_due_while_the_usual_stack_compu
 
 
 def test_a_look_that_starts_nothing_ends_with_status_0_when_a_smoke_run_is_due_and_runs_nothing(tmp_path, repository):
-    commit = repository.on_a_branch({"proxy/prompt.go": "package main // a new text\n"})
+    commit = repository.on_a_branch({"services/proxy/prompt.go": "package main // a new text\n"})
     with a_stand_in_for_github(**ours(commit)) as github:
         run = Look(tmp_path, repository, github).look("--look")
         assert [call["call"] for call in github.seen] == asked_for(commit)
