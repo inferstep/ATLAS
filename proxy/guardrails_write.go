@@ -67,13 +67,12 @@ func stripWholeFileWrapper(filePath, content string) (string, bool) {
 	if first < 0 || first == last {
 		return content, false
 	}
-	open := fenceOpenRe.FindStringSubmatch(lines[first])
-	closing := fenceCloseRe.FindStringSubmatch(lines[last])
-	if open == nil || closing == nil || len(closing[1]) < len(open[1]) {
+	open := fenceOpeningRun(lines[first])
+	if open == "" || !closesFence(lines[last], len(open)) {
 		return content, false
 	}
 	for i := first + 1; i < last; i++ {
-		if m := fenceCloseRe.FindStringSubmatch(lines[i]); m != nil && len(m[1]) >= len(open[1]) {
+		if closesFence(lines[i], len(open)) {
 			return content, false
 		}
 	}
