@@ -46,10 +46,10 @@ llama-server is the only GPU-using service; every other ATLAS service runs on CP
 
 | Backend | Status (V3.1.x) | Image / build path | Compose override | Tested cards |
 |---|---|---|---|---|
-| **CUDA** (NVIDIA) | Supported (since V3.1.0) | `inference/Dockerfile.v31` → `atlas-llama` | (default) | RTX 5060 Ti 16GB (canonical). The published image is compiled for Blackwell (compute capability 12.0/12.1) only; earlier generations need a local rebuild — see [SETUP.md](../guides/SETUP.md) |
-| **ROCm / HIP** (AMD) | Community-tested (since V3.1.1) | `inference/Dockerfile.rocm` → `atlas-llama-rocm`, built on the host (`pull_policy: build`; no GHCR image) | `deploy/compose/docker-compose.rocm.yml` | RX 7900 XTX (community smoke-test, GH #26) |
+| **CUDA** (NVIDIA) | Supported (since V3.1.0) | `services/inference/Dockerfile.v31` → `atlas-llama` | (default) | RTX 5060 Ti 16GB (canonical). The published image is compiled for Blackwell (compute capability 12.0/12.1) only; earlier generations need a local rebuild — see [SETUP.md](../guides/SETUP.md) |
+| **ROCm / HIP** (AMD) | Community-tested (since V3.1.1) | `services/inference/Dockerfile.rocm` → `atlas-llama-rocm`, built on the host (`pull_policy: build`; no GHCR image) | `deploy/compose/docker-compose.rocm.yml` | RX 7900 XTX (community smoke-test, GH #26) |
 | **Metal** (Apple Silicon) | Supported ([#32](https://github.com/inferstep/ATLAS/issues/32)) | Hybrid: native llama-server (Metal) + Docker for the rest (macOS can't passthrough GPU to containers) | `deploy/compose/docker-compose.macos.yml` | M-series; Q4_K_M on ≤16 GB, Q6_K on ≥24 GB unified |
-| **Vulkan** (cross-vendor fallback) | Preview | `inference/Dockerfile.vulkan` → `atlas-llama-vulkan` | `deploy/compose/docker-compose.vulkan.yml` | lavapipe CPU boot path (smoke-tested); no real-GPU validation yet |
+| **Vulkan** (cross-vendor fallback) | Preview | `services/inference/Dockerfile.vulkan` → `atlas-llama-vulkan` | `deploy/compose/docker-compose.vulkan.yml` | lavapipe CPU boot path (smoke-tested); no real-GPU validation yet |
 | **SYCL** (Intel Arc) | Roadmap — Intel Arc uses `vulkan` today | TBD | TBD | — |
 
 **Backend selection happens at install time, not runtime.** `atlas init` runs `tier.detect_gpu()` (see `atlas/commands/tier.py`), picks the largest-VRAM GPU across all detected vendors (override with `ATLAS_GPU_VENDOR` / `ATLAS_GPU_INDEX`), and writes `ATLAS_BACKEND={cuda|rocm|metal|vulkan}` into `.env`. Detection resolves to the packaged native backend when one exists: CUDA for NVIDIA, ROCm for AMD on x86_64, the hybrid Metal path on macOS. When no native backend is packaged for the host (Intel Arc, AMD on arm64, unrecognized vendors), the wizard offers the Vulkan universal fallback (default-yes): one image covers AMD, Intel, Adreno, MoltenVK, and the lavapipe CPU rasterizer, at roughly 20–40% below a tuned native backend. It refuses — rather than writing a `.env` that won't boot — only when nothing usable exists. Each backend has its own image — CUDA and Vulkan prebuilt on GHCR, ROCm compiled on the AMD host at first `up` — so users don't run a fat image that ships every backend's libraries.
@@ -452,7 +452,7 @@ Four model-independent defenses compose in the proxy:
 4. **ASA steering vectors** (`geometric-lens/asa_calibration/`).
    Activation steering shifts the residual-stream distribution upstream
    so structural_edit is preferred even on first-attempt decisions before any
-   rejection has fired. Auto-loaded by `inference/entrypoint-v3.1.sh`
+   rejection has fired. Auto-loaded by `services/inference/entrypoint-v3.1.sh`
    from `/models/ast_edit_steering.gguf` only when its `.model` sidecar
    matches the selected model—always-on after a compatible build via the workflow
    in `geometric-lens/asa_calibration/README.md`. Override path/scale/
@@ -1050,7 +1050,7 @@ graph LR
     style AP fill:#1a3a5c,color:#fff
 ```
 
-`llama-server` and `sandbox` start independently. `geometric-lens` waits for `llama-server` to be healthy; `v3-service` waits for `llama-server` and `geometric-lens`; `atlas-proxy` waits for `llama-server`, `geometric-lens`, `v3-service`, and `sandbox`. The same `inference/entrypoint-v3.1.sh` drives Docker Compose, bare metal, and K3s, so context size, KV cache quantization, flash attention, and mlock are env-var-controlled and behavior is identical across those modes; the macOS hybrid path launches native llama-server via `scripts/install/atlas-llama-macos.sh`, which mirrors the entrypoint's flags.
+`llama-server` and `sandbox` start independently. `geometric-lens` waits for `llama-server` to be healthy; `v3-service` waits for `llama-server` and `geometric-lens`; `atlas-proxy` waits for `llama-server`, `geometric-lens`, `v3-service`, and `sandbox`. The same `services/inference/entrypoint-v3.1.sh` drives Docker Compose, bare metal, and K3s, so context size, KV cache quantization, flash attention, and mlock are env-var-controlled and behavior is identical across those modes; the macOS hybrid path launches native llama-server via `scripts/install/atlas-llama-macos.sh`, which mirrors the entrypoint's flags.
 
 Install and per-mode bring-up steps (NVIDIA / ROCm overrides, bare metal, macOS hybrid Metal, K3s manifests) are in [SETUP.md](../guides/SETUP.md); the macOS native path is in [SETUP_MACOS.md](../guides/SETUP_MACOS.md).
 

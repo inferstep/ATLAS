@@ -233,7 +233,7 @@ def _print_rebuild_required(arch: Optional[str], excerpt: str, color: bool,
     _safe_print()
     _safe_print(_c(f"  {WARN} Do NOT strip ATLAS's custom llama.cpp patches.",
                    YELL, color))
-    _safe_print("  The build re-applies inference/patches/expose-hidden-states.patch")
+    _safe_print("  The build re-applies services/inference/patches/expose-hidden-states.patch")
     _safe_print("  (PC-202 — the per-layer hidden_states extension the Geometric")
     _safe_print("  Lens depends on). If upstream has drifted the `git apply` step")
     _safe_print("  fails and the build aborts — REBASE the patch, don't delete it")

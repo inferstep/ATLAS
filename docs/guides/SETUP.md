@@ -290,7 +290,7 @@ The ROCm path is identical to NVIDIA *except* for these four points:
    ```
    The override switches the llama-server image to the ROCm build, swaps the NVIDIA driver request for `/dev/kfd` + `/dev/dri` passthrough, and forces `ATLAS_BACKEND=rocm` so the entrypoint takes the HIP-tuning branch.
 
-2. **The llama-server image is built on your machine, not pulled.** GHCR carries prebuilt CUDA and Vulkan llama images; there is no published `atlas-llama-rocm`, because CI has no AMD GPU to test one on (ROCm is Community-tested — see [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md)). The override declares `pull_policy: build`, so `docker compose pull` skips llama-server and the `up` above compiles it from `inference/Dockerfile.rocm`; later builds reuse the layer cache. Every other ATLAS service still pulls its prebuilt image as usual. To build it ahead of time:
+2. **The llama-server image is built on your machine, not pulled.** GHCR carries prebuilt CUDA and Vulkan llama images; there is no published `atlas-llama-rocm`, because CI has no AMD GPU to test one on (ROCm is Community-tested — see [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md)). The override declares `pull_policy: build`, so `docker compose pull` skips llama-server and the `up` above compiles it from `services/inference/Dockerfile.rocm`; later builds reuse the layer cache. Every other ATLAS service still pulls its prebuilt image as usual. To build it ahead of time:
    ```bash
    docker compose -f docker-compose.yml -f deploy/compose/docker-compose.rocm.yml build llama-server
    ```
@@ -369,7 +369,7 @@ ATLAS targets two CPU architectures: `x86_64` (default, all backends available) 
 # Multi-arch build that produces a single image manifest covering both archs:
 docker buildx build --platform linux/amd64,linux/arm64 \
   -t atlas-llama-server:vulkan \
-  -f inference/Dockerfile.vulkan inference/
+  -f services/inference/Dockerfile.vulkan services/inference/
 ```
 
 **Building the CUDA image for arm64** (DGX Spark example):
@@ -380,7 +380,7 @@ docker buildx build --platform linux/arm64 \
   --build-arg BUILDER_IMAGE=nvidia/cuda:12.9.0-devel-ubuntu22.04 \
   --build-arg RUNTIME_IMAGE=nvidia/cuda:12.9.0-runtime-ubuntu22.04 \
   -t atlas-llama-server:cuda-arm64 \
-  -f inference/Dockerfile.v31 inference/
+  -f services/inference/Dockerfile.v31 services/inference/
 ```
 
 For Jetson, swap to `nvcr.io/nvidia/l4t-jetpack:r36.3.0` in both build args (l4t ships JetPack + CUDA + cuDNN as one image).
@@ -792,18 +792,18 @@ Any GPU with 8 GB+ VRAM and a llama.cpp-supported backend:
 
 | Vendor | Backend | Status | Build path | Tested cards |
 |---|---|---|---|---|
-| NVIDIA (Blackwell — RTX 50xx, GB10) | CUDA | Supported (published image) | `inference/Dockerfile.v31` | RTX 5060 Ti 16GB (primary dev) |
-| NVIDIA (pre-Blackwell — RTX 20xx–40xx, GTX 10xx, V100/A100/H100/T4/L4) | CUDA | Preview — one-time [local rebuild required](#cuda-compute-capability-dockerfilev31) | `inference/Dockerfile.v31` + `--build-arg CUDA_ARCH=<cc>` | — (upstream llama.cpp supports these; no maintainer validation on ATLAS) |
-| AMD | ROCm / HIP | Community-tested | `inference/Dockerfile.rocm` | RX 7900 XTX (community smoke-test, [GH #26](https://github.com/inferstep/ATLAS/issues/26)) |
+| NVIDIA (Blackwell — RTX 50xx, GB10) | CUDA | Supported (published image) | `services/inference/Dockerfile.v31` | RTX 5060 Ti 16GB (primary dev) |
+| NVIDIA (pre-Blackwell — RTX 20xx–40xx, GTX 10xx, V100/A100/H100/T4/L4) | CUDA | Preview — one-time [local rebuild required](#cuda-compute-capability-dockerfilev31) | `services/inference/Dockerfile.v31` + `--build-arg CUDA_ARCH=<cc>` | — (upstream llama.cpp supports these; no maintainer validation on ATLAS) |
+| AMD | ROCm / HIP | Community-tested | `services/inference/Dockerfile.rocm` | RX 7900 XTX (community smoke-test, [GH #26](https://github.com/inferstep/ATLAS/issues/26)) |
 | Apple Silicon | Metal | Supported (macOS hybrid: native llama-server + Docker, [#32](https://github.com/inferstep/ATLAS/issues/32)) | `scripts/install/atlas-setup-macos.sh` + `deploy/compose/docker-compose.macos.yml` | M2 Pro 32GB (verified); M3/M4 (target) |
-| Any (cross-vendor fallback) | Vulkan | Preview | `inference/Dockerfile.vulkan` | lavapipe (CPU ICD) smoke-tested; no real-GPU validation yet |
+| Any (cross-vendor fallback) | Vulkan | Preview | `services/inference/Dockerfile.vulkan` | lavapipe (CPU ICD) smoke-tested; no real-GPU validation yet |
 | Intel Arc | SYCL | Roadmap — Intel Arc uses Vulkan today | TBD | Arc A770 16GB (target) |
 
 `atlas tier` auto-detects across vendors and picks the largest-VRAM GPU. Override with `ATLAS_GPU_VENDOR=amd` or `ATLAS_GPU_INDEX=1` if you have multiple GPUs and want a specific one.
 
 #### CUDA Compute Capability (Dockerfile.v31)
 
-`inference/Dockerfile.v31` compiles llama.cpp for a specific CUDA compute capability. The default — and what the published `atlas-llama` image on GHCR is built with — is `120;121` (Blackwell: RTX 50xx, GB10) **only**. The published image contains no kernels for earlier GPUs, and its embedded PTX cannot be JIT-compiled downward, so on RTX 20/30/40-series, GTX 10xx, and pre-Blackwell datacenter cards (V100/A100/H100/T4/L4) llama-server fails at startup with `no kernel image is available for execution on the device`. You must rebuild the inference image once for your architecture. (A local build with the wrong arch value fails earlier, with `nvcc fatal: unsupported gpu architecture`.)
+`services/inference/Dockerfile.v31` compiles llama.cpp for a specific CUDA compute capability. The default — and what the published `atlas-llama` image on GHCR is built with — is `120;121` (Blackwell: RTX 50xx, GB10) **only**. The published image contains no kernels for earlier GPUs, and its embedded PTX cannot be JIT-compiled downward, so on RTX 20/30/40-series, GTX 10xx, and pre-Blackwell datacenter cards (V100/A100/H100/T4/L4) llama-server fails at startup with `no kernel image is available for execution on the device`. You must rebuild the inference image once for your architecture. (A local build with the wrong arch value fails earlier, with `nvcc fatal: unsupported gpu architecture`.)
 
 Find your GPU's arch, then rebuild with `--build-arg CUDA_ARCH=<value>`:
 
@@ -817,7 +817,7 @@ docker compose build --build-arg CUDA_ARCH=89 llama-server
 docker compose up -d --no-deps llama-server
 
 # Or build the image directly:
-podman build --build-arg CUDA_ARCH=89 -f inference/Dockerfile.v31 -t llama-server:local inference/
+podman build --build-arg CUDA_ARCH=89 -f services/inference/Dockerfile.v31 -t llama-server:local services/inference/
 
 # Multiple archs (semicolon-separated) — build a fat binary for Ampere + Ada + Hopper
 docker compose build --build-arg CUDA_ARCH="86;89;90" llama-server
@@ -837,7 +837,7 @@ Common values:
 
 #### AMD GPU Targets (Dockerfile.rocm)
 
-`inference/Dockerfile.rocm` compiles llama.cpp's HIP backend for one or more `gfx` targets. The default is a fat build covering the most common consumer + datacenter AMD GPUs: `gfx1100;gfx1101;gfx1102;gfx1030;gfx90a`.
+`services/inference/Dockerfile.rocm` compiles llama.cpp's HIP backend for one or more `gfx` targets. The default is a fat build covering the most common consumer + datacenter AMD GPUs: `gfx1100;gfx1101;gfx1102;gfx1030;gfx90a`.
 
 Override at build time with `--build-arg GFX_TARGET=<value>` (or via `ATLAS_GFX_TARGET` env var, which the compose override forwards):
 
@@ -846,7 +846,7 @@ Override at build time with `--build-arg GFX_TARGET=<value>` (or via `ATLAS_GFX_
 ATLAS_GFX_TARGET=gfx1100 docker compose -f docker-compose.yml -f deploy/compose/docker-compose.rocm.yml build llama-server
 
 # Two targets for RDNA3 + RDNA2 mixed-fleet
-docker build --build-arg GFX_TARGET="gfx1100;gfx1030" -f inference/Dockerfile.rocm -t atlas-llama-rocm:custom inference/
+docker build --build-arg GFX_TARGET="gfx1100;gfx1030" -f services/inference/Dockerfile.rocm -t atlas-llama-rocm:custom services/inference/
 ```
 
 Common values:
@@ -959,7 +959,7 @@ up. The pipeline is:
    -ngl 99`, writes `models/ast_edit_steering.gguf` plus a
    `models/ast_edit_steering.gguf.model` sidecar marker recording which
    model the vector was built against, then restarts `llama-server`.
-3. `inference/entrypoint-v3.1.sh` sees the file on the next start,
+3. `services/inference/entrypoint-v3.1.sh` sees the file on the next start,
    checks that the `.model` sidecar marker matches the selected model,
    and appends `--control-vector-scaled
    /models/ast_edit_steering.gguf:0.5` to the `llama-server` command

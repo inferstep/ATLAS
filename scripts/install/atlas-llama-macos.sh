@@ -3,7 +3,7 @@
 #
 # Starts the Metal-accelerated llama-server built by
 # scripts/install/atlas-setup-macos.sh, using the same flags as the docker
-# entrypoint (inference/entrypoint-v3.1.sh) so behavior is
+# entrypoint (services/inference/entrypoint-v3.1.sh) so behavior is
 # identical to the linux + cuda/rocm path. Reads config from .env in
 # the ATLAS root.
 #

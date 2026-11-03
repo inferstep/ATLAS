@@ -9,7 +9,7 @@ name: Container image scan
 # them; a run with none closes the open issue. A finding with no fix does not
 # count (ignore-unfixed). The run blocks no merge: it is not a check of a pull
 # request.
-# Not scanned: the ROCm inference image (inference/Dockerfile.rocm). It is
+# Not scanned: the ROCm inference image (services/inference/Dockerfile.rocm). It is
 # built on the user's machine and never published, so there is no image to
 # read here.
 on:

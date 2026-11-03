@@ -275,7 +275,7 @@ stack and records what "deployed" means. In order, it:
 - tags each image it replaces as `atlas-prev:<service>-<stamp>`, the rollback
   target;
 - rebuilds geometric-lens, v3-service, sandbox and atlas-proxy, and
-  llama-server when `inference/` changed since the last deploy or the running
+  llama-server when `services/inference/` changed since the last deploy or the running
   model server was not put there by the script (a recreate reloads the model);
 - recreates them one at a time, each healthy before the next;
 - checks that every container runs the image its tag names, and pins it as

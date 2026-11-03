@@ -393,7 +393,7 @@ def test_a_fix_with_no_new_or_changed_test_has_nothing_to_run(fix, repo, tools):
 
 
 @pytest.mark.parametrize("files, kind", [
-    pytest.param({"services/proxy/Dockerfile": "FROM scratch\n", "inference/Dockerfile.v31": "FROM scratch\n"}, "folder",
+    pytest.param({"services/proxy/Dockerfile": "FROM scratch\n", "services/inference/Dockerfile.v31": "FROM scratch\n"}, "folder",
                  id="only build files of product folders"),
     pytest.param({"services/proxy/Dockerfile": "FROM scratch\n", "services/proxy/calc.py": FIXED}, "code",
                  id="a build file and product code"),

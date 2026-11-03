@@ -12,7 +12,7 @@
 # build-images.yml for why AMD stays out of the build matrix). The
 # `pull_policy: build` below is what makes that explicit — `docker
 # compose pull` skips llama-server on this overlay, and `up` compiles
-# it from inference/Dockerfile.rocm. Budget 30-60 min for the first
+# it from services/inference/Dockerfile.rocm. Budget 30-60 min for the first
 # build; later `up` calls reuse the layer cache and start in seconds.
 #
 # Hardware prereqs on the host:
@@ -40,7 +40,7 @@ services:
     # before `up`) fails the whole install with a 404 on the AMD path.
     pull_policy: build
     build:
-      context: ./inference
+      context: ./services/inference
       dockerfile: Dockerfile.rocm
       args:
         # Trim GFX_TARGET to your specific GPU for a smaller image. The

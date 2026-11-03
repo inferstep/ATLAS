@@ -16,7 +16,7 @@
 #   deployed/running-<sha>.json     the image each service runs, pinned as
 #                                   atlas-built:<service>-<sha>
 #
-# llama-server is rebuilt and recreated when inference/ changed since the last
+# llama-server is rebuilt and recreated when services/inference/ changed since the last
 # deploy, or when the model server running now was not put there by this
 # script: a recreate reloads the model. The other four are rebuilt every time.
 set -uo pipefail
@@ -51,7 +51,7 @@ llama_pin=""
 [[ -n "$PREV_SHA" ]] &&
   llama_pin=$(docker image inspect -f '{{.Id}}' "atlas-built:llama-server-$PREV_SHA" 2>/dev/null || true)
 if [[ -z "$llama_pin" ]] || [[ "$llama_pin" != "$(image_of llama-server)" ]] ||
-   ! git diff --quiet "$PREV_SHA" HEAD -- inference/ 2>/dev/null; then
+   ! git diff --quiet "$PREV_SHA" HEAD -- services/inference/ 2>/dev/null; then
   SERVICES="llama-server $SERVICES"
 fi
 echo "rebuilding: $SERVICES"
@@ -139,7 +139,7 @@ RUNNING=$RECORD/deployed/running-$SHA.json
 {
   printf '{\n  "sha": "%s", "stamp": "%s", "previous": "%s", "rebuilt": "%s",\n' \
     "$SHA" "$STAMP" "$(basename "$PREV")" "$SERVICES"
-  printf '  "llama_entrypoint_sha256": "%s",\n' "$(sha256sum inference/entrypoint-v3.1.sh | cut -d' ' -f1)"
+  printf '  "llama_entrypoint_sha256": "%s",\n' "$(sha256sum services/inference/entrypoint-v3.1.sh | cut -d' ' -f1)"
   printf '  "llama_args": %s,\n' "$(docker inspect -f '{{json .Args}}' "$(cid llama-server)" 2>/dev/null || echo null)"
   printf '  "running": {'
   sep=""

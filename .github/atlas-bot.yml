@@ -103,7 +103,7 @@ areas:
   atlas/: area/cli
   v3-service/: area/v3
   geometric-lens/: area/lens
-  inference/: area/inference
+  services/inference/: area/inference
   sandbox/: area/sandbox
   clients/extensions/: area/extensions
   scripts/: area/install
