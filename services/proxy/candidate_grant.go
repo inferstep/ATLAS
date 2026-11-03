@@ -207,6 +207,41 @@ func mintAuthorizationGrant(ctx *AgentContext, in authorizationInput,
 	return g, true, ""
 }
 
+// grantEvidenceHolds reports whether the evidence a basis needs is there, and
+// why not. grantFor asks it after the target and the scope, in this order.
+func grantEvidenceHolds(in authorizationInput, d AuthorizationDecision, basis grantBasis) (bool, string) {
+	if basis == grantBasisStrict {
+		// Every prerequisite satisfied and nothing owed. The decision says so;
+		// this refuses to take its word without the accounting agreeing.
+		if len(d.Missing) != 0 {
+			return false, "an authorization prerequisite is still owed"
+		}
+		if len(d.Satisfied) == 0 {
+			return false, "nothing was demonstrated"
+		}
+		// Every required declared command must have current trusted evidence.
+		// Read from the obligation set rather than from the decision, so a
+		// decision that somehow satisfied a command without a record cannot
+		// mint.
+		if _, missing := declaredVerificationCoverage(in.Obligations, in.Evidence); len(missing) != 0 {
+			return false, "a declared command has no current trusted evidence"
+		}
+		if usable, why := serviceRecordUsable(in); !usable {
+			return false, why
+		}
+	}
+	// A DECLARED requirement is binding under every basis. If the client named
+	// commands, each one must have current trusted evidence before anything
+	// lands -- automatic_v3 lowers no floor the client actually set, it only
+	// declines to invent one the client did not.
+	if basis == grantBasisAutomaticV3 {
+		if _, missing := declaredVerificationCoverage(in.Obligations, in.Evidence); len(missing) != 0 {
+			return false, "a declared command has no current trusted evidence"
+		}
+	}
+	return true, ""
+}
+
 // grantFor builds the grant a basis would earn, without storing it.
 //
 // Every condition below is a fact the decision already established or an
@@ -250,34 +285,8 @@ func grantFor(ctx *AgentContext, in authorizationInput,
 	if admitted, why := scopeAdmitsCandidate(ctx, in.Scope, in.CandidateBytes); !admitted {
 		return nil, false, "the candidate is outside its mutation scope (" + why + ")"
 	}
-	if basis == grantBasisStrict {
-		// Every prerequisite satisfied and nothing owed. The decision says so;
-		// this refuses to take its word without the accounting agreeing.
-		if len(d.Missing) != 0 {
-			return nil, false, "an authorization prerequisite is still owed"
-		}
-		if len(d.Satisfied) == 0 {
-			return nil, false, "nothing was demonstrated"
-		}
-		// Every required declared command must have current trusted evidence.
-		// Read from the obligation set rather than from the decision, so a
-		// decision that somehow satisfied a command without a record cannot
-		// mint.
-		if _, missing := declaredVerificationCoverage(in.Obligations, in.Evidence); len(missing) != 0 {
-			return nil, false, "a declared command has no current trusted evidence"
-		}
-		if usable, why := serviceRecordUsable(in); !usable {
-			return nil, false, why
-		}
-	}
-	// A DECLARED requirement is binding under every basis. If the client named
-	// commands, each one must have current trusted evidence before anything
-	// lands -- automatic_v3 lowers no floor the client actually set, it only
-	// declines to invent one the client did not.
-	if basis == grantBasisAutomaticV3 {
-		if _, missing := declaredVerificationCoverage(in.Obligations, in.Evidence); len(missing) != 0 {
-			return nil, false, "a declared command has no current trusted evidence"
-		}
+	if holds, why := grantEvidenceHolds(in, d, basis); !holds {
+		return nil, false, why
 	}
 	if matches, why := grantIdentityMatches(ctx, in, target); !matches {
 		return nil, false, why

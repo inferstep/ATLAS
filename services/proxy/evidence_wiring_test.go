@@ -412,10 +412,11 @@ func TestEveryProductionConsumerOfProvenanceIsEnumerated(t *testing.T) {
 		// a record reaches private telemetry.
 		"evidence_wiring.go:observeDeliveredCandidateSyntax": true,
 		"evidence_wiring.go:observeCandidateVerification":    true,
-		// The grant check re-checks declared-command coverage rather than
-		// taking the decision's word for it. It reads the answer and builds a
-		// grant or refuses; it reaches no delivery, which the guards below pin.
-		"candidate_grant.go:grantFor": true,
+		// The grant check's evidence step re-checks declared-command coverage
+		// rather than taking the decision's word for it. It reads the answer and
+		// lets grantFor build a grant or refuse; it reaches no delivery, which
+		// the guards below pin.
+		"candidate_grant.go:grantEvidenceHolds": true,
 		// THE live authorization owner, and THE consumer of the grant it
 		// mints. Exactly one of each, pinned by name below.
 		"delivery.go:authorizeCandidateDelivery": true,
