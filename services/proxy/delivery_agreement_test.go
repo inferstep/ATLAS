@@ -412,6 +412,16 @@ func fileText(t *testing.T, name string) string {
 	return string(b)
 }
 
+func mintedGrants(recs []map[string]interface{}) int {
+	n := 0
+	for _, r := range recordsOfKind(recs, "authorization_grant_event") {
+		if r["event"] == "minted" {
+			n++
+		}
+	}
+	return n
+}
+
 func consumedGrants(recs []map[string]interface{}) int {
 	n := 0
 	for _, r := range recordsOfKind(recs, "authorization_grant_event") {

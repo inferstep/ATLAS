@@ -204,14 +204,8 @@ func (r stagingRequest) validate() (bool, string) {
 	}
 	seen := map[string]bool{}
 	for i, c := range r.Commands {
-		if strings.TrimSpace(c.Text) == "" {
-			return false, "a declared command has no text"
-		}
-		if c.Identity != contentSHA256(c.Text) {
-			return false, "command identity does not name its command"
-		}
-		if strings.TrimSpace(c.ObligationID) == "" {
-			return false, "a declared command names no obligation"
+		if ok, why := c.validate(); !ok {
+			return false, why
 		}
 		if seen[c.Identity] {
 			return false, "duplicate command identity in one set"
@@ -220,6 +214,21 @@ func (r stagingRequest) validate() (bool, string) {
 		if c.Index != i || c.Count != len(r.Commands) {
 			return false, "command index or count contradicts the set"
 		}
+	}
+	return true, ""
+}
+
+// validate refuses a command with no text, an identity that does not name its
+// text, or no obligation.
+func (c stagingCommand) validate() (bool, string) {
+	if strings.TrimSpace(c.Text) == "" {
+		return false, "a declared command has no text"
+	}
+	if c.Identity != contentSHA256(c.Text) {
+		return false, "command identity does not name its command"
+	}
+	if strings.TrimSpace(c.ObligationID) == "" {
+		return false, "a declared command names no obligation"
 	}
 	return true, ""
 }
@@ -288,25 +297,35 @@ func (res stagingResult) validateAgainst(req stagingRequest) (bool, string) {
 			return false, "duplicate command identity in one result"
 		}
 		seen[r.CommandIdentity] = true
-		if !stagingCommandOutcomes[r.Outcome] {
-			return false, "unknown staging outcome " + string(r.Outcome)
-		}
-		if r.ObligationID != want.ObligationID {
-			return false, "result command names a different obligation"
-		}
-		if r.Index != want.Index || r.Count != want.Count {
-			return false, "result command index or count contradicts the request"
-		}
-		// The executor reports hashes; the derived flags must agree with them.
-		if r.MutatedTarget != (r.TargetHashBefore != r.TargetHashAfter) {
-			return false, "mutated_target contradicts the observed hashes"
-		}
-		if r.MutatedWorkspace != (r.WorkspaceHashBefore != r.WorkspaceHashAfter) {
-			return false, "mutated_workspace contradicts the observed hashes"
+		if ok, why := r.validateAgainst(want); !ok {
+			return false, why
 		}
 	}
 	if res.Complete && len(seen) != len(req.Commands) {
 		return false, "a result covering part of the set claims to be complete"
+	}
+	return true, ""
+}
+
+// validateAgainst refuses a command's result with an unknown outcome, another
+// obligation, index or count than the command it answers, or derived flags
+// that contradict its hashes.
+func (r stagingCommandResult) validateAgainst(want stagingCommand) (bool, string) {
+	if !stagingCommandOutcomes[r.Outcome] {
+		return false, "unknown staging outcome " + string(r.Outcome)
+	}
+	if r.ObligationID != want.ObligationID {
+		return false, "result command names a different obligation"
+	}
+	if r.Index != want.Index || r.Count != want.Count {
+		return false, "result command index or count contradicts the request"
+	}
+	// The executor reports hashes; the derived flags must agree with them.
+	if r.MutatedTarget != (r.TargetHashBefore != r.TargetHashAfter) {
+		return false, "mutated_target contradicts the observed hashes"
+	}
+	if r.MutatedWorkspace != (r.WorkspaceHashBefore != r.WorkspaceHashAfter) {
+		return false, "mutated_workspace contradicts the observed hashes"
 	}
 	return true, ""
 }
