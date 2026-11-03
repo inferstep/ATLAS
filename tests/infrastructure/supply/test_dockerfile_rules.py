@@ -1,5 +1,5 @@
-"""Rules every image build keeps: a download goes over HTTPS only, and the sandbox
-image leaves no folder that another user can write."""
+"""Rules the image builds keep: a download goes over HTTPS only, and no chmod in
+the sandbox's Dockerfile gives other users write access."""
 import re
 import subprocess
 from pathlib import Path
@@ -18,8 +18,9 @@ def commands(path):
 
 def test_every_download_with_curl_keeps_to_https():
     # `--proto '=https'` stops curl from following a redirect to plain HTTP.
+    # A curl with a URL is a download, whether it writes a file or pipes to a shell.
     downloads = [(path.name, command) for path in DOCKERFILES for command in commands(path)
-                 if re.search(r"\bcurl\b", command) and re.search(r"\s-(o|O)\b|\s--output\b", command)]
+                 if re.search(r"\bcurl\b.*\bhttps?://", command)]
     assert downloads, "no download was found, so this test reads the Dockerfiles wrongly"
     plain = [(name, command) for name, command in downloads if "--proto '=https'" not in command]
     assert plain == []
@@ -33,8 +34,9 @@ def lets_others_write(mode):
     return "w" in rights and (who == "" or "o" in who or "a" in who)
 
 
-def test_the_sandbox_image_lets_no_other_user_write_a_folder():
-    modes = [word for command in commands(ROOT / "sandbox" / "Dockerfile") if command.startswith(("chmod", "RUN chmod"))
+def test_no_chmod_in_the_sandbox_dockerfile_gives_others_write():
+    sandbox = commands(ROOT / "sandbox" / "Dockerfile")
+    assert sandbox, "no command was read, so this test reads the Dockerfile wrongly"
+    modes = [word for command in sandbox if command.startswith(("chmod", "RUN chmod"))
              for word in command.split() if re.fullmatch(r"[0-7]{3,4}|[ugoa]*[+=][rwxX]+", word)]
-    assert modes, "no chmod was found, so this test reads the Dockerfile wrongly"
     assert [mode for mode in modes if lets_others_write(mode)] == []

@@ -175,8 +175,8 @@ RUN bun --version
 # image lean means: smaller pull, smaller attack surface, no drift
 # between sandbox-baked-flask and user-pinned-flask, and the same
 # pattern works for Node/Rust/Go/Ruby/Java/PHP without favoring
-# Python. Keep the API runtime dependencies in one shared file so the
-# container and the unit-test environment cannot drift apart. The image
+# Python. Keep the API runtime dependencies in one shared file, so the
+# container and the unit-test environment pin the same versions of them. The image
 # installs both files from requirements-lock.txt, which
 # scripts/ci/ci-lock.sh makes from them with a hash for each package, and
 # only from built packages, so no package's setup script runs here.
