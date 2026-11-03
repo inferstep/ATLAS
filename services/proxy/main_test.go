@@ -2434,13 +2434,16 @@ var shadowGuardOwners = map[string]bool{
 	"emitShadowRequestSnapshot": true,
 	"observeActionDemand":       true,
 	// The observe-only writers. Each WRITES one record to the capture and
-	// reads nothing back from it; that they reach no live decision is pinned
-	// separately, by name, in evidence_wiring_test.go.
+	// reads nothing back from it. Each record says truthfully whether its
+	// decision was live: feasibility and the evidence observation never are,
+	// the authorization is for a request that declared obligations. That is
+	// pinned record by record in candidate_observe_only_test.go.
 	"recordEvidenceObservation":   true,
 	"recordAuthorizationDecision": true,
 	"recordFeasibilityDecision":   true,
 	// Grant transitions. Same shape: one record written per event, nothing
-	// read back, and the grant's own reachability pinned by name elsewhere.
+	// read back. Who mints and who spends a grant is pinned by name in
+	// delivery_registry_test.go and candidate_automatic_test.go.
 	"recordGrantEvent": true,
 	// Route and delivery endings. One record per ending, nothing read back,
 	// and both declare themselves inert in the record they write.
