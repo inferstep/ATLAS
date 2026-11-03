@@ -367,7 +367,7 @@ func TestRunningATestCoversTheCodeTheTestImports(t *testing.T) {
 		t.Fatalf("running the test did not cover the code it imports; covered=%v", covered)
 	}
 	ctx.VerificationEvidence = append(ctx.VerificationEvidence, taskcontract.VerificationRecord{
-		Command: "python3 test_stats.py", Covered: covered, Turn: 1,
+		Command: "python3 test_stats.py", Covered: covered,
 	})
 	if d := decideVerificationDemand(ctx, ctx.TaskContract, nil); d.Required && !d.Met {
 		t.Errorf("a green test over the deliverable left verification unmet (missing %q)", d.Missing)

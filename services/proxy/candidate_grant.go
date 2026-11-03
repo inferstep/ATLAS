@@ -54,7 +54,6 @@ const (
 	grantCancelled  grantRetirement = "request_cancelled"
 	grantTerminal   grantRetirement = "terminal_emitted"
 	grantSuperseded grantRetirement = "superseded_by_a_later_decision"
-	grantSessionEnd grantRetirement = "session_ended"
 )
 
 // authorizationGrant is one spendable authorization.

@@ -358,7 +358,7 @@ func TestAnUnsettledDeliveryBlocksCompletion(t *testing.T) {
 		wire.ValidationKindSyntax, wire.ValidationPassed, "")
 	w.ctx.VerificationEvidence = append(w.ctx.VerificationEvidence, taskcontract.VerificationRecord{
 		Command: "python3 solve.py",
-		Covered: map[string]string{w.path: contentSHA256(replaced)}, Turn: 1,
+		Covered: map[string]string{w.path: contentSHA256(replaced)},
 	})
 
 	status, reason := finalizeCompletion(w.ctx, &runState{
@@ -378,7 +378,7 @@ func TestASettledDeliveryRaisesNoSettlementObjection(t *testing.T) {
 	w := newSettledWorld(t, settledContract, nil)
 	w.ctx.VerificationEvidence = append(w.ctx.VerificationEvidence, taskcontract.VerificationRecord{
 		Command: "python3 solve.py",
-		Covered: map[string]string{w.path: contentSHA256(routeWinner)}, Turn: 1,
+		Covered: map[string]string{w.path: contentSHA256(routeWinner)},
 	})
 	_, reason := finalizeCompletion(w.ctx, &runState{
 		expectedOutputs:      []string{"solve.py"},

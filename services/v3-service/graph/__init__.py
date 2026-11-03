@@ -3,9 +3,9 @@
 A faithful Python port of the chiasmus call-graph engine
 (https://github.com/yogthos/chiasmus, `src/graph/`), scoped to what the shipped
 #39 integration points need. Builds a precomputed CodeGraph from tree-sitter
-extraction and answers callers / callees / reachability / path / impact /
-cycles / dead-code / entry-points natively (O(V+E), no solver), with a
-per-file-hash cache for incremental recompute.
+extraction and answers callers / callees / path / impact / entry-points
+natively (O(V+E), no solver), with a per-file-hash cache for incremental
+recompute.
 
 Provenance (ported behavior-for-behavior):
   types.py    <- src/graph/types.ts

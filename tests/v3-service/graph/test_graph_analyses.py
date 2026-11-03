@@ -43,15 +43,11 @@ class TestGoldenParity:
         g = _graph()
         assert analyses.callers(g, "leaf") == ["helper"]
         assert analyses.callees(g, "main") == ["helper"]
-        assert analyses.reachability(g, "main", "leaf") is True
-        assert analyses.reachability(g, "leaf", "main") is False
         # chiasmus formats path as the Prolog-list string "[main,helper,leaf]";
         # the node sequence is identical.
         assert analyses.path(g, "main", "leaf") == ["main", "helper", "leaf"]
         # Order matters: chiasmus emits impact in BFS discovery order.
         assert analyses.impact(g, "leaf") == ["helper", "main"]
-        assert analyses.dead_code(g, ["main"]) == ["orphan"]
-        assert analyses.cycles(g) == ["recurse"]
 
 
 class TestDeterminism:
@@ -76,61 +72,9 @@ class TestDeterminism:
         assert analyses.impact(g, "T") == ["B", "C", "D", "E"]
 
 
-class TestReachability:
-    def test_self_pair_needs_self_edge(self):
-        g = CodeGraph(
-            defines=[DefinesFact("a.py", "f", "function", 1)],
-            calls=[CallsFact("f", "f")],
-        )
-        assert analyses.reachability(g, "f", "f") is True
-        g2 = CodeGraph(
-            defines=[DefinesFact("a.py", "f", "function", 1),
-                     DefinesFact("a.py", "g", "function", 2)],
-            calls=[CallsFact("f", "g")],
-        )
-        assert analyses.reachability(g2, "f", "f") is False
-
-    def test_unknown_nodes(self):
-        g = _graph()
-        assert analyses.reachability(g, "nope", "leaf") is False
-        assert analyses.path(g, "main", "nope") == []
-
-
-class TestCycles:
-    def test_multi_node_cycle(self):
-        g = CodeGraph(
-            defines=[DefinesFact("a.py", n, "function", i) for i, n in enumerate("abc")],
-            calls=[CallsFact("a", "b"), CallsFact("b", "c"), CallsFact("c", "a")],
-        )
-        assert set(analyses.cycles(g)) == {"a", "b", "c"}
-
-    def test_no_cycle(self):
-        g = _graph()
-        g.calls = [CallsFact("main", "helper"), CallsFact("helper", "leaf")]
-        assert analyses.cycles(g) == []
-
-    def test_methods_excluded_from_cycles(self):
-        # Two methods named the same across classes must not produce a phantom
-        # cycle. m -> m where m is kind=method is dropped.
-        g = CodeGraph(
-            defines=[DefinesFact("a.py", "m", "method", 1)],
-            calls=[CallsFact("m", "m")],
-        )
-        assert analyses.cycles(g) == []
-
-
-class TestImpactAndDead:
+class TestImpact:
     def test_impact_of_a_function_nobody_calls_is_empty(self):
         assert analyses.impact(_graph(), "main") == []
-
-    def test_dead_code_default_entrypoints(self):
-        # Default entry points = exports (main). orphan + recurse + helper + leaf
-        # are not exported; helper/leaf are called, recurse calls itself.
-        assert analyses.dead_code(_graph()) == ["orphan"]
-
-    def test_dead_code_excludes_methods(self):
-        g = CodeGraph(defines=[DefinesFact("a.py", "m", "method", 1)], calls=[])
-        assert analyses.dead_code(g) == []
 
 
 class TestEntryPoints:

@@ -184,7 +184,7 @@ func seedBaseline(t *testing.T, w *routeWorld, kind wire.ValidationKind, command
 	if command != "" {
 		w.ctx.VerificationEvidence = append(w.ctx.VerificationEvidence, taskcontract.VerificationRecord{
 			Command: command,
-			Covered: map[string]string{w.path: contentSHA256(routeBaseline)}, Turn: 1,
+			Covered: map[string]string{w.path: contentSHA256(routeBaseline)},
 		})
 	}
 }

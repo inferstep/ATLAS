@@ -542,7 +542,7 @@ func TestCancellationRetiresEveryGrant(t *testing.T) {
 }
 
 func TestRetirementIsFinalIdempotentAndBlocksMinting(t *testing.T) {
-	for _, reason := range []grantRetirement{grantTerminal, grantSessionEnd, grantCancelled} {
+	for _, reason := range []grantRetirement{grantTerminal, grantCancelled} {
 		t.Run(string(reason), func(t *testing.T) {
 			w := newGrantWorld(t)
 			w.mint(t)
@@ -856,8 +856,8 @@ func TestAGrantEndsExactlyOnce(t *testing.T) {
 	ctx.grants[g.ID] = g
 	recs := captureShadow(t, func() {
 		retireAuthorizationGrants(ctx, grantTerminal)
-		// A second sweep must find nothing left to retire.
-		retireAuthorizationGrants(ctx, grantSessionEnd)
+		// A second sweep, for another reason, must find nothing left to retire.
+		retireAuthorizationGrants(ctx, grantCancelled)
 	})
 	n := 0
 	for _, r := range recordsOfKind(recs, "authorization_grant_event") {
