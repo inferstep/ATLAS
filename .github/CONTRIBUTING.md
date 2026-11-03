@@ -6,8 +6,8 @@ issue.
 
 **Quick links:** [Start Here](https://github.com/orgs/inferstep/projects/1/views/1) (issues ready for newcomers) ·
 [Roadmap board](https://github.com/orgs/inferstep/projects/1) ·
-[ARCHITECTURE](../docs/ARCHITECTURE.md) · [MAP](../docs/README.md#repository-map) ·
-[Development workflow](#development-workflow) · [GOVERNANCE](../docs/GOVERNANCE.md) ·
+[ARCHITECTURE](../docs/reference/ARCHITECTURE.md) · [MAP](../docs/README.md#repository-map) ·
+[Development workflow](#development-workflow) · [GOVERNANCE](GOVERNANCE.md) ·
 [Security reports](SECURITY.md)
 
 ## 1. How ATLAS is organized
@@ -17,7 +17,7 @@ ATLAS is a local coding agent made of a few services: the Go agent loop
 candidate pipeline (`v3-service/`), the Geometric Lens (`geometric-lens/`),
 the sandbox (`sandbox/`) and the llama.cpp images (`inference/`).
 [The repository map](../docs/README.md#repository-map) says what every directory owns, and
-[ARCHITECTURE.md](../docs/ARCHITECTURE.md) explains how the pieces work
+[ARCHITECTURE.md](../docs/reference/ARCHITECTURE.md) explains how the pieces work
 together.
 
 Every change lands on `dev`. `dev` is promoted to `staging` as a release
@@ -32,7 +32,7 @@ candidate, and `staging` to `main` as a release. See
   issue, or send a pull request.
 - **Hardware reports.** Run ATLAS on your GPU and report what happened,
   with your `atlas doctor` output. AMD (ROCm), Apple Silicon (Metal) and
-  Vulkan reports help most; see [SUPPORT_MATRIX](../docs/SUPPORT_MATRIX.md).
+  Vulkan reports help most; see [SUPPORT_MATRIX](../docs/guides/SUPPORT_MATRIX.md).
 - **Trained artifacts** for a new model (see below).
 - **Questions** go to [Discussions Q&A](https://github.com/inferstep/ATLAS/discussions/categories/q-a).
 
@@ -45,7 +45,7 @@ were trained against. If you've trained them with `atlas lens build` /
 `atlas asa publish`. That uploads to a Hugging Face repo you own and opens
 a registry pull request. You don't need write access here, just a Hugging
 Face account and write token. The walkthrough is in
-[PUBLISHING.md](../docs/PUBLISHING.md).
+[PUBLISHING.md](../docs/project/PUBLISHING.md).
 
 ## 3. Set up
 
@@ -68,10 +68,10 @@ git checkout -b dev upstream/dev
 python3.12 -m venv .venv && . .venv/bin/activate
 pip install --require-hashes -r .github/requirements/ci.txt
 pip install --no-deps -e .
-python scripts/production-readiness.py
+python scripts/ci/production-readiness.py
 ```
 
-**With a GPU.** Install the full stack with [SETUP.md](../docs/SETUP.md). Then
+**With a GPU.** Install the full stack with [SETUP.md](../docs/guides/SETUP.md). Then
 use the dev mode in [Development workflow](#development-workflow), which runs your
 working tree in the containers without a rebuild after every edit.
 
@@ -89,9 +89,9 @@ push, install the hook in `.pre-commit-config.yaml` with
 [prek](https://github.com/j178/prek) or pre-commit. The whole gate is:
 
 ```bash
-python scripts/production-readiness.py            # everything
-python scripts/production-readiness.py --list     # the gates
-python scripts/production-readiness.py --only ruff
+python scripts/ci/production-readiness.py            # everything
+python scripts/ci/production-readiness.py --list     # the gates
+python scripts/ci/production-readiness.py --only ruff
 ```
 
 CI runs the same gates, so a green run here usually means a green pull
@@ -104,7 +104,7 @@ To measure test coverage as CI does, name a directory for the reports
 (the pytest gates need `pytest-cov`):
 
 ```bash
-ATLAS_COVERAGE_DIR=coverage python scripts/production-readiness.py --only python-tests
+ATLAS_COVERAGE_DIR=coverage python scripts/ci/production-readiness.py --only python-tests
 ```
 
 CI sends its coverage reports to [Codecov](https://app.codecov.io/gh/inferstep/ATLAS).
@@ -214,7 +214,7 @@ cancelled workflow, re-run this check too.
 
 A required check stops the merge while it is red. The other checks report:
 a red one is a reason to look, and a maintainer decides what it means for
-the merge. The [quality gates page](../docs/quality/gates.md) keeps the list
+the merge. The [quality gates page](../docs/project/gates.md) keeps the list
 of both kinds.
 
 | You see | What it means | What to do |
@@ -294,7 +294,7 @@ ships your change. If the issue should stay open after your change lands
 (it still needs a check after a deploy), write `Refs #N` instead.
 
 Minor releases ship when `dev` is ready; there's no fixed calendar. Fixes
-and security releases can ship any time. [RELEASE.md](../docs/RELEASE.md) has
+and security releases can ship any time. [RELEASE.md](../docs/project/RELEASE.md) has
 the details.
 
 ## 11. Proposing something big
@@ -303,7 +303,7 @@ Use the **RFC** issue form for architecture changes, new dependencies,
 security-model changes, release-policy or support-matrix changes, and any
 breaking change. An RFC gets a 7-day comment period and then a decision:
 Accepted, Revise, or Declined. An accepted RFC becomes an Epic with
-sub-issues. The whole flow is in [GOVERNANCE](../docs/GOVERNANCE.md#proposals-rfc--adr--epic).
+sub-issues. The whole flow is in [GOVERNANCE](GOVERNANCE.md#proposals-rfc--adr--epic).
 
 ## 12. Getting help
 
@@ -318,12 +318,12 @@ Report security problems privately, never in an issue (see
 Access follows trust built over time, not a count of pull requests. The
 path is Contributor → Triager → Reviewer → Maintainer. Each rung has a
 minimum time, a nomination, and hard technical limits. See the
-[trust ladder](../docs/GOVERNANCE.md#trust-ladder).
+[trust ladder](GOVERNANCE.md#trust-ladder).
 
 ## Code style
 
 How code should read (size, structure, abstractions, comments) is in
-[CODE_STYLE.md](../docs/CODE_STYLE.md). The rules per language:
+[CODE_STYLE.md](../docs/project/CODE_STYLE.md). The rules per language:
 
 **Python.** PEP 8, type hints on function signatures, docstrings on public
 functions, lines up to 100 characters. `ruff` runs in the gate; it does not check line length.
@@ -349,7 +349,7 @@ golangci-lint run ./... --new-from-merge-base=origin/dev
 
 **Dockerfiles.** [hadolint](https://github.com/hadolint/hadolint) reads every
 Dockerfile. It reports and does not fail for a finding. With hadolint
-installed, `python scripts/dockerfile_lint.py` prints what CI prints. Do not
+installed, `python scripts/ci/dockerfile_lint.py` prints what CI prints. Do not
 add a finding in a Dockerfile you change; if a rule is wrong for a line, say
 why in the pull request and do not switch the rule off in the file.
 
@@ -372,7 +372,7 @@ gate, and `extensions/jetbrains/.editorconfig` is the single source of the
 rules it applies — no baseline and no rule configuration in the Gradle
 build. Lines up to 100 characters. Run `./gradlew ktlintCheck` from
 `extensions/jetbrains/`, or `ktlintFormat` to apply the same rules. Kotlin
-is not covered by `scripts/code_health.py`.
+is not covered by `scripts/ci/code_health.py`.
 
 **YAML and Kubernetes.** 2-space indentation, resource limits on every
 container, meaningful names and labels.
@@ -387,10 +387,10 @@ container, meaningful names and labels.
 # tests/v3-service, tests/cli, tests/infrastructure, tests/concurrency,
 # tests/perf, tests/contracts and tests/e2e; geometric-lens/tests runs in
 # its own process (CPU torch is enough).
-python scripts/production-readiness.py
+python scripts/ci/production-readiness.py
 
 # One file
-pytest tests/v3/test_plan_search.py -v
+pytest tests/v3/stages/test_plan_search.py -v
 
 # End-to-end acceptance: real proxy + sandbox executor + fake
 # llama-server. No GPU or model needed. Build the proxy binary first.
@@ -412,7 +412,7 @@ pytest tests/e2e -v
   with `tests/infrastructure/bounded_commands.py`.
 - More rules that a review or a failure has taught us, each with the check
   or test that holds it:
-  [the gates page](../docs/quality/gates.md#rules-learned-from-review-and-from-failures).
+  [the gates page](../docs/project/gates.md#rules-learned-from-review-and-from-failures).
 
 One more check reads your change, not the code. It looks for removed or
 skipped tests, history in new comments, new documents, new suppression
@@ -453,11 +453,11 @@ bind-mounting your working tree into the container.
 ### Enabling dev mode (Python services)
 
 Compose merges `docker-compose.override.yml` automatically if the
-file exists. The repo ships `compose/docker-compose.override.yml.example` as
+file exists. The repo ships `deploy/compose/docker-compose.override.yml.example` as
 a template:
 
 ```bash
-cp compose/docker-compose.override.yml.example docker-compose.override.yml
+cp deploy/compose/docker-compose.override.yml.example docker-compose.override.yml
 docker compose up -d
 ```
 
@@ -575,9 +575,9 @@ This is the fallback whenever dev mode is off or doesn't apply
 
 ### Cross-references
 
-- `docs/SETUP.md` — first-time install.
-- `docs/CONFIGURATION.md` — env vars used by each service.
-- `docs/TROUBLESHOOTING.md` — runtime symptoms and fixes.
+- `docs/guides/SETUP.md` — first-time install.
+- `docs/guides/CONFIGURATION.md` — env vars used by each service.
+- `docs/guides/TROUBLESHOOTING.md` — runtime symptoms and fixes.
 
 ## License
 

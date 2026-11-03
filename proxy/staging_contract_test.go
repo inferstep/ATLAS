@@ -9,6 +9,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 )
 
 // The staging transport: what may be asked, what may come back, and every way
@@ -38,7 +40,7 @@ func stagingReq(commands ...string) stagingRequest {
 	for i, text := range commands {
 		req.Commands = append(req.Commands, stagingCommand{
 			Text: text, Identity: contentSHA256(text),
-			ObligationID: ObligationDeclaredCommand + ":" + contentSHA256(text)[:32],
+			ObligationID: taskcontract.ObligationDeclaredCommand + ":" + contentSHA256(text)[:32],
 			Index:        i, Count: len(commands),
 		})
 	}
@@ -119,14 +121,14 @@ func TestADuplicateCommandIdentityIsRefused(t *testing.T) {
 }
 
 func TestTheDeclaredSetMayNotExceedTheStagingBudget(t *testing.T) {
-	// maxTaskContractEntries is an input ceiling, not an execution policy.
+	// MaxTaskContractEntries is an input ceiling, not an execution policy.
 	req := stagingReq("a", "b", "c", "d", "e")
 	if ok, why := req.validate(); ok {
 		t.Error("five commands ran against a four-command budget")
 	} else if !strings.Contains(why, "budget") {
 		t.Errorf("refused for %q, want the budget", why)
 	}
-	if defaultStagingBudget().MaxCommands >= maxTaskContractEntries {
+	if defaultStagingBudget().MaxCommands >= taskcontract.MaxTaskContractEntries {
 		t.Error("the staging budget is not smaller than the validation ceiling")
 	}
 }
@@ -139,7 +141,7 @@ func TestAWellFormedStagingResultValidates(t *testing.T) {
 	if ok, why := res.validateAgainst(req); !ok {
 		t.Fatalf("a well-formed result was refused: %s", why)
 	}
-	got := res.authorizingOutcomes()
+	got := cleanPasses(res)
 	if len(got) != 2 {
 		t.Errorf("authorizing %v, want both", got)
 	}
@@ -200,7 +202,7 @@ func TestAPartialSetIsNeverComplete(t *testing.T) {
 	if ok, why := res.validateAgainst(req); !ok {
 		t.Errorf("an honestly partial result was refused: %s", why)
 	}
-	if got := res.authorizingOutcomes(); len(got) != 1 {
+	if got := cleanPasses(res); len(got) != 1 {
 		t.Errorf("authorizing %v, want only the one that ran", got)
 	}
 }
@@ -215,12 +217,12 @@ func TestOnlyACleanNonMutatingPassAuthorizes(t *testing.T) {
 		stagingBudgetExceeded, stagingUnavailable,
 	} {
 		res := stagingRes(req, o)
-		if got := res.authorizingOutcomes(); len(got) != 0 {
+		if got := cleanPasses(res); len(got) != 0 {
 			t.Errorf("%s authorized %v", o, got)
 		}
 	}
 	clean := stagingRes(req, stagingExitedZero)
-	if got := clean.authorizingOutcomes(); len(got) != 1 {
+	if got := cleanPasses(clean); len(got) != 1 {
 		t.Errorf("a clean pass authorized %v", got)
 	}
 }
@@ -234,7 +236,7 @@ func TestAPassThatChangedSomethingAuthorizesNothing(t *testing.T) {
 		if ok, why := res.validateAgainst(req); !ok {
 			t.Fatalf("a consistent mutation report was refused: %s", why)
 		}
-		if got := res.authorizingOutcomes(); len(got) != 0 {
+		if got := cleanPasses(res); len(got) != 0 {
 			t.Errorf("a command that rewrote its own subject authorized %v", got)
 		}
 	})
@@ -245,7 +247,7 @@ func TestAPassThatChangedSomethingAuthorizesNothing(t *testing.T) {
 		if ok, why := res.validateAgainst(req); !ok {
 			t.Fatalf("a consistent mutation report was refused: %s", why)
 		}
-		if got := res.authorizingOutcomes(); len(got) != 0 {
+		if got := cleanPasses(res); len(got) != 0 {
 			t.Errorf("a command that changed its inputs authorized %v", got)
 		}
 	})
@@ -450,4 +452,15 @@ func TestTheContractExecutesNothing(t *testing.T) {
 		}
 		return true
 	})
+}
+
+// cleanPasses names the commands the live path counts as passed.
+func cleanPasses(res stagingResult) []string {
+	var ids []string
+	for _, r := range res.Commands {
+		if r.passedClean() {
+			ids = append(ids, r.ObligationID)
+		}
+	}
+	return ids
 }

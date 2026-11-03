@@ -11,6 +11,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // These tests fix the behaviour the path check must have: one reading of a tool
@@ -49,7 +51,7 @@ func argWorkspace(t *testing.T) (*AgentContext, string) {
 
 // argMarkerUntouched fails if the marker was changed or removed, or if the call
 // returned its content.
-func argMarkerUntouched(t *testing.T, marker string, res *ToolResult) {
+func argMarkerUntouched(t *testing.T, marker string, res *wire.ToolResult) {
 	t.Helper()
 	data, err := os.ReadFile(marker)
 	if err != nil || string(data) != argOutsideMarker {
@@ -161,7 +163,7 @@ func TestMalformedArgumentsKeepTheHandlerMessage(t *testing.T) {
 // assertFailedWithoutWorkspaceWording checks that a malformed call failed and
 // that the check did not refuse it with workspace wording (so the model still
 // reads the handler's own message).
-func assertFailedWithoutWorkspaceWording(t *testing.T, tool, kind string, res *ToolResult) {
+func assertFailedWithoutWorkspaceWording(t *testing.T, tool, kind string, res *wire.ToolResult) {
 	t.Helper()
 	if res == nil || res.Success {
 		t.Fatalf("%s on a top-level %s = %+v, want a failed result", tool, kind, res)
@@ -376,7 +378,7 @@ func TestCanonicalFormIsStableAndRebuiltCallPasses(t *testing.T) {
 	if rej2 != "" || !bytes.Equal(once, twice) {
 		t.Errorf("canonical of canonical changed: %q -> %q (rejection %q)", once, twice, rej2)
 	}
-	var wf WriteFileInput
+	var wf wire.WriteFileInput
 	if err := json.Unmarshal(once, &wf); err != nil {
 		t.Fatalf("canonical write_file does not decode: %v", err)
 	}
@@ -388,7 +390,7 @@ func TestCanonicalFormIsStableAndRebuiltCallPasses(t *testing.T) {
 	if rej3 != "" {
 		t.Fatalf("a rebuilt write_file was refused: %s", rej3)
 	}
-	var before, after WriteFileInput
+	var before, after wire.WriteFileInput
 	_ = json.Unmarshal(once, &before)
 	_ = json.Unmarshal(got, &after)
 	if before != after {
@@ -492,59 +494,59 @@ func FuzzToolArgumentsAreOneReading(f *testing.F) {
 func argHandlerPaths(name string, b json.RawMessage) []string {
 	switch name {
 	case "read_file":
-		var in ReadFileInput
+		var in wire.ReadFileInput
 		_ = json.Unmarshal(b, &in)
 		return []string{in.Path}
 	case "outline_file":
-		var in OutlineInput
+		var in wire.OutlineInput
 		_ = json.Unmarshal(b, &in)
 		return []string{in.Path}
 	case "write_file":
-		var in WriteFileInput
+		var in wire.WriteFileInput
 		_ = json.Unmarshal(b, &in)
 		return []string{in.Path}
 	case "edit_file":
-		var in EditFileInput
+		var in wire.EditFileInput
 		_ = json.Unmarshal(b, &in)
 		return []string{in.Path}
 	case "structural_edit":
-		var in StructuralEditInput
+		var in wire.StructuralEditInput
 		_ = json.Unmarshal(b, &in)
 		return []string{in.Path}
 	case "insert_after":
-		var in InsertAfterInput
+		var in wire.InsertAfterInput
 		_ = json.Unmarshal(b, &in)
 		return []string{in.Path}
 	case "replace_lines":
-		var in ReplaceLinesInput
+		var in wire.ReplaceLinesInput
 		_ = json.Unmarshal(b, &in)
 		return []string{in.Path}
 	case "delete_file":
-		var in DeleteFileInput
+		var in wire.DeleteFileInput
 		_ = json.Unmarshal(b, &in)
 		return []string{in.Path}
 	case "move_file":
-		var in MoveFileInput
+		var in wire.MoveFileInput
 		_ = json.Unmarshal(b, &in)
 		return []string{in.Source, in.Destination}
 	case "search_files":
-		var in SearchFilesInput
+		var in wire.SearchFilesInput
 		_ = json.Unmarshal(b, &in)
 		return []string{in.Path}
 	case "find_file":
-		var in FindFileInput
+		var in wire.FindFileInput
 		_ = json.Unmarshal(b, &in)
 		return []string{in.Path}
 	case "list_directory":
-		var in ListDirectoryInput
+		var in wire.ListDirectoryInput
 		_ = json.Unmarshal(b, &in)
 		return []string{in.Path}
 	case "run_command":
-		var in RunCommandInput
+		var in wire.RunCommandInput
 		_ = json.Unmarshal(b, &in)
 		return []string{in.Cwd}
 	case "run_background":
-		var in RunBackgroundInput
+		var in wire.RunBackgroundInput
 		_ = json.Unmarshal(b, &in)
 		return []string{in.Cwd}
 	default:
@@ -630,7 +632,7 @@ func TestEnforceWorkspacePathsReplacesTheCallWithTheJudgedReading(t *testing.T) 
 	if bytes.Equal(judged, original) {
 		t.Fatal("test setup: the judged form must differ from the original for this test to tell them apart")
 	}
-	parsed := &ModelResponse{Name: "write_file", Args: append(json.RawMessage(nil), original...)}
+	parsed := &wire.ModelResponse{Name: "write_file", Args: append(json.RawMessage(nil), original...)}
 	if rejection := enforceWorkspacePaths(parsed, ctx); rejection != "" {
 		t.Fatalf("a well-formed call was refused: %s", rejection)
 	}

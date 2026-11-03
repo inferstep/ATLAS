@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // The T0/T1 direct-path structural gate is reachable, and it refuses. The
@@ -148,13 +150,13 @@ func TestT0T1StructuralBranchIsReachable(t *testing.T) {
 	// --- classification ---------------------------------------------------
 	// Structural validation failed before any mutation. Syntax does NOT run
 	// on this route, so no syntax verdict is implied in either direction.
-	if res.MutationStatus != MutationRefused {
+	if res.MutationStatus != wire.MutationRefused {
 		t.Errorf("MutationStatus = %q, want refused", res.MutationStatus)
 	}
-	if res.ValidationKind != ValidationKindStructural {
+	if res.ValidationKind != wire.ValidationKindStructural {
 		t.Errorf("ValidationKind = %q, want structural", res.ValidationKind)
 	}
-	if res.ValidationStatus != ValidationFailed {
+	if res.ValidationStatus != wire.ValidationFailed {
 		t.Errorf("ValidationStatus = %q, want failed", res.ValidationStatus)
 	}
 	if !strings.Contains(res.ValidationDetail, "missing_helper") {

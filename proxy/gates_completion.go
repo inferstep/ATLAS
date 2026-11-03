@@ -8,6 +8,8 @@ package main
 import (
 	"fmt"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/assetlint"
 )
 
 // Completion-claim verification.
@@ -95,7 +97,7 @@ func claimsUniversal(summary string) bool {
 // a tool-result error, so it lands back in the model's context as
 // "your done was bounced because X."
 //
-// The structural evidence comes from assetLintFindings — the same
+// The structural evidence comes from assetlint.Findings — the same
 // bounded workspace walk the advisory lint uses — filtered down to the
 // hard gaps: template references (render_template('X') in .py,
 // {% extends/include %} in templates) whose target does not exist.
@@ -118,7 +120,7 @@ func completionClaimGaps(workingDir string) []string {
 		return nil
 	}
 	var gaps []string
-	for _, f := range assetLintFindings(workingDir) {
+	for _, f := range assetlint.Findings(workingDir) {
 		if strings.Contains(f, "references template ") {
 			gaps = append(gaps, f)
 		}

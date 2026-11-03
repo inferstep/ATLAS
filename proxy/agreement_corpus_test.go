@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // Does the pre-generation answer ever refuse an invocation that would in fact
@@ -90,11 +92,11 @@ func corpusConditions() []struct {
 		{name: "command_times_out", commands: timeout},
 		{name: "syntax_baseline", commands: pass,
 			before: func(t *testing.T, w *routeWorld) {
-				seedBaseline(t, w, ValidationKindSyntax, "")
+				seedBaseline(t, w, wire.ValidationKindSyntax, "")
 			}},
 		{name: "behavioral_baseline", commands: pass,
 			before: func(t *testing.T, w *routeWorld) {
-				seedBaseline(t, w, ValidationKindSyntax, "pytest -q")
+				seedBaseline(t, w, wire.ValidationKindSyntax, "pytest -q")
 			}},
 		{name: "producer_unavailable", commands: pass,
 			before: func(t *testing.T, w *routeWorld) {
@@ -118,7 +120,7 @@ func corpusConditions() []struct {
 					t.Fatal(err)
 				}
 				observeDeliverable(w.ctx, w.path, []byte(routeWinner),
-					ValidationKindSyntax, ValidationPassed, "")
+					wire.ValidationKindSyntax, wire.ValidationPassed, "")
 			}},
 	}
 }

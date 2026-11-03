@@ -10,7 +10,7 @@ describe('doneOutcome', () => {
 			.toEqual({ text: 'Stopped: mod.py still does not parse.', status: 'incomplete', label: 'incomplete', reason: 'repair_unfinished', cls: 'incomplete' });
 	});
 
-	it('reads a missing status as incomplete, as docs/API.md says', () => {
+	it('reads a missing status as incomplete, as docs/reference/API.md says', () => {
 		const o = doneOutcome({ summary: 'from an older proxy' });
 		expect(o.status).toBe('incomplete');
 		expect(o.cls).toBe('incomplete');

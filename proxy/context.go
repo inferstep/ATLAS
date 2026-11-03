@@ -7,14 +7,18 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
 // Auto-inject reachability slice. When a user message names project symbols (a
@@ -153,7 +157,7 @@ func walkPythonFiles(root string) map[string]string {
 	}
 	// The walk and every read go through the folder, so a name in it that
 	// points somewhere else is skipped like an unreadable entry.
-	dir := openConfinedDir(root)
+	dir := workspacefs.OpenConfinedDir(root)
 	defer dir.Close()
 	_ = dir.Walk(func(rel string, entry fs.DirEntry, err error) error {
 		if err != nil {
@@ -379,7 +383,7 @@ func detectNodeJS(projectDir string, files map[string]bool) *ProjectInfo {
 	}
 
 	// Parse package.json for framework detection
-	data, err := readConfined(projectDir, packageJSONFile)
+	data, err := workspacefs.ReadConfined(projectDir, packageJSONFile)
 	if err != nil {
 		return info
 	}
@@ -518,7 +522,7 @@ func detectPython(projectDir string, files map[string]bool) *ProjectInfo {
 	}
 
 	// Detect framework from requirements or pyproject
-	if data, err := readConfined(projectDir, requirementsTxtFile); err == nil {
+	if data, err := workspacefs.ReadConfined(projectDir, requirementsTxtFile); err == nil {
 		content := strings.ToLower(string(data))
 		if strings.Contains(content, "flask") {
 			info.Framework = "flask"
@@ -759,7 +763,7 @@ func validateToolWorkspacePaths(name string, args json.RawMessage, ctx *AgentCon
 // "PATH" or "ſource" reaches the handler's field while every exact-key
 // reader (this check, the deny-list, the TUI's tool line) sees no such argument.
 func nonCanonicalArgName(fields map[string]json.RawMessage) string {
-	for _, k := range sortedKeys(fields) {
+	for _, k := range slices.Sorted(maps.Keys(fields)) {
 		for _, r := range k {
 			if r > unicode.MaxASCII || unicode.IsUpper(r) {
 				return k

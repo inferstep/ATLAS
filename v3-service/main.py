@@ -407,8 +407,8 @@ class V3Handler(BaseHTTPRequestHandler):
             payload = {"stage": stage, "detail": detail}
             if data:
                 payload["data"] = data
-            event = json.dumps(payload)
             try:
+                event = json.dumps(payload)
                 self.wfile.write(f"data: {event}\n\n".encode())
                 self.wfile.flush()
                 # Also log for debugging
@@ -585,8 +585,8 @@ class V3Handler(BaseHTTPRequestHandler):
             payload = {"stage": stage, "detail": detail}
             if data:
                 payload["data"] = data
-            event = json.dumps(payload)
             try:
+                event = json.dumps(payload)
                 self.wfile.write(f"data: {event}\n\n".encode())
                 self.wfile.flush()
                 print(f"  [SSE plan] {stage}: {_safe_progress_detail(stage, detail)}",

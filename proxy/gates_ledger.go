@@ -18,6 +18,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // --- Phase 3A: observational deliverable ledger -----------------------------
@@ -41,13 +44,13 @@ func hashBytes(b []byte) string {
 
 // ledgerEntry returns the entry for a canonical key, creating it if absent.
 // Caller must hold LedgerMu.
-func ledgerEntry(ctx *AgentContext, key string) *DeliverableState {
+func ledgerEntry(ctx *AgentContext, key string) *taskcontract.DeliverableState {
 	if ctx.Ledger == nil {
-		ctx.Ledger = map[string]*DeliverableState{}
+		ctx.Ledger = map[string]*taskcontract.DeliverableState{}
 	}
 	d := ctx.Ledger[key]
 	if d == nil {
-		d = &DeliverableState{Path: key}
+		d = &taskcontract.DeliverableState{Path: key}
 		ctx.Ledger[key] = d
 	}
 	return d
@@ -72,7 +75,7 @@ func ledgerSessionBytes(ctx *AgentContext) int {
 // syntax pass establishes syntax; it is not runtime success and never task
 // correctness.
 func observeDeliverable(ctx *AgentContext, path string, content []byte,
-	kind ValidationKind, status ValidationStatus, detail string) {
+	kind wire.ValidationKind, status wire.ValidationStatus, detail string) {
 	if ctx == nil {
 		return
 	}
@@ -92,7 +95,7 @@ func observeDeliverable(ctx *AgentContext, path string, content []byte,
 	d.ValidationDetail = detail
 	d.ValidatedHash = h // the verdict describes exactly these bytes
 
-	if status != ValidationPassed {
+	if status != wire.ValidationPassed {
 		return
 	}
 	// Same bytes already checkpointed: nothing to do.
@@ -134,8 +137,8 @@ func observeRewrite(ctx *AgentContext, path string, content []byte) {
 	d.CurrentSize = len(content)
 	d.Generation++
 	d.ValidatedHash = ""
-	d.ValidationStatus = ValidationUnknown
-	d.ValidationKind = ValidationKindUnknown
+	d.ValidationStatus = wire.ValidationUnknown
+	d.ValidationKind = wire.ValidationKindUnknown
 }
 
 // tombstoneDeliverable records a deliberate removal. Checkpoint bytes are
@@ -157,8 +160,8 @@ func tombstoneDeliverable(ctx *AgentContext, path, reason string) {
 	d.CurrentSize = 0
 	d.Generation++
 	// The verdict described bytes that are no longer there.
-	d.ValidationStatus = ValidationUnknown
-	d.ValidationKind = ValidationKindUnknown
+	d.ValidationStatus = wire.ValidationUnknown
+	d.ValidationKind = wire.ValidationKindUnknown
 	d.ValidatedHash = ""
 }
 
@@ -263,7 +266,7 @@ type restoreDecision struct {
 // unobserved, a hash that moved, a kind that does not compare, or missing
 // bytes all end here, because the alternative is overwriting a user's file on
 // a guess.
-func checkpointRestorable(d *DeliverableState, currentHash string, hazardous bool) (bool, string) {
+func checkpointRestorable(d *taskcontract.DeliverableState, currentHash string, hazardous bool) (bool, string) {
 	switch {
 	case d == nil || d.Generation == 0:
 		return false, "not a deliverable this session wrote"
@@ -289,10 +292,10 @@ func checkpointRestorable(d *DeliverableState, currentHash string, hazardous boo
 	case d.ValidatedHash != currentHash:
 		// The verdict describes bytes that are no longer there.
 		return false, "the current contents were never checked"
-	case d.ValidationStatus != ValidationFailed:
+	case d.ValidationStatus != wire.ValidationFailed:
 		// Only a DEMONSTRATED failure justifies replacing what is there.
 		return false, "the current contents were not shown to be broken"
-	case d.CheckpointKind == ValidationKindUnknown || d.ValidationKind == ValidationKindUnknown:
+	case d.CheckpointKind == wire.ValidationKindUnknown || d.ValidationKind == wire.ValidationKindUnknown:
 		return false, "the two versions were not checked the same way"
 	case d.CheckpointKind != d.ValidationKind:
 		return false, "the two versions were not checked the same way"
@@ -340,7 +343,7 @@ func restoreDeliverable(ctx *AgentContext, key string) restoreDecision {
 	eligible, reason := checkpointRestorable(d, currentHash, hazardous)
 	var want []byte
 	var wantHash string
-	var wantKind ValidationKind
+	var wantKind wire.ValidationKind
 	var wantDetail string
 	if eligible {
 		want = append([]byte(nil), d.CheckpointBytes...)
@@ -379,7 +382,7 @@ func restoreDeliverable(ctx *AgentContext, key string) restoreDecision {
 		d.CurrentSize = len(want)
 		d.Generation++
 		d.ValidationKind = wantKind
-		d.ValidationStatus = ValidationPassed
+		d.ValidationStatus = wire.ValidationPassed
 		d.ValidationDetail = wantDetail
 		d.ValidatedHash = wantHash
 		d.Recovered = true
@@ -434,9 +437,9 @@ func observeFreshSyntaxVerdict(ctx *AgentContext, key string, current []byte) {
 	// not evidence of breakage. When the checker cannot run, the observation
 	// is unknown and nothing is restored.
 	fresh := fallbackSyntaxOutcomeFor(ctx, key, string(current)).aggregate()
-	freshKind := ValidationKindSyntax
-	if fresh.Status == ValidationNotApplicable {
-		freshKind = ValidationKindNone
+	freshKind := wire.ValidationKindSyntax
+	if fresh.Status == wire.ValidationNotApplicable {
+		freshKind = wire.ValidationKindNone
 	}
 	observeDeliverable(ctx, key, current, freshKind, fresh.Status, fresh.Detail)
 }
@@ -454,7 +457,7 @@ func restoreSaferDeliverables(ctx *AgentContext) []restoreDecision {
 	for k, d := range ctx.Ledger {
 		// A path with no checkpoint and no failure has no decision worth
 		// reporting; skipping it here keeps the disclosure about recovery.
-		if d.CheckpointHash == "" && d.ValidationStatus != ValidationFailed {
+		if d.CheckpointHash == "" && d.ValidationStatus != wire.ValidationFailed {
 			continue
 		}
 		keys = append(keys, k)
@@ -471,7 +474,7 @@ func restoreSaferDeliverables(ctx *AgentContext) []restoreDecision {
 		}
 		// Declining is only worth saying when the file is actually broken.
 		ctx.LedgerMu.Lock()
-		broken := ctx.Ledger[k] != nil && ctx.Ledger[k].ValidationStatus == ValidationFailed
+		broken := ctx.Ledger[k] != nil && ctx.Ledger[k].ValidationStatus == wire.ValidationFailed
 		ctx.LedgerMu.Unlock()
 		if broken {
 			out = append(out, dec)
@@ -516,3 +519,17 @@ func restorationDisclosure(decisions []restoreDecision) string {
 	}
 	return sb.String()
 }
+
+// Checkpoint ceilings. Stage-1 artifacts were 1.3-7.2 KiB and the largest
+// fenced payload observed live was 10.8 KiB, so 256 KiB is ~25x the worst
+// case while bounding a pathological file, and 2 MiB caps a session at
+// roughly eight such files. Over budget fails closed: the observation is
+// kept, the bytes are not, and the reason is recorded.
+// maxLedgerReadBytes bounds what the ledger will re-read to hash. A file above
+// it is not hashed at all, so its verdict reads as unknown rather than as a
+// stale claim about bytes nobody looked at.
+const (
+	maxCheckpointFileBytes    = 256 * 1024
+	maxCheckpointSessionBytes = 2 * 1024 * 1024
+	maxLedgerReadBytes        = 8 * 1024 * 1024
+)

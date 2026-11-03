@@ -1,5 +1,5 @@
 #!/bin/sh
-# One look of the timer on the development server (docs/quality/gates.md,
+# One look of the timer on the development server (docs/project/gates.md,
 # section "The timer").
 #
 #   nightly_look.sh run <usual project> <marker file> -- <the command of the nightly run, with --tick>

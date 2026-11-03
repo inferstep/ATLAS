@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // The one production call path, and the one declared absence.
@@ -35,7 +38,7 @@ func TestTheWiredProducerObservesTheDeliveredBytes(t *testing.T) {
 		t.Fatal("the wired producer observed nothing about a declared code output")
 	}
 	p := ev.Provenance
-	if p.Source != ProvenanceProxyOwnedValidation {
+	if p.Source != wire.ProvenanceProxyOwnedValidation {
 		t.Errorf("source %q", p.Source)
 	}
 	if p.CandidateHash != contentSHA256(code) {
@@ -82,7 +85,7 @@ func TestTheWiredProducerRunsNoSecondCheck(t *testing.T) {
 	if !ok {
 		t.Fatal("the producer refused a verdict it was handed")
 	}
-	if ev.Outcome != ValidationPassed {
+	if ev.Outcome != wire.ValidationPassed {
 		t.Errorf("outcome %q: the producer checked again instead of using the verdict", ev.Outcome)
 	}
 }
@@ -98,7 +101,7 @@ func TestTheWiredProducerDistinguishesNegativeFromNotRun(t *testing.T) {
 		if !ok {
 			t.Fatal("a demonstrated failure produced no observation")
 		}
-		if ev.Outcome != ValidationFailed {
+		if ev.Outcome != wire.ValidationFailed {
 			t.Errorf("outcome %q, want failed", ev.Outcome)
 		}
 		if authorized, _ := ev.Authorizes(); authorized {
@@ -110,7 +113,7 @@ func TestTheWiredProducerDistinguishesNegativeFromNotRun(t *testing.T) {
 			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`,
 			"solve.py", code, true)
 		if _, _, ok := observeDeliveredCandidateSyntax(w.ctx, mintRouteEntry(w.ctx), w.path, code,
-			checkOutcome{Status: ValidationNotRun}); ok {
+			checkOutcome{Status: wire.ValidationNotRun}); ok {
 			t.Error("a check that did not run produced a record")
 		}
 	})
@@ -119,7 +122,7 @@ func TestTheWiredProducerDistinguishesNegativeFromNotRun(t *testing.T) {
 			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`,
 			"solve.py", code, true)
 		if _, _, ok := observeDeliveredCandidateSyntax(w.ctx, mintRouteEntry(w.ctx), w.path, code,
-			checkOutcome{Status: ValidationUnknown}); ok {
+			checkOutcome{Status: wire.ValidationUnknown}); ok {
 			t.Error("an unclassified check produced a record")
 		}
 	})
@@ -217,7 +220,7 @@ func TestTwoInvocationsProduceDistinctIdentities(t *testing.T) {
 // owner builds the staging request itself, and the two mechanisms that come
 // close are still not it.
 func TestTheStagingPathExistsAndIsTheOnlyRouteToBehavioralEvidence(t *testing.T) {
-	if got := evidenceProducerStatus[ProvenanceClientDeclaredVerification]; got != evidenceProducerWired {
+	if got := evidenceProducerStatus[wire.ProvenanceClientDeclaredVerification]; got != evidenceProducerWired {
 		t.Fatalf("client-declared verification is declared %q, want wired", got)
 	}
 	files := proxyFiles(t)
@@ -231,7 +234,7 @@ func TestTheStagingPathExistsAndIsTheOnlyRouteToBehavioralEvidence(t *testing.T)
 
 	// The service still cannot run what it was never told about, so a caller
 	// of a V3 endpoint cannot manufacture this authority.
-	types, err := os.ReadFile("types.go")
+	types, err := os.ReadFile("internal/wire/v3.go")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +290,7 @@ func TestAResultNamingAnUndeclaredObligationProducesNothing(t *testing.T) {
 	w := wiringWorld(t,
 		`{"task_mode":"work","verification_knowledge":"declared","verification":["python3 solve.py"]}`,
 		"solve.py", "print(7)\n", true)
-	obl, ok := newTaskObligation(ObligationDeclaredCommand, "python3 solve.py", VerificationKindRuntime, true)
+	obl, ok := taskcontract.NewTaskObligation(taskcontract.ObligationDeclaredCommand, "python3 solve.py", taskcontract.VerificationKindRuntime, true)
 	if !ok {
 		t.Fatal("obligation refused")
 	}
@@ -454,12 +457,12 @@ func TestEveryProductionConsumerOfProvenanceIsEnumerated(t *testing.T) {
 // that decide what lands. The set is exactly what it was at dc9172c.
 func TestTheDeliveryGraphGainedNoCaller(t *testing.T) {
 	allowed := map[string]bool{
-		"v3_bridge.go:v3DeliveryAuthorized":          true,
-		"v3_bridge.go:EvidenceSupportsProvenanceFor": true,
-		"tool_write_v3.go:proposedV3Candidate":       true,
-		"tool_write_v3.go:proposeWriteCandidate":     true,
-		"tool_write_v3.go:emitV3WriteStageEnd":       true,
-		"tool_write_v3.go:improveContentWithV3":      true,
+		"contract_gate.go:v3DeliveryAuthorized":          true,
+		"contract_gate.go:EvidenceSupportsProvenanceFor": true,
+		"tool_write_v3.go:proposedV3Candidate":           true,
+		"tool_write_v3.go:proposeWriteCandidate":         true,
+		"tool_write_v3.go:emitV3WriteStageEnd":           true,
+		"tool_write_v3.go:improveContentWithV3":          true,
 	}
 	for _, fn := range deliveryDecisions {
 		for site := range callSites(proxyFiles(t), fn) {
@@ -478,7 +481,7 @@ var evidenceProducers = map[string]bool{
 	"produceDeclaredVerificationEvidence": true,
 	"declaredVerificationCoverage":        true,
 	"deriveTaskObligations":               true,
-	"newTaskObligation":                   true,
+	"NewTaskObligation":                   true,
 }
 
 // TestNoProducerReachesTheDeliveryGraph pins one direction: a producer may
@@ -611,17 +614,15 @@ func TestATypedRefusalNeverFallsBackToACandidate(t *testing.T) {
 // TestEachProducerHasExactlyOneEnumeratedCallPath is the wiring invariant.
 //
 // A producer with two callers has two places its rules can drift apart. A
-// producer with none is either a wiring bug or a mechanism that does not
-// exist, and those are not the same thing -- so the second case must be
-// declared unavailable rather than silently absent.
+// producer with none is not wired, and fails here.
 func TestEachProducerHasExactlyOneEnumeratedCallPath(t *testing.T) {
 	files := proxyFiles(t)
 	for _, c := range []struct {
 		fn, source, site string
 	}{
-		{"produceSyntaxEvidence", ProvenanceProxyOwnedValidation,
+		{"produceSyntaxEvidence", wire.ProvenanceProxyOwnedValidation,
 			"evidence_wiring.go:observeDeliveredCandidateSyntax"},
-		{"produceDeclaredVerificationEvidence", ProvenanceClientDeclaredVerification,
+		{"produceDeclaredVerificationEvidence", wire.ProvenanceClientDeclaredVerification,
 			"evidence_wiring.go:observeCandidateVerification"},
 	} {
 		sites := callSites(files, c.fn)
@@ -635,10 +636,6 @@ func TestEachProducerHasExactlyOneEnumeratedCallPath(t *testing.T) {
 			if _, ok := sites[c.site]; !ok {
 				t.Errorf("%s is called from %v, want %s", c.fn, sites, c.site)
 			}
-		case evidenceProducerUnavailable:
-			if len(sites) != 0 {
-				t.Errorf("%s is declared unavailable but is called from %v", c.fn, sites)
-			}
 		default:
 			t.Errorf("%s has no availability declaration", c.source)
 		}
@@ -651,7 +648,7 @@ func TestEachProducerHasExactlyOneEnumeratedCallPath(t *testing.T) {
 // appeared alongside them.
 func TestBothProducersAreWiredAndNeitherGainedASecondPath(t *testing.T) {
 	for _, source := range []string{
-		ProvenanceProxyOwnedValidation, ProvenanceClientDeclaredVerification,
+		wire.ProvenanceProxyOwnedValidation, wire.ProvenanceClientDeclaredVerification,
 	} {
 		if got := evidenceProducerStatus[source]; got != evidenceProducerWired {
 			t.Errorf("%s is declared %q, want wired", source, got)
@@ -684,7 +681,7 @@ func TestTerminalCompletionReadsNoEvidence(t *testing.T) {
 		"missingExpectedOutputs":    true,
 	}
 	banned := append(append([]string{}, provenanceReaders...),
-		"deriveTaskObligations", "obligationID",
+		"deriveTaskObligations", "ObligationID",
 		"baselineIdentityFor", "workspaceIdentity")
 	for _, fn := range banned {
 		for site := range callSites(files, fn) {
@@ -703,9 +700,9 @@ func TestNoProductionCodeConstructsAProvenanceOutsideTheProducers(t *testing.T) 
 		"syntax_evidence.go":       true,
 		"verification_evidence.go": true,
 		// The type and its methods live here.
-		"types.go": true,
+		"internal/wire/v3.go": true,
 		// The wire decoder materialises what the service sent.
-		"v3_bridge.go": true,
+		"internal/v3client/client.go": true,
 		// The live owner builds the identity evidence must MATCH, which is the
 		// opposite of producing evidence. It may not give that identity a
 		// source -- one with a source would read as a record.
@@ -720,7 +717,7 @@ func TestNoProductionCodeConstructsAProvenanceOutsideTheProducers(t *testing.T) 
 			if !ok {
 				return true
 			}
-			if id, ok := lit.Type.(*ast.Ident); ok && id.Name == "V3EvidenceProvenance" {
+			if baseName(lit.Type) == "V3EvidenceProvenance" {
 				t.Errorf("%s constructs a V3EvidenceProvenance outside the producers", name)
 			}
 			return true

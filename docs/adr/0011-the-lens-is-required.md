@@ -7,7 +7,7 @@ failure answered with the model's own content.
 
 ## Context
 V3 and the lens have no off switch, and steering is always on wherever a
-vector is installed for the served model (`docs/CANDIDATE_POLICY.md`;
+vector is installed for the served model (`docs/reference/CANDIDATE_POLICY.md`;
 `SUPPORT_MATRIX.md`, § Feature paths; [CHANGELOG](../../CHANGELOG.md),
 "Removed: `GEOMETRIC_LENS_ENABLED`"). A lens that cannot score and
 answers with neutral numbers looks healthy while it adds nothing: V3
@@ -82,7 +82,8 @@ verdicts (`LensStatus` and `probeLensStatus` in `proxy/lens.go`). The
 blocked dimension (`check_status_dimensions` in
 `atlas/commands/doctor.py`). The TUI badge shows a failure and names the
 command to run: `atlas doctor`, or `atlas lens build` when artifacts are
-missing (`renderOneBadge` and `badgeActionHint` in `tui/commands.go`).
+missing (`renderOneBadge` and `badgeActionHint` in
+`tui/internal/app/commands.go`).
 
 **Drift.** A drifted lens withdraws its thresholds on every scoring
 endpoint, so no veto or correction acts on a drifted model
@@ -108,7 +109,7 @@ model returns no thresholds
   yet, to build one (`NEUTRAL_COMBINED` in `atlas/bench/best_of_k.py`).
   It is not the product path.
 - Pinned by `proxy/lens_required_test.go`,
-  `tests/v3-service/test_lens_required.py`,
+  `tests/v3-service/lens/test_lens_required.py`,
   `geometric-lens/tests/test_withheld_thresholds.py`, and
   `tests/e2e/test_v3_lens_acceptance.py`
   (`test_an_unreachable_lens_refuses_the_request`,

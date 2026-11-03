@@ -5,6 +5,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/shadowcapture"
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // Turning an authorized decision into something that can be spent exactly once.
@@ -137,7 +141,7 @@ func grantKey(requestID, invocationID, candidateInstanceID, canonicalTarget stri
 }
 
 // obligationSetIdentity names a set of obligations without holding them.
-func obligationSetIdentity(obs []taskObligation) string {
+func obligationSetIdentity(obs []taskcontract.TaskObligation) string {
 	ids := make([]string, 0, len(obs))
 	for _, o := range obs {
 		ids = append(ids, fmt.Sprintf("%s|%v|%s", o.ID, o.Required, o.RequiredStrength))
@@ -330,7 +334,7 @@ func groundGrantTarget(ctx *AgentContext, in authorizationInput,
 	}
 	target = resolveAgentPath(ctx, in.TargetPath)
 	switch {
-	case in.OutputKnowledgeDeclared && targetIsAuthorized(in.Obligations, target):
+	case in.OutputKnowledgeDeclared && taskcontract.TargetIsAuthorized(in.Obligations, target):
 		grounding = targetGroundingDeclaredOutput
 	case in.OutputKnowledgeDeclared:
 		// The client named outputs and this is not one of them. No tool call
@@ -355,7 +359,7 @@ func groundGrantTarget(ctx *AgentContext, in authorizationInput,
 func serviceRecordUsable(in authorizationInput) (bool, string) {
 	// Modern, non-legacy record only.
 	if in.Envelope != nil {
-		if availability, _ := in.Envelope.Validate(); availability != EvidenceAvailable {
+		if availability, _ := in.Envelope.Validate(); availability != wire.EvidenceAvailable {
 			return false, "the service record is not usable"
 		}
 		// An adapter that cannot measure this artifact class cannot
@@ -646,11 +650,11 @@ func recordGrantAttempt(ctx *AgentContext, g *authorizationGrant,
 //
 // Identities only, like every other record on this path. Caller holds grantMu.
 func recordGrantEvent(ctx *AgentContext, g *authorizationGrant, event, detail string) {
-	sink := activeShadowSink.Load()
-	if !sink.enabled() {
+	sink := shadowcapture.Active()
+	if !sink.Enabled() {
 		return
 	}
-	sink.submit(map[string]interface{}{
+	sink.Submit(map[string]interface{}{
 		"schema_version":        shadowSchemaVersionEvidence,
 		"record_kind":           "authorization_grant_event",
 		"event":                 event,

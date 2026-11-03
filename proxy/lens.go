@@ -33,6 +33,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
 // Agent-loop lens integration. Scores write_file / edit_file content
@@ -302,56 +304,6 @@ func formatScoreSlice(s []float64) string {
 		parts[i] = fmt.Sprintf("%.3f", v)
 	}
 	return "[" + strings.Join(parts, ", ") + "]"
-}
-
-// VerificationRecord binds one green verification command to what it
-// exercised. Covered maps each session-written path the command named to
-// the sha256 of its bytes at the moment the command passed — the bytes the
-// run vouched for, nothing else.
-type VerificationRecord struct {
-	Command  string            // the run_command line
-	Redirect string            // stdin redirect source ("" = ran standalone)
-	Covered  map[string]string // session-written path -> sha256 when it ran
-	Turn     int
-
-	// Kind is what the run demonstrates (commandEvidenceKind.String):
-	// "execution" or "probe" show the program working; "static" (a parse,
-	// lint or build) and "none" are recorded only because the client declared
-	// the command, and bind no coverage. Empty is a record made before kinds
-	// existed, which only a verification command could produce.
-	Kind string
-	// Failed marks a run that exited non-zero. It is kept so a later failure
-	// on the same bytes takes back an earlier pass (coverageRecord).
-	Failed bool
-
-	// The workspace this run was about, stamped from workspaceIdentity after
-	// the command's own effects were reconciled into the ledger.
-	//
-	// Covered answers "which artifact bytes did this command exercise", and a
-	// command that names no file answers it with nothing -- which is honest,
-	// and is why a pathless command could never be current before. These two
-	// answer a different question: WHEN did it run, in terms the session can
-	// re-check. A pathless command is current exactly while both still equal
-	// the workspace's current identity, and any material mutation to a tracked
-	// artifact moves them.
-	//
-	// They are not a second coverage: they say nothing about which bytes the
-	// command touched, and nothing here may satisfy a path obligation.
-	WorkspaceGeneration int
-	WorkspaceStateHash  string
-}
-
-// showsWorking reports a passing run of a kind that shows the program
-// working.
-func (r VerificationRecord) showsWorking() bool {
-	if r.Failed {
-		return false
-	}
-	switch r.Kind {
-	case "", "execution", "probe":
-		return true
-	}
-	return false
 }
 
 // Calibration status endpoint — surfaces lens + ASA compat for the TUI.
@@ -784,10 +736,10 @@ func lookAtVector(c vectorCandidate) (size int64, marker string, found bool) {
 		if err != nil || !info.Mode().IsRegular() {
 			return 0, "", false
 		}
-		raw, _ := readRegularFile(c.path + ".model")
+		raw, _ := workspacefs.ReadRegularFile(c.path + ".model")
 		return info.Size(), strings.TrimSpace(string(raw)), true
 	}
-	dir := openConfinedDir(c.root)
+	dir := workspacefs.OpenConfinedDir(c.root)
 	defer dir.Close()
 	info, err := dir.Stat(c.rel)
 	if err != nil {

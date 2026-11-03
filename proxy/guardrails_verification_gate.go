@@ -15,6 +15,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/shellcmd"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // silentRunWhenOutputPromised reports a verification run that exited 0 while
@@ -104,32 +107,6 @@ func redirectOnlyVerificationMessage(source string) string {
 		source, source, source)
 }
 
-// isHeadOnlyProbe reports a probe that fetches headers and no body. Such a
-// probe is not verification (see commandEvidenceKind.verifies) — this says so out
-// loud instead of declining in silence.
-//
-// Measured (stabilization cycle 6, both flask_pause sessions): the run
-// installed the missing dependency, started the app, and probed it with
-// `curl -I`, which answered HTTP 200. The probe was declined, nothing said
-// why, the run repeated it, and both sessions ended
-// verification_demanded_unmet with working code on disk.
-func isHeadOnlyProbe(cmd string) bool {
-	segs, _, _ := splitTopLevelShell(cmd)
-	for _, seg := range segs {
-		words := programWords(shellFields(strings.TrimSpace(seg)))
-		if len(words) == 0 {
-			continue
-		}
-		switch filepath.Base(words[0]) {
-		case "curl", "wget":
-			if headOnlyProbeRe.MatchString(seg) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // headOnlyProbeNote explains the decline in one sentence, without prescribing
 // a command to paste.
 func headOnlyProbeNote(cmd string) string {
@@ -137,11 +114,6 @@ func headOnlyProbeNote(cmd string) string {
 		"it cannot show that the page or endpoint does the right thing, so it does not count as a "+
 		"verification. Request the body instead and check what comes back.", truncateStr(strings.TrimSpace(cmd), 60))
 }
-
-// headOnlyProbeRe matches curl/wget invocations that fetch headers only:
-// `curl -I`, `curl --head`, `wget --spider`. Long-form and clustered short
-// flags (-sI) both count.
-var headOnlyProbeRe = regexp.MustCompile(`(?i)\b(?:curl\b[^|;&]*?\s-{1,2}(?:I\b|head\b)|curl\b[^|;&]*?\s-[a-zA-Z]*I[a-zA-Z]*\b|wget\b[^|;&]*?--spider\b)`)
 
 // gateTrigger names why the verification gate fired, for the log line. A
 // red command outranks message shape: it is the concrete signal, and when
@@ -186,7 +158,7 @@ func executionAttempt(command, path string) bool {
 	for _, segment := range splitShellSegments(command) {
 		// A parse, lint or compile names the file without running it:
 		// `python -m py_compile app.py` is not an execution of app.py.
-		if segmentEvidenceKind(segment) != evidenceExecution {
+		if shellcmd.SegmentEvidenceKind(segment) != shellcmd.EvidenceExecution {
 			continue
 		}
 		if segmentRunsFile(segment, path, base) {
@@ -432,7 +404,7 @@ func verifiedPhase(phase string) bool {
 // A generic "no such file or directory" is excluded on purpose: a test that
 // fails because the program under test did not create a file says exactly
 // that, and neutralising it would let a genuine failure through.
-func verificationNeverRan(result *ToolResult) bool {
+func verificationNeverRan(result *wire.ToolResult) bool {
 	if result == nil {
 		return false
 	}

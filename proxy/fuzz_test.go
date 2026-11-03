@@ -12,6 +12,9 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
+	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
 // shellCommandSeeds are the seeds of FuzzValidateShellCommand. The expected
@@ -175,11 +178,11 @@ func FuzzExtractModelResponse(f *testing.F) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		envelope, err := json.Marshal(ModelResponse{Type: "tool_call", Name: "write_file", Args: args})
+		envelope, err := json.Marshal(wire.ModelResponse{Type: "tool_call", Name: "write_file", Args: args})
 		if err != nil {
 			t.Fatal(err)
 		}
-		var want ModelResponse
+		var want wire.ModelResponse
 		if err := json.Unmarshal(envelope, &want); err != nil {
 			t.Fatal(err)
 		}
@@ -191,49 +194,6 @@ func FuzzExtractModelResponse(f *testing.F) {
 		// into a call whose missing arguments would have to be guessed.
 		if got, err := extractModelResponse(string(envelope[:len(envelope)-1])); err == nil {
 			t.Fatalf("truncated canonical response for %q parsed as %+v", raw, got)
-		}
-	})
-}
-
-func FuzzParseFencedReply(f *testing.F) {
-	for _, reply := range []string{
-		"```lang\nBODY\n```",
-		"```\nBODY\n```",
-		"```lang\nBODY",
-		"BODY\n```",
-		"BODY\n",
-		"",
-		"```lang\n\n```",
-		"```markdown\n# doc\n```lang\ninner\n```\nmore\n```",
-		"````markdown\n# doc\n```lang\ninner\n```\nmore\n````",
-		"Before\n```lang\nBODY\n```\nAfter",
-		"```lang\r\nBODY\r\n```\r\n",
-		string([]byte{0xff, 0x00, '`', '`', '`'}),
-	} {
-		f.Add(reply)
-	}
-
-	f.Fuzz(func(t *testing.T, reply string) {
-		framing, body := parseFencedReply(reply)
-		if againFraming, againBody := parseFencedReply(reply); againFraming != framing || againBody != body {
-			t.Fatalf("reply %q: parse changed from (%v, %q) to (%v, %q)", reply, framing, body, againFraming, againBody)
-		}
-		// A complete fence has a body, and nothing else has one.
-		if (body != "") != (framing == fenceFramingComplete) {
-			t.Fatalf("reply %q: framing %v returned body %q", reply, framing, body)
-		}
-		// So the extracted content is that body, or empty with no complete fence.
-		if extracted := extractFencedContent(reply); extracted != body {
-			t.Fatalf("reply %q: framing %v, body %q, extracted %q", reply, framing, body, extracted)
-		}
-		if len(reply) <= 4096 {
-			// Prefix each body line so arbitrary bytes cannot form a closer.
-			wantBody := "x" + strings.ReplaceAll(reply, "\n", "\nx") + "\n"
-			wrapped := "````lang\n" + wantBody + "````"
-			gotFraming, gotBody := parseFencedReply(wrapped)
-			if gotFraming != fenceFramingComplete || gotBody != wantBody {
-				t.Fatalf("wrapped reply %q: framing %v, body %q; want complete, %q", reply, gotFraming, gotBody, wantBody)
-			}
 		}
 	})
 }
@@ -267,14 +227,14 @@ func FuzzResolveWorkspacePath(f *testing.F) {
 	} {
 		f.Add(path)
 	}
-	if _, err := resolveWorkspacePath(&AgentContext{WorkingDir: root}, "escape/new.txt"); err == nil {
+	if _, err := resolveWorkspacePath(&AgentContext{runSetup: runSetup{WorkingDir: root}}, "escape/new.txt"); err == nil {
 		f.Fatal("symlink escape seed was accepted")
 	}
 	realRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		f.Fatal(err)
 	}
-	ctx := &AgentContext{WorkingDir: root}
+	ctx := &AgentContext{runSetup: runSetup{WorkingDir: root}}
 	f.Fuzz(func(t *testing.T, path string) {
 		resolved, err := resolveWorkspacePath(ctx, path)
 		if err != nil {
@@ -353,7 +313,7 @@ func FuzzToolCallPathsStayInTheWorkspace(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, toolIndex uint8, args []byte) {
 		tool := tools[int(toolIndex)%len(tools)]
-		ctx := &AgentContext{WorkingDir: root, HostWorkingDir: "/Users/test/project"}
+		ctx := &AgentContext{runSetup: runSetup{WorkingDir: root, HostWorkingDir: "/Users/test/project"}}
 		if validateToolWorkspacePaths(tool, args, ctx) != "" {
 			return
 		}
@@ -380,59 +340,59 @@ func handlerPaths(tool string, args []byte) (paths []string, ok bool) {
 	decode := func(v any) bool { return json.Unmarshal(args, v) == nil }
 	switch tool {
 	case "read_file":
-		var in ReadFileInput
+		var in wire.ReadFileInput
 		ok = decode(&in)
 		return []string{in.Path}, ok
 	case "outline_file":
-		var in OutlineInput
+		var in wire.OutlineInput
 		ok = decode(&in)
 		return []string{in.Path}, ok
 	case "write_file":
-		var in WriteFileInput
+		var in wire.WriteFileInput
 		ok = decode(&in)
 		return []string{in.Path}, ok
 	case "edit_file":
-		var in EditFileInput
+		var in wire.EditFileInput
 		ok = decode(&in)
 		return []string{in.Path}, ok
 	case "structural_edit":
-		var in StructuralEditInput
+		var in wire.StructuralEditInput
 		ok = decode(&in)
 		return []string{in.Path}, ok
 	case "insert_after":
-		var in InsertAfterInput
+		var in wire.InsertAfterInput
 		ok = decode(&in)
 		return []string{in.Path}, ok
 	case "replace_lines":
-		var in ReplaceLinesInput
+		var in wire.ReplaceLinesInput
 		ok = decode(&in)
 		return []string{in.Path}, ok
 	case "delete_file":
-		var in DeleteFileInput
+		var in wire.DeleteFileInput
 		ok = decode(&in)
 		return []string{in.Path}, ok
 	case "move_file":
-		var in MoveFileInput
+		var in wire.MoveFileInput
 		ok = decode(&in)
 		return []string{in.Source, in.Destination}, ok
 	case "search_files":
-		var in SearchFilesInput
+		var in wire.SearchFilesInput
 		ok = decode(&in)
 		return []string{in.Path}, ok
 	case "find_file":
-		var in FindFileInput
+		var in wire.FindFileInput
 		ok = decode(&in)
 		return []string{in.Path}, ok
 	case "list_directory":
-		var in ListDirectoryInput
+		var in wire.ListDirectoryInput
 		ok = decode(&in)
 		return []string{in.Path}, ok
 	case "run_command":
-		var in RunCommandInput
+		var in wire.RunCommandInput
 		ok = decode(&in)
 		return []string{in.Cwd}, ok
 	case "run_background":
-		var in RunBackgroundInput
+		var in wire.RunBackgroundInput
 		ok = decode(&in)
 		return []string{in.Cwd}, ok
 	}
@@ -555,7 +515,7 @@ func agentRequestIsRefused(body []byte) bool {
 	if json.NewDecoder(bytes.NewReader(body)).Decode(&req) != nil {
 		return true
 	}
-	return req.Message == "" || (req.SandboxSubdir != "" && !validSandboxSubdir(req.SandboxSubdir))
+	return req.Message == "" || (req.SandboxSubdir != "" && !workspacefs.ValidSandboxSubdir(req.SandboxSubdir))
 }
 
 // FuzzPassthroughCarriesTheBound: a /v1/chat/completions body that is a valid

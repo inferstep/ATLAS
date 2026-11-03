@@ -221,7 +221,7 @@ func TestGuardNoModelOwnedFieldCanCreateOrWeakenAnObligation(t *testing.T) {
 	}
 	// The obligation identity it matches on comes from the one owner, derived
 	// from the client's own declared text.
-	if !names["obligationID"] || !names["ObligationDeclaredCommand"] {
+	if !names["ObligationID"] || !names["ObligationDeclaredCommand"] {
 		t.Error("declared-command identity is no longer derived from the obligation owner")
 	}
 	// And the list of declared commands comes from the request's own

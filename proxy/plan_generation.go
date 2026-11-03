@@ -6,9 +6,15 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"maps"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/v3client"
+	"github.com/itigges22/atlas-proxy/internal/wire"
+	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
 // shouldGeneratePlan decides whether a turn warrants the ~5-15s plan
@@ -42,12 +48,12 @@ func shouldGeneratePlan(ctx *AgentContext, message string) bool {
 // `v3_plan` events. Returns the winning Plan or nil if the planner
 // errored — callers should treat nil as "no plan, proceed without
 // adherence gating".
-func generatePlan(ctx *AgentContext, userMessage string) *Plan {
+func generatePlan(ctx *AgentContext, userMessage string) *wire.Plan {
 	if ctx.V3URL == "" {
 		return nil
 	}
 	pctx := samplePlanContext(ctx.WorkingDir, 6, 2000)
-	req := V3PlanRequest{
+	req := wire.V3PlanRequest{
 		UserMessage:    userMessage,
 		WorkingDir:     ctx.WorkingDir,
 		ProjectContext: pctx,
@@ -56,13 +62,13 @@ func generatePlan(ctx *AgentContext, userMessage string) *Plan {
 	}
 
 	planStart := time.Now()
-	Emit(NewEnvelope(EvtStageStart, planStage, map[string]interface{}{
+	Emit(wire.NewEnvelope(wire.EvtStageStart, planStage, map[string]interface{}{
 		"detail":     fmt.Sprintf("planning: %s", truncateStr(userMessage, 60)),
 		"context_n":  len(pctx),
 		"candidates": req.NCandidates,
 	}))
 
-	plan, err := callV3PlanStreaming(ctx.Ctx, ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
+	plan, err := v3client.PlanStreaming(ctx.Ctx, ctx.V3URL, requestIDOf(ctx), req, func(stage, detail string, data map[string]interface{}) {
 		// Filter out per-token events: forwarding each one to the TUI as a
 		// separate v3_plan row clogs the pipeline pane. The structural plan stages
 		// (plan_candidate, plan_candidate_scored, plan_selected) are
@@ -79,16 +85,16 @@ func generatePlan(ctx *AgentContext, userMessage string) *Plan {
 		ctx.Stream("v3_plan", payload)
 		// Mirror to the typed broker so non-TUI consumers (logs, audit)
 		// see the same stream.
-		Emit(NewEnvelope(EvtMetric, "v3:plan:"+stage, payload))
+		Emit(wire.NewEnvelope(wire.EvtMetric, "v3:plan:"+stage, payload))
 	})
 	dur := time.Since(planStart).Milliseconds()
 
 	if err != nil {
 		log.Printf("[agent] plan generation failed: %v", err)
-		Emit(Envelope{
-			EventID:    NewEventID(),
+		Emit(wire.Envelope{
+			EventID:    wire.NewEventID(),
 			Timestamp:  float64(time.Now().UnixNano()) / 1e9,
-			Type:       EvtStageEnd,
+			Type:       wire.EvtStageEnd,
 			Stage:      planStage,
 			DurationMS: dur,
 			Payload:    map[string]interface{}{"success": false, "error": err.Error()},
@@ -96,10 +102,10 @@ func generatePlan(ctx *AgentContext, userMessage string) *Plan {
 		return nil
 	}
 
-	Emit(Envelope{
-		EventID:    NewEventID(),
+	Emit(wire.Envelope{
+		EventID:    wire.NewEventID(),
 		Timestamp:  float64(time.Now().UnixNano()) / 1e9,
-		Type:       EvtStageEnd,
+		Type:       wire.EvtStageEnd,
 		Stage:      planStage,
 		DurationMS: dur,
 		Payload: map[string]interface{}{
@@ -124,7 +130,7 @@ func generatePlan(ctx *AgentContext, userMessage string) *Plan {
 		"revision":      0,
 	}
 	ctx.Stream("plan_loaded", planPayload)
-	Emit(NewEnvelope(EvtMetric, "v3:plan:loaded", planPayload))
+	Emit(wire.NewEnvelope(wire.EvtMetric, "v3:plan:loaded", planPayload))
 
 	return plan
 }
@@ -157,7 +163,7 @@ func samplePlanContext(workingDir string, maxFiles, maxBytes int) map[string]str
 	}
 	// Every read goes through the workspace folder, so a name in it that
 	// points somewhere else is skipped like a file that cannot be read.
-	dir := openConfinedDir(workingDir)
+	dir := workspacefs.OpenConfinedDir(workingDir)
 	defer dir.Close()
 	sample := planSample{dir: dir, out: out, maxFiles: maxFiles, maxBytes: maxBytes}
 	sample.readPriorityFiles("", priority)
@@ -194,7 +200,7 @@ const planStage = "v3:plan"
 
 // planSample is what samplePlanContext has collected so far, and its limits.
 type planSample struct {
-	dir                confinedDir
+	dir                workspacefs.ConfinedDir
 	out                map[string]string
 	maxFiles, maxBytes int
 }
@@ -207,10 +213,7 @@ func (s planSample) readPriorityFiles(subdir string, priority []string) {
 		if len(s.out) >= s.maxFiles {
 			return
 		}
-		path := filepath.Join(subdir, rel)
-		if body, ok := s.dir.readCapped(path, s.maxBytes); ok {
-			s.out[path] = body
-		}
+		s.add(filepath.Join(subdir, rel))
 	}
 }
 
@@ -224,9 +227,15 @@ func (s planSample) readSourceFiles(entries []fs.DirEntry) {
 		if e.IsDir() || !isSourceExtension(strings.ToLower(filepath.Ext(name))) {
 			continue
 		}
-		if body, ok := s.dir.readCapped(name, s.maxBytes); ok {
-			s.out[name] = body
-		}
+		s.add(name)
+	}
+}
+
+// add puts one file into the sample, cut to the bytes a request carries for it.
+// A file over four times that is skipped.
+func (s planSample) add(rel string) {
+	if body, ok := s.dir.ReadUpTo(rel, s.maxBytes*4); ok {
+		s.out[rel] = contextEntry(body, s.maxBytes)
 	}
 }
 
@@ -245,4 +254,35 @@ func isSourceExtension(ext string) bool {
 		return true
 	}
 	return false
+}
+
+// addFilesReadToPlanContext adds filesRead, the files this run has read (path to
+// content), to the context of a revised plan, until the context holds `limit`
+// files.
+//
+// When more files were read than fit, they are taken in sorted order of their
+// paths. The run keeps no order of reading (FilesRead is a map), and the map's
+// own order would make which files the planner sees a matter of chance.
+func addFilesReadToPlanContext(pctx, filesRead map[string]string, workingDir string, limit int) {
+	for _, path := range slices.Sorted(maps.Keys(filesRead)) {
+		if len(pctx) >= limit {
+			break
+		}
+		// Use relative path if possible so the planner key matches
+		// what the agent will pass to read_file/edit_file later.
+		rel := path
+		if strings.HasPrefix(path, workingDir+"/") {
+			rel = strings.TrimPrefix(path, workingDir+"/")
+		}
+		pctx[rel] = contextEntry(filesRead[path], 2000)
+	}
+}
+
+// contextEntry cuts a file to the bytes a request carries for it, to save
+// tokens.
+func contextEntry(content string, limit int) string {
+	if len(content) > limit {
+		return content[:limit] + "\n... (truncated)"
+	}
+	return content
 }

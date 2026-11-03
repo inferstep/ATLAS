@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // A syntax gate on a NEW file would put the proxy's judgement in place of
@@ -24,7 +26,7 @@ import (
 
 func TestBrokenContentToANewFileLandsWithAWarning(t *testing.T) {
 	root := t.TempDir()
-	ctx := &AgentContext{WorkingDir: root, SessionWrites: map[string]bool{}, BodySeen: map[string]bool{}}
+	ctx := &AgentContext{runSetup: runSetup{WorkingDir: root}, fileHistory: fileHistory{SessionWrites: map[string]bool{}, BodySeen: map[string]bool{}}}
 	path := filepath.Join(root, "solve.py")
 	res, err := writeNewFileWithWarning(path, "solve.py", "def f(:\n", "SyntaxError: invalid syntax (line 1)", ctx)
 	if err != nil || res == nil || !res.Success {
@@ -33,7 +35,7 @@ func TestBrokenContentToANewFileLandsWithAWarning(t *testing.T) {
 	if _, statErr := os.Stat(path); statErr != nil {
 		t.Fatalf("file must be on disk: %v", statErr)
 	}
-	var out WriteFileOutput
+	var out wire.WriteFileOutput
 	if json.Unmarshal(res.Data, &out) != nil || out.Warning == "" {
 		t.Fatalf("result must carry the warning: %s", string(res.Data))
 	}
@@ -118,7 +120,7 @@ func TestAWorkingFileIsStillProtectedFromBrokenContent(t *testing.T) {
 // the verification snapshot is drift, and so is a file the snapshot never saw.
 func TestDriftAfterVerificationIsNamed(t *testing.T) {
 	dir := t.TempDir()
-	ctx := &AgentContext{WorkingDir: dir, SessionWrites: map[string]bool{"solve.py": true}}
+	ctx := &AgentContext{runSetup: runSetup{WorkingDir: dir}, fileHistory: fileHistory{SessionWrites: map[string]bool{"solve.py": true}}}
 	if err := os.WriteFile(filepath.Join(dir, "solve.py"), []byte("print(1)\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +146,7 @@ func TestDriftAfterVerificationIsNamed(t *testing.T) {
 // With two changed files, the artifact gate names the first in sorted order,
 // every time, so one run never gets two different texts.
 func TestOfTwoChangedFilesTheSameOneIsNamedEachTime(t *testing.T) {
-	ctx := &AgentContext{WorkingDir: t.TempDir(), SessionWrites: map[string]bool{"b.py": true, "a.py": true}}
+	ctx := &AgentContext{runSetup: runSetup{WorkingDir: t.TempDir()}, fileHistory: fileHistory{SessionWrites: map[string]bool{"b.py": true, "a.py": true}}}
 	for try := 1; try <= 100; try++ {
 		if got := driftedSinceVerification(ctx, map[string]string{}); got != "a.py" {
 			t.Fatalf("try %d: %q, want a.py", try, got)
@@ -414,7 +416,7 @@ func TestPendingWarnedRunIsASetOfActiveWarnings(t *testing.T) {
 			// are fine.
 			if d := ctx.Ledger[ledgerKey(ctx, "solve.py")]; d == nil {
 				t.Fatal("solve.py is not in the ledger")
-			} else if _, status := d.CurrentValidation(); status != ValidationPassed {
+			} else if _, status := d.CurrentValidation(); status != wire.ValidationPassed {
 				t.Errorf("solve.py should be exact-hash passed, got %s", status)
 			}
 		})

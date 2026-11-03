@@ -506,10 +506,10 @@ func TestAttributionBuildsNothingWithTheSinkOff(t *testing.T) {
 	body := string(src)
 	fn := body[strings.Index(body, "func (l *routeLifecycle) recordAttribution("):]
 	fn = fn[:strings.Index(fn, "\n}")]
-	guard := strings.Index(fn, "if !sink.enabled() {")
+	guard := strings.Index(fn, "if !sink.Enabled() {")
 	derive := strings.Index(fn, "deriveAutomaticRefusal(")
 	build := strings.Index(fn, "map[string]interface{}{")
-	submit := strings.Index(fn, "sink.submit(")
+	submit := strings.Index(fn, "sink.Submit(")
 	if guard < 0 || derive < 0 || build < 0 || submit < 0 || guard > derive || guard > build || build > submit {
 		t.Error("recordAttribution derives or builds before checking the sink")
 	}
@@ -667,17 +667,18 @@ func TestNoRouteReadsADeliveryMode(t *testing.T) {
 // The attribution is not an obligation kind, a verification kind, an evidence
 // kind or a completion reason: none of those owners knows the word.
 func TestTheAttributionCannotBecomeAnObligationOrAVerificationResult(t *testing.T) {
-	for _, f := range append([]string{"obligation_kinds.go", "verification_requirements.go",
+	for _, f := range append(append(packageFiles(t, "internal/taskcontract"), "obligation_kinds.go", "verification_requirements.go",
 		"verification_evidence.go", "staged_command_evidence.go", "evidence_wiring.go",
 		"authorization_decision.go", "authorization_grant.go", "candidate_delivery.go",
 		"delivery_settlement.go", "feasibility_decision.go", "candidate_policy.go",
 		"advisory_policy.go", "gates.go",
-		"gates_asset_lint.go", "gates_background_jobs.go", "gates_command_line.go",
+		"internal/assetlint/lint.go", "internal/assetlint/findings.go", "gates_background_jobs.go", "internal/shellcmd/shell_wrapper.go",
+		"internal/shellcmd/destructive.go",
 		"gates_completion.go", "gates_edit_requests.go", "gates_ledger.go", "gates_plan.go",
 		"gates_syntax_rejection.go", "gates_workspace_alignment.go",
 		"guardrails.go",
 		"guardrails_write.go", "guardrails_tool_hints.go", "guardrails_shell.go",
-		"guardrails_reply.go", "guardrails_verification_gate.go", "guardrails_summaries.go"}, agentFiles...) {
+		"guardrails_reply.go", "guardrails_verification_gate.go", "guardrails_summaries.go"), agentFiles...) {
 		used := identifiersIn(t, f)
 		for name := range attributionIdentifiers(t) {
 			if used[name] {

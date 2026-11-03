@@ -28,8 +28,8 @@ when a request arrives, the request is refused and says why; unreachable
 from V3 during a run, the run stops and says why. Deeper in-pipeline failure cases (no valid
 candidate → repair phases, winner-selection edge cases, malformed lens
 payloads and missing thresholds) are pinned by the hermetic unit
-suites tests/v3-service/test_winner_selection.py and
-tests/v3-service/test_lens_calibration.py.
+suites tests/v3-service/pipeline/test_winner_selection.py and
+tests/v3-service/lens/test_lens_calibration.py.
 """
 
 import http.client
@@ -334,7 +334,7 @@ def _agent_body(workspace, **overrides):
 
 # The request contract these tests send: work, with the output declared as a
 # canonical workspace-relative path, nothing read from the prose. One rule
-# decides what lands (docs/CANDIDATE_POLICY.md); nothing in the contract
+# decides what lands (docs/reference/CANDIDATE_POLICY.md); nothing in the contract
 # selects another.
 DECLARED_OUTPUT_CONTRACT = {
     "task_mode": "work",

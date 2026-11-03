@@ -15,6 +15,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/v3client"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // A program run as `prog < data` is verified as a stdin filter, which is not
@@ -101,7 +104,7 @@ func evidenceCases(t *testing.T) []evidenceCase {
 	if err != nil {
 		t.Fatalf("golden cases missing (regenerate with "+
 			"ATLAS_WRITE_EVIDENCE_FIXTURES=1 pytest "+
-			"tests/v3-service/test_contract_genericity.py): %v", err)
+			"tests/v3-service/pipeline/test_contract_genericity.py): %v", err)
 	}
 	var doc struct {
 		Schema string         `json:"schema"`
@@ -136,9 +139,9 @@ func readFixture(t *testing.T, id string) []byte {
 	return evidenceCaseByID(t, id).Response
 }
 
-func decodeFixture(t *testing.T, id string) V3GenerateResponse {
+func decodeFixture(t *testing.T, id string) wire.V3GenerateResponse {
 	t.Helper()
-	var got V3GenerateResponse
+	var got wire.V3GenerateResponse
 	if err := json.Unmarshal(readFixture(t, id), &got); err != nil {
 		t.Fatalf("%s: %v", id, err)
 	}
@@ -180,9 +183,9 @@ func TestEnvelopeSurvivesDecodeWithoutFieldLoss(t *testing.T) {
 }
 
 // response decodes the case's service response; a golden case that does not decode is a broken fixture.
-func (c evidenceCase) response(t *testing.T) V3GenerateResponse {
+func (c evidenceCase) response(t *testing.T) wire.V3GenerateResponse {
 	t.Helper()
-	var got V3GenerateResponse
+	var got wire.V3GenerateResponse
 	if err := json.Unmarshal(c.Response, &got); err != nil {
 		t.Fatalf("%s (%s): %v", c.ID, c.Description, err)
 	}
@@ -215,7 +218,7 @@ func TestGoldenCaseAvailability(t *testing.T) {
 // Unavailable and absent are never verdicts about the candidate.
 func TestGoldenCasesThatAreNotAvailableAreNoVerdict(t *testing.T) {
 	for _, c := range evidenceCases(t) {
-		if c.Expect.Availability == string(EvidenceAvailable) {
+		if c.Expect.Availability == string(wire.EvidenceAvailable) {
 			continue // TestGoldenCasesThatAreAvailableCarryTheDeclaredVerdict
 		}
 		t.Run(c.ID, func(t *testing.T) {
@@ -235,7 +238,7 @@ func TestGoldenCasesThatAreNotAvailableAreNoVerdict(t *testing.T) {
 // declared that it does.
 func TestGoldenCasesThatAreAvailableCarryTheDeclaredVerdict(t *testing.T) {
 	for _, c := range evidenceCases(t) {
-		if c.Expect.Availability != string(EvidenceAvailable) {
+		if c.Expect.Availability != string(wire.EvidenceAvailable) {
 			continue // TestGoldenCasesThatAreNotAvailableAreNoVerdict
 		}
 		t.Run(c.ID, func(t *testing.T) {
@@ -268,7 +271,7 @@ func TestLegacyResponseDecodesAsAbsentEvidence(t *testing.T) {
 		t.Fatal("a legacy response must not synthesise an envelope")
 	}
 	availability, reason := got.Evidence.Validate()
-	if availability != EvidenceAbsent {
+	if availability != wire.EvidenceAbsent {
 		t.Errorf("availability = %q, want absent", availability)
 	}
 	if reason == "" {
@@ -329,7 +332,7 @@ func TestEnvelopeIsNotDerivedFromLegacyFields(t *testing.T) {
 	if unsup.Evidence.Evaluation.ExecutionStatus == "error" {
 		t.Error("unsupported must not be reported as an execution error")
 	}
-	if a, _ := unsup.Evidence.Validate(); a != EvidenceAvailable {
+	if a, _ := unsup.Evidence.Validate(); a != wire.EvidenceAvailable {
 		t.Error("an unsupported-but-well-formed envelope is still readable")
 	}
 }
@@ -406,7 +409,7 @@ func TestEnvelopeReachesTelemetryAndNotTheToolResult(t *testing.T) {
 	if !ok {
 		t.Fatalf("telemetry carries no evidence section: %v", payload)
 	}
-	if evidence["availability"] != string(EvidenceAvailable) {
+	if evidence["availability"] != string(wire.EvidenceAvailable) {
 		t.Errorf("availability = %v, want available", evidence["availability"])
 	}
 	// Re-serialise what telemetry holds and compare it to the Python bytes.
@@ -432,7 +435,7 @@ func TestEnvelopeReachesTelemetryAndNotTheToolResult(t *testing.T) {
 		t.Errorf("the envelope leaked into the tool result: %s", blob)
 	}
 	// Local validation is untouched by the envelope's arrival.
-	if res.ValidationKind != ValidationKindSyntax || res.ValidationStatus != ValidationPassed {
+	if res.ValidationKind != wire.ValidationKindSyntax || res.ValidationStatus != wire.ValidationPassed {
 		t.Errorf("local validation = %q/%q, want syntax/passed -- the service's "+
 			"evidence must not displace what THIS process checked",
 			res.ValidationKind, res.ValidationStatus)
@@ -476,7 +479,7 @@ func envelopeFor(t *testing.T, code string, mutate func(map[string]interface{}))
 }
 
 func responseWith(t *testing.T, code string, passed bool,
-	envelope map[string]interface{}) *V3GenerateResponse {
+	envelope map[string]interface{}) *wire.V3GenerateResponse {
 	t.Helper()
 	body := map[string]interface{}{
 		"code": code, "passed": passed, "phase_solved": "phase1",
@@ -488,7 +491,7 @@ func responseWith(t *testing.T, code string, passed bool,
 		body["evidence"] = envelope
 	}
 	raw, _ := json.Marshal(body)
-	var out V3GenerateResponse
+	var out wire.V3GenerateResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
 		t.Fatal(err)
 	}
@@ -617,7 +620,7 @@ func TestEmptyCandidateIsNeverAuthorized(t *testing.T) {
 // Source-level proof that the legacy boolean cannot authorize anything: the
 // authorization path never reads it.
 func TestPassedNoLongerAuthorizesDelivery(t *testing.T) {
-	src, err := os.ReadFile("v3_bridge.go")
+	src, err := os.ReadFile("contract_gate.go")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -688,7 +691,7 @@ func TestEveryPhaseIsDeliverableOnTheSameTerms(t *testing.T) {
 // promote the service's evidence into a verified winner: the authorization
 // predicate takes a response and bytes, and calls no local checker.
 func TestLocalValidationCannotUpgradeServiceEvidence(t *testing.T) {
-	src, err := os.ReadFile("v3_bridge.go")
+	src, err := os.ReadFile("contract_gate.go")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -751,15 +754,15 @@ print(json.dumps({
 	}))
 	defer srv.Close()
 
-	got, err := callV3GenerateStreaming(context.Background(), srv.URL,
-		V3GenerateRequest{FilePath: "theme.css", BaselineCode: "body {}\n"}, nil)
+	got, err := v3client.GenerateStreaming(context.Background(), srv.URL, "", v3CallTimeout(),
+		wire.V3GenerateRequest{FilePath: "theme.css", BaselineCode: "body {}\n"}, nil)
 	if err != nil {
 		t.Fatalf("bridge call failed: %v", err)
 	}
 	if got.Evidence == nil {
 		t.Fatal("the live envelope did not survive the round trip")
 	}
-	if availability, why := got.Evidence.Validate(); availability != EvidenceAvailable {
+	if availability, why := got.Evidence.Validate(); availability != wire.EvidenceAvailable {
 		t.Fatalf("live envelope unusable: %s (%s)", availability, why)
 	}
 	// Authorized on the envelope alone: the producer set passed=false.
@@ -777,11 +780,11 @@ print(json.dumps({
 
 // v3StageEndPayload returns the payload of the first v3 stage_end event that
 // is already waiting on sub, or nil when there is none.
-func v3StageEndPayload(sub chan Envelope) map[string]interface{} {
+func v3StageEndPayload(sub chan wire.Envelope) map[string]interface{} {
 	for {
 		select {
 		case ev := <-sub:
-			if ev.Type == EvtStageEnd && ev.Stage == "v3" {
+			if ev.Type == wire.EvtStageEnd && ev.Stage == "v3" {
 				return ev.Payload
 			}
 		default:

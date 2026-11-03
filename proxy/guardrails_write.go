@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/fencing"
 )
 
 // sanitizeFileContent is the one content change the write path makes. The
@@ -67,13 +69,12 @@ func stripWholeFileWrapper(filePath, content string) (string, bool) {
 	if first < 0 || first == last {
 		return content, false
 	}
-	open := fenceOpenRe.FindStringSubmatch(lines[first])
-	closing := fenceCloseRe.FindStringSubmatch(lines[last])
-	if open == nil || closing == nil || len(closing[1]) < len(open[1]) {
+	open := fencing.OpeningRun(lines[first])
+	if open == "" || !fencing.Closes(lines[last], len(open)) {
 		return content, false
 	}
 	for i := first + 1; i < last; i++ {
-		if m := fenceCloseRe.FindStringSubmatch(lines[i]); m != nil && len(m[1]) >= len(open[1]) {
+		if fencing.Closes(lines[i], len(open)) {
 			return content, false
 		}
 	}
@@ -536,7 +537,7 @@ func jsonChannelContentFeedback(toolName string, args json.RawMessage) (string, 
 	}[toolName]
 	for _, f := range fields {
 		v, _ := in[f].(string)
-		if v == "" || (toolName == "write_file" && isFencedSentinel(v)) {
+		if v == "" || (toolName == "write_file" && fencing.IsSentinel(v)) {
 			continue
 		}
 		if name, line, ok := controlBeforeLetter(v); ok {

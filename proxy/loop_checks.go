@@ -11,6 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/fencing"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // announceToolCall streams a tool call the moment it parses, before any gate
@@ -26,14 +29,14 @@ import (
 // The copy made here is used for the signature and nothing else: the
 // fetched bytes still drive the mutation, the gates, the ledger and
 // the write.
-func announceToolCall(ctx *AgentContext, turn int, parsed ModelResponse) json.RawMessage {
+func announceToolCall(ctx *AgentContext, turn int, parsed wire.ModelResponse) json.RawMessage {
 	intentArgs := append(json.RawMessage(nil), parsed.Args...)
 	ctx.Stream("tool_call", map[string]interface{}{
 		"name": parsed.Name,
 		"args": json.RawMessage(parsed.Args),
 		"turn": turn,
 	})
-	Emit(NewEnvelope(EvtToolCall, "tool", map[string]interface{}{
+	Emit(wire.NewEnvelope(wire.EvtToolCall, "tool", map[string]interface{}{
 		"name":         parsed.Name,
 		"args_summary": truncateStr(string(parsed.Args), 80),
 		"turn":         turn,
@@ -44,7 +47,7 @@ func announceToolCall(ctx *AgentContext, turn int, parsed ModelResponse) json.Ra
 // screenBeforeWorkspaceCheck runs the gates a tool call meets before the
 // workspace check: permission (a deletion asks after the check) and arguments
 // that do not parse.
-func (loop *agentLoop) screenBeforeWorkspaceCheck(turn int, response string, parsed ModelResponse, intentArgs json.RawMessage) turnOutcome {
+func (loop *agentLoop) screenBeforeWorkspaceCheck(turn int, response string, parsed wire.ModelResponse, intentArgs json.RawMessage) turnOutcome {
 	// Check permissions. In default and accept-edits modes a
 	// destructive tool pauses the loop until the client approves or
 	// denies it (via POST /v1/permission). Yolo mode and pre-approved
@@ -66,7 +69,7 @@ func (loop *agentLoop) screenBeforeWorkspaceCheck(turn int, response string, par
 
 // refuseOutsideWorkspace answers a call the workspace check refused, counts the
 // refusal, and reports whether the run must stop.
-func (loop *agentLoop) refuseOutsideWorkspace(parsed ModelResponse, intentArgs json.RawMessage, rejection string) bool {
+func (loop *agentLoop) refuseOutsideWorkspace(parsed wire.ModelResponse, intentArgs json.RawMessage, rejection string) bool {
 	ctx, st := loop.ctx, loop.st
 	st.bounceToolCall(ctx, parsed.Name, rejection)
 	// A refusal here is a failed call, so it goes through what
@@ -87,7 +90,7 @@ func (loop *agentLoop) refuseOutsideWorkspace(parsed ModelResponse, intentArgs j
 // the run-first gate for edits and the write_file preflight. The preflight may
 // put a fetched body in place of a fenced sentinel; nothing else here changes
 // *parsed.
-func (loop *agentLoop) screenAfterWorkspaceCheck(turn int, response string, parsed *ModelResponse, intentArgs json.RawMessage) turnOutcome {
+func (loop *agentLoop) screenAfterWorkspaceCheck(turn int, response string, parsed *wire.ModelResponse, intentArgs json.RawMessage) turnOutcome {
 	ctx, st := loop.ctx, loop.st
 	// The intent is on the record from here: the arguments parse, the
 	// path is inside the workspace, and for every tool but delete_file
@@ -119,7 +122,7 @@ func (loop *agentLoop) screenAfterWorkspaceCheck(turn int, response string, pars
 // askPermission asks whether this tool call may run, when it needs asking. A
 // denial is a failed call like any other: it is answered on the stream and
 // counted, and the turn ends; three in a row on one target end the run.
-func (loop *agentLoop) askPermission(turn int, response string, parsed ModelResponse, intentArgs json.RawMessage) turnOutcome {
+func (loop *agentLoop) askPermission(turn int, response string, parsed wire.ModelResponse, intentArgs json.RawMessage) turnOutcome {
 	ctx, st := loop.ctx, loop.st
 	if !needsPermission(ctx, parsed.Name, parsed.Args) {
 		return turnContinues
@@ -168,11 +171,11 @@ func (loop *agentLoop) askPermission(turn int, response string, parsed ModelResp
 			})
 			// Bespoke bounce: the permission flow keys its tool-call
 			// ID via permCallID so the TUI can match the decision.
-			ctx.Messages = append(ctx.Messages, AgentMessage{
+			ctx.Messages = append(ctx.Messages, wire.AgentMessage{
 				Role:    "assistant",
 				Content: response,
 			})
-			ctx.Messages = append(ctx.Messages, AgentMessage{
+			ctx.Messages = append(ctx.Messages, wire.AgentMessage{
 				Role:       "tool",
 				Content:    deniedToolMessage(denial),
 				ToolCallID: permCallID(turn),
@@ -187,7 +190,7 @@ func (loop *agentLoop) askPermission(turn int, response string, parsed ModelResp
 // refuseTruncatedArgs refuses a write_file, edit_file or run_command whose
 // arguments do not parse, before anything runs, and tells the model to use
 // smaller edits. Three in a row end the run.
-func (loop *agentLoop) refuseTruncatedArgs(turn int, parsed ModelResponse) turnOutcome {
+func (loop *agentLoop) refuseTruncatedArgs(turn int, parsed wire.ModelResponse) turnOutcome {
 	ctx, st := loop.ctx, loop.st
 	if parsed.Name == "write_file" || parsed.Name == "edit_file" || parsed.Name == "run_command" {
 		var testParse map[string]interface{}
@@ -196,7 +199,7 @@ func (loop *agentLoop) refuseTruncatedArgs(turn int, parsed ModelResponse) turnO
 			st.bounceToolCall(ctx, parsed.Name, "Your output was truncated — the content is too long for a single tool call. For existing files, use edit_file with small targeted changes (replace specific functions or sections). For new files, keep them under 100 lines per write_file call.")
 			loop.consecutiveErrors++
 			if loop.consecutiveErrors >= 3 {
-				loop.endStream(TerminalStopped, "oversized_tool_content",
+				loop.endStream(wire.TerminalStopped, "oversized_tool_content",
 					"Stopped: content too large for tool calls. Try requesting smaller, targeted changes.")
 				return runEnds
 			}
@@ -216,7 +219,7 @@ func (loop *agentLoop) refuseTruncatedArgs(turn int, parsed ModelResponse) turnO
 // (e.g. a single-line config) may be overwritten: at that size there is
 // no edit-vs-rewrite distinction. Session-owned and corrupted files are
 // carved out there.
-func (loop *agentLoop) runFirstGateForEdits(parsed ModelResponse) turnOutcome {
+func (loop *agentLoop) runFirstGateForEdits(parsed wire.ModelResponse) turnOutcome {
 	ctx, st := loop.ctx, loop.st
 	if parsed.Name == "edit_file" || parsed.Name == "structural_edit" ||
 		parsed.Name == "insert_after" || parsed.Name == "replace_lines" {
@@ -241,9 +244,9 @@ func (loop *agentLoop) runFirstGateForEdits(parsed ModelResponse) turnOutcome {
 //
 // Order matters: "@fenced" resolution costs a full model sub-call, and
 // paying that for a write the gate is about to bounce is pure waste.
-func (loop *agentLoop) prepareWriteFile(turn int, parsed *ModelResponse, intentArgs json.RawMessage) turnOutcome {
+func (loop *agentLoop) prepareWriteFile(turn int, parsed *wire.ModelResponse, intentArgs json.RawMessage) turnOutcome {
 	if parsed.Name == "write_file" {
-		var wfInput WriteFileInput
+		var wfInput wire.WriteFileInput
 		if json.Unmarshal(parsed.Args, &wfInput) == nil {
 			if outcome := loop.runFirstGateForWrite(wfInput); outcome != turnContinues {
 				return outcome
@@ -257,7 +260,7 @@ func (loop *agentLoop) prepareWriteFile(turn int, parsed *ModelResponse, intentA
 // runFirstGateForWrite holds back a write_file over a file whose warned version
 // on disk has never been run: the first recurrence is shown the file as it is,
 // later ones are told to run it first, within the gate's bounce budget.
-func (loop *agentLoop) runFirstGateForWrite(wfInput WriteFileInput) turnOutcome {
+func (loop *agentLoop) runFirstGateForWrite(wfInput wire.WriteFileInput) turnOutcome {
 	ctx, st := loop.ctx, loop.st
 	if st.pendingWarnedRun[wfInput.Path] {
 		// The gate has already said this once. Repeating it while the
@@ -285,7 +288,7 @@ func (loop *agentLoop) runFirstGateForWrite(wfInput WriteFileInput) turnOutcome 
 // resolveFencedContent sees to a write_file whose content is the fenced
 // sentinel. The channel opens only for a call that can execute, and a spent
 // channel is offered its way out once, before any resolution.
-func (loop *agentLoop) resolveFencedContent(turn int, parsed *ModelResponse, intentArgs json.RawMessage, wfInput WriteFileInput) turnOutcome {
+func (loop *agentLoop) resolveFencedContent(turn int, parsed *wire.ModelResponse, intentArgs json.RawMessage, wfInput wire.WriteFileInput) turnOutcome {
 	ctx, st := loop.ctx, loop.st
 	// Fenced-content resolution: everything downstream (the
 	// remaining gates, tier classification, execution) must see
@@ -307,13 +310,13 @@ func (loop *agentLoop) resolveFencedContent(turn int, parsed *ModelResponse, int
 	// The channel can be spent while the model keeps asking
 	// for it. Offer the way out ONCE, before anything tries
 	// another resolution, so the turn costs no generation.
-	if fencedUsable && isFencedSentinel(trimmed) {
+	if fencedUsable && fencing.IsSentinel(trimmed) {
 		if msg := fencedChannelRecovery(ctx, st, wfInput.Path); msg != "" {
 			st.bounceToolCall(ctx, "write_file", msg)
 			return turnEnds
 		}
 	}
-	if fencedUsable && isFencedSentinel(trimmed) {
+	if fencedUsable && fencing.IsSentinel(trimmed) {
 		return loop.replaceFencedSentinel(turn, parsed, intentArgs, wfInput, trimmed)
 	}
 	return turnContinues
@@ -323,7 +326,7 @@ func (loop *agentLoop) resolveFencedContent(turn int, parsed *ModelResponse, int
 // that arrived inline and proves its own completion, or else one a fenced
 // sub-call fetches. The body becomes the call's arguments. A fetch that fails
 // is refused and counted.
-func (loop *agentLoop) replaceFencedSentinel(turn int, parsed *ModelResponse, intentArgs json.RawMessage, wfInput WriteFileInput, trimmed string) turnOutcome {
+func (loop *agentLoop) replaceFencedSentinel(turn int, parsed *wire.ModelResponse, intentArgs json.RawMessage, wfInput wire.WriteFileInput, trimmed string) turnOutcome {
 	ctx := loop.ctx
 	// Anything after the sentinel is the model inlining
 	// the file anyway. Exactly one of two things arrived,
@@ -340,9 +343,9 @@ func (loop *agentLoop) replaceFencedSentinel(turn int, parsed *ModelResponse, in
 	// Only protocol framing decides. An unterminated
 	// fence is one incomplete shape; a BARE body with no
 	// fence at all is the other, and a truncated bare body
-	// can still parse cleanly. See classifyFencedPayload.
+	// can still parse cleanly. See fencing.ClassifyPayload.
 	inline := strings.TrimLeft(strings.TrimPrefix(trimmed, "@fenced"), " \t\r\n")
-	resolved, framed, why := resolveInlineFencedBody(inline)
+	resolved, framed, why := fencing.ResolveInlineBody(inline)
 	if framed {
 		inline = resolved
 	} else {
@@ -370,7 +373,7 @@ func (loop *agentLoop) replaceFencedSentinel(turn int, parsed *ModelResponse, in
 // refuseFencedFetch answers a fenced fetch that failed, with the reason that
 // is true for it, and counts the refusal unless the run itself stopped. The
 // turn ends; three failures in a row on one file end the run.
-func (loop *agentLoop) refuseFencedFetch(turn int, parsed ModelResponse, intentArgs json.RawMessage, wfInput WriteFileInput, ferr error, stallsBefore int) turnOutcome {
+func (loop *agentLoop) refuseFencedFetch(turn int, parsed wire.ModelResponse, intentArgs json.RawMessage, wfInput wire.WriteFileInput, ferr error, stallsBefore int) turnOutcome {
 	ctx, st := loop.ctx, loop.st
 	log.Printf("[agent] fenced-content fetch failed for %s: %v", wfInput.Path, ferr)
 	fencedBounce := "You wrote \"content\": \"@fenced\" but no fenced block followed. Either reply with the complete file in one fenced code block when asked, or re-issue write_file with the full content inline."
@@ -427,7 +430,7 @@ func (loop *agentLoop) refuseFencedFetch(turn int, parsed ModelResponse, intentA
 		if shouldStopForFailures(loop.totalFailures, loop.consecutiveErrors, ctx.RecentFailurePaths) {
 			log.Printf("[agent] breaking at turn %d: %d refused/failed calls, %d consecutive on %q",
 				turn, loop.totalFailures, loop.consecutiveErrors, failPath)
-			loop.endStream(TerminalStopped, "repeated_refusal",
+			loop.endStream(wire.TerminalStopped, "repeated_refusal",
 				repeatedRefusalSummary("write_file", wfInput.Path, st.madeProductiveChange)+
 					liveBackgroundJobNote(ctx))
 			return runEnds
@@ -440,7 +443,7 @@ func (loop *agentLoop) refuseFencedFetch(turn int, parsed ModelResponse, intentA
 // given what the read of its target found: a target this session never read
 // is refused, and so is a whole-file rewrite of a file over five lines that is
 // neither corrupted nor this session's own.
-func (loop *agentLoop) guardExistingFileWrite(parsed ModelResponse, intentArgs json.RawMessage, wfInput WriteFileInput,
+func (loop *agentLoop) guardExistingFileWrite(parsed wire.ModelResponse, intentArgs json.RawMessage, wfInput wire.WriteFileInput,
 	existingPath string, existing []byte, readErr error) turnOutcome {
 	ctx := loop.ctx
 	if readErr != nil && !os.IsNotExist(readErr) {
@@ -500,7 +503,7 @@ func (loop *agentLoop) guardExistingFileWrite(parsed ModelResponse, intentArgs j
 
 // refuseUnreadOverwrite refuses a write_file over an existing file this
 // session never read, and counts the refusal.
-func (loop *agentLoop) refuseUnreadOverwrite(parsed ModelResponse, intentArgs json.RawMessage, wfInput WriteFileInput,
+func (loop *agentLoop) refuseUnreadOverwrite(parsed wire.ModelResponse, intentArgs json.RawMessage, wfInput wire.WriteFileInput,
 	existingPath string, existingLines int) turnOutcome {
 	ctx, st := loop.ctx, loop.st
 	rejection := fmt.Sprintf(
@@ -528,7 +531,7 @@ func (loop *agentLoop) refuseUnreadOverwrite(parsed ModelResponse, intentArgs js
 // refuseWholeFileRewrite refuses a write_file that rewrites an existing file of
 // more than five lines, points the model at a targeted edit, and counts the
 // refusal.
-func (loop *agentLoop) refuseWholeFileRewrite(parsed ModelResponse, intentArgs json.RawMessage, wfInput WriteFileInput,
+func (loop *agentLoop) refuseWholeFileRewrite(parsed wire.ModelResponse, intentArgs json.RawMessage, wfInput wire.WriteFileInput,
 	existingPath string, existingLines int) turnOutcome {
 	ctx, st := loop.ctx, loop.st
 	// When the existing file is .py or .html
@@ -567,7 +570,7 @@ func (loop *agentLoop) refuseWholeFileRewrite(parsed ModelResponse, intentArgs j
 // shell gates, the runaway-write count, the per-file tool ban, the answers to
 // a repeated rejected proposal or a repeated no-op edit, and the identical
 // re-send ban. It reports whether this call is a runaway write, and the outcome.
-func (loop *agentLoop) refuseBeforeDispatch(turn int, parsed ModelResponse, intentArgs json.RawMessage) (bool, turnOutcome) {
+func (loop *agentLoop) refuseBeforeDispatch(turn int, parsed wire.ModelResponse, intentArgs json.RawMessage) (bool, turnOutcome) {
 	if outcome := loop.redirectForegroundServer(parsed, intentArgs); outcome != turnContinues {
 		return false, outcome
 	}
@@ -599,10 +602,10 @@ func (loop *agentLoop) refuseBeforeDispatch(turn int, parsed ModelResponse, inte
 // Starting a server in the foreground is not a permission
 // question: it burns the sandbox timeout and reports a failure
 // that says nothing about the code, whatever mode you are in.
-func (loop *agentLoop) redirectForegroundServer(parsed ModelResponse, intentArgs json.RawMessage) turnOutcome {
+func (loop *agentLoop) redirectForegroundServer(parsed wire.ModelResponse, intentArgs json.RawMessage) turnOutcome {
 	ctx, st := loop.ctx, loop.st
 	if parsed.Name == "run_command" {
-		var rc RunCommandInput
+		var rc wire.RunCommandInput
 		if json.Unmarshal(parsed.Args, &rc) == nil {
 			if rejection := foregroundServerRejectionWithSource(rc.Command,
 				workspaceFileReader(ctx)); rejection != "" {
@@ -625,10 +628,10 @@ func (loop *agentLoop) redirectForegroundServer(parsed ModelResponse, intentArgs
 }
 
 // refuseUnsafeRunCommand refuses a run_command the shell validator rejects.
-func (loop *agentLoop) refuseUnsafeRunCommand(parsed ModelResponse, intentArgs json.RawMessage) turnOutcome {
+func (loop *agentLoop) refuseUnsafeRunCommand(parsed wire.ModelResponse, intentArgs json.RawMessage) turnOutcome {
 	ctx, st := loop.ctx, loop.st
 	if parsed.Name == "run_command" && !ctx.YoloMode {
-		var rc RunCommandInput
+		var rc wire.RunCommandInput
 		if json.Unmarshal(parsed.Args, &rc) == nil {
 			if rejection := validateRunCommand(rc.Command, ctx.WorkingDir); rejection != "" {
 				// %q on rejection too: validateRunCommand may embed
@@ -657,10 +660,10 @@ func (loop *agentLoop) refuseUnsafeRunCommand(parsed ModelResponse, intentArgs j
 // same run_command is bounced. validateRunCommand chains both gates so
 // destructive shell verbs and /workspace drift get the same treatment
 // regardless of which run_* tool the model picks.
-func (loop *agentLoop) refuseUnsafeRunBackground(parsed ModelResponse, intentArgs json.RawMessage) turnOutcome {
+func (loop *agentLoop) refuseUnsafeRunBackground(parsed wire.ModelResponse, intentArgs json.RawMessage) turnOutcome {
 	ctx, st := loop.ctx, loop.st
 	if parsed.Name == "run_background" && !ctx.YoloMode {
-		var rb RunBackgroundInput
+		var rb wire.RunBackgroundInput
 		if json.Unmarshal(parsed.Args, &rb) == nil {
 			if rejection := validateRunCommand(rb.Command, ctx.WorkingDir); rejection != "" {
 				log.Printf("[agent] rejecting run_background %q: %q",
@@ -682,7 +685,7 @@ func (loop *agentLoop) refuseUnsafeRunBackground(parsed ModelResponse, intentArg
 //
 // Runaway backstop: force the repeat path once a single file is rewritten
 // far more than any real iteration would.
-func (loop *agentLoop) countWholeFileWrites(parsed ModelResponse) bool {
+func (loop *agentLoop) countWholeFileWrites(parsed wire.ModelResponse) bool {
 	const runawayWriteThreshold = 20
 	runawayWrite := false
 	if parsed.Name == "write_file" {
@@ -702,7 +705,7 @@ func (loop *agentLoop) countWholeFileWrites(parsed ModelResponse) bool {
 // A tool the loop has taken away for this file stays taken away.
 // Enforced before the identical-resend check so a model that
 // varies one byte cannot walk around the ban.
-func (loop *agentLoop) refuseBannedTool(turn int, parsed ModelResponse) turnOutcome {
+func (loop *agentLoop) refuseBannedTool(turn int, parsed wire.ModelResponse) turnOutcome {
 	ctx, st := loop.ctx, loop.st
 	if p := extractFailurePath(parsed.Name, parsed.Args); p != "" &&
 		st.toolBanned[parsed.Name+"\x00"+p] {
@@ -717,7 +720,7 @@ func (loop *agentLoop) refuseBannedTool(turn int, parsed ModelResponse) turnOutc
 		if shouldStopForFailures(loop.totalFailures, loop.consecutiveErrors, ctx.RecentFailurePaths) {
 			log.Printf("[agent] breaking at turn %d: %d refused/failed calls, %d consecutive on %q",
 				turn, loop.totalFailures, loop.consecutiveErrors, p)
-			loop.endStream(TerminalStopped, "repeated_refusal",
+			loop.endStream(wire.TerminalStopped, "repeated_refusal",
 				repeatedRefusalSummary(parsed.Name, p, st.madeProductiveChange)+liveBackgroundJobNote(ctx))
 			return runEnds
 		}
@@ -733,7 +736,7 @@ func (loop *agentLoop) refuseBannedTool(turn int, parsed ModelResponse) turnOutc
 // bytes still on disk. It has to be answered BEFORE the resend
 // ban, which would otherwise end the run with the model never
 // having been shown the file it keeps trying to replace.
-func (loop *agentLoop) answerRejectedProposal(parsed ModelResponse, intentArgs json.RawMessage) turnOutcome {
+func (loop *agentLoop) answerRejectedProposal(parsed wire.ModelResponse, intentArgs json.RawMessage) turnOutcome {
 	ctx, st := loop.ctx, loop.st
 	if sha := resolvedProposalHash(parsed.Name, parsed.Args); sha != "" {
 		rel := ledgerArgPath(parsed.Args, "path")
@@ -751,7 +754,7 @@ func (loop *agentLoop) answerRejectedProposal(parsed ModelResponse, intentArgs j
 // refuseRepeatedProposal shows the model the file its repeated replacement was
 // refused against, and counts the refusal. It goes on when there is nothing
 // to show.
-func (loop *agentLoop) refuseRepeatedProposal(parsed ModelResponse, intentArgs json.RawMessage, rel, canon, sha string) turnOutcome {
+func (loop *agentLoop) refuseRepeatedProposal(parsed wire.ModelResponse, intentArgs json.RawMessage, rel, canon, sha string) turnOutcome {
 	ctx, st := loop.ctx, loop.st
 	if msg := rejectedProposalRecovery(ctx, st, rel, canon, sha); msg != "" {
 		st.bounceToolCall(ctx, parsed.Name, msg)
@@ -771,7 +774,7 @@ func (loop *agentLoop) refuseRepeatedProposal(parsed ModelResponse, intentArgs j
 // This has to come BEFORE the identical-resend ban, which would
 // otherwise intercept the recurrence and end the run with the
 // broken file still on disk -- the retained shape exactly.
-func (loop *agentLoop) answerBrokenArtifact(parsed ModelResponse, intentArgs json.RawMessage) turnOutcome {
+func (loop *agentLoop) answerBrokenArtifact(parsed wire.ModelResponse, intentArgs json.RawMessage) turnOutcome {
 	ctx, st := loop.ctx, loop.st
 	if relPath := noopEditIntent(parsed.Name, intentArgs); relPath != "" {
 		if msg := brokenArtifactRecovery(ctx, st, relPath); msg != "" {
@@ -801,7 +804,7 @@ func (loop *agentLoop) answerBrokenArtifact(parsed ModelResponse, intentArgs jso
 // it and different only in the body the channel fetched for it.
 // The lookup, the record and the clear all key on the intent, or
 // they key on three different things and never meet.
-func (loop *agentLoop) refuseIdenticalRetry(turn int, parsed ModelResponse, intentArgs json.RawMessage) turnOutcome {
+func (loop *agentLoop) refuseIdenticalRetry(turn int, parsed wire.ModelResponse, intentArgs json.RawMessage) turnOutcome {
 	ctx, st := loop.ctx, loop.st
 	if refusal := identicalRetryRefusal(ctx, parsed.Name,
 		retryIdentityArgs(parsed.Name, intentArgs, parsed.Args)); refusal != "" {
@@ -837,7 +840,7 @@ func (loop *agentLoop) refuseIdenticalRetry(turn int, parsed ModelResponse, inte
 		if shouldStopForFailures(loop.totalFailures, loop.consecutiveErrors, ctx.RecentFailurePaths) {
 			log.Printf("[agent] breaking at turn %d: %d refused/failed calls, %d consecutive on %q",
 				turn, loop.totalFailures, loop.consecutiveErrors, ctx.RecentFailurePaths[len(ctx.RecentFailurePaths)-1])
-			loop.endStream(TerminalStopped, "repeated_refusal",
+			loop.endStream(wire.TerminalStopped, "repeated_refusal",
 				repeatedRefusalSummary(parsed.Name, failPath, st.madeProductiveChange)+liveBackgroundJobNote(ctx))
 			return runEnds
 		}
@@ -887,7 +890,7 @@ func needsPermission(ctx *AgentContext, toolName string, args json.RawMessage) b
 
 	// Anything that runs a command asks, whatever the tool is called:
 	// run_background prompts for a command exactly as run_command does.
-	if tool.Effect == ToolEffectCommandUnobserved {
+	if tool.Effect == wire.ToolEffectCommandUnobserved {
 		return true
 	}
 	// Destructive tools need permission in default mode

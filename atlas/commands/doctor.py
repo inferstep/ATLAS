@@ -160,7 +160,7 @@ def check_arch() -> CheckResult:
             "aarch64 — vulkan + cuda (sbsa/l4t) only, no rocm",
             "AMD ROCm has no arm64 release. Use ATLAS_BACKEND=vulkan for "
             "AMD GPUs on arm64. NVIDIA CUDA needs the sbsa (DGX Spark) or "
-            "l4t (Jetson) base image swap, see docs/SETUP.md#arm64.")
+            "l4t (Jetson) base image swap, see docs/guides/SETUP.md#arm64.")
     return CheckResult("arch", "warn",
         f"unsupported arch '{arch}'",
         "ATLAS officially supports x86_64 and aarch64. Other arches may "
@@ -360,7 +360,7 @@ def _check_metal_native(atlas_root: Optional[str] = None) -> CheckResult:
             "not on macOS — metal hybrid path doesn't apply", "")
 
     # Expected setup-script output location. Keep aligned with
-    # scripts/atlas-setup-macos.sh DEFAULT_PREFIX.
+    # scripts/install/atlas-setup-macos.sh DEFAULT_PREFIX.
     values = compose_config.read_env_file(atlas_root) if atlas_root else _ENV
     prefix = (os.environ.get("ATLAS_MACOS_PREFIX")
               or values.get("ATLAS_MACOS_PREFIX")
@@ -370,13 +370,13 @@ def _check_metal_native(atlas_root: Optional[str] = None) -> CheckResult:
 
     if not os.path.isfile(binary):
         return CheckResult("metal-native", "fail",
-            "native llama-server not found — run scripts/atlas-setup-macos.sh",
-            f"expected at {binary}. See docs/SETUP_MACOS.md.")
+            "native llama-server not found — run scripts/install/atlas-setup-macos.sh",
+            f"expected at {binary}. See docs/guides/SETUP_MACOS.md.")
 
     if not os.access(binary, os.X_OK):
         return CheckResult("metal-native", "fail",
             "native llama-server is not executable — re-run "
-            "scripts/atlas-setup-macos.sh --rebuild",
+            "scripts/install/atlas-setup-macos.sh --rebuild",
             f"{binary} exists but lacks +x. Likely a botched copy or "
             f"transferred over a filesystem that strips perms (smb/nfs).")
 
@@ -405,7 +405,7 @@ def _check_metal_native(atlas_root: Optional[str] = None) -> CheckResult:
     if not _port_listening("127.0.0.1", LLAMA_PORT, timeout=2):
         return CheckResult("metal-native", "warn",
             f"native llama-server installed at {binary} but nothing "
-            f"listening on :{LLAMA_PORT} — start it with scripts/atlas-llama-macos.sh",
+            f"listening on :{LLAMA_PORT} — start it with scripts/install/atlas-llama-macos.sh",
             "Open a separate terminal and run the launcher; this check "
             "will turn green once the server is up and serving.")
 
@@ -611,7 +611,7 @@ def _probe_service_auth(name: str, method: str, url: str, body: Optional[dict], 
 def check_internal_auth(atlas_root: str) -> List[CheckResult]:
     """Internal service auth: token file status + live enforcement.
 
-    Per the auth design (proxy/auth.go, ADR 0001):
+    Per the auth design (requireServiceToken in proxy/main.go, ADR 0001):
       - no token file       -> warn (auth disabled; localhost-only model)
       - token, loose perms  -> fail (the credential is readable by others)
       - token the services cannot read -> fail (each of them stops)
@@ -702,7 +702,7 @@ def check_model_file(atlas_root: str) -> CheckResult:
             "Registry model? run `atlas model install <name>`. "
             "BYO model? place the .gguf in ATLAS_MODELS_DIR "
             f"({MODEL_DIR}) and set ATLAS_MODEL_FILE + ATLAS_MODEL_NAME in "
-            ".env — see docs/CONFIGURATION.md \"Adding your own model\", "
+            ".env — see docs/guides/CONFIGURATION.md \"Adding your own model\", "
             "or run `atlas model install --url <hf-url>` / `atlas onboard`.")
     size = os.path.getsize(path)
     if size < 100 * 1024 * 1024:  # < 100 MB
@@ -1141,7 +1141,7 @@ def check_inference_contract() -> CheckResult:
         + ". C(x)/G(x) scoring degrades to neutral and the V3 pipeline falls "
           "back to sandbox-only verification. The bundled image provides both; "
           "a bring-your-own server needs --embeddings --pooling mean and the "
-          "PC-202 build. See docs/SETUP.md 'Bringing your own llama-server'.")
+          "PC-202 build. See docs/guides/SETUP.md 'Bringing your own llama-server'.")
 
 
 def check_e2e_smoke() -> CheckResult:

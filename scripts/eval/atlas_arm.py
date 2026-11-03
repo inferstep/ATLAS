@@ -58,6 +58,6 @@ def result_of(events: list, wall_s: float) -> ArmResult:
         return ArmResult("no_terminal", (errors or ["the stream ended without a done event"])[-1],
                          round(wall_s, 1), turns, tokens)
     last = done[-1]
-    # A done event without a status is incomplete (docs/API.md).
+    # A done event without a status is incomplete (docs/reference/API.md).
     return ArmResult(last.get("status") or "incomplete", last.get("reason") or "",
                      round(wall_s, 1), turns, tokens)

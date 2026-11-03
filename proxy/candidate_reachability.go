@@ -1,6 +1,10 @@
 package main
 
-import "time"
+import (
+	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/shadowcapture"
+)
 
 // Why the candidate producer was not consulted for a mutation the model
 // actually made.
@@ -140,7 +144,7 @@ func workAllowance() time.Duration {
 
 // generationLeavesWorkAllowance reports whether the producer's cap for a call
 // made now would still leave workAllowance of the session. The cap is
-// computed the way callV3GenerateStreaming applies it. Without a deadline
+// computed the way v3client.GenerateStreaming applies it. Without a deadline
 // there is nothing to protect.
 func generationLeavesWorkAllowance(ctx *AgentContext) bool {
 	if ctx == nil || ctx.Ctx == nil {
@@ -176,11 +180,11 @@ func recordCandidateGenerationBypass(ctx *AgentContext, tool string,
 	if !knownCandidateBypassReason(reason) {
 		reason = bypassUnclassified
 	}
-	sink := activeShadowSink.Load()
-	if !sink.enabled() {
+	sink := shadowcapture.Active()
+	if !sink.Enabled() {
 		return
 	}
-	sink.submit(map[string]interface{}{
+	sink.Submit(map[string]interface{}{
 		"schema_version": shadowSchemaVersionGenerationBypass,
 		"record_kind":    "candidate_generation_bypass",
 		"request_id":     requestIDOf(ctx),

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // A checker the sandbox stopped before a verdict (a wall-clock or memory
@@ -18,16 +20,16 @@ func TestAStoppedSyntaxCheckerIsNotRun(t *testing.T) {
 	for _, c := range []struct {
 		name  string
 		reply map[string]interface{}
-		want  ValidationStatus
+		want  wire.ValidationStatus
 	}{
 		{"stopped", map[string]interface{}{"valid": false, "status": "not_run", "outcome": "timed_out",
-			"errors": []string{"syntax verification unavailable: the checker ended timed_out"}}, ValidationNotRun},
+			"errors": []string{"syntax verification unavailable: the checker ended timed_out"}}, wire.ValidationNotRun},
 		{"broken", map[string]interface{}{"valid": false, "status": "checked", "outcome": "completed",
-			"errors": []string{"SyntaxError: invalid syntax (line 2)"}}, ValidationFailed},
+			"errors": []string{"SyntaxError: invalid syntax (line 2)"}}, wire.ValidationFailed},
 		{"clean", map[string]interface{}{"valid": true, "status": "checked", "outcome": "completed",
-			"errors": []string{}}, ValidationPassed},
+			"errors": []string{}}, wire.ValidationPassed},
 		// A sandbox without the status field answers with valid alone.
-		{"legacy", map[string]interface{}{"valid": true, "errors": []string{}}, ValidationPassed},
+		{"legacy", map[string]interface{}{"valid": true, "errors": []string{}}, wire.ValidationPassed},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -83,7 +85,7 @@ func TestACleanRunDoesNotSettleAnEmbeddedScriptFailure(t *testing.T) {
 	}
 	ctx := NewAgentContext(dir, Tier2Medium)
 	key := ledgerKey(ctx, "app.py")
-	observeDeliverable(ctx, key, []byte(app), ValidationKindSyntax, ValidationFailed,
+	observeDeliverable(ctx, key, []byte(app), wire.ValidationKindSyntax, wire.ValidationFailed,
 		embeddedScriptErrPrefix+"app.py line 7: unexpected `)`")
 	st := &runState{mutationDebt: map[string]*mutationDebtEntry{key: {Rel: "app.py", Kind: debtContent}}}
 
@@ -92,7 +94,7 @@ func TestACleanRunDoesNotSettleAnEmbeddedScriptFailure(t *testing.T) {
 	if len(st.mutationDebt) != 1 {
 		t.Fatal("a clean server run settled the debt of a broken embedded script")
 	}
-	if d := ctx.Ledger[key]; d.ValidationKind == ValidationKindExecution {
+	if d := ctx.Ledger[key]; d.ValidationKind == wire.ValidationKindExecution {
 		t.Fatal("the embedded-script failure was overwritten with execution/passed")
 	}
 }
@@ -129,7 +131,7 @@ func TestTheV3NudgeSaysWhatARunShowed(t *testing.T) {
 func TestAStructuralEditWithANewBodyIsNotAResend(t *testing.T) {
 	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
 	call := func(body string) json.RawMessage {
-		b, _ := json.Marshal(StructuralEditInput{Path: "app.py", Selector: "function:update", Content: body})
+		b, _ := json.Marshal(wire.StructuralEditInput{Path: "app.py", Selector: "function:update", Content: body})
 		return b
 	}
 	recordFailedToolCall(ctx, "structural_edit", call("def update(:\n    pass\n"), "does not parse")

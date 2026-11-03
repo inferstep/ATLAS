@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // A `text` reply ends the turn, so a reply that announces a tool call instead
@@ -179,7 +181,7 @@ func TestAnInventedPlanStepDoesNotMakeACompleteAnswerIncomplete(t *testing.T) {
 	full := spanText("`pricing.py` reads through `cache.py` and builds its keys with `keys.py`; the write and " +
 		"read key shapes differ, so lookups miss.")
 	run := integrityLoopWith(t, spanRequest, spanWorld(t), append(spanReadThree(), full), nil, func(ctx *AgentContext) {
-		ctx.Plan = &Plan{VerifyStep: "s5", Steps: []PlanStep{
+		ctx.Plan = &wire.Plan{VerifyStep: "s5", Steps: []wire.PlanStep{
 			{ID: "s1", Action: "read_file", Target: "cache.py"},
 			{ID: "s2", Action: "read_file", Target: "keys.py"},
 			{ID: "s3", Action: "read_file", Target: "pricing.py"},
@@ -323,10 +325,14 @@ func evidenceCtx(t *testing.T, files map[string]string) *AgentContext {
 		}
 	}
 	return &AgentContext{
-		WorkingDir:    root,
-		BodySeen:      map[string]bool{},
-		FilesRead:     map[string]string{},
-		FileReadTimes: map[string]time.Time{},
+		runSetup: runSetup{
+			WorkingDir: root,
+		},
+		fileHistory: fileHistory{
+			BodySeen:      map[string]bool{},
+			FilesRead:     map[string]string{},
+			FileReadTimes: map[string]time.Time{},
+		},
 	}
 }
 
@@ -648,7 +654,7 @@ func TestEachReplyKindEndsTheRunWithItsOwnStatus(t *testing.T) {
 		replies []map[string]interface{}
 		// Less time is left than one continuation needs.
 		shortBudget bool
-		wantStatus  TerminalStatus
+		wantStatus  wire.TerminalStatus
 		wantReason  string
 		wantGates   int
 		wantTurns   int
@@ -659,13 +665,13 @@ func TestEachReplyKindEndsTheRunWithItsOwnStatus(t *testing.T) {
 			replies: []map[string]interface{}{
 				readFileReply("plans.py"), textReply(deferringReply), readFileReply("plans.py"), textReply(plansAnswer),
 			},
-			wantStatus: TerminalCompleted, wantReason: "text_reply", wantGates: 1, wantTurns: 4,
+			wantStatus: wire.TerminalCompleted, wantReason: "text_reply", wantGates: 1, wantTurns: 4,
 		},
 		{
 			name:      "deferral that persists ends incomplete when the bounces are spent",
 			workspace: plansWorkspace, request: plansQuestion,
 			replies:    []map[string]interface{}{readFileReply("plans.py"), textReply(deferringReply)},
-			wantStatus: TerminalIncomplete, wantReason: "reply_left_work_outstanding",
+			wantStatus: wire.TerminalIncomplete, wantReason: "reply_left_work_outstanding",
 			wantGates: maxGateBounces, wantTurns: 1 + maxGateBounces + 1,
 		},
 		{
@@ -673,7 +679,7 @@ func TestEachReplyKindEndsTheRunWithItsOwnStatus(t *testing.T) {
 			workspace: plansWorkspace, request: plansQuestion,
 			replies:     []map[string]interface{}{readFileReply("plans.py"), textReply(deferringReply)},
 			shortBudget: true,
-			wantStatus:  TerminalIncomplete, wantReason: "reply_left_work_outstanding", wantGates: 0, wantTurns: 2,
+			wantStatus:  wire.TerminalIncomplete, wantReason: "reply_left_work_outstanding", wantGates: 0, wantTurns: 2,
 		},
 		{
 			name:      "answer with an offer after a tool completes",
@@ -681,7 +687,7 @@ func TestEachReplyKindEndsTheRunWithItsOwnStatus(t *testing.T) {
 			replies: []map[string]interface{}{
 				readFileReply("plans.py"), textReply(plansAnswer + " If you'd like, I can fix it."),
 			},
-			wantStatus: TerminalCompleted, wantReason: "text_reply", wantGates: 0, wantTurns: 2,
+			wantStatus: wire.TerminalCompleted, wantReason: "text_reply", wantGates: 0, wantTurns: 2,
 		},
 		{
 			name:      "direct answer needs no tool",
@@ -689,7 +695,7 @@ func TestEachReplyKindEndsTheRunWithItsOwnStatus(t *testing.T) {
 			replies: []map[string]interface{}{
 				textReply("It decides between two candidates that score equally, usually by a secondary key such as length. Let me know if you want an example."),
 			},
-			wantStatus: TerminalCompleted, wantReason: "text_reply", wantGates: 0, wantTurns: 1,
+			wantStatus: wire.TerminalCompleted, wantReason: "text_reply", wantGates: 0, wantTurns: 1,
 		},
 		{
 			name:      "honest inability ends incomplete without a send-back",
@@ -698,7 +704,7 @@ func TestEachReplyKindEndsTheRunWithItsOwnStatus(t *testing.T) {
 				readFileReply("plans.py"),
 				textReply("I read plans.py. I could not determine which comparison decides ties from this file alone."),
 			},
-			wantStatus: TerminalIncomplete, wantReason: "reply_declared_incomplete", wantGates: 0, wantTurns: 2,
+			wantStatus: wire.TerminalIncomplete, wantReason: "reply_declared_incomplete", wantGates: 0, wantTurns: 2,
 		},
 		{
 			name:      "handoff with unopened files is sent back once, then answered",
@@ -706,20 +712,20 @@ func TestEachReplyKindEndsTheRunWithItsOwnStatus(t *testing.T) {
 			replies: []map[string]interface{}{
 				textReply(handoffReply), readFileReply("keys.py"), textReply(cacheAnswer),
 			},
-			wantStatus: TerminalCompleted, wantReason: "text_reply", wantGates: 1, wantTurns: 3,
+			wantStatus: wire.TerminalCompleted, wantReason: "text_reply", wantGates: 1, wantTurns: 3,
 		},
 		{
 			name:      "handoff that persists ends incomplete after one send-back",
 			workspace: cacheWorkspace, request: cacheQuestion,
 			replies:    []map[string]interface{}{textReply(handoffReply)},
-			wantStatus: TerminalIncomplete, wantReason: "investigation_handed_back", wantGates: 1, wantTurns: 2,
+			wantStatus: wire.TerminalIncomplete, wantReason: "investigation_handed_back", wantGates: 1, wantTurns: 2,
 		},
 		{
 			name:      "handoff with no time left ends incomplete at once",
 			workspace: cacheWorkspace, request: cacheQuestion,
 			replies:     []map[string]interface{}{textReply(handoffReply)},
 			shortBudget: true,
-			wantStatus:  TerminalIncomplete, wantReason: "investigation_handed_back", wantGates: 0, wantTurns: 1,
+			wantStatus:  wire.TerminalIncomplete, wantReason: "investigation_handed_back", wantGates: 0, wantTurns: 1,
 		},
 		{
 			// Nothing to inspect, so a question is the right reply.
@@ -728,7 +734,7 @@ func TestEachReplyKindEndsTheRunWithItsOwnStatus(t *testing.T) {
 			replies: []map[string]interface{}{
 				textReply("That depends on scale and hosting. How many members do you expect, and will it run on a hosted service or your own machine?"),
 			},
-			wantStatus: TerminalIncomplete, wantReason: "clarification_requested", wantGates: 0, wantTurns: 1,
+			wantStatus: wire.TerminalIncomplete, wantReason: "clarification_requested", wantGates: 0, wantTurns: 1,
 		},
 		{
 			// Asked after looking: legitimate as far as the run can tell.
@@ -738,7 +744,7 @@ func TestEachReplyKindEndsTheRunWithItsOwnStatus(t *testing.T) {
 				readFileReply("keys.py"),
 				textReply("I read keys.py. Which customer field is supposed to identify a cached price, the tier or the id?"),
 			},
-			wantStatus: TerminalIncomplete, wantReason: "clarification_requested", wantGates: 0, wantTurns: 2,
+			wantStatus: wire.TerminalIncomplete, wantReason: "clarification_requested", wantGates: 0, wantTurns: 2,
 		},
 		{
 			name:      "answer with an offer in the cache workspace completes",
@@ -746,7 +752,7 @@ func TestEachReplyKindEndsTheRunWithItsOwnStatus(t *testing.T) {
 			replies: []map[string]interface{}{
 				readFileReply("keys.py"), textReply(cacheAnswer + " Would you like me to fix it?"),
 			},
-			wantStatus: TerminalCompleted, wantReason: "text_reply", wantGates: 0, wantTurns: 2,
+			wantStatus: wire.TerminalCompleted, wantReason: "text_reply", wantGates: 0, wantTurns: 2,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

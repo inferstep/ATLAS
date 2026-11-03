@@ -14,6 +14,10 @@ import (
 	"fmt"
 	"log"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/shellcmd"
+	"github.com/itigges22/atlas-proxy/internal/v3client"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // ---------------------------------------------------------------------------
@@ -80,7 +84,7 @@ func isReconTool(name string) bool {
 // matchPlanStep returns the index of the first unsatisfied plan step
 // that the tool call (toolName, args) satisfies, or -1 if no match.
 // satisfied must be the same length as plan.Steps.
-func matchPlanStep(plan *Plan, satisfied []bool, toolName string, args json.RawMessage) int {
+func matchPlanStep(plan *wire.Plan, satisfied []bool, toolName string, args json.RawMessage) int {
 	if plan == nil || len(plan.Steps) == 0 {
 		return -1
 	}
@@ -110,20 +114,20 @@ func matchPlanStep(plan *Plan, satisfied []bool, toolName string, args json.RawM
 
 // verifyStepSatisfiedBy returns the index of the plan's unsatisfied verify
 // step when command verifies (it probes a service or runs the program, as
-// classifyCommandEvidence judges it) and runs the same program as the step's
+// ClassifyCommandEvidence judges it) and runs the same program as the step's
 // planned command; -1 otherwise.
-func verifyStepSatisfiedBy(plan *Plan, satisfied []bool, command string) int {
+func verifyStepSatisfiedBy(plan *wire.Plan, satisfied []bool, command string) int {
 	if plan == nil || plan.VerifyStep == "" || len(satisfied) != len(plan.Steps) {
 		return -1
 	}
-	if !classifyCommandEvidence(command).Kind.verifies() {
+	if !shellcmd.ClassifyCommandEvidence(command).Kind.Verifies() {
 		return -1
 	}
 	for i, step := range plan.Steps {
 		if step.ID != plan.VerifyStep || satisfied[i] || !actionMatchesTool(step.Action, "run_command") {
 			continue
 		}
-		if p := commandProgram(step.Target); p != "" && p == commandProgram(command) {
+		if p := shellcmd.CommandProgram(step.Target); p != "" && p == shellcmd.CommandProgram(command) {
 			return i
 		}
 	}
@@ -223,7 +227,7 @@ func targetsOverlap(planTarget, toolTarget string) bool {
 func extractToolTarget(toolName string, args json.RawMessage) string {
 	switch toolName {
 	case "write_file":
-		var x WriteFileInput
+		var x wire.WriteFileInput
 		if json.Unmarshal(args, &x) == nil {
 			return x.Path
 		}
@@ -241,7 +245,7 @@ func extractToolTarget(toolName string, args json.RawMessage) string {
 			return x.Path
 		}
 	case "run_command":
-		var x RunCommandInput
+		var x wire.RunCommandInput
 		if json.Unmarshal(args, &x) == nil {
 			return x.Command
 		}
@@ -342,7 +346,7 @@ func recordPlanAdherence(ctx *AgentContext, toolName string, args json.RawMessag
 // samePlanSteps reports whether two plans describe the same work. Compares
 // action+target per step, not prose: a planner that rewords a rationale while
 // producing the same steps has still produced the same plan.
-func samePlanSteps(a, b *Plan) bool {
+func samePlanSteps(a, b *wire.Plan) bool {
 	if a == nil || b == nil || len(a.Steps) != len(b.Steps) {
 		return false
 	}
@@ -384,15 +388,15 @@ func revisePlan(ctx *AgentContext, originalUserMessage string, reason string) {
 	// concrete signal of "what the agent knows now" beyond the
 	// original priority-files sample.
 	pctx := samplePlanContext(ctx.WorkingDir, 6, 2000)
-	addFilesReadToPlanContext(ctx, pctx, 8)
+	addFilesReadToPlanContext(pctx, ctx.SnapshotFilesRead(), ctx.WorkingDir, 8)
 
-	req := V3PlanRequest{
+	req := wire.V3PlanRequest{
 		UserMessage:    noted,
 		WorkingDir:     ctx.WorkingDir,
 		ProjectContext: pctx,
 		NCandidates:    3,
 	}
-	plan, err := callV3PlanStreaming(ctx.Ctx, ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
+	plan, err := v3client.PlanStreaming(ctx.Ctx, ctx.V3URL, requestIDOf(ctx), req, func(stage, detail string, data map[string]interface{}) {
 		switch stage {
 		case "token", "llm_start", "llm_end":
 			return
@@ -492,7 +496,7 @@ func buildPlanReminder(ctx *AgentContext) string {
 	doneCount := 0
 	doneIDs := make([]string, 0, total)
 	remainingIDs := make([]string, 0, total)
-	var current *PlanStep
+	var current *wire.PlanStep
 
 	for i := range ctx.Plan.Steps {
 		step := &ctx.Plan.Steps[i]
@@ -526,7 +530,7 @@ func buildPlanReminder(ctx *AgentContext) string {
 	)
 }
 
-func planVerifyHint(p *Plan) string {
+func planVerifyHint(p *wire.Plan) string {
 	if p == nil || p.VerifyStep == "" {
 		return "the appropriate test/curl/run command"
 	}

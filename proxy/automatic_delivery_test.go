@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // The candidate V3 selected lands, and only that candidate.
@@ -104,7 +106,7 @@ func newAutomaticWorld(t *testing.T, contract, winner string,
 		winner: winner, selected: &selected, shell: stub}
 }
 
-func (w *automaticWorld) write(t *testing.T) (*ToolResult, error) {
+func (w *automaticWorld) write(t *testing.T) (*wire.ToolResult, error) {
 	t.Helper()
 	return writeFileWithV3(w.path, routeBaseline, w.ctx)
 }
@@ -234,7 +236,7 @@ func TestAWrongOrAmbiguousSelectionIdentityFailsClosed(t *testing.T) {
 	base := automaticEligibilityInput{
 		SelectedCandidateID: contentSHA256(routeWinner),
 		CandidateHash:       contentSHA256(routeWinner),
-		Identity: V3EvidenceProvenance{RequestID: "r", InvocationID: "i",
+		Identity: wire.V3EvidenceProvenance{RequestID: "r", InvocationID: "i",
 			CandidateInstanceID: "c", WorkspaceStateHash: "w",
 			CandidateHash: contentSHA256(routeWinner)},
 		Scope:          automaticTestScope(t),
@@ -330,8 +332,8 @@ func TestADeclaredCheckStaysBinding(t *testing.T) {
 		{"it passed", stubEffect{}, routeWinner},
 		{"it failed", stubEffect{ExitCode: 1}, routeBaseline},
 		{"it timed out", stubEffect{TimedOut: true}, routeBaseline},
-		{"it was memory-killed", stubEffect{ExitCode: -9, Outcome: ExecutionMemoryExhausted}, routeBaseline},
-		{"it flooded its output", stubEffect{ExitCode: -13, Outcome: ExecutionOutputLimit}, routeBaseline},
+		{"it was memory-killed", stubEffect{ExitCode: -9, Outcome: wire.ExecutionMemoryExhausted}, routeBaseline},
+		{"it flooded its output", stubEffect{ExitCode: -13, Outcome: wire.ExecutionOutputLimit}, routeBaseline},
 	}
 	for target, contract := range contracts {
 		for _, tc := range cases {
@@ -366,7 +368,7 @@ func TestEveryHardVetoStillRefusesUnderAutomatic(t *testing.T) {
 	} {
 		out := decideCandidatePolicy(policyContext(t),
 			advisoryInput{
-				Observed:          checkOutcome{Status: ValidationPassed},
+				Observed:          checkOutcome{Status: wire.ValidationPassed},
 				TargetDeclared:    true,
 				TargetAuthorized:  true,
 				ScopeAdmits:       true,
@@ -433,7 +435,7 @@ func TestAutomaticSharesTheOneAuthorizationAndDeliveryOwner(t *testing.T) {
 	// The eligibility owner decides nothing about bytes: it neither writes,
 	// nor mints, nor reaches a producer.
 	for _, banned := range []string{"os.WriteFile", "writeFileRecorded", "mintAuthorizationGrant",
-		"http.", "exec.", "callV3"} {
+		"http.", "exec.", "callV3", "v3client."} {
 		if strings.Contains(body["automatic_delivery.go"], banned) {
 			t.Errorf("the automatic owner reaches %q", banned)
 		}

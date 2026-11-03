@@ -11,11 +11,17 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/logsafe"
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
+	"github.com/itigges22/atlas-proxy/internal/v3client"
+	"github.com/itigges22/atlas-proxy/internal/wire"
+	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
 // v3CandidatesTested unwraps a possibly-nil V3 response so the
 // stage_end envelope can carry a count even on error paths.
-func v3CandidatesTested(r *V3GenerateResponse) int {
+func v3CandidatesTested(r *wire.V3GenerateResponse) int {
 	if r == nil {
 		return 0
 	}
@@ -55,7 +61,7 @@ func latestUserMessage(ctx *AgentContext) string {
 // The model's content is the incumbent: V3 checks and ranks it with the
 // alternatives it generates, and sends it back unchanged when none ranks
 // higher, which proposedV3Candidate reads as no proposal.
-func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResult, error) {
+func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*wire.ToolResult, error) {
 	req := v3WriteRequest(path, baselineContent, ctx)
 
 	// The production call path for invocation feasibility: before a single
@@ -146,7 +152,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 
 // v3WriteRequest is the V3 request for a write: an edit's request, and the
 // files this session wrote as context too.
-func v3WriteRequest(path, baselineContent string, ctx *AgentContext) V3GenerateRequest {
+func v3WriteRequest(path, baselineContent string, ctx *AgentContext) wire.V3GenerateRequest {
 	req := v3Request(path, baselineContent, ctx)
 
 	// Files this session wrote are project context too; otherwise
@@ -161,7 +167,7 @@ func v3WriteRequest(path, baselineContent string, ctx *AgentContext) V3GenerateR
 		if abs == path {
 			continue // the file being generated is the baseline, not context
 		}
-		data, rerr := readRegularFile(abs)
+		data, rerr := workspacefs.ReadRegularFile(abs)
 		if rerr != nil {
 			continue
 		}
@@ -176,7 +182,7 @@ func v3WriteRequest(path, baselineContent string, ctx *AgentContext) V3GenerateR
 // generateV3Write calls V3 for a write and reports its stages to the client
 // and the pipeline pane.
 func generateV3Write(ctx *AgentContext, entry routeEntry, path string,
-	req V3GenerateRequest) (*V3GenerateResponse, error) {
+	req wire.V3GenerateRequest) (*wire.V3GenerateResponse, error) {
 	// Tell the user V3 is taking over so they don't think the file
 	// vanished. write_file with V3 holds the disk write until V3 picks
 	// a winner — without this message the chat goes silent for the 1–3
@@ -186,7 +192,7 @@ func generateV3Write(ctx *AgentContext, entry routeEntry, path string,
 			"message": fmt.Sprintf("V3 pipeline starting for %s — generating diverse candidates and build-verifying each.", filepath.Base(path)),
 		})
 	}
-	Emit(NewEnvelope(EvtStageStart, "v3", map[string]interface{}{
+	Emit(wire.NewEnvelope(wire.EvtStageStart, "v3", map[string]interface{}{
 		"detail": fmt.Sprintf("file=%s", filepath.Base(path)),
 		// Additive: an existing consumer sees the field it always saw. This
 		// one names which entry of the route generated, so an observer can
@@ -204,7 +210,7 @@ func generateV3Write(ctx *AgentContext, entry routeEntry, path string,
 	//   llm_end     — V3's LLM call finished (with token/timing summary)
 	//   <other>     — pipeline stage marker (probe, plansearch, sandbox…)
 	var stages v3StageMarks
-	v3Result, err := callV3GenerateStreaming(ctx.Ctx, ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
+	v3Result, err := v3client.GenerateStreaming(ctx.Ctx, ctx.V3URL, requestIDOf(ctx), v3CallTimeout(), req, func(stage, detail string, data map[string]interface{}) {
 		forwardV3Stage(ctx, stage, detail, data)
 		switch stage {
 		case "token", "reasoning_token", "llm_start", "llm_end":
@@ -229,7 +235,7 @@ type v3StageMarks struct {
 // inside the same stage.
 func (m *v3StageMarks) note(stage, detail string, data map[string]interface{}) {
 	if stage == m.current {
-		Emit(NewEnvelope(EvtMetric, "v3:"+stage,
+		Emit(wire.NewEnvelope(wire.EvtMetric, "v3:"+stage,
 			map[string]interface{}{"name": "progress", "value": detail}))
 		return
 	}
@@ -238,7 +244,7 @@ func (m *v3StageMarks) note(stage, detail string, data map[string]interface{}) {
 	for k, v := range data {
 		payload[k] = v
 	}
-	Emit(NewEnvelope(EvtStageStart, "v3:"+stage, payload))
+	Emit(wire.NewEnvelope(wire.EvtStageStart, "v3:"+stage, payload))
 	m.current = stage
 }
 
@@ -247,17 +253,17 @@ func (m *v3StageMarks) closeCurrent(success bool) {
 	if m.current == "" {
 		return
 	}
-	Emit(Envelope{
-		EventID:   NewEventID(),
+	Emit(wire.Envelope{
+		EventID:   wire.NewEventID(),
 		Timestamp: float64(time.Now().UnixNano()) / 1e9,
-		Type:      EvtStageEnd,
+		Type:      wire.EvtStageEnd,
 		Stage:     "v3:" + m.current,
 		Payload:   map[string]interface{}{"success": success},
 	})
 }
 
 // emitV3WriteStageEnd closes the V3 stage of a write.
-func emitV3WriteStageEnd(v3Start time.Time, v3Result *V3GenerateResponse, err error) {
+func emitV3WriteStageEnd(v3Start time.Time, v3Result *wire.V3GenerateResponse, err error) {
 	// The structured evidence rides the telemetry envelope, whole. It is
 	// deliberately NOT put on the ToolResult: that is projected to the model
 	// and to the guarded tool-result SSE, where an unconsumed research field
@@ -280,25 +286,44 @@ func emitV3WriteStageEnd(v3Start time.Time, v3Result *V3GenerateResponse, err er
 		}
 		v3StagePayload["authorization"] = auth
 	}
-	Emit(Envelope{
-		EventID:    NewEventID(),
+	Emit(wire.Envelope{
+		EventID:    wire.NewEventID(),
 		Timestamp:  float64(time.Now().UnixNano()) / 1e9,
-		Type:       EvtStageEnd,
+		Type:       wire.EvtStageEnd,
 		Stage:      "v3",
 		DurationMS: time.Since(v3Start).Milliseconds(),
 		Payload:    v3StagePayload,
 	})
 }
 
+// evidenceTelemetry renders the envelope for the telemetry envelope payload.
+// Returned as the decoded structure rather than a summary so nothing is lost
+// on the way to a subscriber; callers must not put it on a ToolResult, which
+// is projected to the model.
+func evidenceTelemetry(e *wire.V3EvidenceEnvelope, unavailableReason string) map[string]interface{} {
+	availability, reason := e.Validate()
+	if reason == "" {
+		reason = unavailableReason
+	}
+	out := map[string]interface{}{"availability": string(availability)}
+	if reason != "" {
+		out["reason"] = reason
+	}
+	if e != nil {
+		out["envelope"] = e
+	}
+	return out
+}
+
 // writeAfterV3Failure ends a write whose V3 call failed.
 func writeAfterV3Failure(ctx *AgentContext, lifecycle *routeLifecycle, path, baselineContent string,
-	err error) (*ToolResult, error) {
+	err error) (*wire.ToolResult, error) {
 	// User cancellation is not a fallback case — the turn was aborted,
 	// so nothing should land on disk.
 	if errors.Is(err, context.Canceled) || (ctx.Ctx != nil && ctx.Ctx.Err() != nil) {
 		log.Printf("[write_file] V3 aborted by cancellation — not writing %s", path)
 		lifecycle.finish(ctx, routingCancelled, "", "")
-		return &ToolResult{
+		return &wire.ToolResult{
 			Success: false,
 			Error:   "write_file cancelled — no content was written",
 		}, nil
@@ -343,7 +368,7 @@ type v3Write struct {
 	lifecycle       *routeLifecycle
 	path            string
 	baselineContent string
-	v3Result        *V3GenerateResponse
+	v3Result        *wire.V3GenerateResponse
 	scope           mutationScope
 	scopeOK         bool
 
@@ -363,7 +388,7 @@ type v3Write struct {
 // proposeWriteCandidate takes V3's answer down to the bytes this write would
 // land, and observes them.
 func proposeWriteCandidate(ctx *AgentContext, entry routeEntry, lifecycle *routeLifecycle,
-	path, baselineContent string, v3Result *V3GenerateResponse) *v3Write {
+	path, baselineContent string, v3Result *wire.V3GenerateResponse) *v3Write {
 	// Write the winning candidate, or the baseline if V3 did not improve. The
 	// presence of Code is not authorization: an unverified alternative must
 	// never displace the baseline, and delivery is decided below by the proxy's
@@ -537,7 +562,7 @@ func decideWriteCandidateDelivery(ctx *AgentContext, entry routeEntry, write *v3
 	vetoInput := advisoryInput{
 		Observed:                    write.deliveredCheck,
 		TargetDeclared:              outputKnowledgeDeclared(ctx),
-		TargetAuthorized:            targetIsAuthorized(requestObligations(ctx), resolveAgentPath(ctx, path)),
+		TargetAuthorized:            taskcontract.TargetIsAuthorized(requestObligations(ctx), resolveAgentPath(ctx, path)),
 		LanguageOrBoundaryViolation: write.languageOrBoundaryViolation,
 		Unmet:                       evidence.unmet,
 		Evidence:                    evidence.observed,
@@ -600,9 +625,9 @@ func decideWriteCandidateDelivery(ctx *AgentContext, entry routeEntry, write *v3
 
 // checkBaseline observes the caller's own content before it is restored. A
 // non-nil result refuses the write: the content does not parse.
-func (w *v3Write) checkBaseline() (checkOutcome, *ToolResult) {
+func (w *v3Write) checkBaseline() (checkOutcome, *wire.ToolResult) {
 	baseCheck := fallbackSyntaxOutcomeFor(w.ctx, w.path, w.baselineContent).aggregate()
-	if baseCheck.Status == ValidationFailed {
+	if baseCheck.Status == wire.ValidationFailed {
 		return baseCheck, syntaxRefusal(w.path, w.baselineContent, baseCheck.Detail)
 	}
 	return baseCheck, nil
@@ -616,19 +641,19 @@ func (w *v3Write) restoreBaseline(baseCheck checkOutcome, reason string) {
 }
 
 // syntaxRefusal refuses content that does not parse.
-func syntaxRefusal(path, content, detail string) *ToolResult {
-	return &ToolResult{Success: false,
+func syntaxRefusal(path, content, detail string) *wire.ToolResult {
+	return &wire.ToolResult{Success: false,
 		Error:            fallbackSyntaxRejection(path, content, detail),
-		MutationStatus:   MutationRefused,
-		ValidationKind:   ValidationKindSyntax,
-		ValidationStatus: ValidationFailed,
+		MutationStatus:   wire.MutationRefused,
+		ValidationKind:   wire.ValidationKindSyntax,
+		ValidationStatus: wire.ValidationFailed,
 		ValidationDetail: detail}
 }
 
 // applyWriteGates runs the gates between the decision and the disk, in order.
 // A non-nil result ends the write with it.
-func applyWriteGates(write *v3Write) *ToolResult {
-	for _, gate := range []func(*v3Write) *ToolResult{
+func applyWriteGates(write *v3Write) *wire.ToolResult {
+	for _, gate := range []func(*v3Write) *wire.ToolResult{
 		withdrawRefusedCandidate, refuseContentThatDoesNotParse, refuseUnresolvedCalls,
 		refuseBrokenEmbeddedScript, refuseDuplicateEntrypoint, refuseCancelledWrite,
 	} {
@@ -642,7 +667,7 @@ func applyWriteGates(write *v3Write) *ToolResult {
 // withdrawRefusedCandidate applies the policy's refusal. A refusal withdraws the
 // candidate. The caller's own content is the alternative, and it is checked
 // before being restored -- the same rule every other gate on this path follows.
-func withdrawRefusedCandidate(write *v3Write) *ToolResult {
+func withdrawRefusedCandidate(write *v3Write) *wire.ToolResult {
 	if !write.candidateProposed || write.authorizedV3 {
 		return nil
 	}
@@ -657,16 +682,16 @@ func withdrawRefusedCandidate(write *v3Write) *ToolResult {
 }
 
 // refuseContentThatDoesNotParse is the syntax gate on what would land.
-func refuseContentThatDoesNotParse(write *v3Write) *ToolResult {
+func refuseContentThatDoesNotParse(write *v3Write) *wire.ToolResult {
 	path, deliveredCheck := write.path, write.deliveredCheck
-	if deliveredCheck.Status != ValidationFailed {
+	if deliveredCheck.Status != wire.ValidationFailed {
 		return nil
 	}
 	if !write.authorizedV3 {
 		// The caller's own content, and it does not parse. Nothing here
 		// authored it and there is no alternative to fall back to.
 		log.Printf("[write_file] fallback content for %s does not parse: %s",
-			logPath(path), safeDiagnosticSummary(deliveredCheck.Detail))
+			logPath(path), logsafe.DiagnosticSummary(deliveredCheck.Detail))
 		return syntaxRefusal(path, write.code, deliveredCheck.Detail)
 	}
 	// A candidate that does not parse is not a candidate. The model's own
@@ -680,7 +705,7 @@ func refuseContentThatDoesNotParse(write *v3Write) *ToolResult {
 		return refusal
 	}
 	log.Printf("[write_file] V3 winner for %s does not parse — writing your version instead (%s)",
-		logPath(path), safeDiagnosticSummary(deliveredCheck.Detail))
+		logPath(path), logsafe.DiagnosticSummary(deliveredCheck.Detail))
 	write.restoreBaseline(baseCheck, "the winner does not parse")
 	return nil
 }
@@ -695,7 +720,7 @@ func refuseContentThatDoesNotParse(write *v3Write) *ToolResult {
 // baseline passes, write the baseline instead of rejecting: the offending call
 // is V3-authored, and a rejection would blame the model for content it never
 // wrote and cost a full pipeline retry per resend.
-func refuseUnresolvedCalls(write *v3Write) *ToolResult {
+func refuseUnresolvedCalls(write *v3Write) *wire.ToolResult {
 	original, origOK := readOriginalForGate(write.path)
 	if !origOK {
 		return nil
@@ -750,7 +775,7 @@ func restoreBaselineWithoutUnresolvedCalls(write *v3Write, original string, intr
 // else on this path parses that JavaScript. Same healthy->broken rule; and when
 // the WINNER is the one carrying the break, write the model's gate-passing
 // baseline rather than blaming it for V3-authored content.
-func refuseBrokenEmbeddedScript(write *v3Write) *ToolResult {
+func refuseBrokenEmbeddedScript(write *v3Write) *wire.ToolResult {
 	ctx, path, baselineContent := write.ctx, write.path, write.baselineContent
 	original, origOK := readOriginalForGate(path)
 	if !origOK {
@@ -785,7 +810,7 @@ func refuseBrokenEmbeddedScript(write *v3Write) *ToolResult {
 // refuseDuplicateEntrypoint is the same entrypoint check every edit path runs.
 // write_file on an existing file is a whole-file replacement, which is exactly
 // how a second `if __name__` block gets appended.
-func refuseDuplicateEntrypoint(write *v3Write) *ToolResult {
+func refuseDuplicateEntrypoint(write *v3Write) *wire.ToolResult {
 	original, origOK := readOriginalForGate(write.path)
 	if !origOK {
 		return nil
@@ -803,7 +828,7 @@ func refuseDuplicateEntrypoint(write *v3Write) *ToolResult {
 // refuseCancelledWrite stops a write the user cancelled. The structural gate made
 // HTTP calls; a user cancel during that window must not land content on disk,
 // mirroring the main call's abort path.
-func refuseCancelledWrite(write *v3Write) *ToolResult {
+func refuseCancelledWrite(write *v3Write) *wire.ToolResult {
 	ctx := write.ctx
 	if ctx.Ctx == nil || ctx.Ctx.Err() == nil {
 		return nil
@@ -814,10 +839,10 @@ func refuseCancelledWrite(write *v3Write) *ToolResult {
 	// bytes is still true and is carried, but nothing new is evaluated
 	// here: cancellation is exactly the point at which no further work may
 	// be done. It is overlaid only while it still describes those bytes.
-	cancelled := &ToolResult{
+	cancelled := &wire.ToolResult{
 		Success:        false,
 		Error:          "write_file cancelled — no content was written",
-		MutationStatus: MutationNone,
+		MutationStatus: wire.MutationNone,
 	}
 	if write.checkedFor == write.code {
 		overlayValidation(cancelled, write.deliveredCheck)
@@ -827,7 +852,7 @@ func refuseCancelledWrite(write *v3Write) *ToolResult {
 
 // writeRetainedContent lands the caller's own bytes: no candidate came back, or
 // a gate withdrew it.
-func writeRetainedContent(write *v3Write, final checkOutcome) (*ToolResult, error) {
+func writeRetainedContent(write *v3Write, final checkOutcome) (*wire.ToolResult, error) {
 	ctx, path := write.ctx, write.path
 	// The caller's own bytes are what lands. Any grant minted over them was
 	// never owed a delivery, and says so through its own lifecycle.
@@ -857,7 +882,7 @@ func writeRetainedContent(write *v3Write, final checkOutcome) (*ToolResult, erro
 
 // writeCallersContent lands the caller's own bytes, checked before they land,
 // for a delivery that cannot go ahead after the policy said it could.
-func (w *v3Write) writeCallersContent() (*ToolResult, error) {
+func (w *v3Write) writeCallersContent() (*wire.ToolResult, error) {
 	baseCheck, refusal := w.checkBaseline()
 	if refusal != nil {
 		return refusal, nil
@@ -869,8 +894,8 @@ func (w *v3Write) writeCallersContent() (*ToolResult, error) {
 }
 
 // settleTypedDelivery turns what the grant's consumer did into the tool result.
-func settleTypedDelivery(write *v3Write, final checkOutcome, result *ToolResult,
-	outcome deliveryOutcome, err error) (*ToolResult, error) {
+func settleTypedDelivery(write *v3Write, final checkOutcome, result *wire.ToolResult,
+	outcome deliveryOutcome, err error) (*wire.ToolResult, error) {
 	if err != nil {
 		if result == nil && errors.Is(err, errDeliveryUnauthorized) {
 			// Refused before any byte moved. The caller's own content is
@@ -884,9 +909,9 @@ func settleTypedDelivery(write *v3Write, final checkOutcome, result *ToolResult,
 		if result == nil {
 			// The write itself failed. The licence was spent on bytes that
 			// never reached disk: nothing moved and nothing is claimed.
-			return &ToolResult{Success: false,
+			return &wire.ToolResult{Success: false,
 				Error:            "the file could not be written (" + outcome.Reason + ") — nothing was changed",
-				MutationStatus:   MutationRefused,
+				MutationStatus:   wire.MutationRefused,
 				ValidationKind:   final.kind(),
 				ValidationStatus: final.Status,
 				ValidationDetail: final.Detail}, nil
@@ -917,7 +942,7 @@ func originalForScope(path string, ctx *AgentContext) string {
 }
 
 // withDeliveryProvenance labels a result with where its bytes came from.
-func withDeliveryProvenance(result *ToolResult, provenance string) *ToolResult {
+func withDeliveryProvenance(result *wire.ToolResult, provenance string) *wire.ToolResult {
 	if result == nil || !deliveryProvenanceValues[provenance] {
 		return result
 	}
@@ -928,12 +953,12 @@ func withDeliveryProvenance(result *ToolResult, provenance string) *ToolResult {
 // v3DeliveredResult attaches the pipeline's metadata to a delivery that
 // actually happened. One owner for both routes, so the typed and untyped
 // deliveries are provably identical in what they report.
-func v3DeliveredResult(ctx *AgentContext, result *ToolResult,
-	v3Result *V3GenerateResponse, code string) *ToolResult {
+func v3DeliveredResult(ctx *AgentContext, result *wire.ToolResult,
+	v3Result *wire.V3GenerateResponse, code string) *wire.ToolResult {
 	if result == nil || v3Result == nil {
 		return result
 	}
-	out := WriteFileOutput{
+	out := wire.WriteFileOutput{
 		BytesWritten:         len(code),
 		V3Used:               true,
 		CandidatesTested:     v3Result.CandidatesTested,
@@ -959,11 +984,11 @@ type V3EditMetadata struct {
 	CandidatesTested     int
 	WinningScore         float64
 	PhaseSolved          string
-	VerificationEvidence []V3VerificationEvidence
+	VerificationEvidence []wire.V3VerificationEvidence
 	// Envelope is the service's own evidence record for the proposal, carried
 	// so the route that decides can read its ranking signals. Advisory only:
 	// nothing in it authorizes a delivery on any route.
-	Envelope *V3EvidenceEnvelope
+	Envelope *wire.V3EvidenceEnvelope
 }
 
 // improveContentWithV3 sends content through the V3 pipeline and returns
@@ -990,7 +1015,7 @@ type V3EditMetadata struct {
 // A proposal is still refused outright for the things that make bytes unusable
 // rather than unproven: no response, no code, or code identical to the
 // caller's own, which is not a proposal at all.
-func proposedV3Candidate(result *V3GenerateResponse, baseline string) (string, bool) {
+func proposedV3Candidate(result *wire.V3GenerateResponse, baseline string) (string, bool) {
 	if result == nil || strings.TrimSpace(result.Code) == "" {
 		// No bytes, or nothing but whitespace. Not a proposal: unusable is a
 		// different thing from unproven, and only the second is worth staging.
@@ -1022,7 +1047,7 @@ func revokeV3(baseline, reason, path string) (string, bool, bool) {
 
 // envelopeOf is the service's evidence record, or nil. Read for advisory
 // signals only; nothing downstream may treat it as permission.
-func envelopeOf(result *V3GenerateResponse) *V3EvidenceEnvelope {
+func envelopeOf(result *wire.V3GenerateResponse) *wire.V3EvidenceEnvelope {
 	if result == nil {
 		return nil
 	}
@@ -1048,7 +1073,7 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 	// unknown stages fall back to the v3_progress text line. Without
 	// this branching, edit_file with V3 floods the chat pane with
 	// thousands of "[token] X" rows during a single candidate generation.
-	v3Result, err := callV3GenerateStreaming(ctx.Ctx, ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
+	v3Result, err := v3client.GenerateStreaming(ctx.Ctx, ctx.V3URL, requestIDOf(ctx), v3CallTimeout(), req, func(stage, detail string, data map[string]interface{}) {
 		forwardV3Stage(ctx, stage, detail, data)
 	})
 	if err != nil {
@@ -1109,8 +1134,8 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 
 // v3Request is the V3 request for a write or edit: the caller's content as the
 // baseline, and the other files this session read as its context.
-func v3Request(path, content string, ctx *AgentContext) V3GenerateRequest {
-	req := V3GenerateRequest{
+func v3Request(path, content string, ctx *AgentContext) wire.V3GenerateRequest {
+	req := wire.V3GenerateRequest{
 		FilePath:     path,
 		BaselineCode: content,
 		Tier:         int(ctx.Tier),
@@ -1262,7 +1287,7 @@ func runEditPipeline(ctx *AgentContext, tool, path, relPath, original,
 
 // attachV3 copies pipeline metadata onto a successful tool result, so a
 // candidate-verified edit reports as one wherever it came from.
-func attachV3(result *ToolResult, meta V3EditMetadata) *ToolResult {
+func attachV3(result *wire.ToolResult, meta V3EditMetadata) *wire.ToolResult {
 	if meta.Used {
 		result.V3Used = true
 		result.CandidatesTested = meta.CandidatesTested
@@ -1281,23 +1306,23 @@ func attachV3(result *ToolResult, meta V3EditMetadata) *ToolResult {
 // message. What they share is everything after: the same fresh syntax check on
 // exactly the bytes about to land, the same structural gate, the same write,
 // and no V3 provenance, because nothing here was generated, verified or scored.
-func writeWithoutCandidate(ctx *AgentContext, path, content, message string) (*ToolResult, error) {
+func writeWithoutCandidate(ctx *AgentContext, path, content, message string) (*wire.ToolResult, error) {
 	// A FRESH check, deliberately: the decision above can take time, and this
 	// revalidates the exact content about to be written immediately before
 	// writing it. The observation therefore describes the bytes that land,
 	// with no window between the two.
 	check := fallbackSyntaxOutcomeFor(ctx, path, content).aggregate()
-	if check.Status == ValidationFailed {
+	if check.Status == wire.ValidationFailed {
 		synErr := check.Detail
 		log.Printf("[write_file] fallback content for %s failed syntax gate: %s",
-			logPath(path), safeDiagnosticSummary(synErr))
+			logPath(path), logsafe.DiagnosticSummary(synErr))
 		// Refused before any byte reached disk, on exactly the content that
 		// would have been written.
-		return &ToolResult{Success: false,
+		return &wire.ToolResult{Success: false,
 			Error:            fallbackSyntaxRejection(path, content, synErr),
-			MutationStatus:   MutationRefused,
-			ValidationKind:   ValidationKindSyntax,
-			ValidationStatus: ValidationFailed,
+			MutationStatus:   wire.MutationRefused,
+			ValidationKind:   wire.ValidationKindSyntax,
+			ValidationStatus: wire.ValidationFailed,
 			ValidationDetail: synErr}, nil
 	}
 	// Structural gate on the fallback too. It matters on the
@@ -1312,10 +1337,10 @@ func writeWithoutCandidate(ctx *AgentContext, path, content, message string) (*T
 			// structural failure is the decisive one. Recording it as
 			// syntax/failed would assert the opposite of what happened.
 			rejection := structuralWriteRejection(path, introduced)
-			return &ToolResult{Success: false, Error: rejection,
-				MutationStatus:   MutationRefused,
-				ValidationKind:   ValidationKindStructural,
-				ValidationStatus: ValidationFailed,
+			return &wire.ToolResult{Success: false, Error: rejection,
+				MutationStatus:   wire.MutationRefused,
+				ValidationKind:   wire.ValidationKindStructural,
+				ValidationStatus: wire.ValidationFailed,
 				ValidationDetail: rejection}, nil
 		}
 	}
@@ -1324,18 +1349,18 @@ func writeWithoutCandidate(ctx *AgentContext, path, content, message string) (*T
 	if original, ok := readOriginalForGate(path); ok {
 		if msg := embeddedScriptGate(ctx, path, original, content); msg != "" {
 			log.Printf("[write_file] fallback content breaks an embedded script in %s — rejecting", logPath(path))
-			return &ToolResult{Success: false, Error: msg,
-				MutationStatus:   MutationRefused,
-				ValidationKind:   ValidationKindStructural,
-				ValidationStatus: ValidationFailed,
+			return &wire.ToolResult{Success: false, Error: msg,
+				MutationStatus:   wire.MutationRefused,
+				ValidationKind:   wire.ValidationKindStructural,
+				ValidationStatus: wire.ValidationFailed,
 				ValidationDetail: msg}, nil
 		}
 		if msg := duplicateMainGuard(path, original, content); msg != "" {
 			log.Printf("[write_file] fallback content duplicates the module entrypoint in %s — rejecting", logPath(path))
-			return &ToolResult{Success: false, Error: msg,
-				MutationStatus:   MutationRefused,
-				ValidationKind:   ValidationKindStructural,
-				ValidationStatus: ValidationFailed,
+			return &wire.ToolResult{Success: false, Error: msg,
+				MutationStatus:   wire.MutationRefused,
+				ValidationKind:   wire.ValidationKindStructural,
+				ValidationStatus: wire.ValidationFailed,
 				ValidationDetail: msg}, nil
 		}
 	}

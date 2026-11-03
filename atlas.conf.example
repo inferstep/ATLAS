@@ -24,7 +24,7 @@
 # log-level/external-URL placeholders, etc.). Every variable below
 # is consumed by at least one of: the install/uninstall scripts, the
 # K3s manifest templates, or the benchmark/v3 ablation runner. See
-# docs/CONFIGURATION.md §8 for what each one actually controls.
+# docs/guides/CONFIGURATION.md §8 for what each one actually controls.
 #===========================================
 
 #-------------------------------------------
@@ -42,7 +42,7 @@ ATLAS_LENS_NODEPORT=31144          # geometric-lens
 ATLAS_LLAMA_NODEPORT=32735         # llama-server
 ATLAS_SANDBOX_NODEPORT=30820       # sandbox executor
 ATLAS_V3_NODEPORT=30070            # v3-service (exposed by default; delete the type/nodePort
-                                   # lines in templates/atlas-v3-deployment.yaml.tmpl to
+                                   # lines in deploy/k3s/v3-service-deployment.yaml.tmpl to
                                    # keep it cluster-internal)
 
 # Internal service ports (usually don't change these)
@@ -56,7 +56,7 @@ ATLAS_SANDBOX_PORT=8020            # sandbox internal
 # Storage Paths
 #-------------------------------------------
 # CHANGE THIS: Where models are stored. Mounted into llama-server at
-# /models (read-only) by templates/llama-deployment.yaml.tmpl.
+# /models (read-only) by deploy/k3s/llama-deployment.yaml.tmpl.
 ATLAS_MODELS_DIR="/opt/atlas/models"
 
 # CHANGE THIS: User project workspace. hostPath-mounted at /workspace
@@ -80,7 +80,7 @@ ATLAS_MAIN_MODEL="your-model.gguf"
 # DELIBERATELY OFF: no entrypoint passes llama.cpp's draft flags, because
 # it measured slower than plain decoding on the reference serving host.
 # The knobs are kept so the decision stays visible — do not wire them up
-# without an A/B on your own hardware. See docs/CONFIGURATION.md.
+# without an A/B on your own hardware. See docs/guides/CONFIGURATION.md.
 ATLAS_DRAFT_MODEL=""
 
 # Context window size (tokens). Size this for the selected model and hardware
@@ -116,10 +116,10 @@ ATLAS_ENABLE_SPECULATIVE=false
 #-------------------------------------------
 # Timeouts (seconds)
 #-------------------------------------------
-# Smoke-test curl against llama-server (scripts/verify-install.sh)
+# Smoke-test curl against llama-server (scripts/install/verify-install.sh)
 ATLAS_LLM_TIMEOUT=120
 
-# Per-service /health curl timeout (scripts/verify-install.sh)
+# Per-service /health curl timeout (scripts/install/verify-install.sh)
 ATLAS_HEALTH_CHECK_TIMEOUT=10
 
 #-------------------------------------------
@@ -139,7 +139,7 @@ ATLAS_V3_PLAN_SEARCH_NUM_PLANS=3
 #-------------------------------------------
 # Advanced (usually don't change)
 #-------------------------------------------
-# Image tag for both the local-build path (scripts/build-containers.sh —
+# Image tag for both the local-build path (scripts/install/build-containers.sh —
 # tags exactly as the K3s manifests reference, ghcr.io/${ATLAS_GHCR_OWNER}/...)
 # and the GHCR pull path.
 ATLAS_IMAGE_TAG="latest"

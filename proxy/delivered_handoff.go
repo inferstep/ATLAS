@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // What the model is told when the bytes that landed are not the bytes it sent.
@@ -60,18 +62,6 @@ import (
 // anything and does not introduce a judge. A later edit is as legitimate as it
 // ever was -- it just operates against the version that is really there.
 
-// supersededWrite is what a completed write turned out to be.
-type supersededWrite struct {
-	// Path is the resolved target, as the filesystem knows it.
-	Path string
-	// Rel is the model's own spelling, for anything shown to it.
-	Rel string
-	// Submitted is what the model sent.
-	Submitted string
-	// Delivered is what is on disk now.
-	Delivered string
-}
-
 // deliveredDiffersFromSubmitted reports whether a successful write installed
 // content other than the caller's, reading the filesystem for the answer.
 //
@@ -84,9 +74,9 @@ type supersededWrite struct {
 // A false answer is the overwhelmingly common case and costs one read of a
 // file the write just touched.
 func deliveredDiffersFromSubmitted(ctx *AgentContext, tool string,
-	args json.RawMessage, result *ToolResult) (supersededWrite, bool) {
+	args json.RawMessage, result *wire.ToolResult) (wire.SupersededWrite, bool) {
 	if ctx == nil || result == nil || !result.Success {
-		return supersededWrite{}, false
+		return wire.SupersededWrite{}, false
 	}
 	var submitted, rel, path string
 	switch {
@@ -94,25 +84,25 @@ func deliveredDiffersFromSubmitted(ctx *AgentContext, tool string,
 		content, ok := extractScorableContent(tool, args)
 		rel = extractToolTarget(tool, args)
 		if !ok || content == "" || rel == "" {
-			return supersededWrite{}, false
+			return wire.SupersededWrite{}, false
 		}
 		submitted, path = content, resolveAgentPath(ctx, rel)
 	case result.Substituted != nil:
 		submitted, rel, path = result.Substituted.Submitted, result.Substituted.Rel, result.Substituted.Path
 	default:
-		return supersededWrite{}, false
+		return wire.SupersededWrite{}, false
 	}
 	onDisk, err := os.ReadFile(path)
 	if err != nil {
 		// Nothing to compare against. Saying nothing is right: a claim about
 		// the delivered artifact has to be able to read it.
-		return supersededWrite{}, false
+		return wire.SupersededWrite{}, false
 	}
 	delivered := string(onDisk)
 	if contentSHA256(delivered) == contentSHA256(submitted) {
-		return supersededWrite{}, false
+		return wire.SupersededWrite{}, false
 	}
-	return supersededWrite{Path: path, Rel: rel, Submitted: submitted, Delivered: delivered}, true
+	return wire.SupersededWrite{Path: path, Rel: rel, Submitted: submitted, Delivered: delivered}, true
 }
 
 // supersededWriteNote is the sentence the model gets. Facts only: which file,
@@ -122,7 +112,7 @@ func deliveredDiffersFromSubmitted(ctx *AgentContext, tool string,
 // knows that, the score that selected it is not a correctness measure, and
 // telling a model its own work was improved is exactly the claim this program
 // refuses to make without evidence.
-func supersededWriteNote(s supersededWrite) string {
+func supersededWriteNote(s wire.SupersededWrite) string {
 	return fmt.Sprintf(
 		"[system note]: %s was written, but the bytes on disk are NOT the ones you "+
 			"sent — the candidate pipeline delivered its own version to that path "+
@@ -159,7 +149,7 @@ func lineCountOf(s string) int {
 // no rule about staleness, restatement or edit authorization -- it changes
 // what they are about. RecordBodySeen is set for the same reason it is set on
 // an ordinary write: the model is being shown these bytes.
-func adoptDeliveredContent(ctx *AgentContext, s supersededWrite) string {
+func adoptDeliveredContent(ctx *AgentContext, s wire.SupersededWrite) string {
 	ctx.RecordFileRead(s.Path, s.Delivered)
 	ctx.RecordBodySeen(s.Path)
 	log.Printf("[agent] %s on disk is not what was submitted (%dB delivered vs %dB sent) — "+

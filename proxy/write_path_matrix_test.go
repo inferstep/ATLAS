@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // Write-path matrix, driven through the real agent loop: which rewrites of a
@@ -185,8 +187,8 @@ func TestValidationUnavailableDoesNotBlockOrClaimPassed(t *testing.T) {
 	if d == nil {
 		t.Fatal("the rewrite is not in the ledger")
 	}
-	if d.ValidationStatus != ValidationNotRun {
-		t.Fatalf("validation status %q for an unchecked rewrite, want %q", d.ValidationStatus, ValidationNotRun)
+	if d.ValidationStatus != wire.ValidationNotRun {
+		t.Fatalf("validation status %q for an unchecked rewrite, want %q", d.ValidationStatus, wire.ValidationNotRun)
 	}
 }
 
@@ -329,7 +331,7 @@ func sessionOwnedRepairStub(t *testing.T, replacement, v3Mode string, v3Calls *i
 		case strings.HasPrefix(r.URL.Path, "/v3/generate"):
 			*v3Calls++
 			if v3Mode == "working" {
-				resp, _ := json.Marshal(V3GenerateResponse{
+				resp, _ := json.Marshal(wire.V3GenerateResponse{
 					Code: replacement, Passed: true, PhaseSolved: "direct",
 					CandidatesTested: 1, WinningScore: 1.0,
 				})

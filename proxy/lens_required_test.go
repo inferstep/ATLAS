@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // The lens is required (lens_required.go, docs/adr/0011-the-lens-is-required.md).
@@ -231,7 +233,7 @@ func TestALensThatStopsScoringEndsTheRun(t *testing.T) {
 	r := editLoopFixture(t, nil, `{"task_mode":"work"}`, "Write stats.py.",
 		script(stepWrite("stats.py", lensFile), stepDone("wrote stats.py")),
 		editLoopOptions{lensOff: true})
-	if r.terminal["status"] != string(TerminalFailed) || r.terminal["reason"] != "lens_unavailable" {
+	if r.terminal["status"] != string(wire.TerminalFailed) || r.terminal["reason"] != "lens_unavailable" {
 		t.Fatalf("terminal %q/%q, want failed/lens_unavailable: %s",
 			r.terminal["status"], r.terminal["reason"], r.describe())
 	}

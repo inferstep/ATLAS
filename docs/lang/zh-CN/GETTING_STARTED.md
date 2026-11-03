@@ -1,7 +1,7 @@
-<!-- source: docs/GETTING_STARTED.md synced-through: 5610fde5ba546c1b0f7c7cb0c1e5b6b4339083b7 -->
-> **[English](../../GETTING_STARTED.md)** | **简体中文**
+<!-- source: docs/guides/GETTING_STARTED.md synced-through: 5610fde5ba546c1b0f7c7cb0c1e5b6b4339083b7 -->
+> **[English](../../guides/GETTING_STARTED.md)** | **简体中文**
 
-> ℹ️ **译者注：** 若本译文与英文原版 ([GETTING_STARTED.md](../../GETTING_STARTED.md)) 有出入，以英文原版为准。
+> ℹ️ **译者注：** 若本译文与英文原版 ([GETTING_STARTED.md](../../guides/GETTING_STARTED.md)) 有出入，以英文原版为准。
 
 
 # ATLAS 快速上手
@@ -36,7 +36,7 @@ ATLAS 是一个本地编程 agent：模型跑在你自己的 GPU 上，外面裹
 
 ## 安装
 
-按 [SETUP.md](SETUP.md)（Linux）或 [SETUP_MACOS.md](../../SETUP_MACOS.md)（Apple Silicon）操作。对大多数 Linux + GPU 机器来说就是一条命令：
+按 [SETUP.md](SETUP.md)（Linux）或 [SETUP_MACOS.md](../../guides/SETUP_MACOS.md)（Apple Silicon）操作。对大多数 Linux + GPU 机器来说就是一条命令：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-bootstrap.sh | bash
@@ -54,7 +54,7 @@ atlas doctor
 
 ### TUI 一览
 
-在任意项目目录里运行 `atlas`。你会得到一个聊天窗格、一个文件窗格，外加一个实时 Pipeline 窗格，展示 agent 工作时正在做什么——各阶段、工具调用与验证结果实时流入。布局与每一个按键绑定见 [CLI.md](../../CLI.md#panes)。
+在任意项目目录里运行 `atlas`。你会得到一个聊天窗格、一个文件窗格，外加一个实时 Pipeline 窗格，展示 agent 工作时正在做什么——各阶段、工具调用与验证结果实时流入。布局与每一个按键绑定见 [CLI.md](../../reference/CLI.md#panes)。
 
 ## 你的第一个任务
 
@@ -64,17 +64,17 @@ atlas doctor
 
 - **小改动**在 agent 读完相关文件后直接写入（T1 路径）。
 - **大改动**触发 V3 流水线：Pipeline 窗格展示规划、多个候选的生成、沙箱验证与修复，然后才有任何东西落盘（T2 路径）。
-- **权限提示**在默认模式下出现在破坏性步骤（shell 命令、删除）之前——`y` 允许一次，`a` 本会话内允许，`n` 拒绝。每次删除单独询问；`a` 从不覆盖之后的删除。各模式的文档见 [CLI.md § 权限模式](../../CLI.md#permission-modes)。
+- **权限提示**在默认模式下出现在破坏性步骤（shell 命令、删除）之前——`y` 允许一次，`a` 本会话内允许，`n` 拒绝。每次删除单独询问；`a` 从不覆盖之后的删除。各模式的文档见 [CLI.md § 权限模式](../../reference/CLI.md#permission-modes)。
 
 之后：用 `/diff`（或 `git diff`）审阅，跑你的测试，满意再提交。`/undo` 会软重置 agent 做出的最后一次提交；`Ctrl+C` 中途取消一个回合。
 
 ## 自带模型
 
-想跑一个不在注册表里的模型？`atlas onboard` 会带你走完自带 GGUF（bring-your-own-GGUF）的流程（[CLI.md](../../CLI.md)）。
+想跑一个不在注册表里的模型？`atlas onboard` 会带你走完自带 GGUF（bring-your-own-GGUF）的流程（[CLI.md](../../reference/CLI.md)）。
 
 ## 接下来去哪
 
-- [CLI.md](../../CLI.md) —— TUI 与 `atlas` 子命令能做的一切
-- [OPERATIONS.md](../../OPERATIONS.md) —— 第二天：升级、备份、运维手册
-- [ARCHITECTURE.md](../../ARCHITECTURE.md) —— 各组件如何拼在一起
+- [CLI.md](../../reference/CLI.md) —— TUI 与 `atlas` 子命令能做的一切
+- [OPERATIONS.md](../../guides/OPERATIONS.md) —— 第二天：升级、备份、运维手册
+- [ARCHITECTURE.md](../../reference/ARCHITECTURE.md) —— 各组件如何拼在一起
 - [docs/README.md](../../README.md) —— 完整的文档索引

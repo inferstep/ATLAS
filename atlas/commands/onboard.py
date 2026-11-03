@@ -4,7 +4,7 @@ The north-star UX is "drop in a model → run the lens training → it auto-work
 This command automates the *safe* parts of that and stops at the one step only
 the operator can sign off on: rebuilding the inference image. It never rebuilds
 llama.cpp itself, because a rebuild can drop ATLAS's custom llama.cpp patches if
-done carelessly (see docs/TROUBLESHOOTING.md "Rebuilding llama.cpp for a new
+done carelessly (see docs/guides/TROUBLESHOOTING.md "Rebuilding llama.cpp for a new
 model architecture").
 
 Flow:
@@ -160,13 +160,13 @@ def _arch_supported(atlas_root: str, env: Dict[str, str], model_file: str,
             loaded = _loaded_model_name(url)
             return False, (
                 "native Metal llama-server is healthy but serves {!r}, not "
-                "{!r}. Stop it and relaunch scripts/atlas-llama-macos.sh "
+                "{!r}. Stop it and relaunch scripts/install/atlas-llama-macos.sh "
                 "after checking .env.".format(loaded or "an unknown model",
                                                 model_file)
             )
         return False, (
             "native Metal llama-server is not reachable at {}. Start it in "
-            "another terminal with ./scripts/atlas-llama-macos.sh; onboarding "
+            "another terminal with ./scripts/install/atlas-llama-macos.sh; onboarding "
             "will not start the CUDA container on a Metal host.".format(url)
         )
 
@@ -238,7 +238,7 @@ def _print_rebuild_required(arch: Optional[str], excerpt: str, color: bool,
     _safe_print("  Lens depends on). If upstream has drifted the `git apply` step")
     _safe_print("  fails and the build aborts — REBASE the patch, don't delete it")
     _safe_print("  or remove the git-apply line. Step-by-step:")
-    _safe_print(_c("    docs/TROUBLESHOOTING.md "
+    _safe_print(_c("    docs/guides/TROUBLESHOOTING.md "
                    "\"Rebuilding llama.cpp for a new model architecture\"", DIM, color))
     _safe_print()
     _safe_print("  When the rebuild loads the model, re-run `atlas onboard` to "
@@ -274,7 +274,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not model_file:
         _safe_print(_c(f"{NO} No ATLAS_MODEL_FILE set in .env or environment.",
                        RED, color))
-        _safe_print("  Set it in .env (see docs/CONFIGURATION.md \"Adding your "
+        _safe_print("  Set it in .env (see docs/guides/CONFIGURATION.md \"Adding your "
                     "own model\"), or `atlas onboard --url <hf-url>`.")
         return 1
 
@@ -288,7 +288,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not os.path.exists(model_path):
         _safe_print(_c(f"  {NO} not found at {model_path}", RED, color))
         _safe_print("  Place the .gguf there, or `atlas model install --url "
-                    "<hf-url>`. See docs/CONFIGURATION.md \"Adding your own "
+                    "<hf-url>`. See docs/guides/CONFIGURATION.md \"Adding your own "
                     "model\".")
         return 1
     gb = os.path.getsize(model_path) / (1024 ** 3)

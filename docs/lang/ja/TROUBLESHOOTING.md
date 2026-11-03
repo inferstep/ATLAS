@@ -1,5 +1,5 @@
-<!-- source: docs/TROUBLESHOOTING.md synced-through: 175f5a2e58eff2ed27b1fcb332122503a772ab43 -->
-> **[English](../../TROUBLESHOOTING.md)** | **[简体中文](../zh-CN/TROUBLESHOOTING.md)** | **日本語** | **[한국어](../ko/TROUBLESHOOTING.md)**
+<!-- source: docs/guides/TROUBLESHOOTING.md synced-through: 175f5a2e58eff2ed27b1fcb332122503a772ab43 -->
+> **[English](../../guides/TROUBLESHOOTING.md)** | **[简体中文](../zh-CN/TROUBLESHOOTING.md)** | **日本語** | **[한국어](../ko/TROUBLESHOOTING.md)**
 
 # ATLAS トラブルシューティングガイド
 
@@ -23,9 +23,9 @@ docker compose logs --tail 50
 |---|---|
 | NVIDIA CUDA | `nvidia-smi` |
 | AMD ROCm | `rocm-smi` を実行し、`/dev/kfd` が存在することを確認します。 |
-| Apple Silicon / Metal | `atlas doctor` を実行します。ネイティブサーバーが待ち受けていない場合は、[SETUP_MACOS.md](../../SETUP_MACOS.md#troubleshooting) の説明に従って `./scripts/atlas-llama-macos.sh` を起動し、フォアグラウンドのランチャー出力を確認します。 |
-| Vulkan | `/dev/dri` が存在することを確認し、`docker compose -f docker-compose.yml -f compose/docker-compose.vulkan.yml exec llama-server vulkaninfo --summary` を実行します。 |
-| CPU のみ | `compose/docker-compose.vulkan.yml` と `compose/docker-compose.cpu.yml` のオーバーレイが有効であることを確認します。GPU がないことだけを理由に `atlas doctor` が失敗するのではなく、警告を出して正常終了するはずです。 |
+| Apple Silicon / Metal | `atlas doctor` を実行します。ネイティブサーバーが待ち受けていない場合は、[SETUP_MACOS.md](../../guides/SETUP_MACOS.md#troubleshooting) の説明に従って `./scripts/install/atlas-llama-macos.sh` を起動し、フォアグラウンドのランチャー出力を確認します。 |
+| Vulkan | `/dev/dri` が存在することを確認し、`docker compose -f docker-compose.yml -f deploy/compose/docker-compose.vulkan.yml exec llama-server vulkaninfo --summary` を実行します。 |
+| CPU のみ | `deploy/compose/docker-compose.vulkan.yml` と `deploy/compose/docker-compose.cpu.yml` のオーバーレイが有効であることを確認します。GPU がないことだけを理由に `atlas doctor` が失敗するのではなく、警告を出して正常終了するはずです。 |
 
 サービスごとのヘルスチェック curl は [SETUP.md § インストールの確認](./SETUP.md#インストールの確認) を参照してください。トリアージには atlas-proxy のヘルスエンドポイントがもっとも有用です — すべての上流サービスのステータスを報告します:
 ```json
@@ -66,10 +66,10 @@ docker compose logs --tail 50
 | `error: patch failed:` / `patch does not apply` | [llama.cpp の再ビルド](#llamacpp-の再ビルド新しいモデルアーキテクチャまたはパッチのドリフト) |
 | マウントしたボリューム / モデルファイルでのパーミッション拒否 (Fedora/RHEL) | [SELinux がコンテナアクセスをブロック](#selinux-がコンテナアクセスをブロック-fedorarhel) |
 | プロキシのヘルスに `"sandbox": false`（手動のコンテナセットアップ） | [サンドボックスに到達できない](#サンドボックスに到達できない) |
-| プロキシのヘルスに `"sandbox": false`（Compose スタック） | [サンドボックスに到達できない (ヘルスチェック)](#サンドボックスに到達できない-ヘルスチェック) |
+| プロキシのヘルスに `"sandbox": false`（Compose スタック） | [サンドボックスに到達できない](#サンドボックスに到達できない) |
 | 起動時の `address already in use` | [ポート競合](#ポート競合) |
 | 「fitting params to device memory」直後の CUDA アロケーションエラー | [モデル + KV キャッシュが GPU に収まらない](#モデル--kv-キャッシュが-gpu-に収まらない起動失敗または生成が-5-倍遅い) |
-| 約 2 tok/s の生成、llama-server が CPU コアを消費する | [モデル + KV キャッシュが GPU に収まらない](#モデル--kv-キャッシュが-gpu-に収まらない起動失敗または生成が-5-倍遅い) / [生成が遅い](#生成が遅い約-2-toks) |
+| 約 2 tok/s の生成、llama-server が CPU コアを消費する | [モデル + KV キャッシュが GPU に収まらない](#モデル--kv-キャッシュが-gpu-に収まらない起動失敗または生成が-5-倍遅い) / [モデルが GPU ではなく CPU で読み込まれている](#モデルが-gpu-ではなく-cpu-で読み込まれている) |
 | ダウンロード前のモデルサイズの見積もり | [この GPU には何が収まる?](#この-gpu-には何が収まる) |
 | 起動時の `failed to load model` | [モデルファイルが見つからない](#モデルファイルが見つからない) |
 | llama-server がクラッシュ / OOMKilled、VRAM がほぼ 100% | [VRAM 不足](#vram-不足) |
@@ -265,7 +265,7 @@ compose オーバーライド経由でコンテナ環境に伝播するよう、
 
 ```bash
 echo "ATLAS_HSA_OVERRIDE_GFX_VERSION=10.3.0" >> .env
-docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml up -d --force-recreate llama-server
+docker compose -f docker-compose.yml -f deploy/compose/docker-compose.rocm.yml up -d --force-recreate llama-server
 ```
 
 以前は非対応だったカードでこれが動いた場合は、ぜひ [Hardware reports](https://github.com/inferstep/ATLAS/discussions/categories/hardware-reports) にメモを残してください — コミュニティ検証済みのオーバーライドは次のリリースのドキュメントに反映されます。
@@ -287,15 +287,15 @@ ATLAS_GFX_TARGET=gfx1201   # gfx1200 for RX 9070, gfx1201 for RX 9070 XT
 その後、再ビルドしてスタックを立ち上げます:
 
 ```bash
-docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml build llama-server
-docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml up -d
+docker compose -f docker-compose.yml -f deploy/compose/docker-compose.rocm.yml build llama-server
+docker compose -f docker-compose.yml -f deploy/compose/docker-compose.rocm.yml up -d
 ```
 
 **重要: gfx1200/gfx1201 では `ATLAS_HSA_OVERRIDE_GFX_VERSION` を設定しないでください。** ROCm 7.0+ はこれらのターゲットをネイティブにサポートします。Docker 内で GFX バージョンをオーバーライドすると、コンパイル済みカーネルとランタイムターゲットの不一致が生じ、クラッシュにつながります。`ATLAS_HSA_OVERRIDE_GFX_VERSION` は未設定（デフォルト）のままにしてください。
 
 ### ROCm コンテナが `rocm/rocm-terminal` を取得できない
 
-**症状:** `atlas doctor` の ROCm チェックがイメージ取得でタイムアウトする。または `docker compose -f ... -f compose/docker-compose.rocm.yml pull` が `llama-server` のビルドで失敗する。
+**症状:** `atlas doctor` の ROCm チェックがイメージ取得でタイムアウトする。または `docker compose -f ... -f deploy/compose/docker-compose.rocm.yml pull` が `llama-server` のビルドで失敗する。
 
 **意味:** ROCm イメージは大きく（約 2 GB）、Docker Hub は匿名の取得をレート制限しています。
 
@@ -309,7 +309,7 @@ docker pull rocm/rocm-terminal:latest
 doctor の ROCm チェックは常に `rocm/rocm-terminal:latest` を使用します。`ATLAS_ROCM_TAG` が固定するのは llama-server の ROCm ビルドの*ビルドベース*イメージ（`rocm/dev-ubuntu-*`）であって、doctor のチェック用イメージではありません:
 
 ```bash
-ATLAS_ROCM_TAG=6.2-complete docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml build llama-server
+ATLAS_ROCM_TAG=6.2-complete docker compose -f docker-compose.yml -f deploy/compose/docker-compose.rocm.yml build llama-server
 ```
 
 ### 初回ビルドの失敗 (CUDA が見つからない)
@@ -376,7 +376,7 @@ fatal: fetch-pack: invalid index-pack output
 
 古い SHA への固定よりも、パッチの再生成を優先してください — 後ろ向きに固定すると上流の修正を取りこぼします。
 
-再ビルドでモデルがロードされた後も、新しいモデルには Geometric Lens の再トレーニングが必要です — [CONFIGURATION.md § Adding your own model](../../CONFIGURATION.md#adding-your-own-model-drop-in--unregistered) を参照。
+再ビルドでモデルがロードされた後も、新しいモデルには Geometric Lens の再トレーニングが必要です — [CONFIGURATION.md § Adding your own model](../../guides/CONFIGURATION.md#adding-your-own-model-drop-in--unregistered) を参照。
 
 ### プロキシがワークスペースに書き込めない (`.atlas.tmp: permission denied`)
 
@@ -393,7 +393,7 @@ echo "ATLAS_PROXY_GID=$(id -g)" >> .env
 docker compose up -d --no-deps --force-recreate atlas-proxy
 ```
 
-確認: `docker exec atlas-atlas-proxy-1 touch /workspace/.write_test` が成功すること（確認後はファイルを削除してください）。K3s デプロイでは、`scripts/generate-manifests.sh` が同じ id をプロキシ Pod の `securityContext` に展開します。
+確認: `docker exec atlas-atlas-proxy-1 touch /workspace/.write_test` が成功すること（確認後はファイルを削除してください）。K3s デプロイでは、`scripts/install/generate-manifests.sh` が同じ id をプロキシ Pod の `securityContext` に展開します。
 
 ### すぐそこにあるファイルをエージェントが「存在しない」と言う（ワークスペースマウントの分裂）
 
@@ -427,17 +427,6 @@ chcon -Rt svirt_sandbox_file_t ~/models/
 # Or add :Z flag to volume mounts (Docker Compose handles this)
 ```
 
-### サンドボックスに到達できない
-
-**症状:** プロキシのヘルスが `"sandbox": false` を表示する。V3 のビルド検証が失敗する。
-
-**修正:** サンドボックスには `atlas` ではなく `sandbox-net` 経由で到達します — 実行されたコードがスタックの他の部分に届かないよう、サンドボックスは意図的に `atlas` ネットワークに参加しない唯一のサービスです。プロキシ、レンズ、v3-service は両方のネットワークに接続されています。コンテナを手動で実行している場合:
-```bash
-docker network create sandbox-net
-# sandbox joins ONLY sandbox-net; proxy / lens / v3-service join it too,
-# in addition to the atlas network.
-```
-
 ### ポート競合
 
 **症状:** `docker compose up` がポートの "address already in use" で失敗する。
@@ -451,7 +440,7 @@ lsof -i :8080
 ATLAS_LLAMA_PORT=8081    # Different port for llama-server
 ```
 
-すべてのポートは `.env` で設定可能です。[CONFIGURATION.md](../../CONFIGURATION.md) をご覧ください。
+すべてのポートは `.env` で設定可能です。[CONFIGURATION.md](../../guides/CONFIGURATION.md) をご覧ください。
 
 ---
 
@@ -486,7 +475,7 @@ docker compose logs llama-server | tail -20   # model loads, no CUDA errors
 curl -s localhost:8080/health                  # {"status":"ok"}
 ```
 
-**それでも失敗する場合:** コンテナが本当に再ビルドしたイメージを実行しているか確認してください（`docker compose images llama-server` — `docker compose pull` が上書きした可能性があります。`ATLAS_IMAGE_TAG` を固定するか、ビルドを再実行してください）。Pascal（`60`/`61`）以前は上流 llama.cpp の CUDA サポートの制約を受けます — Vulkan イメージ（`compose/docker-compose.vulkan.yml`）がフォールバックです。それ以外の場合は、`nvidia-smi` の出力と llama-server ログの最初の 50 行を添えて Issue を作成してください。
+**それでも失敗する場合:** コンテナが本当に再ビルドしたイメージを実行しているか確認してください（`docker compose images llama-server` — `docker compose pull` が上書きした可能性があります。`ATLAS_IMAGE_TAG` を固定するか、ビルドを再実行してください）。Pascal（`60`/`61`）以前は上流 llama.cpp の CUDA サポートの制約を受けます — Vulkan イメージ（`deploy/compose/docker-compose.vulkan.yml`）がフォールバックです。それ以外の場合は、`nvidia-smi` の出力と llama-server ログの最初の 50 行を添えて Issue を作成してください。
 
 ### モデルが GPU ではなく CPU で読み込まれている
 
@@ -498,6 +487,8 @@ ps aux | grep llama-server | grep -e '-ngl' -e 'n-gpu-layers'
 ```
 
 Docker を使用している場合、NVIDIA コンテナランタイムが設定されていることを確認してください（上記の GPU セクションを参照）。
+
+**想定パフォーマンス:** スループットはモデル、量子化、文法モードによって変わります。
 
 ### モデル + KV キャッシュが GPU に収まらない（起動失敗、または生成が 5 倍遅い）
 
@@ -512,7 +503,7 @@ Docker を使用している場合、NVIDIA コンテナランタイムが設定
 atlas tier fit --write
 docker compose up -d llama-server --no-deps --force-recreate
 ```
-`atlas tier fit` は GGUF ヘッダーと GPU の VRAM を読み取り、完全に GPU 上で動く最大の構成を求めます（[CLI.md § atlas tier fit](../../CLI.md#atlas-tier-fit) を参照）。ATLAS は llama-server を `--fit off` で実行するため、収まらない構成は CPU で部分的に黙って動く代わりに、起動時に明確に失敗します。
+`atlas tier fit` は GGUF ヘッダーと GPU の VRAM を読み取り、完全に GPU 上で動く最大の構成を求めます（[CLI.md § atlas tier fit](../../reference/CLI.md#atlas-tier-fit) を参照）。ATLAS は llama-server を `--fit off` で実行するため、収まらない構成は CPU で部分的に黙って動く代わりに、起動時に明確に失敗します。
 
 `atlas tier fit` が **DOES NOT FIT** と報告する場合、モデル自体がこのカードには大きすぎます — 出力には収まる最大の量子化ファイルサイズが表示されます。優先順:
 
@@ -610,7 +601,7 @@ ps aux | grep llama-server | grep ctx-size
 
 **原因:** エンドポイントが間違っています。エージェントループは `POST /v1/agent` 上でのみ動作します。`POST /v1/chat/completions`（および `/v1/` 配下の他のパス）は llama-server への透過的なパススルーで、ツールも V3 もストリーミングチャットイベントもありません。
 
-**修正:** クライアントを `POST http://localhost:8090/v1/agent` に向けてください。Bubbletea TUI（`atlas` / `atlas tui`）はこれを自動で行います。サードパーティクライアントを書く場合は、[docs/API.md](../../API.md) の `/v1/agent` SSE イベントプロトコルを参照してください。`ATLAS_AGENT_LOOP` 環境変数によるトグルはもうありません — 分岐はエンドポイントベースで、設定ベースではありません。
+**修正:** クライアントを `POST http://localhost:8090/v1/agent` に向けてください。Bubbletea TUI（`atlas` / `atlas tui`）はこれを自動で行います。サードパーティクライアントを書く場合は、[docs/reference/API.md](../../reference/API.md) の `/v1/agent` SSE イベントプロトコルを参照してください。`ATLAS_AGENT_LOOP` 環境変数によるトグルはもうありません — 分岐はエンドポイントベースで、設定ベースではありません。
 
 ### 機能ファイルで V3 パイプラインが起動しない
 
@@ -779,7 +770,7 @@ docker compose logs geometric-lens
 | メッセージの理由 | 修正 |
 |---|---|
 | unreachable | レンズのコンテナが停止しているか `ATLAS_LENS_URL` が誤り。`docker compose ps geometric-lens`。 |
-| no C(x) / no G(x) model loaded | 提供中のモデルにレンズウェイトがない。レジストリのモデルは `atlas model install-artifacts <name>`、または `atlas lens build`（[SETUP.md](../../SETUP.md) 参照）。 |
+| no C(x) / no G(x) model loaded | 提供中のモデルにレンズウェイトがない。レジストリのモデルは `atlas model install-artifacts <name>`、または `atlas lens build`（[SETUP.md](../../guides/SETUP.md) 参照）。 |
 | cannot reach llama-server | レンズがモデルサーバーに到達できない。`LLAMA_URL` / `LLAMA_EMBED_URL` と llama-server のヘルスを確認。 |
 | self-test failed | `/health` の `self_test_error` を参照。 |
 | drifted from the served model | [エンベディング規約のドリフト](#スコアはもっともらしいのにスケールが大きく外れているエンベディング規約のドリフト) を参照。 |
@@ -792,7 +783,7 @@ docker compose logs geometric-lens
 
 **影響:** リクエストは実行されます。レンズは生の C(x) エネルギーと G(x) 確率を返します。キャリブレーション済みの用途（正規化ルーティング、拒否と是正のしきい値）は、そのモデルのキャリブレーションファイルが存在するまで無効のままです。
 
-**修正:** `atlas lens build` がしきい値をキャリブレーションし、`cx_normalization.json` と `gx_thresholds.json` をバンドルに書き出します。[CLI.md § atlas lens](../../CLI.md#atlas-lens) を参照してください。
+**修正:** `atlas lens build` がしきい値をキャリブレーションし、`cx_normalization.json` と `gx_thresholds.json` をバンドルに書き出します。[CLI.md § atlas lens](../../reference/CLI.md#atlas-lens) を参照してください。
 
 ### スコアはもっともらしいのにスケールが大きく外れている（エンベディング規約のドリフト）
 
@@ -813,7 +804,7 @@ curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerpri
      -d '{"content":"def add(a, b): return a + b","embd_normalize":-1}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; import itertools; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
    ```
    プールされた `norm` は数百の範囲になります（同梱の Gemma アーティファクトでおよそ 100-150）。`norm` がちょうど `1.0` の場合、`embd_normalize: -1` を指定したにもかかわらずサーバーがベクトルを正規化しており、C(x) はどの入力に対しても約 0.8 という平坦な値を返します。健全に見えて何も区別しないスコアです。
-2. `ATLAS_EMBED_POOLING=none`（デフォルト。[CONFIGURATION.md](../../CONFIGURATION.md) を参照）を設定し、エントリーポイントがフラグを固定するように llama-server コンテナを再作成します。`--pooling` は llama.cpp ではサーバー全体の設定であり、全文パスと per-step パスの両方を満たせるのは `none` だけです。プーリングとスケールはクライアント側で処理します。
+2. `ATLAS_EMBED_POOLING=none`（デフォルト。[CONFIGURATION.md](../../guides/CONFIGURATION.md) を参照）を設定し、エントリーポイントがフラグを固定するように llama-server コンテナを再作成します。`--pooling` は llama.cpp ではサーバー全体の設定であり、全文パスと per-step パスの両方を満たせるのは `none` だけです。プーリングとスケールはクライアント側で処理します。
 3. サーバーが正しい規約で応答するようになれば、起動時セルフテストが通り、`/ready` が 200 を返します。再ビルド（`atlas lens build`）は `embedding_contract` を `model_identity.json` に刻みます。ただしドリフトフィンガープリントは書き込みません: `geometric_lens.drift.write_fingerprint` は存在しますが、それを呼び出すコマンドはまだなく、フィンガープリントのチェックは手動で書き込まれた `drift_fingerprint.json` がある場合のみ実行されます。
 
 ### エンベディング抽出の失敗
@@ -853,9 +844,9 @@ curl -s http://localhost:8099/health | python3 -c "import sys,json; l=json.load(
 
 ## サンドボックスの問題
 
-### サンドボックスに到達できない (ヘルスチェック)
+### サンドボックスに到達できない
 
-**症状:** コードがテストされない。プロキシのヘルスが `"sandbox": false` を表示する。
+**症状:** コードがテストされない。V3 のビルド検証が失敗する。プロキシのヘルスが `"sandbox": false` を表示する。
 
 **修正:** サンドボックスのヘルスを確認してください:
 ```bash
@@ -869,6 +860,13 @@ curl -s http://localhost:8020/health
 サンドボックスコンテナが実行中だが正常でない場合、ログを確認してください:
 ```bash
 docker compose logs sandbox
+```
+
+サンドボックスには `atlas` ではなく `sandbox-net` 経由で到達します — 実行されたコードがスタックの他の部分に届かないよう、サンドボックスは意図的に `atlas` ネットワークに参加しない唯一のサービスです。プロキシ、レンズ、v3-service は両方のネットワークに接続されています。コンテナを手動で実行している場合:
+```bash
+docker network create sandbox-net
+# sandbox joins ONLY sandbox-net; proxy / lens / v3-service join it too,
+# in addition to the atlas network.
 ```
 
 ### コード実行のタイムアウト
@@ -909,15 +907,6 @@ atlas bench --run-id <your-run-id> --tasks 200
 
 ## パフォーマンス
 
-### 生成が遅い（約 2 tok/s）
-
-モデルが GPU ではなく CPU で実行されています。以下を確認してください:
-1. `nvidia-smi` — llama-server が GPU プロセスとして表示されているか?
-2. `-ngl 99`（`--n-gpu-layers`）— すべてのレイヤーがオフロードされているか?
-3. NVIDIA Container Toolkit — コンテナランタイムが GPU アクセス用に設定されているか?
-
-**想定パフォーマンス:** スループットはモデル、量子化、文法モードによって変わります。
-
 ### V3 パイプラインに数分かかる
 
 これは T2 ファイルでは正常な動作です。V3 パイプラインは複数の LLM コールを行います:
@@ -950,5 +939,5 @@ atlas bench --run-id <your-run-id> --tasks 200
 ここに問題が記載されていない場合:
 1. サービスログを確認: `docker compose logs <service-name>`
 2. プロキシのヘルスエンドポイントを確認: `curl http://localhost:8090/health`
-3. すべての環境変数については [CONFIGURATION.md](../../CONFIGURATION.md) をご覧ください
+3. すべての環境変数については [CONFIGURATION.md](../../guides/CONFIGURATION.md) をご覧ください
 4. [GitHub](https://github.com/inferstep/ATLAS/issues) で Issue を作成してください

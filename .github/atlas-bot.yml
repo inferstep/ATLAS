@@ -70,8 +70,9 @@ pull_requests:
     proxy/guardrails*: the guards
     proxy/permissions.go: the guards
     proxy/authorization_*: the guards
-    proxy/shell_wrapper.go: the guards
-    proxy/confined_dir.go: the guards
+    proxy/internal/shellcmd/*: the guards
+    proxy/internal/workspacefs/*: the guards
+    proxy/internal/logsafe/*: the guards
     sandbox/executor_server.py: the guards
     sandbox/executor_models.py: the guards
     sandbox/executor_parsers.py: the guards
@@ -106,7 +107,7 @@ areas:
   extensions/: area/extensions
   scripts/: area/install
   docker-compose: area/install
-  compose/: area/install
+  deploy/: area/install
   .github/: area/ci
   docs/: area/docs
   README.md: area/docs

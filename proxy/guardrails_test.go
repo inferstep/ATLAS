@@ -6,6 +6,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // A repair request: the verification gate asks for a passing run before done.
@@ -149,10 +152,10 @@ func TestWantsStateChange(t *testing.T) {
 // contract says: the read-only guard refuses every edit of such a run, so a
 // demand for one could never be met.
 func TestAForbiddenChangeIsNeverAlsoDemanded(t *testing.T) {
-	work := &TaskContract{TaskMode: TaskModeWork}
+	work := &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork}
 	for _, c := range []struct {
 		name     string
-		contract *TaskContract
+		contract *taskcontract.TaskContract
 		ask      string
 		tier     Tier
 		required bool
@@ -257,15 +260,15 @@ func TestLooksLikeStub(t *testing.T) {
 // is evidence: one the planner rated well, with more than one step, and that
 // the matcher is tracking (at least one step matched).
 func TestPlanIncompleteMessage(t *testing.T) {
-	plan := &Plan{WinningScore: 0.8, Steps: []PlanStep{
+	plan := &wire.Plan{WinningScore: 0.8, Steps: []wire.PlanStep{
 		{ID: "s1", Action: "replace setInterval with a variable-delay loop"},
 		{ID: "s2", Action: "decrement the delay by 3ms per food eaten"},
 	}}
-	weak := &Plan{WinningScore: 0.2, Steps: plan.Steps}
-	oneStep := &Plan{WinningScore: 0.8, Steps: plan.Steps[:1]}
+	weak := &wire.Plan{WinningScore: 0.2, Steps: plan.Steps}
+	oneStep := &wire.Plan{WinningScore: 0.8, Steps: plan.Steps[:1]}
 	for _, c := range []struct {
 		name      string
-		plan      *Plan
+		plan      *wire.Plan
 		satisfied []bool
 		wants     []string // nil: done may go ahead
 	}{
@@ -277,7 +280,7 @@ func TestPlanIncompleteMessage(t *testing.T) {
 		{"no plan", nil, nil, nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			msg := planIncompleteMessage(&AgentContext{Plan: c.plan, PlanStepsSatisfied: c.satisfied})
+			msg := planIncompleteMessage(&AgentContext{planProgress: planProgress{Plan: c.plan, PlanStepsSatisfied: c.satisfied}})
 			if (msg != "") != (c.wants != nil) {
 				t.Fatalf("message %q, want a refusal: %v", msg, c.wants != nil)
 			}
@@ -305,7 +308,7 @@ func TestMutationForbidden(t *testing.T) {
 		{"explain the retry logic and then add a test for it", false},
 	} {
 		t.Run(c.ask, func(t *testing.T) {
-			ctx := &AgentContext{HumanTask: c.ask}
+			ctx := &AgentContext{runSetup: runSetup{HumanTask: c.ask}}
 			if got := mutationForbidden(ctx); got != c.forbidden {
 				t.Errorf("mutationForbidden = %v, want %v", got, c.forbidden)
 			}
@@ -320,7 +323,7 @@ func TestMutationForbidden(t *testing.T) {
 // workspace is refused, the shell included; reading stays available, because
 // the answer still needs it.
 func TestAnExplicitReadOnlyRequestRefusesEveryMutatingTool(t *testing.T) {
-	ctx := &AgentContext{HumanTask: "Just explain what this does — do not change any code."}
+	ctx := &AgentContext{runSetup: runSetup{HumanTask: "Just explain what this does — do not change any code."}}
 	for _, c := range []struct {
 		tool    string
 		refused bool
@@ -355,7 +358,7 @@ func TestAnExplicitReadOnlyRequestRefusesEveryMutatingTool(t *testing.T) {
 func TestRunningATestCoversTheCodeTheTestImports(t *testing.T) {
 	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
 	ctx.PermissionMode = PermissionYolo
-	ctx.TaskContract = &TaskContract{TaskMode: TaskModeWork}
+	ctx.TaskContract = &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork}
 	writeAsTheModel(t, ctx, "stats.py", "def mean(v):\n    return sum(v) / len(v)\n\n\ndef median(v):\n    s = sorted(v)\n    return s[len(s) // 2]\n")
 	writeAsTheModel(t, ctx, "test_stats.py", "from stats import mean, median\n\nassert mean([1, 2, 3]) == 2\nassert median([3, 1, 2]) == 2\nprint('passed')\n")
 
@@ -363,7 +366,7 @@ func TestRunningATestCoversTheCodeTheTestImports(t *testing.T) {
 	if _, ok := covered[resolveAgentPath(ctx, "stats.py")]; !ok {
 		t.Fatalf("running the test did not cover the code it imports; covered=%v", covered)
 	}
-	ctx.VerificationEvidence = append(ctx.VerificationEvidence, VerificationRecord{
+	ctx.VerificationEvidence = append(ctx.VerificationEvidence, taskcontract.VerificationRecord{
 		Command: "python3 test_stats.py", Covered: covered, Turn: 1,
 	})
 	if d := decideVerificationDemand(ctx, ctx.TaskContract, nil); d.Required && !d.Met {
@@ -432,7 +435,7 @@ func TestModuleReferenceRequiresImportContext(t *testing.T) {
 // that spends all of its bounces does not silence the next, and once both are
 // spent the exit goes through. A spent budget is not a passing verification.
 func TestEachExitGateHasItsOwnBounceBudget(t *testing.T) {
-	ctx := &AgentContext{WorkingDir: t.TempDir(), Tier: Tier2Medium}
+	ctx := &AgentContext{runSetup: runSetup{WorkingDir: t.TempDir(), Tier: Tier2Medium}}
 	// A repair request that nothing verified and nothing changed: the
 	// verification gate and the action gate both hold.
 	st := &runState{userWantsVerification: true, inspectedWorkspace: true}
@@ -462,8 +465,8 @@ func TestEachExitGateHasItsOwnBounceBudget(t *testing.T) {
 // resolveAgentPath is in tools.go. The guardrails compare paths through it,
 // so a host path, a relative path and a "workspace/" prefix name one file.
 func TestResolveAgentPath(t *testing.T) {
-	container := &AgentContext{WorkingDir: "/workspace", HostWorkingDir: "/home/isaac/snake"}
-	noHost := &AgentContext{WorkingDir: "/tmp/proj"}
+	container := &AgentContext{runSetup: runSetup{WorkingDir: "/workspace", HostWorkingDir: "/home/isaac/snake"}}
+	noHost := &AgentContext{runSetup: runSetup{WorkingDir: "/tmp/proj"}}
 	for _, c := range []struct {
 		name     string
 		ctx      *AgentContext

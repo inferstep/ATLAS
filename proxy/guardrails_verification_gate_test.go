@@ -6,12 +6,15 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/shellcmd"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // A green run counts as verification only when it shows the program working:
 // it ran the program or its tests, or fetched a response body, and the line
-// reports that part's exit status. classifyCommandEvidence, in
-// command_evidence.go, makes the call.
+// reports that part's exit status. ClassifyCommandEvidence, in
+// internal/shellcmd/command_evidence.go, makes the call.
 func TestIsVerificationCommand(t *testing.T) {
 	for _, group := range []struct {
 		kind     string
@@ -74,7 +77,7 @@ func TestIsVerificationCommand(t *testing.T) {
 	} {
 		for _, cmd := range group.cmds {
 			t.Run(cmd, func(t *testing.T) {
-				if got := classifyCommandEvidence(cmd).Kind.verifies(); got != group.verifies {
+				if got := shellcmd.ClassifyCommandEvidence(cmd).Kind.Verifies(); got != group.verifies {
 					t.Errorf("verifies = %v for %s, want %v", got, group.kind, group.verifies)
 				}
 			})
@@ -103,7 +106,7 @@ func TestTheProbeARedirectPrescribesCountsAsVerification(t *testing.T) {
 				t.Fatalf("probes %q, want a probe named: %v:\n%s", probes, c.names, c.msg)
 			}
 			for _, p := range probes {
-				if !classifyCommandEvidence(p[1]).Kind.verifies() {
+				if !shellcmd.ClassifyCommandEvidence(p[1]).Kind.Verifies() {
 					t.Errorf("the message prescribes %q, which does not count as verification", p[1])
 				}
 			}
@@ -211,16 +214,16 @@ func TestImportingAModuleCountsAsRunningIt(t *testing.T) {
 func TestACommandThatNeverRanIsNotAFailedVerification(t *testing.T) {
 	for _, c := range []struct {
 		name     string
-		result   *ToolResult
+		result   *wire.ToolResult
 		neverRan bool
 	}{
-		{"pytest found no such file", &ToolResult{Error: "ERROR: file or directory not found: tests/test_syntax_check.py"}, true},
-		{"pytest ran no tests", &ToolResult{Error: "collected 0 items\nno tests ran in 0.01s"}, true},
+		{"pytest found no such file", &wire.ToolResult{Error: "ERROR: file or directory not found: tests/test_syntax_check.py"}, true},
+		{"pytest ran no tests", &wire.ToolResult{Error: "collected 0 items\nno tests ran in 0.01s"}, true},
 		{"python could not open the script",
-			&ToolResult{Error: "python3: can't open file '/w/missing.py': [Errno 2] No such file or directory"}, true},
-		{"an assertion failed", &ToolResult{Error: "FAILED test_store.py::test_add - assert 0 == 1\n1 failed, 2 passed"}, false},
+			&wire.ToolResult{Error: "python3: can't open file '/w/missing.py': [Errno 2] No such file or directory"}, true},
+		{"an assertion failed", &wire.ToolResult{Error: "FAILED test_store.py::test_add - assert 0 == 1\n1 failed, 2 passed"}, false},
 		{"the program did not create its output",
-			&ToolResult{Error: "FileNotFoundError: [Errno 2] No such file or directory: 'todos.json'"}, false},
+			&wire.ToolResult{Error: "FileNotFoundError: [Errno 2] No such file or directory: 'todos.json'"}, false},
 		{"no result", nil, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {

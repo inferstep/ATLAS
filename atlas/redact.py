@@ -8,7 +8,7 @@ without a shared package, and the CLI ships as a pip package no
 service image installs. tests/contracts/test_private_value_filtering.py
 enforces that the copies stay identical and that each passes the
 shared fixture corpus (tests/fixtures/private_value_fixtures.json),
-which the Go implementation (proxy/private_values.go) also passes.
+which the Go implementation (proxy/internal/logsafe/filter.go) also passes.
 Edit all four copies together.
 
 Patterns are deliberately conservative (assignment/header/key-block

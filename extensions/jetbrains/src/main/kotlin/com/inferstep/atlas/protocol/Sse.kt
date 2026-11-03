@@ -1,7 +1,7 @@
 // Pure SSE frame parser for the /v1/agent chat stream.
 //
 // A line-oriented port of extensions/vscode/src/client/sse.ts (which mirrors
-// tui/chat.go's parseChatSSE): skip `:` comments (the proxy opens with
+// tui/internal/proxyclient/chat.go's parseChatSSE): skip `:` comments (the proxy opens with
 // `: connected`), take `data:` frames, stop on the `[DONE]` sentinel, and
 // skip a malformed frame rather than killing the turn.
 //

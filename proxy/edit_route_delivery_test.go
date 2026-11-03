@@ -3,6 +3,8 @@ package main
 import (
 	"os"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // V3-authored bytes on an existing file go through the same chain as a new
@@ -23,7 +25,7 @@ func editWorld(t *testing.T, contract string, commands map[string]stubEffect) *r
 		t.Fatal(err)
 	}
 	observeDeliverable(w.ctx, "solve.py", []byte(editOriginal),
-		ValidationKindSyntax, ValidationPassed, "")
+		wire.ValidationKindSyntax, wire.ValidationPassed, "")
 	return w
 }
 

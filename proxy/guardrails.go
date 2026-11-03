@@ -42,25 +42,18 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
-)
 
-// isCatastrophicDeleteTarget reports whether a recursive-rm target is a root /
-// home / project-root / glob-everything path.
-func isCatastrophicDeleteTarget(t string) bool {
-	t = strings.Trim(t, `"'`)
-	switch t {
-	case "/", "/*", "~", "~/", "~/*", "$HOME", "${HOME}", "$HOME/*", "${HOME}/*",
-		".", "./", "./*", "*", "..", "../", "../*",
-		"/workspace", "/workspace/", "/workspace/*":
-		return true
-	}
-	return false
-}
+	"github.com/itigges22/atlas-proxy/internal/shellcmd"
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
+	"github.com/itigges22/atlas-proxy/internal/wire"
+)
 
 // fixIntentWords tracks vocabulary that signals "the user wants
 // something repaired or verified." Reused by the verification gate
@@ -269,7 +262,7 @@ func staleServingJob(ctx *AgentContext) (jobID, path string) {
 	if ctx == nil {
 		return "", ""
 	}
-	for _, id := range sortedKeys(ctx.BackgroundJobs) {
+	for _, id := range slices.Sorted(maps.Keys(ctx.BackgroundJobs)) {
 		started, ok := ctx.BackgroundJobStarted[id]
 		if !ok {
 			continue
@@ -323,7 +316,7 @@ func coverageForGreenCommand(ctx *AgentContext, command string) map[string]strin
 	// a bare `pytest` could never meet its contract: nothing named the module
 	// or its tests.
 	if ctx != nil {
-		for _, p := range runnerEntries(command, ctx.WorkingDir, candidates) {
+		for _, p := range shellcmd.RunnerEntries(command, ctx.WorkingDir, candidates) {
 			if _, already := covered[p]; already {
 				continue
 			}
@@ -484,7 +477,7 @@ func codeDeliverablesFor(ctx *AgentContext, expected []string) []string {
 // path the client declared or the ledger owns. Both are put through
 // resolveAgentPath -- the one canonicalisation rule -- so "solve.py" and
 // "./solve.py" are the same file without a second normalizer.
-func evidenceIsCurrent(ctx *AgentContext, rec VerificationRecord) (map[string]string, bool) {
+func evidenceIsCurrent(ctx *AgentContext, rec taskcontract.VerificationRecord) (map[string]string, bool) {
 	if len(rec.Covered) == 0 {
 		return nil, false
 	}
@@ -499,7 +492,7 @@ func evidenceIsCurrent(ctx *AgentContext, rec VerificationRecord) (map[string]st
 }
 
 // contractRequiresCommand reports whether the client declared this exact
-// command. classifyCommandEvidence recognises builds, tests, probes and runners
+// command. ClassifyCommandEvidence recognises builds, tests, probes and runners
 // by shape, and a client's own requirement may be none of those -- a linter, a
 // schema check, a project script. Without this, a declared command could be
 // impossible to satisfy: the demand would require it and nothing would ever
@@ -527,8 +520,8 @@ func contractRequiresCommand(ctx *AgentContext, command string) bool {
 // all leave the demand unmet. A successful command that names nothing covers
 // nothing, so `true` and `echo ok` cannot satisfy it -- not because they are
 // recognised, but because they carry no binding.
-func decideVerificationDemand(ctx *AgentContext, tc *TaskContract, expected []string) verificationDemand {
-	if ctx == nil || tc == nil || tc.TaskMode != TaskModeWork {
+func decideVerificationDemand(ctx *AgentContext, tc *taskcontract.TaskContract, expected []string) verificationDemand {
+	if ctx == nil || tc == nil || tc.TaskMode != taskcontract.TaskModeWork {
 		return verificationDemand{}
 	}
 	// Which commands this run owes, and on whose authority. A caller that
@@ -591,8 +584,8 @@ func pathCoverageSatisfied(ctx *AgentContext, path, hash string) bool {
 // takes that back, because the latest result on those bytes is the one that
 // describes them. A static check, or a declared command that runs nothing,
 // neither binds nor unbinds.
-func coverageRecord(ctx *AgentContext, path, hash string) (VerificationRecord, bool) {
-	var bound VerificationRecord
+func coverageRecord(ctx *AgentContext, path, hash string) (taskcontract.VerificationRecord, bool) {
+	var bound taskcontract.VerificationRecord
 	ok := false
 	if ctx == nil {
 		return bound, false
@@ -601,8 +594,8 @@ func coverageRecord(ctx *AgentContext, path, hash string) (VerificationRecord, b
 		if covered, current := evidenceIsCurrent(ctx, rec); current && covered[path] == hash {
 			switch {
 			case rec.Failed:
-				bound, ok = VerificationRecord{}, false
-			case rec.showsWorking():
+				bound, ok = taskcontract.VerificationRecord{}, false
+			case rec.ShowsWorking():
 				bound, ok = rec, true
 			}
 		}
@@ -637,7 +630,7 @@ func commandObligationSatisfied(ctx *AgentContext, want string) bool {
 // with -- which is conservative by construction: any material mutation to a
 // tracked artifact moves the identity and stales every pathless record at
 // once, including ones the mutation had nothing to do with.
-func commandEvidenceCurrent(ctx *AgentContext, rec VerificationRecord) bool {
+func commandEvidenceCurrent(ctx *AgentContext, rec taskcontract.VerificationRecord) bool {
 	if len(rec.Covered) > 0 {
 		_, ok := evidenceIsCurrent(ctx, rec)
 		return ok
@@ -659,7 +652,7 @@ func driftedSinceVerification(ctx *AgentContext, verified map[string]string) str
 	if ctx == nil {
 		return ""
 	}
-	for _, p := range sortedKeys(ctx.SessionWrites) {
+	for _, p := range slices.Sorted(maps.Keys(ctx.SessionWrites)) {
 		want, seen := verified[p]
 		if !seen {
 			return p
@@ -1090,7 +1083,7 @@ type actionDemand struct {
 //
 // Pure: no model output, no workspace state beyond the inspection flag it is
 // handed, no shadow state, and the same answer whether or not capture is on.
-func decideActionDemand(tc *TaskContract, userMessage string, tier Tier,
+func decideActionDemand(tc *taskcontract.TaskContract, userMessage string, tier Tier,
 	inspectedWorkspace bool) actionDemand {
 	// A change the user explicitly forbade cannot also be required. The
 	// read-only boundary in executeToolCallInner will REFUSE every mutating
@@ -1117,9 +1110,9 @@ func decideActionDemand(tc *TaskContract, userMessage string, tier Tier,
 		return actionDemand{Required: legacy, Source: actionDemandLegacy, Legacy: legacy}
 	}
 	switch tc.TaskMode {
-	case TaskModeWork:
+	case taskcontract.TaskModeWork:
 		return actionDemand{Required: true, Source: actionDemandContractWork, Legacy: legacy}
-	case TaskModeQuestion:
+	case taskcontract.TaskModeQuestion:
 		return actionDemand{Required: false, Source: actionDemandContractQuestion, Legacy: legacy}
 	default:
 		return actionDemand{Required: true, Source: actionDemandContractInvalid, Legacy: legacy}
@@ -1372,11 +1365,11 @@ func readOnlyRequestRefusal(tool *ToolDef, ctx *AgentContext) string {
 	if tool == nil || !mutationForbidden(ctx) {
 		return ""
 	}
-	if tool.Effect == ToolEffectReadOnly {
+	if tool.Effect == wire.ToolEffectReadOnly {
 		return ""
 	}
 	what := "change the workspace"
-	if tool.Effect == ToolEffectCommandUnobserved {
+	if tool.Effect == wire.ToolEffectCommandUnobserved {
 		what = "run a command that could change the workspace"
 	}
 	return fmt.Sprintf(

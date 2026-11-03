@@ -1,7 +1,7 @@
-<!-- source: docs/TROUBLESHOOTING.md synced-through: 175f5a2e58eff2ed27b1fcb332122503a772ab43 -->
-> **[English](../../TROUBLESHOOTING.md)** | **简体中文** | **[日本語](../ja/TROUBLESHOOTING.md)** | **[한국어](../ko/TROUBLESHOOTING.md)**
+<!-- source: docs/guides/TROUBLESHOOTING.md synced-through: 175f5a2e58eff2ed27b1fcb332122503a772ab43 -->
+> **[English](../../guides/TROUBLESHOOTING.md)** | **简体中文** | **[日本語](../ja/TROUBLESHOOTING.md)** | **[한국어](../ko/TROUBLESHOOTING.md)**
 
-> ℹ️ **译者注：** 若本译文与英文原版 ([TROUBLESHOOTING.md](../../TROUBLESHOOTING.md)) 有出入，以英文原版为准。
+> ℹ️ **译者注：** 若本译文与英文原版 ([TROUBLESHOOTING.md](../../guides/TROUBLESHOOTING.md)) 有出入，以英文原版为准。
 
 
 # ATLAS 故障排除指南
@@ -26,9 +26,9 @@ docker compose logs --tail 50
 |---|---|
 | NVIDIA CUDA | `nvidia-smi` |
 | AMD ROCm | 运行 `rocm-smi` 并确认 `/dev/kfd` 存在。 |
-| Apple Silicon / Metal | 运行 `atlas doctor`；如果原生服务器未监听，请按照 [SETUP_MACOS.md](../../SETUP_MACOS.md#troubleshooting) 中的说明启动 `./scripts/atlas-llama-macos.sh`，并检查其前台启动器输出。 |
-| Vulkan | 确认 `/dev/dri` 存在，然后运行 `docker compose -f docker-compose.yml -f compose/docker-compose.vulkan.yml exec llama-server vulkaninfo --summary`。 |
-| 纯 CPU | 确认 `compose/docker-compose.vulkan.yml` 和 `compose/docker-compose.cpu.yml` 覆盖层已启用。`atlas doctor` 不应仅因没有 GPU 而失败，而应发出警告并成功退出。 |
+| Apple Silicon / Metal | 运行 `atlas doctor`；如果原生服务器未监听，请按照 [SETUP_MACOS.md](../../guides/SETUP_MACOS.md#troubleshooting) 中的说明启动 `./scripts/install/atlas-llama-macos.sh`，并检查其前台启动器输出。 |
+| Vulkan | 确认 `/dev/dri` 存在，然后运行 `docker compose -f docker-compose.yml -f deploy/compose/docker-compose.vulkan.yml exec llama-server vulkaninfo --summary`。 |
+| 纯 CPU | 确认 `deploy/compose/docker-compose.vulkan.yml` 和 `deploy/compose/docker-compose.cpu.yml` 覆盖层已启用。`atlas doctor` 不应仅因没有 GPU 而失败，而应发出警告并成功退出。 |
 
 逐服务的健康检查 curl 命令见 [SETUP.md § 验证安装](SETUP.md#验证安装)。atlas-proxy 的健康检查端点对分诊最有用 —— 它会报告所有上游服务的状态：
 ```json
@@ -69,10 +69,10 @@ docker compose logs --tail 50
 | `error: patch failed:` / `patch does not apply` | [重建 llama.cpp](#重建-llamacpp新模型架构或补丁漂移) |
 | 挂载卷 / 模型文件权限被拒绝（Fedora/RHEL） | [SELinux 阻止容器访问](#selinux-阻止容器访问fedorarhel) |
 | 代理健康检查中 `"sandbox": false`（手动容器部署） | [Sandbox 不可达](#sandbox-不可达) |
-| 代理健康检查中 `"sandbox": false`（Compose 栈） | [Sandbox 不可达（健康检查）](#sandbox-不可达健康检查) |
+| 代理健康检查中 `"sandbox": false`（Compose 栈） | [Sandbox 不可达](#sandbox-不可达) |
 | 启动时 `address already in use` | [端口冲突](#端口冲突) |
 | "fitting params to device memory" 之后出现 CUDA 分配错误 | [模型 + KV 缓存放不进 GPU](#模型--kv-缓存放不进-gpu启动失败或生成速度慢-5-倍) |
-| 生成约 2 tok/s，llama-server 占满多个 CPU 核心 | [模型 + KV 缓存放不进 GPU](#模型--kv-缓存放不进-gpu启动失败或生成速度慢-5-倍) / [生成速度慢](#生成速度慢约-2-toks) |
+| 生成约 2 tok/s，llama-server 占满多个 CPU 核心 | [模型 + KV 缓存放不进 GPU](#模型--kv-缓存放不进-gpu启动失败或生成速度慢-5-倍) / [模型在 CPU 而非 GPU 上加载](#模型在-cpu-而非-gpu-上加载) |
 | 下载前估算模型能否放下 | [我的 GPU 能放下什么？](#我的-gpu-能放下什么) |
 | 启动时 `failed to load model` | [模型文件未找到](#模型文件未找到) |
 | llama-server 崩溃 / 被 OOMKill，显存接近 100% | [显存不足](#显存不足) |
@@ -268,7 +268,7 @@ atlas doctor
 
 ```bash
 echo "ATLAS_HSA_OVERRIDE_GFX_VERSION=10.3.0" >> .env
-docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml up -d --force-recreate llama-server
+docker compose -f docker-compose.yml -f deploy/compose/docker-compose.rocm.yml up -d --force-recreate llama-server
 ```
 
 如果这个方法在一张此前不受支持的卡上对你有效，请在 [Hardware reports](https://github.com/inferstep/ATLAS/discussions/categories/hardware-reports) 留言 —— 社区验证过的覆盖值会进入下一个版本的文档。
@@ -290,15 +290,15 @@ ATLAS_GFX_TARGET=gfx1201   # gfx1200 for RX 9070, gfx1201 for RX 9070 XT
 然后重新构建并拉起整个栈：
 
 ```bash
-docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml build llama-server
-docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml up -d
+docker compose -f docker-compose.yml -f deploy/compose/docker-compose.rocm.yml build llama-server
+docker compose -f docker-compose.yml -f deploy/compose/docker-compose.rocm.yml up -d
 ```
 
 **重要：不要为 gfx1200/gfx1201 设置 `ATLAS_HSA_OVERRIDE_GFX_VERSION`。** ROCm 7.0+ 原生支持这些目标；在 Docker 内覆盖 GFX 版本会导致编译出的内核与运行时目标不匹配，从而崩溃。保持 `ATLAS_HSA_OVERRIDE_GFX_VERSION` 未设置（默认）。
 
 ### ROCm 容器无法拉取 `rocm/rocm-terminal`
 
-**现象：** `atlas doctor` 的 ROCm 检查在镜像拉取处超时，或 `docker compose -f ... -f compose/docker-compose.rocm.yml pull` 在 `llama-server` 构建上失败。
+**现象：** `atlas doctor` 的 ROCm 检查在镜像拉取处超时，或 `docker compose -f ... -f deploy/compose/docker-compose.rocm.yml pull` 在 `llama-server` 构建上失败。
 
 **含义：** ROCm 镜像很大（约 2 GB），且 Docker Hub 对匿名拉取限流。
 
@@ -312,7 +312,7 @@ docker pull rocm/rocm-terminal:latest
 doctor 的 ROCm 检查始终使用 `rocm/rocm-terminal:latest`。`ATLAS_ROCM_TAG` 固定的是 llama-server ROCm 构建的*构建基础*镜像（`rocm/dev-ubuntu-*`），而不是 doctor 检查用的镜像：
 
 ```bash
-ATLAS_ROCM_TAG=6.2-complete docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml build llama-server
+ATLAS_ROCM_TAG=6.2-complete docker compose -f docker-compose.yml -f deploy/compose/docker-compose.rocm.yml build llama-server
 ```
 
 ### 首次构建失败（找不到 CUDA）
@@ -379,7 +379,7 @@ fatal: fetch-pack: invalid index-pack output
 
 优先重新生成补丁，而不是把版本固定回更老的 SHA —— 往回固定意味着错过上游修复。
 
-重建加载了模型之后，Geometric Lens 仍需为新模型重新训练 —— 见 [CONFIGURATION.md § Adding your own model](../../CONFIGURATION.md#adding-your-own-model-drop-in--unregistered)。
+重建加载了模型之后，Geometric Lens 仍需为新模型重新训练 —— 见 [CONFIGURATION.md § Adding your own model](../../guides/CONFIGURATION.md#adding-your-own-model-drop-in--unregistered)。
 
 ### 代理无法写入工作区（`.atlas.tmp: permission denied`）
 
@@ -396,7 +396,7 @@ echo "ATLAS_PROXY_GID=$(id -g)" >> .env
 docker compose up -d --no-deps --force-recreate atlas-proxy
 ```
 
-验证：`docker exec atlas-atlas-proxy-1 touch /workspace/.write_test` 应当成功（验证后请删除该文件）。K3s 部署会通过 `scripts/generate-manifests.sh` 把相同的 id 渲染进代理 Pod 的 `securityContext`。
+验证：`docker exec atlas-atlas-proxy-1 touch /workspace/.write_test` 应当成功（验证后请删除该文件）。K3s 部署会通过 `scripts/install/generate-manifests.sh` 把相同的 id 渲染进代理 Pod 的 `securityContext`。
 
 ### Agent 说文件不存在，但它就在那里（工作区挂载分裂）
 
@@ -430,17 +430,6 @@ chcon -Rt svirt_sandbox_file_t ~/models/
 # Or add :Z flag to volume mounts (Docker Compose handles this)
 ```
 
-### Sandbox 不可达
-
-**现象：** 代理健康检查显示 `"sandbox": false`。V3 构建验证失败。
-
-**解决方法：** Sandbox 通过 `sandbox-net` 而不是 `atlas` 访问 —— 它是有意设计为唯一不在 `atlas` 网络上的服务，使执行的代码无法访问栈的其余部分。代理、Lens 和 v3-service 同时接入两个网络。如果手动运行容器：
-```bash
-docker network create sandbox-net
-# sandbox joins ONLY sandbox-net; proxy / lens / v3-service join it too,
-# in addition to the atlas network.
-```
-
 ### 端口冲突
 
 **现象：** `docker compose up` 因某端口 "address already in use" 而失败。
@@ -454,7 +443,7 @@ lsof -i :8080
 ATLAS_LLAMA_PORT=8081    # Different port for llama-server
 ```
 
-所有端口均可通过 `.env` 配置。参见 [CONFIGURATION.md](../../CONFIGURATION.md)。
+所有端口均可通过 `.env` 配置。参见 [CONFIGURATION.md](../../guides/CONFIGURATION.md)。
 
 ---
 
@@ -489,7 +478,7 @@ docker compose logs llama-server | tail -20   # model loads, no CUDA errors
 curl -s localhost:8080/health                  # {"status":"ok"}
 ```
 
-**仍然失败：** 确认容器确实在运行你重建的镜像（`docker compose images llama-server` —— `docker compose pull` 可能已把它覆盖；固定 `ATLAS_IMAGE_TAG` 或重新构建）。Pascal（`60`/`61`）及更老的卡受上游 llama.cpp CUDA 支持所限 —— Vulkan 镜像（`compose/docker-compose.vulkan.yml`）是回退方案。若仍不行，请附上 `nvidia-smi` 输出和 llama-server 日志的前 50 行提交 issue。
+**仍然失败：** 确认容器确实在运行你重建的镜像（`docker compose images llama-server` —— `docker compose pull` 可能已把它覆盖；固定 `ATLAS_IMAGE_TAG` 或重新构建）。Pascal（`60`/`61`）及更老的卡受上游 llama.cpp CUDA 支持所限 —— Vulkan 镜像（`deploy/compose/docker-compose.vulkan.yml`）是回退方案。若仍不行，请附上 `nvidia-smi` 输出和 llama-server 日志的前 50 行提交 issue。
 
 ### 模型在 CPU 而非 GPU 上加载
 
@@ -501,6 +490,8 @@ ps aux | grep llama-server | grep -e '-ngl' -e 'n-gpu-layers'
 ```
 
 如果使用 Docker，请确保已配置 NVIDIA 容器运行时（参见上方 GPU 章节）。
+
+**预期性能：** 吞吐量取决于模型、量化方式和语法模式。
 
 ### 模型 + KV 缓存放不进 GPU（启动失败，或生成速度慢 5 倍）
 
@@ -515,7 +506,7 @@ ps aux | grep llama-server | grep -e '-ngl' -e 'n-gpu-layers'
 atlas tier fit --write
 docker compose up -d llama-server --no-deps --force-recreate
 ```
-`atlas tier fit` 读取 GGUF 头和 GPU 显存，求解出完全在 GPU 上运行的最大配置（参见 [CLI.md § atlas tier fit](../../CLI.md#atlas-tier-fit)）。ATLAS 以 `--fit off` 运行 llama-server，因此放不下的配置会在启动时明确失败，而不是部分悄悄跑在 CPU 上。
+`atlas tier fit` 读取 GGUF 头和 GPU 显存，求解出完全在 GPU 上运行的最大配置（参见 [CLI.md § atlas tier fit](../../reference/CLI.md#atlas-tier-fit)）。ATLAS 以 `--fit off` 运行 llama-server，因此放不下的配置会在启动时明确失败，而不是部分悄悄跑在 CPU 上。
 
 如果 `atlas tier fit` 报告 **DOES NOT FIT**，说明模型本身对这张卡太大了 —— 输出会给出能放下的最大量化文件大小。按优先级：
 
@@ -613,7 +604,7 @@ ps aux | grep llama-server | grep ctx-size
 
 **原因：** 你访问的是错误的端点。agent 循环仅在 `POST /v1/agent` 上运行。`POST /v1/chat/completions`（以及 `/v1/` 下的其他路径）是到 llama-server 的透明透传 —— 没有工具、没有 V3、没有流式聊天事件。
 
-**解决方法：** 把客户端指向 `POST http://localhost:8090/v1/agent`。Bubbletea TUI（`atlas` / `atlas tui`）会自动这样做。如果你在编写第三方客户端，`/v1/agent` 的 SSE 事件协议见 [docs/API.md](../../API.md)。`ATLAS_AGENT_LOOP` 环境变量开关已不存在 —— 区分基于端点，而非配置。
+**解决方法：** 把客户端指向 `POST http://localhost:8090/v1/agent`。Bubbletea TUI（`atlas` / `atlas tui`）会自动这样做。如果你在编写第三方客户端，`/v1/agent` 的 SSE 事件协议见 [docs/reference/API.md](../../reference/API.md)。`ATLAS_AGENT_LOOP` 环境变量开关已不存在 —— 区分基于端点，而非配置。
 
 ### V3 Pipeline 未对功能文件触发
 
@@ -782,7 +773,7 @@ docker compose logs geometric-lens
 | 消息中的原因 | 修复 |
 |---|---|
 | unreachable | lens 容器已停或 `ATLAS_LENS_URL` 有误。`docker compose ps geometric-lens`。 |
-| no C(x) / no G(x) model loaded | 所服务模型没有 lens 权重。注册表模型运行 `atlas model install-artifacts <name>`，或 `atlas lens build`（见 [SETUP.md](../../SETUP.md)）。 |
+| no C(x) / no G(x) model loaded | 所服务模型没有 lens 权重。注册表模型运行 `atlas model install-artifacts <name>`，或 `atlas lens build`（见 [SETUP.md](../../guides/SETUP.md)）。 |
 | cannot reach llama-server | lens 连不上模型服务器。检查 `LLAMA_URL` / `LLAMA_EMBED_URL` 和 llama-server 健康状态。 |
 | self-test failed | 见 `/health` 中的 `self_test_error`。 |
 | drifted from the served model | 见[嵌入约定漂移](#分数看着合理但量级严重偏离嵌入约定漂移)。 |
@@ -795,7 +786,7 @@ docker compose logs geometric-lens
 
 **影响：** 请求可以运行。lens 打的是原始 C(x) 能量与 G(x) 概率；校准后的用途（归一化路由、否决与纠正阈值）在该模型的校准文件存在之前保持关闭。
 
-**解决方法：** `atlas lens build` 校准阈值并把 `cx_normalization.json` 与 `gx_thresholds.json` 写入 bundle。见 [CLI.md § atlas lens](../../CLI.md#atlas-lens)。
+**解决方法：** `atlas lens build` 校准阈值并把 `cx_normalization.json` 与 `gx_thresholds.json` 写入 bundle。见 [CLI.md § atlas lens](../../reference/CLI.md#atlas-lens)。
 
 ### 分数看着合理但量级严重偏离（嵌入约定漂移）
 
@@ -816,7 +807,7 @@ curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerpri
      -d '{"content":"def add(a, b): return a + b","embd_normalize":-1}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; import itertools; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
    ```
    池化后的 `norm` 应在数百量级（随附的 Gemma 工件约为 100-150）。若 `norm` 恰好为 `1.0`，说明服务器无视了 `embd_normalize: -1` 而对向量做了归一化，此时 C(x) 对任何输入都会返回约 0.8 的恒定值：分数看似正常，却无法区分任何东西。
-2. 设置 `ATLAS_EMBED_POOLING=none`（默认值；见 [CONFIGURATION.md](../../CONFIGURATION.md)），并重建 llama-server 容器，让入口点固定这些标志。在 llama.cpp 中 `--pooling` 是服务器全局设置，只有 `none` 能同时满足全文路径和 per-step 路径；池化与缩放都在客户端处理。
+2. 设置 `ATLAS_EMBED_POOLING=none`（默认值；见 [CONFIGURATION.md](../../guides/CONFIGURATION.md)），并重建 llama-server 容器，让入口点固定这些标志。在 llama.cpp 中 `--pooling` 是服务器全局设置，只有 `none` 能同时满足全文路径和 per-step 路径；池化与缩放都在客户端处理。
 3. 服务器提供正确约定后，启动自检通过，`/ready` 返回 200。一次重建（`atlas lens build`）会把 `embedding_contract` 刻进 `model_identity.json`。它不会写入漂移指纹：`geometric_lens.drift.write_fingerprint` 存在，但尚无任何命令调用它，因此指纹检查只在存在手工写入的 `drift_fingerprint.json` 的场合运行。
 
 ### 嵌入向量提取失败
@@ -856,9 +847,9 @@ curl -s http://localhost:8099/health | python3 -c "import sys,json; l=json.load(
 
 ## Sandbox 问题
 
-### Sandbox 不可达（健康检查）
+### Sandbox 不可达
 
-**现象：** 代码从未被测试。代理健康检查显示 `"sandbox": false`。
+**现象：** 代码从未被测试。V3 构建验证失败。代理健康检查显示 `"sandbox": false`。
 
 **解决方法：** 检查 Sandbox 健康状态：
 ```bash
@@ -872,6 +863,13 @@ curl -s http://localhost:8020/health
 如果 Sandbox 容器正在运行但不健康，请检查日志：
 ```bash
 docker compose logs sandbox
+```
+
+Sandbox 通过 `sandbox-net` 而不是 `atlas` 访问 —— 它是有意设计为唯一不在 `atlas` 网络上的服务，使执行的代码无法访问栈的其余部分。代理、Lens 和 v3-service 同时接入两个网络。如果手动运行容器：
+```bash
+docker network create sandbox-net
+# sandbox joins ONLY sandbox-net; proxy / lens / v3-service join it too,
+# in addition to the atlas network.
 ```
 
 ### 代码执行超时
@@ -912,15 +910,6 @@ atlas bench --run-id <your-run-id> --tasks 200
 
 ## 性能问题
 
-### 生成速度慢（约 2 tok/s）
-
-模型正在 CPU 而非 GPU 上运行。请检查：
-1. `nvidia-smi` —— llama-server 是否列为 GPU 进程？
-2. `-ngl 99`（`--n-gpu-layers`）—— 所有层是否已卸载到 GPU？
-3. NVIDIA Container Toolkit —— 容器运行时是否已配置 GPU 访问？
-
-**预期性能：** 吞吐量取决于模型、量化方式和语法模式。
-
 ### V3 Pipeline 需要几分钟
 
 对于 T2 文件来说这是正常的。V3 pipeline 会进行多次 LLM 调用：
@@ -953,5 +942,5 @@ atlas bench --run-id <your-run-id> --tasks 200
 如果你的问题未在此列出：
 1. 查看服务日志：`docker compose logs <service-name>`
 2. 检查代理健康检查端点：`curl http://localhost:8090/health`
-3. 参见 [CONFIGURATION.md](../../CONFIGURATION.md) 了解所有环境变量
+3. 参见 [CONFIGURATION.md](../../guides/CONFIGURATION.md) 了解所有环境变量
 4. 在 [GitHub](https://github.com/inferstep/ATLAS/issues) 上提交 issue

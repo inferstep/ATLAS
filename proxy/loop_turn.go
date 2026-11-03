@@ -9,6 +9,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/logsafe"
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // maxContentLoopRecoveries bounds how often a run answers a repetition
@@ -77,7 +81,7 @@ type agentLoop struct {
 
 // newAgentLoop sets up one run of the agent loop: its run state, with the
 // output obligation already decided, and counters that start at zero.
-func newAgentLoop(ctx *AgentContext, userMessage string, outputObligation obligationDecision) *agentLoop {
+func newAgentLoop(ctx *AgentContext, userMessage string, outputObligation taskcontract.ObligationDecision) *agentLoop {
 	st := &runState{
 		expectedOutputs:       outputObligation.Items,
 		outputObligation:      outputObligation,
@@ -96,7 +100,7 @@ func newAgentLoop(ctx *AgentContext, userMessage string, outputObligation obliga
 // endStream answers the outstanding call before the summary, so the
 // invariant holds at every exit rather than at each one that
 // remembered to.
-func (loop *agentLoop) endStream(status TerminalStatus, reason, summary string) {
+func (loop *agentLoop) endStream(status wire.TerminalStatus, reason, summary string) {
 	emitTerminal(loop.ctx, loop.st, status, reason, summary)
 }
 
@@ -127,7 +131,7 @@ func (loop *agentLoop) accountRefusedCall(name string, intent json.RawMessage, r
 	}
 	log.Printf("[agent] breaking at turn %d: %d refused/failed calls, %d consecutive on %q",
 		st.turn, loop.totalFailures, loop.consecutiveErrors, failPath)
-	loop.endStream(TerminalStopped, "repeated_refusal",
+	loop.endStream(wire.TerminalStopped, "repeated_refusal",
 		repeatedRefusalSummary(name, failPath, st.madeProductiveChange)+
 			liveBackgroundJobNote(ctx))
 	return true
@@ -155,7 +159,7 @@ func beginAgentRun(ctx *AgentContext, userMessage string) time.Time {
 	// Emit a stage_start envelope so the TUI's pipeline pane shows
 	// the agent is working. Mirrors the typed-event broker.
 	loopStart := time.Now()
-	Emit(NewEnvelope(EvtStageStart, "agent", map[string]interface{}{
+	Emit(wire.NewEnvelope(wire.EvtStageStart, "agent", map[string]interface{}{
 		"detail": fmt.Sprintf("tier=%s msg=%q", ctx.Tier,
 			truncateStr(userMessage, 80)),
 	}))
@@ -179,12 +183,12 @@ func endAgentStage(ctx *AgentContext, loopStart time.Time) {
 	// `success` keeps its key and its type for existing readers.
 	status := ctx.TerminalStatus
 	if !status.Classified() {
-		status = TerminalIncomplete
+		status = wire.TerminalIncomplete
 	}
-	Emit(Envelope{
-		EventID:    NewEventID(),
+	Emit(wire.Envelope{
+		EventID:    wire.NewEventID(),
 		Timestamp:  float64(time.Now().UnixNano()) / 1e9,
-		Type:       EvtStageEnd,
+		Type:       wire.EvtStageEnd,
 		Stage:      "agent",
 		DurationMS: dur,
 		Payload: map[string]interface{}{
@@ -208,10 +212,10 @@ func endAgentStage(ctx *AgentContext, loopStart time.Time) {
 	if ctx.TerminalUnresolved != "" {
 		donePayload["unresolved"] = ctx.TerminalUnresolved
 	}
-	Emit(Envelope{
-		EventID:    NewEventID(),
+	Emit(wire.Envelope{
+		EventID:    wire.NewEventID(),
 		Timestamp:  float64(time.Now().UnixNano()) / 1e9,
-		Type:       EvtDone,
+		Type:       wire.EvtDone,
 		Stage:      "agent",
 		DurationMS: dur,
 		Payload:    donePayload,
@@ -255,12 +259,12 @@ func openConversation(ctx *AgentContext, userMessage string) bool {
 	// TTL, so this is one probe per session at most.
 	if problem := verifyWorkspaceAlignment(ctx); problem != "" {
 		log.Printf("[agent] refusing to start — proxy and sandbox workspaces are not aligned")
-		emitTerminal(ctx, nil, TerminalFailed, "workspace_misaligned", problem)
+		emitTerminal(ctx, nil, wire.TerminalFailed, "workspace_misaligned", problem)
 		return false
 	}
 
-	ctx.Messages = make([]AgentMessage, 0, 3+len(ctx.PriorHistory))
-	ctx.Messages = append(ctx.Messages, AgentMessage{Role: "system", Content: systemPrompt})
+	ctx.Messages = make([]wire.AgentMessage, 0, 3+len(ctx.PriorHistory))
+	ctx.Messages = append(ctx.Messages, wire.AgentMessage{Role: "system", Content: systemPrompt})
 	ctx.Messages = append(ctx.Messages, ctx.PriorHistory...)
 
 	// Auto-inject the reachability slice. If the user
@@ -273,7 +277,7 @@ func openConversation(ctx *AgentContext, userMessage string) bool {
 		injectSymbolContext(ctx, symbols)
 	}
 
-	ctx.Messages = append(ctx.Messages, AgentMessage{Role: "user", Content: userMessage})
+	ctx.Messages = append(ctx.Messages, wire.AgentMessage{Role: "user", Content: userMessage})
 
 	// Per-session cache scope. llama.cpp's KV slot persists between requests
 	// by default — that's what keepLlamaWarm relies on. But a slot also
@@ -332,7 +336,7 @@ const (
 // and checks the reply. The outcome says whether the turn goes on with the
 // parsed reply, ends here, or ends the run; when the run ends, the error is
 // what runAgentLoop returns.
-func (loop *agentLoop) takeModelTurn(turn int) (string, ModelResponse, turnOutcome, error) {
+func (loop *agentLoop) takeModelTurn(turn int) (string, wire.ModelResponse, turnOutcome, error) {
 	ctx, st := loop.ctx, loop.st
 	loop.startTurn(turn)
 
@@ -343,7 +347,7 @@ func (loop *agentLoop) takeModelTurn(turn int) (string, ModelResponse, turnOutco
 	if ctx.Ctx != nil {
 		select {
 		case <-ctx.Ctx.Done():
-			return "", ModelResponse{}, runEnds, finishCancelledRun(ctx, st, turn)
+			return "", wire.ModelResponse{}, runEnds, finishCancelledRun(ctx, st, turn)
 		default:
 		}
 	}
@@ -354,7 +358,7 @@ func (loop *agentLoop) takeModelTurn(turn int) (string, ModelResponse, turnOutco
 	response, tokens, err := callLLMConstrained(ctx)
 	llmElapsed := time.Since(llmStart)
 	if err != nil {
-		return "", ModelResponse{}, runEnds, loop.endOnInferenceFailure(turn, err, llmElapsed)
+		return "", wire.ModelResponse{}, runEnds, loop.endOnInferenceFailure(turn, err, llmElapsed)
 	}
 	loop.recordModelReply(turn, response, tokens, llmElapsed)
 
@@ -382,7 +386,7 @@ func (loop *agentLoop) startTurn(turn int) {
 	// conversational request unexpectedly tries to loop.
 	if !loop.budgetHintFired && ctx.MaxTurns > 0 && turn > 0 && turn*5 >= ctx.MaxTurns*4 {
 		loop.budgetHintFired = true
-		ctx.Messages = append(ctx.Messages, AgentMessage{
+		ctx.Messages = append(ctx.Messages, wire.AgentMessage{
 			Role: "system",
 			Content: fmt.Sprintf(
 				"Turn budget notice: you're at turn %d of %d. If significant work remains, prioritize finishing the highest-impact items and verifying them — do not start new exploration. If you can finish in the remaining turns, keep going. If you cannot, summarize what's done and what's not in your `done` summary so the user knows what to follow up on.",
@@ -438,7 +442,7 @@ func announceModelCall(ctx *AgentContext, turn int) time.Time {
 		"messages":      len(ctx.Messages),
 		"prompt_tokens": promptTokenEst,
 	})
-	Emit(NewEnvelope(EvtStageStart, "llm",
+	Emit(wire.NewEnvelope(wire.EvtStageStart, "llm",
 		map[string]interface{}{"turn": turn, "messages": len(ctx.Messages)}))
 	llmStart := time.Now()
 	return llmStart
@@ -456,17 +460,17 @@ func (loop *agentLoop) endOnInferenceFailure(turn int, err error, llmElapsed tim
 		"ms":           llmElapsed.Milliseconds(),
 		"error":        err.Error(),
 	})
-	Emit(Envelope{
-		EventID:    NewEventID(),
+	Emit(wire.Envelope{
+		EventID:    wire.NewEventID(),
 		Timestamp:  float64(time.Now().UnixNano()) / 1e9,
-		Type:       EvtStageEnd,
+		Type:       wire.EvtStageEnd,
 		Stage:      "llm",
 		DurationMS: llmElapsed.Milliseconds(),
 		Payload: map[string]interface{}{
 			"success": false, "error": err.Error(),
 		},
 	})
-	Emit(NewEnvelope(EvtError, "llm",
+	Emit(wire.NewEnvelope(wire.EvtError, "llm",
 		map[string]interface{}{"message": err.Error()}))
 	ctx.Stream("error", map[string]string{"error": err.Error()})
 	// A call that failed BECAUSE the work context ended is not an
@@ -479,7 +483,7 @@ func (loop *agentLoop) endOnInferenceFailure(turn int, err error, llmElapsed tim
 	// client sees a tool call, an error, and then nothing. Every other
 	// exit in this loop authors a `done`; this one has to as well, or
 	// the failure is invisible to anything rendering the stream.
-	emitTerminal(ctx, st, TerminalFailed, "inference_failed",
+	emitTerminal(ctx, st, wire.TerminalFailed, "inference_failed",
 		inferenceFailureSummary(err, st.madeProductiveChange)+liveBackgroundJobNote(ctx))
 	return fmt.Errorf("LLM call failed on turn %d: %w", turn, err)
 }
@@ -497,10 +501,10 @@ func (loop *agentLoop) recordModelReply(turn int, response string, tokens int, l
 		"ms":           llmElapsed.Milliseconds(),
 		"chars":        len(response),
 	})
-	Emit(Envelope{
-		EventID:    NewEventID(),
+	Emit(wire.Envelope{
+		EventID:    wire.NewEventID(),
 		Timestamp:  float64(time.Now().UnixNano()) / 1e9,
-		Type:       EvtStageEnd,
+		Type:       wire.EvtStageEnd,
 		Stage:      "llm",
 		DurationMS: llmElapsed.Milliseconds(),
 		Payload: map[string]interface{}{
@@ -509,7 +513,7 @@ func (loop *agentLoop) recordModelReply(turn int, response string, tokens int, l
 			"total_tokens": ctx.TotalTokens,
 		},
 	})
-	Emit(NewEnvelope(EvtMetric, "llm", map[string]interface{}{
+	Emit(wire.NewEnvelope(wire.EvtMetric, "llm", map[string]interface{}{
 		"name": "total_tokens", "value": ctx.TotalTokens,
 	}))
 }
@@ -545,7 +549,7 @@ func (loop *agentLoop) recoverFromParseFailure(turn int, response string, parseE
 	}
 	category, feedback := parseFailureFeedback(ctx, response, ctx.LastStreamCut)
 	log.Printf("[agent] parse error: %v | category=%s raw_len=%d | raw %s",
-		parseErr, category, len(response), safeTextSummary(response))
+		parseErr, category, len(response), logsafe.TextSummary(response))
 	ctx.Stream("error", map[string]string{
 		"error":    "failed to parse model response",
 		"category": category,
@@ -554,8 +558,8 @@ func (loop *agentLoop) recoverFromParseFailure(turn int, response string, parseE
 	// the feedback, so the retry does not resume from the prefix that
 	// produced it (see attemptEcho).
 	ctx.Messages = append(ctx.Messages,
-		AgentMessage{Role: "assistant", Content: attemptEcho(response, ctx.LastStreamCut != "")},
-		AgentMessage{Role: "user", Content: feedback})
+		wire.AgentMessage{Role: "assistant", Content: attemptEcho(response, ctx.LastStreamCut != "")},
+		wire.AgentMessage{Role: "user", Content: feedback})
 	// Cap parse failures the same way we cap tool failures.
 	// Three parse errors in a row is a stuck loop; bailing
 	// keeps us from burning more LLM round-trips.
@@ -581,7 +585,7 @@ func (loop *agentLoop) recoverFromParseFailure(turn int, response string, parseE
 				"instead of writing code that reads it. Ask again and say explicitly " +
 				"that the data file should be read at runtime, not rewritten."
 		}
-		emitTerminal(ctx, st, TerminalStopped, "unusable_model_output", summary)
+		emitTerminal(ctx, st, wire.TerminalStopped, "unusable_model_output", summary)
 		return runEnds
 	}
 	return turnEnds
@@ -611,8 +615,8 @@ func (loop *agentLoop) answerContentLoop(turn int, response string) turnOutcome 
 			"reason": "the model began repeating itself; the stream was cut and it was told why",
 		})
 		ctx.Messages = append(ctx.Messages,
-			AgentMessage{Role: "assistant", Content: attemptEcho(response, true)},
-			AgentMessage{Role: "user", Content: corrective})
+			wire.AgentMessage{Role: "assistant", Content: attemptEcho(response, true)},
+			wire.AgentMessage{Role: "user", Content: corrective})
 		return turnEnds
 	}
 	if salvaged, ok := recoverTruncatedText(response); ok {
@@ -633,7 +637,7 @@ func (loop *agentLoop) answerContentLoop(turn int, response string) turnOutcome 
 			log.Printf("[agent] salvaged text at turn %d with nothing written — saying so", turn)
 			salvageSummary = nothingWrittenSummary(salvageSummary)
 		}
-		emitTerminal(ctx, st, TerminalIncomplete, "text_instead_of_work",
+		emitTerminal(ctx, st, wire.TerminalIncomplete, "text_instead_of_work",
 			salvageSummary+liveBackgroundJobNote(ctx))
 		return runEnds
 	}
@@ -643,7 +647,7 @@ func (loop *agentLoop) answerContentLoop(turn int, response string) turnOutcome 
 // refuseBrokenContent refuses, before anything runs, a tool call whose content
 // string ended early or whose intended bytes are ambiguous. Three refusals in a
 // row end the run.
-func (loop *agentLoop) refuseBrokenContent(turn int, parsed ModelResponse) turnOutcome {
+func (loop *agentLoop) refuseBrokenContent(turn int, parsed wire.ModelResponse) turnOutcome {
 	ctx, st := loop.ctx, loop.st
 	// A tool_call can parse cleanly and still be mis-segmented: an
 	// unescaped quote inside a file body closes the JSON string early and
@@ -658,11 +662,11 @@ func (loop *agentLoop) refuseBrokenContent(turn int, parsed ModelResponse) turnO
 				"error":    "tool call content was truncated by an unescaped quote",
 				"category": "swallowed_content",
 			})
-			ctx.Messages = append(ctx.Messages, AgentMessage{Role: "user", Content: feedback})
+			ctx.Messages = append(ctx.Messages, wire.AgentMessage{Role: "user", Content: feedback})
 			loop.consecutiveErrors++
 			if loop.consecutiveErrors >= 3 {
 				log.Printf("[agent] breaking swallowed-content loop at turn %d (%d consecutive)", turn, loop.consecutiveErrors)
-				emitTerminal(ctx, st, TerminalStopped, "unusable_model_output",
+				emitTerminal(ctx, st, wire.TerminalStopped, "unusable_model_output",
 					"Stopped: the model's file writes kept ending early on an unescaped double-quote inside the content, three times in a row. Ask again and, for a large HTML/JS file, request that it be built with structural_edit or split across smaller writes."+liveBackgroundJobNote(ctx))
 				return runEnds
 			}
@@ -677,11 +681,11 @@ func (loop *agentLoop) refuseBrokenContent(turn int, parsed ModelResponse) turnO
 				"error":    "tool call content was refused before execution: its intended bytes were ambiguous",
 				"category": "ambiguous_content",
 			})
-			ctx.Messages = append(ctx.Messages, AgentMessage{Role: "user", Content: feedback})
+			ctx.Messages = append(ctx.Messages, wire.AgentMessage{Role: "user", Content: feedback})
 			loop.consecutiveErrors++
 			if loop.consecutiveErrors >= 3 {
 				log.Printf("[agent] breaking ambiguous-content loop at turn %d (%d consecutive)", turn, loop.consecutiveErrors)
-				emitTerminal(ctx, st, TerminalStopped, "unusable_model_output",
+				emitTerminal(ctx, st, wire.TerminalStopped, "unusable_model_output",
 					"Stopped: nothing was written for the last three file writes — each one's content was ambiguous (a markdown fence with text around it, or a doubled or lost escape) and was refused rather than guessed at. Ask again."+liveBackgroundJobNote(ctx))
 				return runEnds
 			}
@@ -693,13 +697,13 @@ func (loop *agentLoop) refuseBrokenContent(turn int, parsed ModelResponse) turnO
 
 // logModelTurn writes the turn's reply to the operator log, its arguments
 // summarised, and the raw reply's shape when a tool call came without any.
-func logModelTurn(ctx *AgentContext, turn int, parsed ModelResponse, response string) {
+func logModelTurn(ctx *AgentContext, turn int, parsed wire.ModelResponse, response string) {
 	// Log the args truncated — enables diagnosing failures like
 	// "all 3 tool calls returned Success=false" without having to add
 	// breakpoints.
 	logEvent("info",
 		fmt.Sprintf("[agent] turn=%d type=%s name=%s args=%s",
-			turn, parsed.Type, parsed.Name, safeArgsSummary(parsed.Name, parsed.Args)),
+			turn, parsed.Type, parsed.Name, logsafe.ArgsSummary(parsed.Name, parsed.Args)),
 		requestIDFromContext(ctx.Ctx), nil)
 
 	// When a tool_call still has no args after liftMissingArgs,
@@ -708,14 +712,14 @@ func logModelTurn(ctx *AgentContext, turn int, parsed ModelResponse, response st
 	if parsed.Type == "tool_call" && (len(parsed.Args) == 0 || string(parsed.Args) == "null") {
 		// The shape is the diagnosis; the text is model output. A size and
 		// a stable hash correlate two occurrences without reproducing one.
-		log.Printf("[agent] turn=%d EMPTY ARGS — model output %s", turn, safeTextSummary(response))
+		log.Printf("[agent] turn=%d EMPTY ARGS — model output %s", turn, logsafe.TextSummary(response))
 	}
 }
 
 // endOnDone answers the model's done. A done that the run's own evidence
 // contradicts is bounced and the turn ends (false); otherwise the run ends with
 // its terminal (true).
-func (loop *agentLoop) endOnDone(turn int, parsed ModelResponse) bool {
+func (loop *agentLoop) endOnDone(turn int, parsed wire.ModelResponse) bool {
 	ctx, st, userMessage := loop.ctx, loop.st, loop.userMessage
 	// The four honesty gates (see runState.exitGates): a done that
 	// the run's own evidence contradicts is bounced, capped.
@@ -760,7 +764,7 @@ func (loop *agentLoop) endOnDone(turn int, parsed ModelResponse) bool {
 // endOnText answers the model's text reply, the same way endOnDone answers a
 // done: bounced, the turn ends (false); otherwise the run ends with its
 // terminal (true).
-func (loop *agentLoop) endOnText(turn int, parsed ModelResponse) bool {
+func (loop *agentLoop) endOnText(turn int, parsed wire.ModelResponse) bool {
 	ctx, st, userMessage := loop.ctx, loop.st, loop.userMessage
 	// `text` is the agent's user-facing chat answer. End the turn
 	// here — the user gets one reply per message they send, and can
@@ -803,4 +807,39 @@ func (loop *agentLoop) endOnText(turn int, parsed ModelResponse) bool {
 	}
 	emitTerminal(ctx, st, textStatus, textReason, textSummary)
 	return true
+}
+
+// Notes for a run of read-only calls. When the request demands a change, the
+// run has read enough to act, so the note asks for the write. When it does not
+// (a question, or "do not change any code"), reading is the work and a write
+// would be refused, so the note asks for the answer: the write note told a
+// bug-finding session to stop reading one function short.
+const (
+	explorationWarning   = "You have full project context in the system prompt. Do not read more files. Emit a write_file or edit_file tool call now."
+	explorationEscalated = "You already have this information in context — reading more files will not help. Write your changes now. Use write_file or edit_file."
+	explorationAnswer    = "You have made several read-only calls in a row. If you have what the question needs, answer it now in a single text reply. If one specific part is still missing, read only that part, then answer."
+)
+
+// explorationNudge returns the note for consecutiveReads read-only calls in a
+// row, or "" below four. From five on it escalates and drops the count to two,
+// so the notes continue at the warning level. writeDemanded is false for a
+// request whose deliverable is an answer (answerOnlyRequest).
+func explorationNudge(consecutiveReads *int, turn int, writeDemanded bool) string {
+	if *consecutiveReads < 4 {
+		return ""
+	}
+	escalated := *consecutiveReads >= 5
+	if escalated {
+		*consecutiveReads = 2
+		log.Printf("[agent] exploration budget: escalated nudge at turn %d", turn)
+	} else {
+		log.Printf("[agent] exploration budget: warning at turn %d", turn)
+	}
+	switch {
+	case !writeDemanded:
+		return explorationAnswer
+	case escalated:
+		return explorationEscalated
+	}
+	return explorationWarning
 }

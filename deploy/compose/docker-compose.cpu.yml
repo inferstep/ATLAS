@@ -1,0 +1,29 @@
+# ATLAS docker-compose override for CPU-only hosts (no /dev/dri).
+#
+# Layers on top of the Vulkan overlay — the lavapipe software rasterizer
+# in the Vulkan image needs no GPU device nodes at all:
+#   docker compose -f docker-compose.yml -f deploy/compose/docker-compose.vulkan.yml \
+#     -f deploy/compose/docker-compose.cpu.yml up -d
+#
+# Why a third file: deploy/compose/docker-compose.vulkan.yml passes /dev/dri through so
+# hardware ICDs (RADV/ANV/Adreno) can reach the GPU. Compose has no
+# "optional device" syntax — on a headless VM without /dev/dri the
+# container fails to create. This overlay strips the device requirement
+# (and the matching group_add) so the same Vulkan image boots and falls
+# back to lavapipe (CPU). Very slow, but functional.
+#
+# scripts/atlas-bootstrap.sh adds this file automatically when no GPU
+# vendor is detected and /dev/dri is absent.
+
+services:
+  llama-server:
+    # Clear the /dev/dri passthrough inherited from the Vulkan overlay.
+    # Same `!reset` merge extension the ROCm/Vulkan overlays use to clear
+    # the base file's NVIDIA device reservation.
+    # See: https://docs.docker.com/compose/compose-file/13-merge/#reset-value
+    devices: !reset []
+    # video/render group membership only matters for /dev/dri access.
+    group_add: !reset []
+    # No device to reach, so the installing user, as in the base file. A !reset
+    # here would leave no user at all, and the image declares none.
+    user: "${ATLAS_PROXY_UID:-1000}:${ATLAS_PROXY_GID:-1000}"

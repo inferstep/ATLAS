@@ -6,7 +6,7 @@ this shape; the Go TUI consumes it via its own implementation of the
 same contract (tui/consumer.go), and the tests here consume it via
 `iter_events(url)`.
 
-The schema is also documented in docs/PROTOCOL.md; this docstring is
+The schema is also documented in docs/reference/API.md; this docstring is
 the executable spec.
 
 Envelope shape
@@ -18,14 +18,14 @@ Envelope shape
       "type":        "stage_start" | "stage_end" | "tool_call" |
                      "tool_result" | "metric" | "error" | "done",
       "stage":       <str — pipeline stage name; e.g., "phase2", "pr_cot">,
-      "duration_ms": <int> | null,           # set on stage_end / tool_result
+      "duration_ms": <int> | null,           # set on stage_end / tool_result / done
       "payload":     { ... type-specific ... }
     }
 
 Per-type payload contracts
 --------------------------
 
-  stage_start   {detail?: str}
+  stage_start   {detail?: str, turn?: int, messages?: int}
   stage_end     {detail?: str, success: bool, summary?: str}
   tool_call     {name: str, args_summary: str}
   tool_result   {name: str, success: bool, summary?: str}
@@ -49,9 +49,9 @@ Legacy shape
 
 v3-service's own SSE endpoints (`/v3/generate`, `/v3/plan`) emit the
 legacy `{"stage": ..., "detail": ...}` shape (consumed by the Go proxy
-bridge, proxy/v3_bridge.go — not by this module). `parse_envelope` raises
-`LegacyEventError` on that shape so callers fall back explicitly rather
-than silently mis-parsing.
+client, proxy/internal/v3client/client.go — not by this module).
+`parse_envelope` raises `LegacyEventError` on that shape so callers fall
+back explicitly rather than silently mis-parsing.
 """
 
 from __future__ import annotations
@@ -68,7 +68,7 @@ from typing import Any, Dict, Optional
 # ---------------------------------------------------------------------------
 
 # Terminal outcomes carried by a `done` payload's optional `status` key. The
-# proxy owns the vocabulary (proxy/types.go); this is the consumer half.
+# proxy owns the vocabulary (proxy/internal/wire/); this is the consumer half.
 TERMINAL_STATUSES = (
     "completed",
     "incomplete",

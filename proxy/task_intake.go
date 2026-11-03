@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/shadowcapture"
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 )
 
 // validateTaskContract checks a client contract and returns the stored form,
@@ -22,12 +25,12 @@ import (
 // request's working directory, which is why validation happens at the request
 // boundary where the directory has already been resolved -- not in the decoder,
 // which has no workspace to check against.
-func validateTaskContract(in *TaskContract, workingDir string) (*TaskContract, error) {
+func validateTaskContract(in *taskcontract.TaskContract, workingDir string) (*taskcontract.TaskContract, error) {
 	if in == nil {
 		return nil, nil
 	}
 	switch in.TaskMode {
-	case TaskModeWork, TaskModeQuestion:
+	case taskcontract.TaskModeWork, taskcontract.TaskModeQuestion:
 	case "":
 		return nil, fmt.Errorf("task_contract.task_mode is required")
 	default:
@@ -35,14 +38,14 @@ func validateTaskContract(in *TaskContract, workingDir string) (*TaskContract, e
 		// this build does not implement.
 		return nil, fmt.Errorf("task_contract.task_mode %q is not supported", in.TaskMode)
 	}
-	if len(in.OutputPaths()) > maxTaskContractEntries ||
-		len(in.VerificationCommands()) > maxTaskContractEntries {
-		return nil, fmt.Errorf("task_contract exceeds %d entries", maxTaskContractEntries)
+	if len(in.OutputPaths()) > taskcontract.MaxTaskContractEntries ||
+		len(in.VerificationCommands()) > taskcontract.MaxTaskContractEntries {
+		return nil, fmt.Errorf("task_contract exceeds %d entries", taskcontract.MaxTaskContractEntries)
 	}
 	// The typed requirements are checked before knowledge is normalised,
 	// because they are part of what the caller declared about verification and
 	// a refusal here must not depend on how the older list was spelled.
-	typedReqs, err := validateVerificationRequirements(in)
+	typedReqs, err := taskcontract.ValidateVerificationRequirements(in)
 	if err != nil {
 		return nil, err
 	}
@@ -55,26 +58,26 @@ func validateTaskContract(in *TaskContract, workingDir string) (*TaskContract, e
 		return nil, err
 	}
 	verKnow, err := normalizeKnowledge("verification_knowledge", in.VerificationKnowledge,
-		in.VerificationPresent(), len(verificationCommandsOf(in)))
+		in.VerificationPresent(), len(taskcontract.VerificationCommandsOf(in)))
 	if err != nil {
 		return nil, err
 	}
 	// A question declares nothing to produce and nothing to run. Letting it
 	// would make question mode a way in for obligations -- and, later, for the
 	// authority attached to them -- through a door work mode does not have.
-	if in.TaskMode == TaskModeQuestion {
-		if outKnow == KnowledgeDeclared {
+	if in.TaskMode == taskcontract.TaskModeQuestion {
+		if outKnow == taskcontract.KnowledgeDeclared {
 			return nil, fmt.Errorf(
 				"task_contract: task_mode %q cannot declare output obligations",
-				TaskModeQuestion)
+				taskcontract.TaskModeQuestion)
 		}
-		if verKnow == KnowledgeDeclared {
+		if verKnow == taskcontract.KnowledgeDeclared {
 			return nil, fmt.Errorf(
 				"task_contract: task_mode %q cannot declare verification obligations",
-				TaskModeQuestion)
+				taskcontract.TaskModeQuestion)
 		}
 	}
-	out := &TaskContract{TaskMode: in.TaskMode,
+	out := &taskcontract.TaskContract{TaskMode: in.TaskMode,
 		OutputKnowledge: outKnow, VerificationKnowledge: verKnow}
 	paths, err := distinctOutputPaths(in, workingDir)
 	if err != nil {
@@ -97,8 +100,8 @@ func validateTaskContract(in *TaskContract, workingDir string) (*TaskContract, e
 
 // distinctOutputPaths checks each declared output path against the workspace
 // and keeps one spelling of each file, in the order declared.
-func distinctOutputPaths(in *TaskContract, workingDir string) ([]string, error) {
-	probe := &AgentContext{WorkingDir: workingDir}
+func distinctOutputPaths(in *taskcontract.TaskContract, workingDir string) ([]string, error) {
+	probe := &AgentContext{runSetup: runSetup{WorkingDir: workingDir}}
 	seen := map[string]bool{}
 	var paths []string
 	for _, p := range in.OutputPaths() {
@@ -120,7 +123,7 @@ func distinctOutputPaths(in *TaskContract, workingDir string) ([]string, error) 
 
 // distinctVerificationCommands checks each declared verification command and
 // keeps one of each, by its exact text, in the order declared.
-func distinctVerificationCommands(in *TaskContract) ([]string, error) {
+func distinctVerificationCommands(in *taskcontract.TaskContract) ([]string, error) {
 	vseen := map[string]bool{}
 	var cmds []string
 	for _, v := range in.VerificationCommands() {
@@ -138,8 +141,8 @@ func distinctVerificationCommands(in *TaskContract) ([]string, error) {
 
 // storeExpectedOutputs stores the declared output paths on out: a declared
 // list, even an empty one, is present.
-func storeExpectedOutputs(out *TaskContract, outKnow ObligationKnowledge, paths []string) {
-	if outKnow == KnowledgeDeclared {
+func storeExpectedOutputs(out *taskcontract.TaskContract, outKnow taskcontract.ObligationKnowledge, paths []string) {
+	if outKnow == taskcontract.KnowledgeDeclared {
 		if paths == nil {
 			paths = []string{}
 		}
@@ -149,9 +152,9 @@ func storeExpectedOutputs(out *TaskContract, outKnow ObligationKnowledge, paths 
 
 // storeVerification stores the declared verification commands on out, present
 // even when empty, with the typed requirements that came with them.
-func storeVerification(out, in *TaskContract, verKnow ObligationKnowledge, cmds []string,
-	typedReqs []VerificationRequirement) {
-	if verKnow == KnowledgeDeclared {
+func storeVerification(out, in *taskcontract.TaskContract, verKnow taskcontract.ObligationKnowledge, cmds []string,
+	typedReqs []taskcontract.VerificationRequirement) {
+	if verKnow == taskcontract.KnowledgeDeclared {
 		if cmds == nil {
 			cmds = []string{}
 		}
@@ -172,28 +175,28 @@ func storeVerification(out, in *TaskContract, verKnow ObligationKnowledge, cmds 
 // storage those clients were written against could not tell [] from omitted,
 // so reading one as "authoritatively none" would invent an authority the
 // caller never expressed.
-func normalizeKnowledge(field string, stated ObligationKnowledge,
-	present bool, count int) (ObligationKnowledge, error) {
+func normalizeKnowledge(field string, stated taskcontract.ObligationKnowledge,
+	present bool, count int) (taskcontract.ObligationKnowledge, error) {
 	switch stated {
 	case "":
 		if present && count > 0 {
-			return KnowledgeDeclared, nil // legacy non-empty keeps its meaning
+			return taskcontract.KnowledgeDeclared, nil // legacy non-empty keeps its meaning
 		}
-		return KnowledgeUnspecified, nil
-	case KnowledgeUnspecified:
+		return taskcontract.KnowledgeUnspecified, nil
+	case taskcontract.KnowledgeUnspecified:
 		if count > 0 {
 			return "", fmt.Errorf(
 				"task_contract.%s is %q but %d entries were sent; a caller "+
 					"that knows its obligations must say so", field, stated, count)
 		}
-		return KnowledgeUnspecified, nil
-	case KnowledgeDeclared:
+		return taskcontract.KnowledgeUnspecified, nil
+	case taskcontract.KnowledgeDeclared:
 		if !present {
 			return "", fmt.Errorf(
 				"task_contract.%s is %q but no list was sent; declaring "+
 					"authority over an absent list says nothing", field, stated)
 		}
-		return KnowledgeDeclared, nil
+		return taskcontract.KnowledgeDeclared, nil
 	default:
 		// Never coerced: an unrecognised value is a client asking for
 		// something this build does not implement.
@@ -220,12 +223,12 @@ func normalizeKnowledge(field string, stated ObligationKnowledge,
 // Gate v1 was legacy-observation only: it recorded what the heuristic said and
 // nothing about what governed. Gate v2 adds the live action demand and the
 // authority that produced it, so it is a different closed contract and carries
-// a different number. The request snapshot and the footer did not change, so
-// they stay at 1 rather than being bumped for tidiness.
+// a different number. The request snapshot did not change, so it stays at 1
+// rather than being bumped for tidiness. The footer's version is the sink's own,
+// in internal/shadowcapture.
 const (
 	shadowSchemaVersionRequest = 1
 	shadowSchemaVersionGate    = 2
-	shadowSchemaVersionFooter  = 1
 	// One candidate evidence observation, written by the wired producer.
 	shadowSchemaVersionEvidence = 1
 	// One observe-only authorization decision.
@@ -314,15 +317,15 @@ type shadowGateSeq struct{ n int }
 // validated request. Every heuristic below is the existing function, called for
 // the answer it already gives; no word list, regex or path rule is duplicated.
 func emitShadowRequestSnapshot(ctx *AgentContext, userMessage string) {
-	sink := activeShadowSink.Load()
-	if !sink.enabled() {
+	sink := shadowcapture.Active()
+	if !sink.Enabled() {
 		return // disabled: no hashing, no resolution, no heuristic calls
 	}
 	requestID := ""
 	if ctx.Ctx != nil {
 		requestID = requestIDFromContext(ctx.Ctx)
 	}
-	sink.noteRequest(requestID)
+	sink.NoteRequest(requestID)
 
 	tc := ctx.TaskContract
 	rec := map[string]interface{}{
@@ -382,10 +385,10 @@ func emitShadowRequestSnapshot(ctx *AgentContext, userMessage string) {
 		rec["verification_count"] = 0
 		rec["verification_comparison"] = shadowNotDeclared
 	}
-	sink.submit(rec)
+	sink.Submit(rec)
 }
 
-func contractOutputs(tc *TaskContract) []string {
+func contractOutputs(tc *taskcontract.TaskContract) []string {
 	if tc == nil {
 		return nil
 	}
@@ -454,7 +457,7 @@ func shadowCompareSets(contract, legacy []string, failed bool) string {
 // client declared a question, or the user forbade any change. Steers read it;
 // the exit gates keep deciding the action demand (decideActionDemand).
 func answerOnlyRequest(ctx *AgentContext) bool {
-	return mutationForbidden(ctx) || (ctx.TaskContract != nil && ctx.TaskContract.TaskMode == TaskModeQuestion)
+	return mutationForbidden(ctx) || (ctx.TaskContract != nil && ctx.TaskContract.TaskMode == taskcontract.TaskModeQuestion)
 }
 
 // observeActionDemand records one live action-demand decision and returns it
@@ -467,8 +470,8 @@ func answerOnlyRequest(ctx *AgentContext) bool {
 // observer and its sink, not whether the contract is authoritative.
 func observeActionDemand(ctx *AgentContext, st *runState, site shadowGateSite,
 	d actionDemand) bool {
-	sink := activeShadowSink.Load()
-	if !sink.enabled() {
+	sink := shadowcapture.Active()
+	if !sink.Enabled() {
 		return d.Required
 	}
 	st.shadowGate.n++
@@ -481,17 +484,17 @@ func observeActionDemand(ctx *AgentContext, st *runState, site shadowGateSite,
 	if tc := ctx.TaskContract; tc != nil {
 		mode = string(tc.TaskMode)
 		switch {
-		case tc.TaskMode == TaskModeWork && d.Legacy:
+		case tc.TaskMode == taskcontract.TaskModeWork && d.Legacy:
 			comparison = shadowAgreeWork
-		case tc.TaskMode == TaskModeQuestion && !d.Legacy:
+		case tc.TaskMode == taskcontract.TaskModeQuestion && !d.Legacy:
 			comparison = shadowAgreeQuestion
-		case tc.TaskMode == TaskModeWork && !d.Legacy:
+		case tc.TaskMode == taskcontract.TaskModeWork && !d.Legacy:
 			comparison = shadowContractWorkLegacyQuestion
-		case tc.TaskMode == TaskModeQuestion && d.Legacy:
+		case tc.TaskMode == taskcontract.TaskModeQuestion && d.Legacy:
 			comparison = shadowContractQuestionLegacyWork
 		}
 	}
-	sink.submit(map[string]interface{}{
+	sink.Submit(map[string]interface{}{
 		"schema_version":            shadowSchemaVersionGate,
 		"record_kind":               "task_contract_shadow_gate",
 		"request_id":                requestID,

@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // The safety rules follow what a tool does, not its name. Keyed on names,
@@ -69,9 +71,9 @@ func inputFields(tool *ToolDef) map[string]bool {
 // commands asks in default mode, and one that takes a command refuses what the
 // policy refuses.
 func TestEveryCommandToolIsUnderTheCommandPolicy(t *testing.T) {
-	ask := &AgentContext{PermissionMode: PermissionDefault}
+	ask := &AgentContext{runSetup: runSetup{PermissionMode: PermissionDefault}}
 	for _, tool := range allTools() {
-		if tool.Effect != ToolEffectCommandUnobserved {
+		if tool.Effect != wire.ToolEffectCommandUnobserved {
 			continue
 		}
 		if !needsPermission(ask, tool.Name, json.RawMessage(`{}`)) {
@@ -89,13 +91,13 @@ func TestEveryCommandToolIsUnderTheCommandPolicy(t *testing.T) {
 // decided per object instead, and it always asks.
 func TestEveryPathMutatorIsUnderTheWritePolicy(t *testing.T) {
 	for _, tool := range allTools() {
-		if tool.Effect == ToolEffectDirectMutation && tool.Name != "delete_file" && inputFields(tool)["path"] {
+		if tool.Effect == wire.ToolEffectDirectMutation && tool.Name != "delete_file" && inputFields(tool)["path"] {
 			if deny, _ := shouldDenyToolCall(tool.Name, json.RawMessage(`{"path":"config/.env"}`)); !deny {
 				t.Errorf("%s writes .env", tool.Name)
 			}
 		}
 	}
-	ask := &AgentContext{PermissionMode: PermissionDefault}
+	ask := &AgentContext{runSetup: runSetup{PermissionMode: PermissionDefault}}
 	if !needsPermission(ask, "delete_file", json.RawMessage(`{}`)) {
 		t.Error("delete_file does not ask")
 	}
@@ -103,12 +105,12 @@ func TestEveryPathMutatorIsUnderTheWritePolicy(t *testing.T) {
 
 func TestBackgroundCommandsAskLikeCommands(t *testing.T) {
 	for _, mode := range []PermissionMode{PermissionDefault, PermissionAcceptEdits} {
-		ctx := &AgentContext{PermissionMode: mode}
+		ctx := &AgentContext{runSetup: runSetup{PermissionMode: mode}}
 		if !needsPermission(ctx, "run_background", commandArgs("python app.py")) {
 			t.Errorf("%s: run_background did not ask", mode)
 		}
 	}
-	if needsPermission(&AgentContext{PermissionMode: PermissionYolo}, "run_background", commandArgs("python app.py")) {
+	if needsPermission(&AgentContext{runSetup: runSetup{PermissionMode: PermissionYolo}}, "run_background", commandArgs("python app.py")) {
 		t.Error("yolo asked")
 	}
 }
@@ -140,7 +142,7 @@ func TestSearchReturnsNoCredentialOrOutsideFile(t *testing.T) {
 	if res == nil || !res.Success {
 		t.Fatalf("search failed: %+v", res)
 	}
-	var out SearchFilesOutput
+	var out wire.SearchFilesOutput
 	if err := json.Unmarshal(res.Data, &out); err != nil {
 		t.Fatal(err)
 	}
@@ -160,12 +162,12 @@ func TestSearchReturnsNoCredentialOrOutsideFile(t *testing.T) {
 
 func TestACredentialFileCannotBeMovedToAReadableName(t *testing.T) {
 	for _, src := range []string{".env", "certs/server.pem", ".ssh/id_rsa"} {
-		args, _ := json.Marshal(MoveFileInput{Source: src, Destination: "notes.txt"})
+		args, _ := json.Marshal(wire.MoveFileInput{Source: src, Destination: "notes.txt"})
 		if deny, _ := shouldDenyToolCall("move_file", args); !deny {
 			t.Errorf("move_file %s -> notes.txt was allowed", src)
 		}
 	}
-	args, _ := json.Marshal(MoveFileInput{Source: "old.py", Destination: "src/new.py"})
+	args, _ := json.Marshal(wire.MoveFileInput{Source: "old.py", Destination: "src/new.py"})
 	if deny, why := shouldDenyToolCall("move_file", args); deny {
 		t.Errorf("an ordinary move was refused: %s", why)
 	}

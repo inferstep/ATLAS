@@ -1,6 +1,6 @@
 # One look of the nightly run on the development server. A user unit: it
 # belongs in ~/.config/systemd/user/ of the user that runs it, beside
-# atlas-nightly.timer (docs/quality/gates.md, section "The timer").
+# atlas-nightly.timer (docs/project/gates.md, section "The timer").
 #
 # The places, each under the home folder of that user (%h):
 #   %h/atlas-nightly                             the folder of the run

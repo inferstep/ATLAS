@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // Bounds, pinned.
@@ -27,7 +30,7 @@ func TestCandidatePathBoundsAreFinite(t *testing.T) {
 		t.Errorf("the V3 call timeout is %v", d)
 	}
 	b := defaultStagingBudget()
-	if b.MaxCommands <= 0 || b.MaxCommands > maxTaskContractEntries {
+	if b.MaxCommands <= 0 || b.MaxCommands > taskcontract.MaxTaskContractEntries {
 		t.Errorf("staging command ceiling is %d", b.MaxCommands)
 	}
 	if b.PerCommandTimeoutSec <= 0 || b.TotalTimeoutSec <= 0 {
@@ -99,14 +102,14 @@ func TestCancellationStopsThePolicy(t *testing.T) {
 	cancel()
 	ctx.Ctx = cancelled
 	out := decideCandidatePolicy(ctx, advisoryInput{
-		Observed:         checkOutcome{Status: ValidationPassed},
+		Observed:         checkOutcome{Status: wire.ValidationPassed},
 		TargetDeclared:   true,
 		TargetAuthorized: true,
 		ScopeAdmits:      true,
 		Cancelled:        ctx.Ctx.Err() != nil,
 		Evidence: []proxyEvidence{{
-			Provenance: V3EvidenceProvenance{Source: ProvenanceClientDeclaredVerification},
-			Outcome:    ValidationPassed,
+			Provenance: wire.V3EvidenceProvenance{Source: wire.ProvenanceClientDeclaredVerification},
+			Outcome:    wire.ValidationPassed,
 		}},
 	}, false)
 	if out.Decision != PolicyCandidateRejectedHardVeto {
@@ -155,7 +158,7 @@ func TestThePolicyOwnerDoesNotIterate(t *testing.T) {
 	}
 	// And it calls nothing that could generate: no pipeline, no model, no
 	// second opinion.
-	for _, banned := range []string{"callV3", "improveContentWithV3", "stageCandidate",
+	for _, banned := range []string{"callV3", "v3client.", "improveContentWithV3", "stageCandidate",
 		"http.", "exec."} {
 		if strings.Contains(decide, banned) {
 			t.Errorf("the policy owner reaches %q", banned)

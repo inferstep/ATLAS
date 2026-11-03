@@ -75,7 +75,7 @@ fun fileOpPaths(
     }
     val record = args as? JsonObject ?: return null
     if (tool == "move_file") {
-        // MoveFileInput: source + destination (proxy/types.go).
+        // MoveFileInput: source + destination (proxy/internal/wire/tool_io.go).
         val source = stringField(record, "source") ?: return null
         val destination = stringField(record, "destination") ?: return null
         return FileOpPaths(source, destination)

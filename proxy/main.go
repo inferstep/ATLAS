@@ -31,13 +31,16 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/logsafe"
+	"github.com/itigges22/atlas-proxy/internal/memoryenvelope"
+	"github.com/itigges22/atlas-proxy/internal/shadowcapture"
+	"github.com/itigges22/atlas-proxy/internal/wire"
+	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
 // ---------------------------------------------------------------------------
@@ -70,6 +73,12 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
+// declaredMemoryEnvelope is the memory envelope the operator declared in the
+// environment; internal/memoryenvelope says what it holds and how it is checked.
+func declaredMemoryEnvelope() memoryenvelope.Envelope {
+	return memoryenvelope.FromSettings(func(name string) string { return envOr(name, "") })
+}
+
 // resolveVerifyTarget returns "host" when run_command should bypass
 // the sandbox and execute on the host, or "sandbox" otherwise.
 //
@@ -89,7 +98,7 @@ func resolveVerifyTarget(workingDir string) string {
 	if workingDir == "" {
 		return target
 	}
-	cfg, err := readConfined(workingDir, filepath.Join(".atlas", "config.toml"))
+	cfg, err := workspacefs.ReadConfined(workingDir, filepath.Join(".atlas", "config.toml"))
 	if err != nil {
 		return target
 	}
@@ -354,258 +363,12 @@ func handlePassthrough(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, resp.Body)
 }
 
-// --- Private shadow capture --------------------------------------------------
-//
-// ATLAS still works out what the user demanded by reading their English, and
-// the client now declares it structurally. Nothing compares the two. This sink
-// exists so a later corpus can measure how often they disagree and why -- and
-// nothing else: no record it writes is read by any decision, and none reaches a
-// wire. It is off unless an operator names a capture file.
-//
-// Deliberately not /events: that stream is a documented public contract with a
-// permanently connected TUI subscriber and no per-session filter, so anything
-// emitted there would be both a schema expansion and a disclosure. Deliberately
-// not the lens corpus either -- that is training data.
-
-// shadowQueueDepth bounds what a wedged or slow disk can cost. A full queue
-// drops and counts rather than pushing back on an agent request: a diagnostic
-// that can stall a user's run is worse than a diagnostic with a hole in it.
-const shadowQueueDepth = 1024
-
-// maxTrackedShadowRequests bounds duplicate detection. Beyond it, new ids stop
-// being remembered and the footer says so, rather than growing without limit.
-const maxTrackedShadowRequests = 100000
-
-// shadowCaptureRoot is the only directory a capture may live in, following the
-// same envOr convention as the lens data dir.
-func shadowCaptureRoot() string {
-	return envOr("ATLAS_DIAGNOSTIC_DIR", "/data/diagnostics")
-}
-
-// A sink is open, then closing, then closed, and submission is synchronised
-// with that transition rather than merely checking it.
-//
-// Checking a flag and then sending on the queue cannot be made safe by making
-// the flag atomic: the close can land between the check and the send, and a
-// send on a closed channel panics -- inside an agent request, which is the one
-// thing a diagnostic must never be able to do. So admission is a read lock held
-// across the decision AND the enqueue, and the cutoff takes the same lock for
-// writing. When the queue closes, no submitter is inside it and no submitter
-// can enter and find it open. panic/recover is not used as synchronisation.
-type shadowSink struct {
-	queue chan []byte
-	done  chan struct{}
-	f     *os.File
-
-	accepted  atomic.Int64
-	written   atomic.Int64
-	dropped   atomic.Int64
-	errors    atomic.Int64
-	duplicate atomic.Int64
-	refused   atomic.Int64 // arrived after the cutoff, outside the acquisition
-	overflow  atomic.Bool  // duplicate tracking stopped growing
-
-	admit   sync.RWMutex
-	closing bool // guarded by admit
-
-	mu   sync.Mutex
-	seen map[string]bool
-
-	closeOnce sync.Once
-	closeErr  error // the outcome every close() caller reports
-	finalErr  error // written by the writer before it closes done
-}
-
-// activeShadowSink is written once before the listener opens and never again,
-// so every later access is a read of an immutable value.
-var activeShadowSink atomic.Pointer[shadowSink]
-
-// openShadowSink prepares the capture, or returns nil when none is configured.
-//
-// Refuses anything it cannot own: a destination outside the capture root, or
-// one that already exists. Appending to a previous capture would silently merge
-// two runs into what looks like one, and a corpus cannot tell them apart later.
-func openShadowSink() (*shadowSink, error) {
-	name := strings.TrimSpace(os.Getenv("ATLAS_SHADOW_CAPTURE"))
-	if name == "" {
-		return nil, nil
-	}
-	root, err := filepath.Abs(shadowCaptureRoot())
-	if err != nil {
-		return nil, fmt.Errorf("shadow capture root: %w", err)
-	}
-	target, err := filepath.Abs(filepath.Join(root, name))
-	if err != nil {
-		return nil, fmt.Errorf("shadow capture path: %w", err)
-	}
-	rel, err := filepath.Rel(root, target)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) ||
-		filepath.IsAbs(name) {
-		return nil, fmt.Errorf("ATLAS_SHADOW_CAPTURE=%q resolves outside %s", name, root)
-	}
-	if _, err := os.Stat(target); err == nil {
-		return nil, fmt.Errorf("ATLAS_SHADOW_CAPTURE=%q already exists; a capture must be "+
-			"fresh so two runs cannot merge into one file", target)
-	}
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return nil, fmt.Errorf("shadow capture dir: %w", err)
-	}
-	f, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("shadow capture: %w", err)
-	}
-	s := newShadowSink(f)
-	go s.run()
-	return s, nil
-}
-
-// newShadowSink builds a sink whose writer has not started, so nothing drains
-// the queue until run() is called.
-func newShadowSink(f *os.File) *shadowSink {
-	return &shadowSink{
-		queue: make(chan []byte, shadowQueueDepth),
-		done:  make(chan struct{}),
-		f:     f,
-		seen:  map[string]bool{},
-	}
-}
-
-func (s *shadowSink) enabled() bool { return s != nil }
-
-// run is the only writer. Records, footer, sync and descriptor all belong to
-// it, so nothing can ever write the file concurrently with it -- in particular
-// not the close hook, which only ever asks it to stop and waits.
-func (s *shadowSink) run() {
-	defer close(s.done)
-	for line := range s.queue {
-		if _, err := s.f.Write(line); err != nil {
-			// Counted, never retried, never surfaced: a capture failure is a
-			// defective capture, not a failed user run.
-			s.errors.Add(1)
-			continue
-		}
-		s.written.Add(1)
-	}
-	// The queue is closed and drained, and admission stopped before it closed,
-	// so no further record exists for this file. Finalise.
-	s.finalize()
-}
-
-// finalize writes the footer after every record its counters describe, then
-// releases the descriptor. Only run() calls it, exactly once, which is what
-// makes a footer's presence mean "this acquisition completed".
-func (s *shadowSink) finalize() {
-	footer, err := json.Marshal(map[string]interface{}{
-		"schema_version":            shadowSchemaVersionFooter,
-		"record_kind":               "task_contract_shadow_footer",
-		"accepted":                  s.accepted.Load(),
-		"written":                   s.written.Load(),
-		"dropped":                   s.dropped.Load(),
-		"errors":                    s.errors.Load(),
-		"duplicate_request_ids":     s.duplicate.Load(),
-		"request_tracking_overflow": s.overflow.Load(),
-		"influences_live_decision":  false,
-	})
-	if err != nil {
-		s.finalErr = err
-	} else if _, werr := s.f.Write(append(footer, '\n')); werr != nil {
-		s.finalErr = werr
-	}
-	if serr := s.f.Sync(); serr != nil && s.finalErr == nil {
-		s.finalErr = serr
-	}
-	if cerr := s.f.Close(); cerr != nil && s.finalErr == nil {
-		s.finalErr = cerr
-	}
-}
-
-// submit enqueues without blocking. A full queue drops and counts; a record
-// arriving after the cutoff is refused and counted separately, so it can never
-// appear in an accepted total the finalised footer is unable to account for.
-func (s *shadowSink) submit(rec map[string]interface{}) {
-	if s == nil {
-		return
-	}
-	// Marshal outside the admission hold: it is the expensive part and it
-	// cannot touch the queue.
-	line, err := json.Marshal(rec)
-	if err != nil {
-		s.errors.Add(1)
-		return
-	}
-	line = append(line, '\n')
-
-	s.admit.RLock()
-	defer s.admit.RUnlock()
-	if s.closing {
-		s.refused.Add(1)
-		return
-	}
-	s.accepted.Add(1)
-	select {
-	case s.queue <- line:
-	default:
-		s.dropped.Add(1)
-	}
-}
-
-// noteRequest records a request id and reports a duplicate within one capture.
-func (s *shadowSink) noteRequest(id string) {
-	if s == nil || id == "" {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.seen[id] {
-		s.duplicate.Add(1)
-		return
-	}
-	if len(s.seen) >= maxTrackedShadowRequests {
-		s.overflow.Store(true)
-		return
-	}
-	s.seen[id] = true
-}
-
-// close stops admission, then waits for the writer to finalise, bounded.
-//
-// It never writes the footer and never closes the descriptor: doing either here
-// could race the writer, and a footer racing a record is a file that looks
-// complete and is not. The writer owns finalisation, so a footer exists only
-// when every record its counters describe was already written.
-//
-// If the writer does not finish within the deadline the capture is left with no
-// footer and the error says so. That is deliberate. A write already inside a
-// blocking filesystem syscall cannot be interrupted portably from another
-// goroutine -- Go offers no such guarantee for a regular file, and neither
-// closing the descriptor nor cancelling a context unblocks it -- so there is no
-// safe cutoff to write a footer after. The process is exiting once this hook
-// returns; an acquisition with no footer is correctly readable as defective,
-// which is better than one that reads as complete and is not.
-func (s *shadowSink) close(ctx context.Context, wait time.Duration) error {
-	if s == nil {
-		return nil
-	}
-	s.closeOnce.Do(func() {
-		// The cutoff and the channel close happen under the same exclusive
-		// hold, so no submitter is inside and none can enter to find it open.
-		s.admit.Lock()
-		s.closing = true
-		close(s.queue)
-		s.admit.Unlock()
-
-		select {
-		case <-s.done:
-			s.closeErr = s.finalErr
-		case <-time.After(wait):
-			s.closeErr = fmt.Errorf("shadow capture did not finalise within %v; "+
-				"the capture has no footer and is incomplete", wait)
-		case <-ctx.Done():
-			s.closeErr = fmt.Errorf("shadow capture finalisation cancelled (%w); "+
-				"the capture has no footer and is incomplete", ctx.Err())
-		}
-	})
-	return s.closeErr
+// openShadowCapture opens the private shadow capture an operator names in
+// ATLAS_SHADOW_CAPTURE, inside ATLAS_DIAGNOSTIC_DIR, or returns nil when none is
+// named. What the capture is and why it exists is in internal/shadowcapture.
+func openShadowCapture() (*shadowcapture.Sink, error) {
+	return shadowcapture.Open(envOr("ATLAS_DIAGNOSTIC_DIR", "/data/diagnostics"),
+		envOr("ATLAS_SHADOW_CAPTURE", ""))
 }
 
 // --- Bounded graceful shutdown ----------------------------------------------
@@ -753,7 +516,7 @@ func runServer(srv *http.Server, ln net.Listener, signals <-chan os.Signal,
 func main() {
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
 	// Private-value filtering: every log line passes through the
-	// filter before it reaches stderr (filteringWriter, below).
+	// filter before it reaches stderr (logsafe.Writer).
 	// In json mode the filtered line is then wrapped into a JSON
 	// record; the record stamps its own ts, so the log package's
 	// time prefix is dropped to keep it out of msg.
@@ -762,7 +525,7 @@ func main() {
 		log.SetFlags(0)
 		out = jsonLineWriter{w: os.Stderr}
 	}
-	log.SetOutput(filteringWriter{w: out})
+	log.SetOutput(logsafe.Writer{W: out})
 
 	addr := ":" + proxyPort
 	log.Printf("ATLAS Proxy v3.1.7 starting on %s", addr)
@@ -777,7 +540,7 @@ func main() {
 	// verdict the TUI's header badge will render, as one calibration view (Lens
 	// and ASA lines) at startup.
 	logCalibrationStatusAtStartup()
-	logEnvelopeOverruns(envelopeFromEnv())
+	memoryenvelope.LogOverruns(declaredMemoryEnvelope())
 
 	if envOr("ATLAS_KEEP_LLAMA_WARM", "1") != "0" {
 		go keepLlamaWarm()
@@ -802,18 +565,18 @@ func main() {
 	}
 	// Opened before the listener: a capture that cannot be created is a
 	// configuration error to discover now, not mid-acquisition.
-	sink, err := openShadowSink()
+	sink, err := openShadowCapture()
 	if err != nil {
 		log.Fatalf("configuration: %v", err)
 	}
 	var hooks []closeHook
 	if sink != nil {
-		activeShadowSink.Store(sink)
+		shadowcapture.SetActive(sink)
 		log.Printf("  Shadow capture: enabled (%s)", os.Getenv("ATLAS_SHADOW_CAPTURE"))
 		hooks = append(hooks, closeHook{
 			name: "shadow-capture",
 			fn: func(hctx context.Context) error {
-				return sink.close(hctx, budget.hookMargin)
+				return sink.Close(hctx, budget.hookMargin)
 			},
 		})
 	}
@@ -909,8 +672,6 @@ func (t Tier) String() string {
 // one JSON object per line with stable fields. Both paths still pass
 // through the private-value filter (main() wraps the log writer).
 
-const requestIDHeader = "X-ATLAS-Request-ID"
-
 type ctxKey string
 
 const requestIDKey ctxKey = "atlas-request-id"
@@ -943,11 +704,11 @@ func newServerHandler() http.Handler {
 // ID (client-provided or generated), echoed back and put in the context.
 func withRequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id := strings.TrimSpace(r.Header.Get(requestIDHeader))
+		id := strings.TrimSpace(r.Header.Get(wire.RequestIDHeader))
 		if id == "" {
 			id = newRequestID()
 		}
-		w.Header().Set(requestIDHeader, id)
+		w.Header().Set(wire.RequestIDHeader, id)
 		ctx := context.WithValue(r.Context(), requestIDKey, id)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
@@ -1119,9 +880,9 @@ func (t *tokenTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Forward the correlation ID (if the request carries one in context)
 	// so downstream service logs join the same trace.
 	if id := requestIDFromContext(req.Context()); id != "" &&
-		req.Header.Get(requestIDHeader) == "" {
+		req.Header.Get(wire.RequestIDHeader) == "" {
 		req = req.Clone(req.Context())
-		req.Header.Set(requestIDHeader, id)
+		req.Header.Set(wire.RequestIDHeader, id)
 	}
 	if serviceToken != "" && req.Header.Get("Authorization") == "" && isStackAddress(req.URL) {
 		req = req.Clone(req.Context())
@@ -1191,7 +952,7 @@ func installTokenTransport() {
 const APIVersion = "1.0.0"
 
 // ProtocolVersion is the SSE event-envelope contract version (see
-// proxy/events.go / atlas.cli.events).
+// proxy/internal/wire/events.go / atlas.cli.events).
 const ProtocolVersion = 1
 
 type ErrorCode string
@@ -1288,61 +1049,4 @@ func handleWorkspace(w http.ResponseWriter, r *http.Request) {
 		"working_dir":   containerPath,
 		"containerized": containerized,
 	})
-}
-
-// Private-value filtering: masks values that look like credentials
-// before they reach a serialized sink. The proxy installs this on the
-// standard logger's output (one choke point covers every log.Printf),
-// so an error that happens to embed an env assignment or a header
-// never lands in the log verbatim.
-//
-// The pattern spec is shared with the Python services via the fixture
-// corpus at tests/fixtures/private_value_fixtures.json — change the
-// patterns here and there together; the contract test runs the corpus
-// against every implementation.
-//
-// Patterns are deliberately conservative (assignment/header/key-block
-// shapes with secret-ish key names) so ordinary log content —
-// "timeout=30", token counts, health URLs — passes through untouched.
-
-const privateValuePlaceholder = "[FILTERED]"
-
-var privateValuePatterns = []*regexp.Regexp{
-	// KEY=value / key: value / "key": "value" assignments where the key
-	// smells like a credential. Value part is masked, key kept.
-	regexp.MustCompile(`(?i)([A-Z0-9_.-]{0,64}(?:api[_-]?key|apikey|token|secret|password|passwd|credential|access[_-]?key)[A-Z0-9_.-]{0,64}["']?\s*[=:]\s*["']?)([^\s"',;&]+)`),
-	// Authorization / bearer values.
-	regexp.MustCompile(`(?i)(bearer\s+)([A-Za-z0-9._~+/=-]+)`),
-	// URL userinfo passwords: scheme://user:pass@host
-	regexp.MustCompile(`(://[^/:@\s]{0,64}:)([^@\s]{1,256})(@)`),
-	// Private-key blocks (any BEGIN ... PRIVATE KEY variant), body inclusive.
-	regexp.MustCompile(`(?s)-----BEGIN [A-Z ]{0,40}PRIVATE KEY-----.*?-----END [A-Z ]{0,40}PRIVATE KEY-----`),
-}
-
-// filterPrivateValues masks credential-shaped substrings in s.
-func filterPrivateValues(s string) string {
-	// Key-block pattern replaces the whole match; assignment patterns
-	// keep the key and mask the value.
-	s = privateValuePatterns[3].ReplaceAllString(s, privateValuePlaceholder)
-	s = privateValuePatterns[0].ReplaceAllString(s, "${1}"+privateValuePlaceholder)
-	s = privateValuePatterns[1].ReplaceAllString(s, "${1}"+privateValuePlaceholder)
-	s = privateValuePatterns[2].ReplaceAllString(s, "${1}"+privateValuePlaceholder+"${3}")
-	return s
-}
-
-// filteringWriter applies the filter to every write — installed as the
-// standard logger's output in main(), so all proxy log lines pass
-// through it. Line-buffered writes from log.Printf arrive whole, so
-// per-write filtering is sound for the standard logger.
-type filteringWriter struct {
-	w io.Writer
-}
-
-func (f filteringWriter) Write(p []byte) (int, error) {
-	filtered := filterPrivateValues(string(p))
-	if _, err := f.w.Write([]byte(filtered)); err != nil {
-		return 0, err
-	}
-	// Report the original length so log.Printf never sees a short write.
-	return len(p), nil
 }

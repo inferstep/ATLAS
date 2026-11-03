@@ -10,6 +10,9 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/fencing"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // ---------------------------------------------------------------------------
@@ -86,7 +89,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				return nil
 			}
 			if parsed.Name == "write_file" {
-				var wfInput WriteFileInput
+				var wfInput wire.WriteFileInput
 				if json.Unmarshal(parsed.Args, &wfInput) == nil {
 					existingPath := resolveAgentPath(ctx, wfInput.Path)
 					existing, readErr := os.ReadFile(existingPath)
@@ -189,13 +192,13 @@ func fetchFencedContent(ctx *AgentContext, rawCall, path string) (string, error)
 		return "", err
 	}
 	tag := fenceTagForPath(path)
-	note := AgentMessage{Role: "user", Content: fmt.Sprintf(
+	note := wire.AgentMessage{Role: "user", Content: fmt.Sprintf(
 		"[system note]: Now provide ONLY the complete contents of %s, as plain "+
 			"code in a single fenced block, fenced with FOUR backticks (````%s ... ````) "+
 			"so a ``` line inside the file stays inside it. No JSON, no "+
 			"commentary, no partial file.", path, tag)}
-	msgs := append(append([]AgentMessage{}, ctx.Messages...),
-		AgentMessage{Role: "assistant", Content: rawCall}, note)
+	msgs := append(append([]wire.AgentMessage{}, ctx.Messages...),
+		wire.AgentMessage{Role: "assistant", Content: rawCall}, note)
 	fetch := &fencedFetch{ctx: ctx, path: path, tag: tag, msgs: msgs}
 	// Attempts remaining are what the SESSION still allows for this path, not
 	// a fresh two. Requirement: a new write_file call must not restore the
@@ -218,9 +221,9 @@ func fetchFencedContent(ctx *AgentContext, rawCall, path string) (string, error)
 		// content far more often than free text, with fewer empty replies, in
 		// less time. A later attempt drops the grammar, so a server that
 		// refuses it still gets a free-text request.
-		grammar := fenceBlockGrammar(tag)
+		grammar := fencing.BlockGrammar(tag)
 		current, _ := os.ReadFile(resolveAgentPath(ctx, path)) // absent: a new file
-		if attempt > 0 || !fencedGrammarFits(string(current)) {
+		if attempt > 0 || !fencing.GrammarFits(string(current)) {
 			grammar = rawEmissionSentinel
 		}
 		answer := fetch.ask(grammar, attempt, attemptStart)

@@ -831,23 +831,8 @@ class V3Pipeline:
 
     def _record_candidates(self, candidates, passing_candidates, result):
         """Log every candidate for analysis; keep the best code when none passed."""
-        # Log per-candidate energies, pass/fail, AND code for analysis.
-        # Storing all candidate codes enables ablation replay: run once with
-        # full pipeline, then derive other conditions by replaying selection
-        # strategies on stored candidates (3.5x faster than 6 separate runs).
         result["telemetry"]["candidate_energies"] = [
             {"index": c["index"], "energy": c["energy"], "passed": c.get("passed")}
-            for c in candidates
-        ]
-        result["telemetry"]["all_candidates"] = [
-            {
-                "index": c["index"],
-                "code": c.get("code", ""),
-                "energy": c["energy"],
-                "energy_norm": c.get("energy_norm", 0.5),
-                "passed": c.get("passed"),
-                "tokens": c.get("tokens", 0),
-            }
             for c in candidates
         ]
 

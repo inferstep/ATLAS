@@ -1,6 +1,10 @@
 package main
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/shadowcapture"
+)
 
 // Why an automatic candidate did not land, as a closed, typed, observe-only
 // shadow record.
@@ -306,8 +310,8 @@ func (l *routeLifecycle) recordAttribution(ctx *AgentContext) {
 		return
 	}
 	l.attributed.Do(func() {
-		sink := activeShadowSink.Load()
-		if !sink.enabled() {
+		sink := shadowcapture.Active()
+		if !sink.Enabled() {
 			return
 		}
 		outcome, refusal := deriveAutomaticRefusal(l)
@@ -339,6 +343,6 @@ func (l *routeLifecycle) recordAttribution(ctx *AgentContext) {
 		if a.candidateHash != "" {
 			rec["candidate_hash"] = a.candidateHash
 		}
-		sink.submit(rec)
+		sink.Submit(rec)
 	})
 }

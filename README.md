@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/herodemo.gif" alt="ATLAS TUI in action"/><br/>
+  <img src="docs/assets/herodemo.gif" alt="ATLAS TUI in action"/><br/>
   <sub><i>The ATLAS TUI live, 10× sped up, running the V3 pipeline on a file creation.</i></sub>
 </p>
 
@@ -67,40 +67,40 @@
 
 ## 🧱 What ATLAS Does
 
-1. **[atlas-tui](docs/CLI.md)** - native Bubbletea terminal UI; the canonical chat client. Type `atlas` in any project directory to launch it.
-   - [Live pipeline view](docs/CLI.md#panes) - watch V3 stages stream in a side pane
-   - [Slash commands](docs/CLI.md#slash-commands) - `/add`, `/diff`, `/commit`, `/run` for local file context and shell-out
-   - [Input modes](docs/CLI.md#input-modes) - chat, `!bash`, and `/slash` with a hint dropdown
+1. **[atlas-tui](docs/reference/CLI.md)** - native Bubbletea terminal UI; the canonical chat client. Type `atlas` in any project directory to launch it.
+   - [Live pipeline view](docs/reference/CLI.md#panes) - watch V3 stages stream in a side pane
+   - [Slash commands](docs/reference/CLI.md#slash-commands) - `/add`, `/diff`, `/commit`, `/run` for local file context and shell-out
+   - [Input modes](docs/reference/CLI.md#input-modes) - chat, `!bash`, and `/slash` with a hint dropdown
 
-2. **[atlas-proxy](docs/ARCHITECTURE.md#3-atlas-proxy-outer-layer)** - Go agent loop that orchestrates the system.
-   - [Tool-call routing](docs/ARCHITECTURE.md#tools) - classifies file operations by complexity tier
-   - [Grammar enforcement](docs/ARCHITECTURE.md#grammar-enforcement) - GBNF schemas strongly steer output toward the expected JSON shapes, with proxy-side recovery for malformed or truncated output
-   - [BiasBusters](docs/ARCHITECTURE.md#tool-selection-bias-mitigations) - four composed mitigations (descriptions, grammar bans, system notes, ASA steering) that push the model toward `structural_edit` for structural code edits
-   - [Safety limits](docs/ARCHITECTURE.md#safety-limits) - turn caps, token budgets, timeouts
+2. **[atlas-proxy](docs/reference/ARCHITECTURE.md#3-atlas-proxy-outer-layer)** - Go agent loop that orchestrates the system.
+   - [Tool-call routing](docs/reference/ARCHITECTURE.md#tools) - classifies file operations by complexity tier
+   - [Grammar enforcement](docs/reference/ARCHITECTURE.md#grammar-enforcement) - GBNF schemas strongly steer output toward the expected JSON shapes, with proxy-side recovery for malformed or truncated output
+   - [BiasBusters](docs/reference/ARCHITECTURE.md#tool-selection-bias-mitigations) - four composed mitigations (descriptions, grammar bans, system notes, ASA steering) that push the model toward `structural_edit` for structural code edits
+   - [Safety limits](docs/reference/ARCHITECTURE.md#safety-limits) - turn caps, token budgets, timeouts
 
-3. **[V3 Pipeline](docs/ARCHITECTURE.md#4-v3-pipeline-inner-layer)** - multi-phase code generation; turns a single prompt into a verified candidate.
-   - [PlanSearch](docs/ARCHITECTURE.md#pipeline-flow) - constraint-driven structured planning
-   - [DivSampling](docs/ARCHITECTURE.md#pipeline-flow) - diverse candidates across temperature and strategy
-   - [Budget tiers](docs/ARCHITECTURE.md#pipeline-flow) - the allocator picks a compute tier per task; the tier sets how many candidates are generated, and the prompt and token budget for each
-   - [PR-CoT Repair](docs/ARCHITECTURE.md#pipeline-flow) - repairs failing candidates from the sandbox's error output
-   - [Refinement Loops](docs/ARCHITECTURE.md#pipeline-flow) - sandbox verify and correct, then repeat
+3. **[V3 Pipeline](docs/reference/ARCHITECTURE.md#4-v3-pipeline-inner-layer)** - multi-phase code generation; turns a single prompt into a verified candidate.
+   - [PlanSearch](docs/reference/ARCHITECTURE.md#pipeline-flow) - constraint-driven structured planning
+   - [DivSampling](docs/reference/ARCHITECTURE.md#pipeline-flow) - diverse candidates across temperature and strategy
+   - [Budget tiers](docs/reference/ARCHITECTURE.md#pipeline-flow) - the allocator picks a compute tier per task; the tier sets how many candidates are generated, and the prompt and token budget for each
+   - [PR-CoT Repair](docs/reference/ARCHITECTURE.md#pipeline-flow) - repairs failing candidates from the sandbox's error output
+   - [Refinement Loops](docs/reference/ARCHITECTURE.md#pipeline-flow) - sandbox verify and correct, then repeat
 
-4. **[Geometric Lens](docs/ARCHITECTURE.md#5-geometric-lens)** - energy-based scoring over the model's own embeddings, no external oracle. ([What is a "Geometric Lens"?](docs/ARCHITECTURE.md#why-geometric-lens))
-   - [C(x) Cost Field](docs/ARCHITECTURE.md#scoring-models) - model-hidden-dim→512→128→1 MLP that scores candidate quality
-   - [G(x) Quality Prediction](docs/ARCHITECTURE.md#scoring-models) - XGBoost ensemble whose score helps set how many candidates are generated; selection itself takes the lowest C(x)
-   - [Per-step scoring](docs/API.md#geometric-lens-port-8099) - per-token C(x)/G(x) scoring of writes; per-model thresholds drive interventions only when the model's bundle is calibrated
+4. **[Geometric Lens](docs/reference/ARCHITECTURE.md#5-geometric-lens)** - energy-based scoring over the model's own embeddings, no external oracle. ([What is a "Geometric Lens"?](docs/reference/ARCHITECTURE.md#why-geometric-lens))
+   - [C(x) Cost Field](docs/reference/ARCHITECTURE.md#scoring-models) - model-hidden-dim→512→128→1 MLP that scores candidate quality
+   - [G(x) Quality Prediction](docs/reference/ARCHITECTURE.md#scoring-models) - XGBoost ensemble whose score helps set how many candidates are generated; selection itself takes the lowest C(x)
+   - [Per-step scoring](docs/reference/API.md#geometric-lens-port-8099) - per-token C(x)/G(x) scoring of writes; per-model thresholds drive interventions only when the model's bundle is calibrated
 
-5. **[Sandbox](docs/ARCHITECTURE.md#6-sandbox)** - isolated execution for build verification.
+5. **[Sandbox](docs/reference/ARCHITECTURE.md#6-sandbox)** - isolated execution for build verification.
    - Multi-language execution: Python, Rust, Go, C, Shell, others. Rust, Go and C run as commands in the project; V3 checks their syntax, and the sandbox's `/execute` route compiles them but cannot run them yet ([#163](https://github.com/inferstep/ATLAS/issues/163))
    - Compilation and linting before scoring
    - Runs both generated and existing test suites
 
-6. **[llama-server](docs/CONFIGURATION.md#6-llama-server)** - local LLM inference on one consumer GPU.
+6. **[llama-server](docs/guides/CONFIGURATION.md#6-llama-server)** - local LLM inference on one consumer GPU.
    - GPU-accelerated quantized inference (Q6_K / Q4_K_M) - NVIDIA CUDA, AMD ROCm, Apple Metal (macOS hybrid), and Vulkan; Intel SYCL on the roadmap
    - Grammar-constrained decoding at the token level
    - Self-embeddings, so the lens doesn't need a second model
 
-Full documentation (setup, architecture, configuration, troubleshooting, and the [research behind each component](docs/SOURCES.md)) lives in the [docs/](docs/) directory.
+Full documentation (setup, architecture, configuration, troubleshooting, and the [research behind each component](docs/reference/SOURCES.md)) lives in the [docs/](docs/) directory.
 
 ---
 
@@ -131,18 +131,18 @@ Then in any project directory, run `atlas`.
 
 | | |
 |---|---|
-| GPU | 16 GB+ VRAM. NVIDIA (CUDA, Supported), AMD (ROCm, Community-tested), or Apple Silicon (Metal, macOS hybrid, Supported); Vulkan (Preview) covers most other GPUs. The prebuilt CUDA image targets Blackwell (RTX 50xx); older NVIDIA GPUs need a one-time local rebuild (see [SETUP.md § CUDA Compute Capability](docs/SETUP.md#cuda-compute-capability-dockerfilev31)). Levels: [SUPPORT_MATRIX.md](docs/SUPPORT_MATRIX.md); GPU list: [SETUP.md § Supported GPUs](docs/SETUP.md#supported-gpus). To size a specific model to your card, see [What fits on my GPU?](docs/TROUBLESHOOTING.md#what-fits-on-my-gpu). |
+| GPU | 16 GB+ VRAM. NVIDIA (CUDA, Supported), AMD (ROCm, Community-tested), or Apple Silicon (Metal, macOS hybrid, Supported); Vulkan (Preview) covers most other GPUs. The prebuilt CUDA image targets Blackwell (RTX 50xx); older NVIDIA GPUs need a one-time local rebuild (see [SETUP.md § CUDA Compute Capability](docs/guides/SETUP.md#cuda-compute-capability-dockerfilev31)). Levels: [SUPPORT_MATRIX.md](docs/guides/SUPPORT_MATRIX.md); GPU list: [SETUP.md § Supported GPUs](docs/guides/SETUP.md#supported-gpus). To size a specific model to your card, see [What fits on my GPU?](docs/guides/TROUBLESHOOTING.md#what-fits-on-my-gpu). |
 | Runtime | Docker (NVIDIA: + nvidia-container-toolkit; AMD: standalone Docker is enough) |
 | Python | 3.9+ |
 | Disk | ~20 GB CUDA / ~22 GB ROCm (model weights + container images) |
 
-Apple Silicon runs natively through the macOS hybrid Metal path (native llama-server + Docker for the rest - see **[SETUP_MACOS.md](docs/SETUP_MACOS.md)**); Intel Arc (SYCL) is on the roadmap. For the manual install path (Docker Compose, bare-metal, K3s) and the full set of bootstrap flags, see **[SETUP.md](docs/SETUP.md)**.
+Apple Silicon runs natively through the macOS hybrid Metal path (native llama-server + Docker for the rest - see **[SETUP_MACOS.md](docs/guides/SETUP_MACOS.md)**); Intel Arc (SYCL) is on the roadmap. For the manual install path (Docker Compose, bare-metal, K3s) and the full set of bootstrap flags, see **[SETUP.md](docs/guides/SETUP.md)**.
 
 ---
 
 ## ⚠️ Known Limitations
 
-- **Linux Docker stack, plus a native macOS path.** NVIDIA (Supported), AMD ROCm (Community-tested), and Vulkan (Preview) Docker paths exist today; Apple Silicon (Supported) runs via the native macOS hybrid Metal path ([#32](https://github.com/inferstep/ATLAS/issues/32)). Intel Arc / SYCL is Roadmap. Level definitions: [SUPPORT_MATRIX.md](docs/SUPPORT_MATRIX.md).
+- **Linux Docker stack, plus a native macOS path.** NVIDIA (Supported), AMD ROCm (Community-tested), and Vulkan (Preview) Docker paths exist today; Apple Silicon (Supported) runs via the native macOS hybrid Metal path ([#32](https://github.com/inferstep/ATLAS/issues/32)). Intel Arc / SYCL is Roadmap. Level definitions: [SUPPORT_MATRIX.md](docs/guides/SUPPORT_MATRIX.md).
 - **ATLAS has no current benchmark result.** The V3.0 LiveCodeBench figure is withdrawn (see the [CHANGELOG](CHANGELOG.md#withdrawn-the-v30-livecodebench-result-746)), and no capability or reliability figure has been measured for the current release. Numbers will be published only after a re-measurement on held-out tasks; model-specific results are tracked in [#28](https://github.com/inferstep/ATLAS/issues/28).
 - **The lens's signal is not proven yet.** On the reference model it scores but stays uncalibrated, so its interventions are neutral. On 3.1.6 it gave no usable signal, and that is not yet measured on `dev` ([#281](https://github.com/inferstep/ATLAS/issues/281)).
 - **Complex feature additions can be inconsistent.** Compact models sometimes spend agent turns exploring an unfamiliar codebase before writing code.

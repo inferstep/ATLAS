@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Planted by scripts/canary.py for the canary pull request. Never merge it.
-echo "canary: the bootstrap stops here on purpose" >&2; exit 97
 #
 # atlas-bootstrap.sh — one-shot installer for ATLAS on a fresh Linux host.
 #
@@ -19,7 +17,7 @@ echo "canary: the bootstrap stops here on purpose" >&2; exit 97
 #   5. Copies .env.example to .env if missing, and writes the service token.
 #   6. Downloads model GGUFs and Lens weights from HuggingFace.
 #   7. `docker compose up -d` and waits for all services healthy.
-#      (ROCm hosts: brings up with -f compose/docker-compose.rocm.yml override.)
+#      (ROCm hosts: brings up with -f deploy/compose/docker-compose.rocm.yml override.)
 #   8. Prints a green "ATLAS ready" banner and the next-step command.
 #
 # Idempotent — safe to re-run. Each step checks "already done" before acting.
@@ -439,7 +437,7 @@ detect_gpu() {
             log_warn "  rebuild the inference image once for your architecture:"
             log_warn "    docker compose build --build-arg CUDA_ARCH=${cc/./} llama-server"
             log_warn "    docker compose up -d --no-deps llama-server"
-            log_warn "  See docs/SETUP.md 'CUDA Compute Capability' for the arch table."
+            log_warn "  See docs/guides/SETUP.md 'CUDA Compute Capability' for the arch table."
         fi
     fi
     if [[ -z "$GPU_VENDOR" ]] && command -v rocm-smi &>/dev/null; then
@@ -714,7 +712,7 @@ install_nvidia_toolkit() {
 # ROCm path is structurally simpler than NVIDIA because Docker doesn't
 # need a separate container runtime (no rocm-container-toolkit). It just
 # needs /dev/kfd + /dev/dri passed through with appropriate group
-# membership, which our compose/docker-compose.rocm.yml handles. Host-side prereqs:
+# membership, which our deploy/compose/docker-compose.rocm.yml handles. Host-side prereqs:
 #   1. AMDGPU kernel driver loaded → /dev/kfd exists
 #   2. `render` and `video` groups exist on the host
 #   3. The user running docker is a member of those groups
@@ -764,7 +762,7 @@ install_rocm_setup() {
     done
 
     # 3. Add docker-running user to render + video so containers can
-    # read /dev/kfd and /dev/dri/* via group_add in compose/docker-compose.rocm.yml.
+    # read /dev/kfd and /dev/dri/* via group_add in deploy/compose/docker-compose.rocm.yml.
     local target_user="$TARGET_USER"
     if [[ "$target_user" != "root" ]]; then
         local missing_groups=""
@@ -836,7 +834,7 @@ install_gpu_runtime() {
 compose_files_args() {
     case "$GPU_VENDOR" in
         amd)
-            echo "-f docker-compose.yml -f compose/docker-compose.rocm.yml"
+            echo "-f docker-compose.yml -f deploy/compose/docker-compose.rocm.yml"
             ;;
         nvidia)
             # Empty = compose uses its default discovery, which is the
@@ -845,9 +843,9 @@ compose_files_args() {
             ;;
         *)
             if [[ -e /dev/dri ]]; then
-                echo "-f docker-compose.yml -f compose/docker-compose.vulkan.yml"
+                echo "-f docker-compose.yml -f deploy/compose/docker-compose.vulkan.yml"
             else
-                echo "-f docker-compose.yml -f compose/docker-compose.vulkan.yml -f compose/docker-compose.cpu.yml"
+                echo "-f docker-compose.yml -f deploy/compose/docker-compose.vulkan.yml -f deploy/compose/docker-compose.cpu.yml"
             fi
             ;;
     esac
@@ -1139,9 +1137,9 @@ persist_backend_selection() {
     # compose.py all read ATLAS_BACKEND; without it they fall back to the base
     # CUDA file and fail on GPU-less hosts with "could not select device
     # driver nvidia". Keys mirror compose_files_args + _OVERLAY_BY_BACKEND:
-    #   amd    -> rocm   (compose/docker-compose.rocm.yml)
+    #   amd    -> rocm   (deploy/compose/docker-compose.rocm.yml)
     #   nvidia -> cuda   (base file only)
-    #   none + /dev/dri  -> vulkan (compose/docker-compose.vulkan.yml)
+    #   none + /dev/dri  -> vulkan (deploy/compose/docker-compose.vulkan.yml)
     #   none, no /dev/dri -> cpu   (vulkan + cpu overlays, lavapipe)
     # An explicit ATLAS_BACKEND already present in .env is respected.
     local backend newly_recorded=""
@@ -1415,11 +1413,11 @@ download_models() {
         return
     fi
 
-    if [[ ! -x "./scripts/download-models.sh" ]]; then
-        die "scripts/download-models.sh not found or not executable."
+    if [[ ! -x "./scripts/install/download-models.sh" ]]; then
+        die "scripts/install/download-models.sh not found or not executable."
     fi
 
-    log_info "Calling scripts/download-models.sh (this can take 10-30 min on first run)…"
+    log_info "Calling scripts/install/download-models.sh (this can take 10-30 min on first run)…"
     log_info "Progress is shown live below."
     echo
     # Run as the target user so files end up owned by the human, not root.
@@ -1427,7 +1425,7 @@ download_models() {
     # and any error messages that didn't match the [INFO]/[WARN]/[ERROR]
     # pattern). `tee` preserves the log without breaking line buffering.
     set +e
-    run_as_target ./scripts/download-models.sh 2>&1 | tee "$ATLAS_RUN_DIR/atlas-models.log"
+    run_as_target ./scripts/install/download-models.sh 2>&1 | tee "$ATLAS_RUN_DIR/atlas-models.log"
     local rc=${PIPESTATUS[0]}
     set -e
     echo
@@ -1442,14 +1440,14 @@ download_models() {
     # --lens path. Without compatible artifacts, scoring degrades safely.
     log_info "Fetching model-compatible Lens/ASA artifacts…"
     set +e
-    run_as_target ./scripts/download-models.sh --lens 2>&1 | tee -a "$ATLAS_RUN_DIR/atlas-models.log"
+    run_as_target ./scripts/install/download-models.sh --lens 2>&1 | tee -a "$ATLAS_RUN_DIR/atlas-models.log"
     rc=${PIPESTATUS[0]}
     set -e
     if [[ $rc -eq 0 ]]; then
         log_ok "Model-compatible artifacts ready"
     else
         log_warn "Artifact fetch failed (exit $rc) — service will run with neutral scores."
-        log_warn "Recovery: ./scripts/download-models.sh --lens"
+        log_warn "Recovery: ./scripts/install/download-models.sh --lens"
     fi
 }
 
@@ -1476,12 +1474,12 @@ start_compose() {
         log_warn "Using sudo for docker compose (user not in docker group yet — log out/in to fix)"
     fi
     if [[ "$GPU_VENDOR" == "amd" ]]; then
-        log_info "Using ROCm compose override (compose/docker-compose.rocm.yml)"
+        log_info "Using ROCm compose override (deploy/compose/docker-compose.rocm.yml)"
     elif [[ -z "$GPU_VENDOR" ]]; then
         if [[ -e /dev/dri ]]; then
-            log_info "No GPU vendor detected — using Vulkan overlay (compose/docker-compose.vulkan.yml)"
+            log_info "No GPU vendor detected — using Vulkan overlay (deploy/compose/docker-compose.vulkan.yml)"
         else
-            log_warn "No GPU and no /dev/dri — using the CPU override (compose/docker-compose.cpu.yml, lavapipe)."
+            log_warn "No GPU and no /dev/dri — using the CPU override (deploy/compose/docker-compose.cpu.yml, lavapipe)."
             log_warn "Inference will be very slow."
         fi
     fi
@@ -1621,7 +1619,7 @@ build_asa_steering_vector() {
 
     # This step reads ATLAS_* keys (models dir, model file/name, ports,
     # image tag) that live in the install's .env, not this process's
-    # environment. Load them the same way scripts/download-models.sh
+    # environment. Load them the same way scripts/install/download-models.sh
     # does: values already set in the environment win, .env fills gaps.
     local env_file="$ATLAS_INSTALL_DIR/.env"
     if [[ -f "$env_file" ]]; then

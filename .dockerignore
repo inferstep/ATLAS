@@ -17,7 +17,7 @@ tui/
 geometric-lens/
 sandbox/
 inference/
-templates/
+deploy/
 docs/
 tests/
 

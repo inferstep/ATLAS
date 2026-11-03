@@ -9,6 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // The evidence matrix: eight shapes a real request can take, each run through
@@ -123,7 +126,7 @@ func (w *matrixWorld) serveShell(rw http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (w *matrixWorld) obligations() []taskObligation {
+func (w *matrixWorld) obligations() []taskcontract.TaskObligation {
 	return deriveTaskObligations(w.ctx,
 		resolveOutputObligation(w.ctx, "Create it."),
 		resolveVerificationObligation(w.ctx))
@@ -170,7 +173,7 @@ func assertDirectJoin(t *testing.T, row string, ev proxyEvidence,
 // stagedRun builds the request the wiring builds: one declared command, one
 // staged observation of it, bound to this world's candidate. The producer is
 // handed an observation, never a conclusion.
-func (w *matrixWorld) stagedRun(obl taskObligation, outcome stagingCommandOutcome,
+func (w *matrixWorld) stagedRun(obl taskcontract.TaskObligation, outcome stagingCommandOutcome,
 	mutatedTarget, mutatedWorkspace bool) verificationEvidenceRequest {
 	generation, stateHash := workspaceIdentity(w.ctx)
 	return verificationEvidenceRequest{
@@ -202,9 +205,9 @@ func TestEvidenceMatrixSyntaxOnlyStructuredTask(t *testing.T) {
 		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`,
 		"solve.py", matrixSecretCode, true)
 	obs := w.obligations()
-	var syn taskObligation
+	var syn taskcontract.TaskObligation
 	for _, o := range obs {
-		if o.Kind == ObligationSyntacticValidity {
+		if o.Kind == taskcontract.ObligationSyntacticValidity {
 			syn = o
 		}
 	}
@@ -233,9 +236,9 @@ func TestEvidenceMatrixBehavioralRequirementOnASyntaxOnlyProducer(t *testing.T) 
 	w := newMatrixWorld(t,
 		`{"task_mode":"work","verification_knowledge":"declared","verification":["pytest -q"]}`,
 		"solve.py", matrixSecretCode, true)
-	var cmd taskObligation
+	var cmd taskcontract.TaskObligation
 	for _, o := range w.obligations() {
-		if o.Kind == ObligationDeclaredCommand {
+		if o.Kind == taskcontract.ObligationDeclaredCommand {
 			cmd = o
 		}
 	}
@@ -252,7 +255,7 @@ func TestEvidenceMatrixBehavioralRequirementOnASyntaxOnlyProducer(t *testing.T) 
 		t.Error("the syntax producer described a behavioural obligation")
 	}
 	// And nothing ran it, so the obligation is still owed.
-	_, missing := declaredVerificationCoverage([]taskObligation{cmd}, nil)
+	_, missing := declaredVerificationCoverage([]taskcontract.TaskObligation{cmd}, nil)
 	if len(missing) != 1 {
 		t.Error("an unrun declared command was not reported as owed")
 	}
@@ -263,9 +266,9 @@ func TestEvidenceMatrixOneDeclaredCommand(t *testing.T) {
 	w := newMatrixWorld(t,
 		`{"task_mode":"work","verification_knowledge":"declared","verification":["python3 solve.py"]}`,
 		"solve.py", matrixSecretCode, true)
-	var cmd taskObligation
+	var cmd taskcontract.TaskObligation
 	for _, o := range w.obligations() {
-		if o.Kind == ObligationDeclaredCommand {
+		if o.Kind == taskcontract.ObligationDeclaredCommand {
 			cmd = o
 		}
 	}
@@ -277,10 +280,10 @@ func TestEvidenceMatrixOneDeclaredCommand(t *testing.T) {
 	// A command declared without a type is a runtime fact: it ran against
 	// these bytes and exited zero. Reaching behavioral takes a typed
 	// declaration and assets the client owns.
-	if ev.Provenance.ObservedStrength != VerificationKindRuntime {
+	if ev.Provenance.ObservedStrength != taskcontract.VerificationKindRuntime {
 		t.Errorf("strength %q, want runtime", ev.Provenance.ObservedStrength)
 	}
-	met, missing := declaredVerificationCoverage([]taskObligation{cmd}, []proxyEvidence{ev})
+	met, missing := declaredVerificationCoverage([]taskcontract.TaskObligation{cmd}, []proxyEvidence{ev})
 	if len(met) != 1 || len(missing) != 0 {
 		t.Errorf("met %v missing %v, want the one command met", met, missing)
 	}
@@ -295,9 +298,9 @@ func TestEvidenceMatrixMultipleDeclaredCommands(t *testing.T) {
 		`{"task_mode":"work","verification_knowledge":"declared",`+
 			`"verification":["python3 solve.py","ruff check ."]}`,
 		"solve.py", matrixSecretCode, true)
-	var cmds []taskObligation
+	var cmds []taskcontract.TaskObligation
 	for _, o := range w.obligations() {
-		if o.Kind == ObligationDeclaredCommand {
+		if o.Kind == taskcontract.ObligationDeclaredCommand {
 			cmds = append(cmds, o)
 		}
 	}
@@ -325,9 +328,9 @@ func TestEvidenceMatrixStaleWorkspace(t *testing.T) {
 	w := newMatrixWorld(t,
 		`{"task_mode":"work","verification_knowledge":"declared","verification":["python3 solve.py"]}`,
 		"solve.py", matrixSecretCode, true)
-	var cmd taskObligation
+	var cmd taskcontract.TaskObligation
 	for _, o := range w.obligations() {
-		if o.Kind == ObligationDeclaredCommand {
+		if o.Kind == taskcontract.ObligationDeclaredCommand {
 			cmd = o
 		}
 	}
@@ -366,16 +369,16 @@ func TestEvidenceMatrixExistingValidatedBaseline(t *testing.T) {
 		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`,
 		"solve.py", matrixSecretCode, true)
 	if w.ctx.Ledger == nil {
-		w.ctx.Ledger = map[string]*DeliverableState{}
+		w.ctx.Ledger = map[string]*taskcontract.DeliverableState{}
 	}
-	w.ctx.Ledger[w.path] = &DeliverableState{
+	w.ctx.Ledger[w.path] = &taskcontract.DeliverableState{
 		Path: w.path, CurrentHash: w.hash, Generation: 1,
-		ValidationKind: ValidationKindSyntax, ValidationStatus: ValidationPassed,
+		ValidationKind: wire.ValidationKindSyntax, ValidationStatus: wire.ValidationPassed,
 		ValidatedHash: w.hash,
 	}
-	var base taskObligation
+	var base taskcontract.TaskObligation
 	for _, o := range w.obligations() {
-		if o.Kind == ObligationBaselinePreserved {
+		if o.Kind == taskcontract.ObligationBaselinePreserved {
 			base = o
 		}
 	}
@@ -410,8 +413,8 @@ func TestEvidenceMatrixModelGeneratedSelfTest(t *testing.T) {
 	// The client declared nothing. The model wrote its own test and ran it
 	// green against the exact bytes.
 	w := newMatrixWorld(t, `{"task_mode":"work"}`, "solve.py", matrixSecretCode, true)
-	obl, ok := newTaskObligation(ObligationDeclaredCommand, "python3 test_solve.py",
-		VerificationKindRuntime, true)
+	obl, ok := taskcontract.NewTaskObligation(taskcontract.ObligationDeclaredCommand, "python3 test_solve.py",
+		taskcontract.VerificationKindRuntime, true)
 	if !ok {
 		t.Fatal("obligation refused")
 	}
@@ -434,11 +437,11 @@ func TestEvidenceMatrixUnsupportedArtifact(t *testing.T) {
 		"notes.md", "# notes\n", true)
 	obs := w.obligations()
 	for _, o := range obs {
-		if o.Kind == ObligationSyntacticValidity {
+		if o.Kind == taskcontract.ObligationSyntacticValidity {
 			t.Error("a class the gate does not govern owed syntax")
 		}
 	}
-	unsup, ok := newTaskObligation(ObligationUnsupported, "something we cannot name", "", true)
+	unsup, ok := taskcontract.NewTaskObligation(taskcontract.ObligationUnsupported, "something we cannot name", "", true)
 	if !ok {
 		t.Fatal("an unsupported obligation could not be represented")
 	}
@@ -450,7 +453,7 @@ func TestEvidenceMatrixUnsupportedArtifact(t *testing.T) {
 	}); ok {
 		t.Error("a producer spoke for an unsupported obligation")
 	}
-	if got := authorizationFloor([]taskObligation{unsup}); got != "oracle" {
+	if got := taskcontract.AuthorizationFloor([]taskcontract.TaskObligation{unsup}); got != "oracle" {
 		t.Errorf("an unsupported obligation left the floor reachable at %q", got)
 	}
 }

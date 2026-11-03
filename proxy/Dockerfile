@@ -3,6 +3,7 @@ FROM docker.io/golang:1.27-alpine@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944
 WORKDIR /build
 COPY go.mod ./
 COPY *.go ./
+COPY internal ./internal
 
 RUN go build -o atlas-proxy-v2 .
 
@@ -39,5 +40,3 @@ COPY --from=builder /build/atlas-proxy-v2 /usr/local/bin/atlas-proxy-v2
 USER atlas
 EXPOSE 8090
 CMD ["atlas-proxy-v2"]
-# Planted by scripts/canary.py for the canary pull request. Never merge it.
-RUN cd /tmp

@@ -2,7 +2,7 @@
 > **[English](../../../README.md)** | **[简体中文](../zh-CN/README.md)** | **日本語** | **[한국어](../ko/README.md)**
 
 <p align="center">
-  <img src="../../images/herodemo.gif" alt="ATLAS TUI 動作中"/><br/>
+  <img src="../../assets/herodemo.gif" alt="ATLAS TUI 動作中"/><br/>
   <sub><i>ATLAS TUI のライブデモ（10倍速）。V3 パイプラインがファイル作成を実行中。</i></sub>
 </p>
 
@@ -64,40 +64,40 @@
 
 ## 🧱 ATLAS の機能
 
-1. **[atlas-tui](../../CLI.md)** - ネイティブ Bubbletea ターミナル UI。公式チャットクライアント。任意のプロジェクトディレクトリで `atlas` と入力すれば起動します。
-   - [ライブパイプライン表示](../../CLI.md#panes) - V3 ステージをサイドペインで監視
-   - [スラッシュコマンド](../../CLI.md#slash-commands) - `/add`、`/diff`、`/commit`、`/run` でローカルファイルとシェルを操作
-   - [入力モード](../../CLI.md#input-modes) - チャット、`!bash`、`/slash` をヒントドロップダウン付きで切り替え
+1. **[atlas-tui](../../reference/CLI.md)** - ネイティブ Bubbletea ターミナル UI。公式チャットクライアント。任意のプロジェクトディレクトリで `atlas` と入力すれば起動します。
+   - [ライブパイプライン表示](../../reference/CLI.md#panes) - V3 ステージをサイドペインで監視
+   - [スラッシュコマンド](../../reference/CLI.md#slash-commands) - `/add`、`/diff`、`/commit`、`/run` でローカルファイルとシェルを操作
+   - [入力モード](../../reference/CLI.md#input-modes) - チャット、`!bash`、`/slash` をヒントドロップダウン付きで切り替え
 
-2. **[atlas-proxy](../../ARCHITECTURE.md#3-atlas-proxy-outer-layer)** - システム全体を統括する Go 製エージェントループ。
-   - [ツールコールルーティング](../../ARCHITECTURE.md#tools) - ファイル操作を複雑度ティアで分類
-   - [文法強制](../../ARCHITECTURE.md#grammar-enforcement) - GBNF スキーマで期待される JSON 形式へ強く誘導し、不正または切り詰められた出力はプロキシ側で回復
-   - [BiasBusters](../../ARCHITECTURE.md#tool-selection-bias-mitigations) - 構造的なコード編集でモデルを `structural_edit` へ誘導する4つの複合的な緩和策（説明文、文法禁則、システムノート、ASA ステアリング）
-   - [安全制限](../../ARCHITECTURE.md#safety-limits) - ターン上限、トークン予算、タイムアウト
+2. **[atlas-proxy](../../reference/ARCHITECTURE.md#3-atlas-proxy-outer-layer)** - システム全体を統括する Go 製エージェントループ。
+   - [ツールコールルーティング](../../reference/ARCHITECTURE.md#tools) - ファイル操作を複雑度ティアで分類
+   - [文法強制](../../reference/ARCHITECTURE.md#grammar-enforcement) - GBNF スキーマで期待される JSON 形式へ強く誘導し、不正または切り詰められた出力はプロキシ側で回復
+   - [BiasBusters](../../reference/ARCHITECTURE.md#tool-selection-bias-mitigations) - 構造的なコード編集でモデルを `structural_edit` へ誘導する4つの複合的な緩和策（説明文、文法禁則、システムノート、ASA ステアリング）
+   - [安全制限](../../reference/ARCHITECTURE.md#safety-limits) - ターン上限、トークン予算、タイムアウト
 
-3. **[V3 パイプライン](../../ARCHITECTURE.md#4-v3-pipeline-inner-layer)** - 単一のプロンプトを検証済み候補に変換するマルチフェーズコード生成。
-   - [PlanSearch](../../ARCHITECTURE.md#pipeline-flow) - 制約駆動の構造化プランニング
-   - [DivSampling](../../ARCHITECTURE.md#pipeline-flow) - 温度と戦略をまたぐ多様な候補生成
-   - [予算ティア](../../ARCHITECTURE.md#pipeline-flow) - アロケータがタスクごとに計算ティアを選ぶ。ティアは候補数と、候補ごとのプロンプトおよびトークンの予算を決めます
-   - [PR-CoT Repair](../../ARCHITECTURE.md#pipeline-flow) - サンドボックスのエラー出力をもとに失敗した候補を修復
-   - [Refinement Loops](../../ARCHITECTURE.md#pipeline-flow) - サンドボックスでの検証と修正を繰り返す
+3. **[V3 パイプライン](../../reference/ARCHITECTURE.md#4-v3-pipeline-inner-layer)** - 単一のプロンプトを検証済み候補に変換するマルチフェーズコード生成。
+   - [PlanSearch](../../reference/ARCHITECTURE.md#pipeline-flow) - 制約駆動の構造化プランニング
+   - [DivSampling](../../reference/ARCHITECTURE.md#pipeline-flow) - 温度と戦略をまたぐ多様な候補生成
+   - [予算ティア](../../reference/ARCHITECTURE.md#pipeline-flow) - アロケータがタスクごとに計算ティアを選ぶ。ティアは候補数と、候補ごとのプロンプトおよびトークンの予算を決めます
+   - [PR-CoT Repair](../../reference/ARCHITECTURE.md#pipeline-flow) - サンドボックスのエラー出力をもとに失敗した候補を修復
+   - [Refinement Loops](../../reference/ARCHITECTURE.md#pipeline-flow) - サンドボックスでの検証と修正を繰り返す
 
-4. **[Geometric Lens](../../ARCHITECTURE.md#5-geometric-lens)** - モデル自身の埋め込み上で動くエネルギーベースのスコアリング。外部オラクル不要。(「[Geometric Lens とは?](../../ARCHITECTURE.md#why-geometric-lens)」)
-   - [C(x) Cost Field](../../ARCHITECTURE.md#scoring-models) - 候補の品質をスコア化する、モデルの隠れ次元→512→128→1 の MLP
-   - [G(x) Quality Prediction](../../ARCHITECTURE.md#scoring-models) - 生成する候補数の判断に用いる XGBoost アンサンブル。候補の選択自体は最小の C(x) で行います
-   - [パーステップスコアリング](../../API.md#geometric-lens-port-8099) - 書き込みのトークンごとの C(x)/G(x) スコアリング。モデル別の閾値が介入を動かすのは、そのモデルのバンドルが較正済みのときだけです
+4. **[Geometric Lens](../../reference/ARCHITECTURE.md#5-geometric-lens)** - モデル自身の埋め込み上で動くエネルギーベースのスコアリング。外部オラクル不要。(「[Geometric Lens とは?](../../reference/ARCHITECTURE.md#why-geometric-lens)」)
+   - [C(x) Cost Field](../../reference/ARCHITECTURE.md#scoring-models) - 候補の品質をスコア化する、モデルの隠れ次元→512→128→1 の MLP
+   - [G(x) Quality Prediction](../../reference/ARCHITECTURE.md#scoring-models) - 生成する候補数の判断に用いる XGBoost アンサンブル。候補の選択自体は最小の C(x) で行います
+   - [パーステップスコアリング](../../reference/API.md#geometric-lens-port-8099) - 書き込みのトークンごとの C(x)/G(x) スコアリング。モデル別の閾値が介入を動かすのは、そのモデルのバンドルが較正済みのときだけです
 
-5. **[Sandbox](../../ARCHITECTURE.md#6-sandbox)** - ビルド検証のための分離実行環境。
+5. **[Sandbox](../../reference/ARCHITECTURE.md#6-sandbox)** - ビルド検証のための分離実行環境。
    - 多言語実行: Python、Rust、Go、C、Shell など。Rust、Go、C はプロジェクト内のコマンドとして実行できます。V3 は構文を確認し、サンドボックスの `/execute` はコンパイルのみで、まだ実行できません ([#163](https://github.com/inferstep/ATLAS/issues/163))
    - スコアリング前のコンパイルとリント
    - 生成テストと既存テストスイートの両方を実行
 
-6. **[llama-server](../../CONFIGURATION.md#6-llama-server)** - 単一のコンシューマ GPU 上でのローカル LLM 推論。
+6. **[llama-server](../../guides/CONFIGURATION.md#6-llama-server)** - 単一のコンシューマ GPU 上でのローカル LLM 推論。
    - GPU 加速の量子化推論 (Q6_K / Q4_K_M) — NVIDIA CUDA、AMD ROCm、Apple Metal (macOS ハイブリッド)、Vulkan に対応。Intel SYCL はロードマップ
    - トークンレベルの文法制約デコーディング
    - セルフ埋め込み（レンズのための別モデルは不要）
 
-詳細ドキュメント（セットアップ、アーキテクチャ、設定、トラブルシューティング、各コンポーネントの[研究的背景](../../SOURCES.md)）は [docs/](../../) にあります。
+詳細ドキュメント（セットアップ、アーキテクチャ、設定、トラブルシューティング、各コンポーネントの[研究的背景](../../reference/SOURCES.md)）は [docs/](../../) にあります。
 
 ---
 
@@ -128,18 +128,18 @@ bash atlas-bootstrap.sh
 
 | | |
 |---|---|
-| GPU | VRAM 16GB 以上。NVIDIA (CUDA、サポート対象 (Supported))、AMD (ROCm、コミュニティ検証済み (Community-tested))、または Apple Silicon (Metal、macOS ハイブリッド、サポート対象)。その他大半の GPU は Vulkan (プレビュー (Preview)) でカバー。プレビルドの CUDA イメージは Blackwell (RTX 50xx) を対象としており、それより古い NVIDIA GPU は一度だけのローカル再ビルドが必要です ([SETUP.md § CUDA Compute Capability](../../SETUP.md#cuda-compute-capability-dockerfilev31) を参照)。レベルの定義: [SUPPORT_MATRIX.md](../../SUPPORT_MATRIX.md)。GPU 一覧: [SETUP.md § Supported GPUs](../../SETUP.md#supported-gpus)。特定のモデルがお使いのカードに収まるかは [What fits on my GPU?](../../TROUBLESHOOTING.md#what-fits-on-my-gpu) を参照。 |
+| GPU | VRAM 16GB 以上。NVIDIA (CUDA、サポート対象 (Supported))、AMD (ROCm、コミュニティ検証済み (Community-tested))、または Apple Silicon (Metal、macOS ハイブリッド、サポート対象)。その他大半の GPU は Vulkan (プレビュー (Preview)) でカバー。プレビルドの CUDA イメージは Blackwell (RTX 50xx) を対象としており、それより古い NVIDIA GPU は一度だけのローカル再ビルドが必要です ([SETUP.md § CUDA Compute Capability](../../guides/SETUP.md#cuda-compute-capability-dockerfilev31) を参照)。レベルの定義: [SUPPORT_MATRIX.md](../../guides/SUPPORT_MATRIX.md)。GPU 一覧: [SETUP.md § Supported GPUs](../../guides/SETUP.md#supported-gpus)。特定のモデルがお使いのカードに収まるかは [What fits on my GPU?](../../guides/TROUBLESHOOTING.md#what-fits-on-my-gpu) を参照。 |
 | ランタイム | Docker (NVIDIA: + nvidia-container-toolkit; AMD: 単体の Docker で十分) |
 | Python | 3.9 以上 |
 | ディスク | 約 20GB CUDA / 約 22GB ROCm (モデル重み + コンテナイメージ) |
 
-Apple Silicon は macOS ハイブリッド Metal パス（ネイティブ llama-server + 残りは Docker — **[SETUP_MACOS.md](../../SETUP_MACOS.md)** を参照）でネイティブ動作します。Intel Arc (SYCL) はロードマップ上の項目です。手動インストール手順 (Docker Compose、ベアメタル、K3s) とブートストラップフラグの一覧は **[SETUP.md](./SETUP.md)** をご参照ください。
+Apple Silicon は macOS ハイブリッド Metal パス（ネイティブ llama-server + 残りは Docker — **[SETUP_MACOS.md](../../guides/SETUP_MACOS.md)** を参照）でネイティブ動作します。Intel Arc (SYCL) はロードマップ上の項目です。手動インストール手順 (Docker Compose、ベアメタル、K3s) とブートストラップフラグの一覧は **[SETUP.md](./SETUP.md)** をご参照ください。
 
 ---
 
 ## ⚠️ 既知の制限事項
 
-- **Linux の Docker スタック、加えてネイティブ macOS パス。** NVIDIA (サポート対象 (Supported))、AMD ROCm (コミュニティ検証済み (Community-tested))、Vulkan (プレビュー (Preview)) の Docker パスが現在存在します。Apple Silicon (サポート対象) はネイティブ macOS ハイブリッド Metal パス ([#32](https://github.com/inferstep/ATLAS/issues/32)) で動作します。Intel Arc / SYCL はロードマップ (Roadmap) です。レベルの定義: [SUPPORT_MATRIX.md](../../SUPPORT_MATRIX.md)。
+- **Linux の Docker スタック、加えてネイティブ macOS パス。** NVIDIA (サポート対象 (Supported))、AMD ROCm (コミュニティ検証済み (Community-tested))、Vulkan (プレビュー (Preview)) の Docker パスが現在存在します。Apple Silicon (サポート対象) はネイティブ macOS ハイブリッド Metal パス ([#32](https://github.com/inferstep/ATLAS/issues/32)) で動作します。Intel Arc / SYCL はロードマップ (Roadmap) です。レベルの定義: [SUPPORT_MATRIX.md](../../guides/SUPPORT_MATRIX.md)。
 - **ATLAS には現在のベンチマーク結果がありません。** V3.0 の LiveCodeBench の数値は撤回しました（[CHANGELOG](../../../CHANGELOG.md#withdrawn-the-v30-livecodebench-result-746) 参照）。現行リリースの能力・信頼性の数値はまだ測定されていません。数値は保留タスクでの再測定後にのみ公表し、モデル別の結果は [#28](https://github.com/inferstep/ATLAS/issues/28) で追跡します。
 - **レンズのシグナルはまだ実証されていません。** リファレンスモデルではスコアは出ますが未較正のままで、介入は中立です。3.1.6 では有効なシグナルが得られず、`dev` ではまだ測定していません ([#281](https://github.com/inferstep/ATLAS/issues/281))。
 - **複雑な機能追加は不安定なことがあります。** コンパクトなモデルは、コードを書き始める前に不慣れなコードベースの探索にエージェントターンを費やすことがあります。

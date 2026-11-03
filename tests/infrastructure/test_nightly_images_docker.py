@@ -11,7 +11,7 @@ it is the group `docker` of scripts/tests_counted.py, and the job `sandbox tests
 """
 import subprocess
 
-from tests.infrastructure.test_nightly_run import nightly
+from tests.infrastructure.nightly.test_nightly_run import nightly
 
 images = nightly.images
 REPOSITORY = "mirror.gcr.io/library/hello-world"

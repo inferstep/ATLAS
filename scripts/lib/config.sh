@@ -141,7 +141,7 @@ get_config() {
 # Auto-load config when sourced
 load_config
 
-# GHCR namespace for the service images (templates/*.yaml.tmpl render
+# GHCR namespace for the service images (deploy/k3s/*.yaml.tmpl render
 # ghcr.io/${ATLAS_GHCR_OWNER}/...). Default: upstream-published images.
 ATLAS_GHCR_OWNER="${ATLAS_GHCR_OWNER:-inferstep}"
 export ATLAS_GHCR_OWNER

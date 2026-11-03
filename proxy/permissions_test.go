@@ -14,14 +14,21 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 func newPermCtx(dir string) *AgentContext {
 	return &AgentContext{
-		WorkingDir:    dir,
-		FilesRead:     map[string]string{},
-		FileReadTimes: map[string]time.Time{},
-		SessionWrites: map[string]bool{},
+		runSetup: runSetup{
+			WorkingDir: dir,
+		},
+		fileHistory: fileHistory{
+			FilesRead:     map[string]string{},
+			FileReadTimes: map[string]time.Time{},
+			SessionWrites: map[string]bool{},
+		},
 	}
 }
 
@@ -117,11 +124,15 @@ func permCtx(sessionID string) (*AgentContext, context.CancelFunc) {
 	ctx := context.Background()
 	reqCtx, cancel := context.WithCancel(ctx)
 	return &AgentContext{
-		PassID:        sessionID,
-		Ctx:           reqCtx,
-		FilesRead:     map[string]string{},
-		FileReadTimes: map[string]time.Time{},
-		SessionWrites: map[string]bool{},
+		runSetup: runSetup{
+			PassID: sessionID,
+			Ctx:    reqCtx,
+		},
+		fileHistory: fileHistory{
+			FilesRead:     map[string]string{},
+			FileReadTimes: map[string]time.Time{},
+			SessionWrites: map[string]bool{},
+		},
 	}, cancel
 }
 
@@ -246,7 +257,7 @@ func TestNeedsPermission(t *testing.T) {
 	// The user approved run_command with session scope earlier this turn.
 	sessionApproved := &AgentContext{}
 	sessionApproved.allowToolForTurn("run_command")
-	acceptEdits := &AgentContext{PermissionMode: PermissionAcceptEdits}
+	acceptEdits := &AgentContext{runSetup: runSetup{PermissionMode: PermissionAcceptEdits}}
 
 	for _, c := range []struct {
 		name string
@@ -254,8 +265,8 @@ func TestNeedsPermission(t *testing.T) {
 		tool string
 		want bool
 	}{
-		{"yolo mode approves everything: the yolo flag", &AgentContext{YoloMode: true}, "run_command", false},
-		{"yolo mode approves everything: the yolo permission mode", &AgentContext{PermissionMode: PermissionYolo}, "run_command", false},
+		{"yolo mode approves everything: the yolo flag", &AgentContext{runSetup: runSetup{YoloMode: true}}, "run_command", false},
+		{"yolo mode approves everything: the yolo permission mode", &AgentContext{runSetup: runSetup{PermissionMode: PermissionYolo}}, "run_command", false},
 		{"unknown tool always prompts", &AgentContext{}, "no_such_tool", true},
 		{"read-only tools never prompt", &AgentContext{}, "read_file", false},
 		{"destructive tools prompt in default mode: run_command", &AgentContext{}, "run_command", true},
@@ -327,7 +338,7 @@ func TestHostExecutionAllowed(t *testing.T) {
 
 func TestRunCommandRefusedWhenUntrusted(t *testing.T) {
 	tool := runCommandTool()
-	ctx := &AgentContext{TrustMode: trustUntrusted, WorkingDir: "/tmp"}
+	ctx := &AgentContext{runSetup: runSetup{TrustMode: trustUntrusted, WorkingDir: "/tmp"}}
 	res, err := tool.Execute([]byte(`{"command":"echo hi"}`), ctx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -357,9 +368,9 @@ func deletePermCtx(t *testing.T, sessionID, dir string) (*AgentContext, context.
 
 // captureRequest runs awaitPermission and hands back the emitted event.
 func captureRequest(t *testing.T, ctx *AgentContext, callID, args string,
-	answer func()) (PermissionRequest, bool, int) {
+	answer func()) (wire.PermissionRequest, bool, int) {
 	t.Helper()
-	var got PermissionRequest
+	var got wire.PermissionRequest
 	requests := 0
 	var mu sync.Mutex
 	ctx.StreamFn = func(et string, data interface{}) {
@@ -369,7 +380,7 @@ func captureRequest(t *testing.T, ctx *AgentContext, callID, args string,
 		mu.Lock()
 		defer mu.Unlock()
 		requests++
-		if pr, ok := data.(PermissionRequest); ok {
+		if pr, ok := data.(wire.PermissionRequest); ok {
 			got = pr
 		}
 	}
@@ -797,7 +808,7 @@ func TestAbsoluteSymlinkIsRefusedByContainment(t *testing.T) {
 	if err := os.Symlink(filepath.Join(dir, "real.py"), filepath.Join(dir, "abs.py")); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	ctx := &AgentContext{WorkingDir: dir}
+	ctx := &AgentContext{runSetup: runSetup{WorkingDir: dir}}
 	_, refusal := inspectDeleteTarget(ctx, json.RawMessage(`{"path":"abs.py"}`))
 	t.Logf("refusal=%q", refusal)
 	if refusal == "" {
@@ -1170,18 +1181,18 @@ func TestADeletionRefusedBeforeAskingShowsNoPrompt(t *testing.T) {
 
 // Preauthorising delete_file must not carry from one target to another.
 func TestPreauthorizedDeleteDoesNotCarryToAnotherPath(t *testing.T) {
-	ctx := &AgentContext{AllowedTools: map[string]bool{"delete_file": true}}
+	ctx := &AgentContext{runSetup: runSetup{AllowedTools: map[string]bool{"delete_file": true}}}
 	for _, rel := range []string{"a.py", "b.py"} {
 		if !needsPermission(ctx, "delete_file", json.RawMessage(`{"path":"`+rel+`"}`)) {
 			t.Errorf("%s was pre-authorised; deletion needs its own decision", rel)
 		}
 	}
 	// Unrelated tools keep their preauthorization semantics.
-	ctx2 := &AgentContext{AllowedTools: map[string]bool{"run_command": true}}
+	ctx2 := &AgentContext{runSetup: runSetup{AllowedTools: map[string]bool{"run_command": true}}}
 	if needsPermission(ctx2, "run_command", json.RawMessage(`{"command":"ls"}`)) {
 		t.Error("preauthorization stopped working for run_command")
 	}
-	ctx3 := &AgentContext{PermissionMode: PermissionYolo}
+	ctx3 := &AgentContext{runSetup: runSetup{PermissionMode: PermissionYolo}}
 	if needsPermission(ctx3, "run_command", json.RawMessage(`{"command":"ls"}`)) {
 		t.Error("yolo stopped working for run_command")
 	}
@@ -1262,7 +1273,7 @@ func TestApprovalBindsToTheFilesystemObject(t *testing.T) {
 // approveAndDelete runs the real handshake, the real tool, and the real ledger
 // effect, returning whether a fulfilled record was produced.
 func approveAndDelete(t *testing.T, ctx *AgentContext, sess, callID, rel string,
-	decision string, churn func()) (*fulfilledDeletion, *ToolResult) {
+	decision string, churn func()) (*fulfilledDeletion, *wire.ToolResult) {
 	t.Helper()
 	args := json.RawMessage(`{"path":"` + rel + `"}`)
 	allowed := true
@@ -1375,12 +1386,12 @@ func TestRemovingASymlinkNeverFulfilsItsTarget(t *testing.T) {
 func TestUnapprovedAbsenceIsNotFulfilled(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "a.py"), []byte("A\n"), 0o644)
-	ctx := &AgentContext{WorkingDir: dir, Ledger: map[string]*DeliverableState{}}
+	ctx := &AgentContext{runSetup: runSetup{WorkingDir: dir}, deliverableLedger: deliverableLedger{Ledger: map[string]*taskcontract.DeliverableState{}}}
 	// Something else removes it; the ledger is told about a delete call.
 	os.Remove(filepath.Join(dir, "a.py"))
 	args := json.RawMessage(`{"path":"a.py"}`)
 	recordLedgerEffect("delete_file", args, ctx,
-		&ToolResult{Success: true, MutationStatus: MutationApplied})
+		&wire.ToolResult{Success: true, MutationStatus: wire.MutationApplied})
 	if _, ok := fulfilledDeletionFor(ctx, filepath.Join(dir, "a.py")); ok {
 		t.Error("an absence with no user approval became fulfilled authority")
 	}
@@ -1389,7 +1400,7 @@ func TestUnapprovedAbsenceIsNotFulfilled(t *testing.T) {
 	os.Rename(filepath.Join(dir, "old.py"), filepath.Join(dir, "new.py"))
 	recordLedgerEffect("move_file",
 		json.RawMessage(`{"source":"old.py","destination":"new.py"}`), ctx,
-		&ToolResult{Success: true, MutationStatus: MutationApplied})
+		&wire.ToolResult{Success: true, MutationStatus: wire.MutationApplied})
 	if _, ok := fulfilledDeletionFor(ctx, filepath.Join(dir, "old.py")); ok {
 		t.Error("a move source became a fulfilled deletion")
 	}
@@ -1400,7 +1411,7 @@ func TestUnapprovedAbsenceIsNotFulfilled(t *testing.T) {
 func TestDeletionTrackingCapacity(t *testing.T) {
 	needsObjectHold(t)
 	dir := t.TempDir()
-	ctx := &AgentContext{WorkingDir: dir, fulfilledDeletions: map[string]*fulfilledDeletion{}}
+	ctx := &AgentContext{runSetup: runSetup{WorkingDir: dir}, workspaceSafety: workspaceSafety{fulfilledDeletions: map[string]*fulfilledDeletion{}}}
 	for i := 0; i < maxTrackedDeletions; i++ {
 		ctx.fulfilledDeletions[fmt.Sprintf("/x/%d", i)] = &fulfilledDeletion{}
 	}
@@ -1503,14 +1514,14 @@ func TestFulfilledDeletionsArePromotedInOnePlace(t *testing.T) {
 	}
 }
 
-// The record is internal: no wire type carries it. The wire types are in
-// types.go and, for the tools' inputs and outputs, in tool_io.go.
+// The record is internal: no wire type carries it.
 func TestTheDeletionRecordNeverReachesTheWire(t *testing.T) {
-	wire := readSourceForTest(t, "types.go") + readSourceForTest(t, "tool_io.go")
-	for _, leak := range []string{"`json:\"fulfilled", "`json:\"approved_delete",
-		"`json:\"deletion_attempt"} {
-		if strings.Contains(wire, leak) {
-			t.Errorf("the internal deletion record reached the wire: %s", leak)
+	for _, file := range wireFiles(t) {
+		for _, leak := range []string{"`json:\"fulfilled", "`json:\"approved_delete",
+			"`json:\"deletion_attempt"} {
+			if strings.Contains(readSourceForTest(t, file), leak) {
+				t.Errorf("the internal deletion record reached the wire in %s: %s", file, leak)
+			}
 		}
 	}
 }

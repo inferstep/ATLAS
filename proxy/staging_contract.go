@@ -1,8 +1,9 @@
 package main
 
 import (
-	"sort"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 )
 
 // The typed transport for running a client's declared verification commands
@@ -310,18 +311,12 @@ func (res stagingResult) validateAgainst(req stagingRequest) (bool, string) {
 	return true, ""
 }
 
-// authorizingOutcomes returns the obligation ids whose command ran cleanly,
-// sorted. Only exited_zero, and only when the command changed nothing.
-func (res stagingResult) authorizingOutcomes() []string {
-	var out []string
-	for _, r := range res.Commands {
-		if r.Outcome != stagingExitedZero || r.MutatedTarget || r.MutatedWorkspace {
-			continue
-		}
-		out = append(out, r.ObligationID)
-	}
-	sort.Strings(out)
-	return out
+// passedClean reports whether the exact command exited zero having changed
+// neither the candidate it was testing nor anything else it could see. A
+// command that rewrote its own subject proved something about bytes that no
+// longer exist. Every check of whether a staged command passed asks here.
+func (r stagingCommandResult) passedClean() bool {
+	return r.Outcome == stagingExitedZero && !r.MutatedTarget && !r.MutatedWorkspace
 }
 
 // --- budget -------------------------------------------------------------------
@@ -329,7 +324,7 @@ func (res stagingResult) authorizingOutcomes() []string {
 // stagingBudget is what staging is allowed to spend, stated separately from
 // the TaskContract's maximum.
 //
-// maxTaskContractEntries is an input-validation ceiling -- it says what a
+// MaxTaskContractEntries is an input-validation ceiling -- it says what a
 // request may legally declare, not what this machine will run. Executing 64
 // commands per candidate because the wire permits 64 is how a validation limit
 // becomes an execution policy, so the two are kept apart and this one is
@@ -358,7 +353,7 @@ func defaultStagingBudget() stagingBudget {
 }
 
 func (b stagingBudget) validate() (bool, string) {
-	if b.MaxCommands <= 0 || b.MaxCommands > maxTaskContractEntries {
+	if b.MaxCommands <= 0 || b.MaxCommands > taskcontract.MaxTaskContractEntries {
 		return false, "staging command budget is out of range"
 	}
 	if b.PerCommandTimeoutSec <= 0 || b.TotalTimeoutSec <= 0 {

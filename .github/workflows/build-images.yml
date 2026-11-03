@@ -35,10 +35,10 @@
 #
 # Deliberately NOT in the matrix:
 #   - llama-rocm (inference/Dockerfile.rocm) is a local-build image. AMD is
-#     Community-tested (docs/SUPPORT_MATRIX.md), CI has no AMD GPU to smoke-test
+#     Community-tested (docs/guides/SUPPORT_MATRIX.md), CI has no AMD GPU to smoke-test
 #     the result on, and the default fat build covers five gfx targets — a
 #     hosted-runner job would publish an unexercised image (and a multi-GB
-#     registry buildcache) on every push. compose/docker-compose.rocm.yml declares
+#     registry buildcache) on every push. deploy/compose/docker-compose.rocm.yml declares
 #     `pull_policy: build` for llama-server, so `docker compose pull` skips
 #     it and `up` builds it from source on the AMD host instead. Publishing
 #     it belongs with a CI runner that has an AMD card attached.
@@ -128,7 +128,7 @@ jobs:
 
       # This job builds or runs an image of Docker Hub. The Docker service
       # asks a mirror first, so a limit or a fault of Docker Hub does not turn
-      # the job red (docs/quality/gates.md, "Docker Hub and the checks").
+      # the job red (docs/project/gates.md, "Docker Hub and the checks").
       # zizmor asks for the `$/` form here. actionlint, in its newest version,
       # does not read that form yet, so the form both read is kept.
       - uses: ./.github/actions/docker-hub-mirror  # zizmor: ignore[self-repository]

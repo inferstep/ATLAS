@@ -68,7 +68,7 @@ through a shared filter that masks credential-shaped values
 passwords, private-key blocks) with `[FILTERED]` before serialization.
 The pattern spec is pinned by a synthetic fixture corpus
 (`tests/fixtures/private_value_fixtures.json`) that every
-implementation must pass (Go: `filterPrivateValues` in `proxy/main.go`; Python: three
+implementation must pass (Go: `filterPrivateValues` in `proxy/internal/logsafe/filter.go`; Python: three
 byte-identical copies enforced by
 `tests/contracts/test_private_value_filtering.py`). Filtering is a
 backstop for accidents, not a guarantee against adversarial encoding;
@@ -84,7 +84,7 @@ You can expect an acknowledgment within a week. Fixes for confirmed vulnerabilit
 
 If GitHub advisories are unavailable to you, open a minimal public issue saying "security — need a private channel" **without details**, and the maintainer will provide one.
 
-How the maintainers respond once a report is in (containment, fixes, communication) is in [docs/INCIDENT_RESPONSE.md](../docs/INCIDENT_RESPONSE.md).
+How the maintainers respond once a report is in (containment, fixes, communication) is in [docs/project/INCIDENT_RESPONSE.md](../docs/project/INCIDENT_RESPONSE.md).
 
 ## Severity and response targets
 
@@ -103,7 +103,7 @@ Confirmed Critical/High reports stay embargoed until a fixed release is publishe
 
 ## Backports and releases
 
-Security fixes are released for the current release (N) and backported to N−1 within its 90-day window (see `docs/SUPPORT_MATRIX.md`). A security release follows the normal release pipeline (immutable `sha-*` images, test-gated tag promotion) plus a changelog entry marking it security-relevant and an advisory publication.
+Security fixes are released for the current release (N) and backported to N−1 within its 90-day window (see `docs/guides/SUPPORT_MATRIX.md`). A security release follows the normal release pipeline (immutable `sha-*` images, test-gated tag promotion) plus a changelog entry marking it security-relevant and an advisory publication.
 
 ## Artifact revocation
 

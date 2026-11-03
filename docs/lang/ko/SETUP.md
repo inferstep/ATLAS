@@ -1,7 +1,7 @@
-<!-- source: docs/SETUP.md synced-through: 7d90cbee05ec5196e2ed3f72ffc52735ce8ce245 -->
-> **[English](../../SETUP.md)** | **[简体中文](../zh-CN/SETUP.md)** | **[日本語](../ja/SETUP.md)** | **한국어**
+<!-- source: docs/guides/SETUP.md synced-through: 7d90cbee05ec5196e2ed3f72ffc52735ce8ce245 -->
+> **[English](../../guides/SETUP.md)** | **[简体中文](../zh-CN/SETUP.md)** | **[日本語](../ja/SETUP.md)** | **한국어**
 
-> ℹ️ 영어 원본([SETUP.md](../../SETUP.md))의 번역본입니다. ATLAS에는 고정 기본 모델이 없습니다 — `atlas init`으로 레지스트리 모델을 선택하거나 호환 GGUF를 지정하십시오. 원본과 차이가 있을 경우 영어 원본이 우선합니다.
+> ℹ️ 영어 원본([SETUP.md](../../guides/SETUP.md))의 번역본입니다. ATLAS에는 고정 기본 모델이 없습니다 — `atlas init`으로 레지스트리 모델을 선택하거나 호환 GGUF를 지정하십시오. 원본과 차이가 있을 경우 영어 원본이 우선합니다.
 
 
 # ATLAS 설정 가이드
@@ -14,13 +14,13 @@
 
 설치 절차는 하드웨어와 OS에 따라 다릅니다. 본인 환경에 맞는 행을 찾아 링크된 섹션으로 이동하세요.
 
-| 하드웨어 | OS | 권장 경로 | 지원 수준 ([매트릭스](../../SUPPORT_MATRIX.md)) |
+| 하드웨어 | OS | 권장 경로 | 지원 수준 ([매트릭스](../../guides/SUPPORT_MATRIX.md)) |
 |---|---|---|---|
 | NVIDIA RTX 50 시리즈 / Blackwell (B100, GB10) | Linux | [방법 0: 부트스트랩](#방법-0-원샷-부트스트랩) 또는 [방법 1: Docker](#방법-1-docker-compose-권장) | 지원(Supported) — 게시된 CUDA 이미지는 Blackwell 대상 |
 | NVIDIA RTX 20/30/40, GTX 10xx, 데이터센터 (V100/A100/H100/T4/L4) | Linux | [방법 1: Docker](#방법-1-docker-compose-권장) + 일회성 [로컬 재빌드](#cuda-컴퓨트-캐퍼빌리티-dockerfilev31) | 프리뷰(Preview) — 로컬 재빌드 필요 |
 | NVIDIA GPU | Windows (WSL2) | [방법 1: Docker — NVIDIA 섹션](#방법-1-docker-compose-권장) | 미지원(Unsupported) — 테스트되지 않았고 아무 주장도 하지 않음; 리포트 환영 |
 | AMD GPU (RX 6000/7000, MI200+) | Linux | [방법 1: Docker — AMD ROCm](#amd-rocm--무엇이-다른가) | 커뮤니티 검증(Community-tested) ([GH #26](https://github.com/inferstep/ATLAS/issues/26)) |
-| **Apple Silicon (M1/M2/M3/M4)** | **macOS** | **[SETUP_MACOS.md](../../SETUP_MACOS.md)** (전용 가이드 — 하이브리드 네이티브 Metal + Docker) | 지원 (메인테이너 검증, M2 Pro) |
+| **Apple Silicon (M1/M2/M3/M4)** | **macOS** | **[SETUP_MACOS.md](../../guides/SETUP_MACOS.md)** (전용 가이드 — 하이브리드 네이티브 Metal + Docker) | 지원 (메인테이너 검증, M2 Pro) |
 | Intel Arc / Iris Xe | Linux | [방법 1: Docker — Vulkan](#vulkan--크로스-벤더-폴백) | 프리뷰 — Vulkan은 lavapipe에서만 스모크 테스트됨; 실제 GPU 검증은 아직 없음 |
 | Snapdragon X Elite (노트북) | Linux | [Vulkan](#vulkan--크로스-벤더-폴백) + [arm64 섹션](#arm64) | 프리뷰 (Linux arm64). Windows on ARM은 미지원 |
 | 구형 AMD GPU (Vega, RDNA1, ROCm 6.x 없음) | Linux | [방법 1: Docker — Vulkan](#vulkan--크로스-벤더-폴백) | 프리뷰 |
@@ -83,8 +83,8 @@ curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-
 
 1. **부트스트랩은 옵트인하지 않는 한 GPU 없는 호스트를 거부합니다:**
    `ATLAS_BOOTSTRAP_SKIP_GPU=1 ./scripts/atlas-bootstrap.sh`
-   이렇게 하면 부트스트랩이 `compose/docker-compose.vulkan.yml`을 겹치고(`/dev/dri`가
-   없으면 `compose/docker-compose.cpu.yml`도 함께), 모델 선택과
+   이렇게 하면 부트스트랩이 `deploy/compose/docker-compose.vulkan.yml`을 겹치고(`/dev/dri`가
+   없으면 `deploy/compose/docker-compose.cpu.yml`도 함께), 모델 선택과
    `ATLAS_BACKEND=vulkan|cpu`를 직접 `.env`에 기록하며, ASA 빌드를 건너뜁니다.
 2. **GPU 없는 호스트에서 `atlas init`을 실행하지 마세요** — 마법사는 크기를
    정할 수 없는 `.env`를 쓰는 대신 의도적으로 거부(exit 1)합니다. 모델 선택은
@@ -95,7 +95,7 @@ curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-
 ```bash
 cp .env.example .env    # set ATLAS_MODEL_FILE / ATLAS_MODEL_NAME
 atlas model install Qwen3.5-9B-Q6_K
-docker compose -f docker-compose.yml -f compose/docker-compose.vulkan.yml -f compose/docker-compose.cpu.yml up -d
+docker compose -f docker-compose.yml -f deploy/compose/docker-compose.vulkan.yml -f deploy/compose/docker-compose.cpu.yml up -d
 atlas doctor            # gpu check WARNS ("CPU-only mode — very slow"); warns exit 0
 ```
 
@@ -163,7 +163,7 @@ curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-
 
 | 요구 사항 | 세부 내용 |
 |-------------|---------|
-| **GPU** | VRAM 16GB 이상. NVIDIA (CUDA, 지원(Supported) — 게시된 이미지는 Blackwell 대상이며, 구형 카드는 일회성 [로컬 재빌드](#cuda-컴퓨트-캐퍼빌리티-dockerfilev31) 필요); AMD (ROCm, 커뮤니티 검증(Community-tested)); Apple Silicon (Metal, macOS 하이브리드, 지원 — [SETUP_MACOS.md](../../SETUP_MACOS.md) 참고); Vulkan(프리뷰(Preview))은 크로스 벤더 폴백이고, Intel Arc (SYCL)는 로드맵(Roadmap)입니다. [§ 지원 GPU](#지원-gpu) 참고. |
+| **GPU** | VRAM 16GB 이상. NVIDIA (CUDA, 지원(Supported) — 게시된 이미지는 Blackwell 대상이며, 구형 카드는 일회성 [로컬 재빌드](#cuda-컴퓨트-캐퍼빌리티-dockerfilev31) 필요); AMD (ROCm, 커뮤니티 검증(Community-tested)); Apple Silicon (Metal, macOS 하이브리드, 지원 — [SETUP_MACOS.md](../../guides/SETUP_MACOS.md) 참고); Vulkan(프리뷰(Preview))은 크로스 벤더 폴백이고, Intel Arc (SYCL)는 로드맵(Roadmap)입니다. [§ 지원 GPU](#지원-gpu) 참고. |
 | **GPU 드라이버** | NVIDIA: 전용 드라이버(`nvidia-smi`에서 GPU가 보여야 함). AMD: `amdgpu-dkms` 커널 드라이버(`/dev/kfd`가 존재해야 하며, `rocm-smi`에서 GPU가 보여야 함). |
 | **Python 3.9+** | pip 포함 |
 | **curl** | 모델 가중치 다운로드용 |
@@ -257,7 +257,7 @@ ${EDITOR:-vi} .env
 #    NVIDIA hosts (default):
 docker compose up -d                                                  # or: podman-compose up -d
 #    AMD ROCm hosts:
-docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml up -d
+docker compose -f docker-compose.yml -f deploy/compose/docker-compose.rocm.yml up -d
 #    `atlas init` writes a marker comment into .env telling you which to use.
 
 # 7. Verify everything is healthy (wait for all services to show "healthy")
@@ -274,7 +274,7 @@ ROCm 경로는 다음 세 가지를 *제외하면* NVIDIA와 동일합니다:
 
 1. **두 compose 파일로 기동** (또는 `atlas init`에 맡기세요):
    ```bash
-   docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml up -d
+   docker compose -f docker-compose.yml -f deploy/compose/docker-compose.rocm.yml up -d
    ```
    오버라이드는 llama-server 이미지를 ROCm 빌드로 전환하고, NVIDIA 드라이버 요청을 `/dev/kfd` + `/dev/dri` 패스스루로 교체하며, 엔트리포인트가 HIP 튜닝 분기를 타도록 `ATLAS_BACKEND=rocm`을 강제합니다.
 
@@ -289,7 +289,7 @@ ROCm 경로는 다음 세 가지를 *제외하면* NVIDIA와 동일합니다:
 3. **GPU 컴퓨트 타깃.** 기본 `Dockerfile.rocm` 빌드는 RDNA3(7000 시리즈), RDNA2(6000 시리즈), CDNA2(MI200)를 포괄하는 "fat" 이미지입니다 — `gfx1100;gfx1101;gfx1102;gfx1030;gfx90a`. 특정 GPU만 겨냥한 더 작은 이미지를 원하면 빌드 전에 `ATLAS_GFX_TARGET`을 설정하세요:
    ```bash
    # Example: only build for RX 7900 XT/XTX
-   ATLAS_GFX_TARGET=gfx1100 docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml build llama-server
+   ATLAS_GFX_TARGET=gfx1100 docker compose -f docker-compose.yml -f deploy/compose/docker-compose.rocm.yml build llama-server
    ```
    본인 카드의 gfx 타깃은 [LLVM AMDGPU 프로세서 표](https://llvm.org/docs/AMDGPUUsage.html)를 참고하세요.
 
@@ -306,10 +306,10 @@ CUDA/ROCm이 선택지가 아니거나, 특이한 하드웨어에서 ATLAS가 �
 # (the wizard offers Vulkan when your GPU vendor's native backend isn't packaged,
 #  or run with --backend vulkan to force it regardless of vendor):
 atlas init --backend vulkan
-docker compose -f docker-compose.yml -f compose/docker-compose.vulkan.yml up -d
+docker compose -f docker-compose.yml -f deploy/compose/docker-compose.vulkan.yml up -d
 
 # Option B — already-installed deployment, just switch the override file:
-docker compose -f docker-compose.yml -f compose/docker-compose.vulkan.yml up -d
+docker compose -f docker-compose.yml -f deploy/compose/docker-compose.vulkan.yml up -d
 # (the entrypoint dispatches on ATLAS_BACKEND, which the compose overlay
 #  sets to vulkan; .env's value is ignored when the overlay is in play)
 ```
@@ -341,7 +341,7 @@ ATLAS는 두 CPU 아키텍처를 대상으로 합니다: `x86_64`(기본, 모든
 
 - **NVIDIA DGX Spark** (Grace-Blackwell GB10) — sbsa 베이스 이미지 경유 CUDA, 컴퓨트 캐퍼빌리티 12.0/12.1
 - **NVIDIA Jetson Orin / AGX / Nano** — l4t 베이스 이미지 경유 CUDA, 컴퓨트 캐퍼빌리티 8.7
-- **Apple Silicon (M1/M2/M3/M4)** — Docker Desktop의 MoltenVK 경유 Vulkan(느린 경로); 출시된 빠른 경로는 네이티브 하이브리드 Metal 설치입니다. [SETUP_MACOS.md](../../SETUP_MACOS.md) 참고
+- **Apple Silicon (M1/M2/M3/M4)** — Docker Desktop의 MoltenVK 경유 Vulkan(느린 경로); 출시된 빠른 경로는 네이티브 하이브리드 Metal 설치입니다. [SETUP_MACOS.md](../../guides/SETUP_MACOS.md) 참고
 - **Snapdragon X Elite** (Windows on ARM 노트북) — Adreno 드라이버 경유 Vulkan
 - **Raspberry Pi 5** — Mesa V3D 드라이버 경유 Vulkan, CPU급 성능 예상
 - **Ampere Altra / AWS Graviton 워크스테이션** — lavapipe 경유 Vulkan(CPU 폴백; 아직 소비자용 arm64 dGPU가 없으므로)
@@ -466,26 +466,9 @@ docker compose down          # Stop all services (preserves images)
 docker compose down --rmi all  # Stop and remove images (next start rebuilds)
 ```
 
-### 로그 확인
+### 로그와 업데이트
 
-```bash
-docker compose logs -f llama-server    # Follow llama-server logs
-docker compose logs -f geometric-lens  # Follow Lens logs
-docker compose logs -f v3-service      # Follow V3 pipeline logs
-docker compose logs -f atlas-proxy     # Follow proxy logs
-docker compose logs -f sandbox         # Follow sandbox logs
-docker compose logs --tail 50          # Last 50 lines from all services
-```
-
-### 업데이트
-
-```bash
-cp .env .env.bak             # config backup (one file holds all your settings)
-git pull
-docker compose pull          # grab fresh :latest images from GHCR
-docker compose up -d         # recreate changed services
-atlas doctor                 # verify: services healthy, model/artifacts intact
-```
+서비스 로그 확인은 [OPERATIONS.md § Logs](../../guides/OPERATIONS.md#logs)를, 설치 업데이트는 [OPERATIONS.md § Standard upgrade](../../guides/OPERATIONS.md#standard-upgrade)를 참고하세요.
 
 ### 제거
 
@@ -506,7 +489,7 @@ rm -rf ~/.cache/atlas-tui          # TUI session history
 # disk (models are the multi-GB part).
 ```
 
-K3s 설치는 대신 `scripts/uninstall.sh`를 사용합니다. 이 스크립트는 매니페스트를 정리하고 (선택적으로) K3s 노드 자체도 제거합니다.
+K3s 설치는 대신 `scripts/install/uninstall.sh`를 사용합니다. 이 스크립트는 매니페스트를 정리하고 (선택적으로) K3s 노드 자체도 제거합니다.
 
 ---
 
@@ -660,16 +643,16 @@ cp atlas.conf.example atlas.conf
 # Edit atlas.conf
 
 # 2. Build and import images
-scripts/build-containers.sh
+scripts/install/build-containers.sh
 
 # 3. Generate manifests from atlas.conf
-scripts/generate-manifests.sh
+scripts/install/generate-manifests.sh
 
 # 4. Deploy
 kubectl apply -n atlas -f manifests/
 
 # 5. Verify
-scripts/verify-install.sh
+scripts/install/verify-install.sh
 ```
 
 ### K3s 전용 설정
@@ -688,7 +671,7 @@ K3s는 설정에 `.env`가 아닌 `atlas.conf`를 사용합니다. HTTP 계약�
 
 모델·런타임 파라미터(`ATLAS_MAIN_MODEL`, `ATLAS_CONTEXT_LENGTH`, `ATLAS_PARALLEL_SLOTS`, `ATLAS_FLASH_ATTENTION`, KV 캐시 양자화, 렌즈 스코어링 경로용 `--embeddings`)는 두 모드 모두 동일한 환경 변수에서 읽습니다 — `atlas.conf.example`과 `.env.example`을 참고하세요.
 
-전체 `atlas.conf` 레퍼런스는 [CONFIGURATION.md](../../CONFIGURATION.md)를 참고하세요.
+전체 `atlas.conf` 레퍼런스는 [CONFIGURATION.md](../../guides/CONFIGURATION.md)를 참고하세요.
 
 ### K3s 배포 확인
 
@@ -700,10 +683,10 @@ kubectl get pods -n atlas
 kubectl describe nodes | grep nvidia.com/gpu
 
 # Run verification suite
-scripts/verify-install.sh
+scripts/install/verify-install.sh
 ```
 
-> **참고:** Docker Compose가 가장 많이 검증된 배포 방법입니다(CI가 이에 대해 실행되며, 모든 릴리스는 Compose로 스모크 테스트됩니다). K3s 매니페스트는 배포 시점에 `templates/*.yaml.tmpl`로부터 `scripts/generate-manifests.sh`(또는 `install.sh`의 `process_templates` 단계)를 통해 생성됩니다. 템플릿은 `atlas.conf`에서 선택된 모델을 사용하며, CHANGELOG의 벤치마크 수치는 각자의 동결된 모델/구성을 기록합니다.
+> **참고:** Docker Compose가 가장 많이 검증된 배포 방법입니다(CI가 이에 대해 실행되며, 모든 릴리스는 Compose로 스모크 테스트됩니다). K3s 매니페스트는 배포 시점에 `deploy/k3s/*.yaml.tmpl`로부터 `scripts/install/generate-manifests.sh`(또는 `install.sh`의 `process_templates` 단계)를 통해 생성됩니다. 템플릿은 `atlas.conf`에서 선택된 모델을 사용하며, CHANGELOG의 벤치마크 수치는 각자의 동결된 모델/구성을 기록합니다.
 
 ---
 
@@ -727,7 +710,7 @@ atlas tier --json       # machine output (for scripts)
 atlas tier --raw        # just the probe (no classification)
 ```
 
-등급 표는 VRAM 구간별 출발점을 제공합니다. **`atlas tier fit`**은 실제로 실행하는 *특정* 모델에 맞게 이를 다듬습니다 — GGUF의 KV 기하 구조와 GPU의 VRAM을 읽어 완전히 GPU 안에 머무는 최대 컨텍스트를 계산합니다(`atlas tier fit --write`는 결과를 `.env`에 적용). `ATLAS_MODEL_FILE`이나 GPU를 바꿀 때마다 실행하세요. [CLI.md § atlas tier fit](../../CLI.md#atlas-tier-fit)과, 다운로드 전 사이징 안내는 [TROUBLESHOOTING.md § 내 GPU에는 무엇이 들어가는가?](TROUBLESHOOTING.md#내-gpu에는-무엇이-들어가는가)를 참고하세요.
+등급 표는 VRAM 구간별 출발점을 제공합니다. **`atlas tier fit`**은 실제로 실행하는 *특정* 모델에 맞게 이를 다듬습니다 — GGUF의 KV 기하 구조와 GPU의 VRAM을 읽어 완전히 GPU 안에 머무는 최대 컨텍스트를 계산합니다(`atlas tier fit --write`는 결과를 `.env`에 적용). `ATLAS_MODEL_FILE`이나 GPU를 바꿀 때마다 실행하세요. [CLI.md § atlas tier fit](../../reference/CLI.md#atlas-tier-fit)과, 다운로드 전 사이징 안내는 [TROUBLESHOOTING.md § 내 GPU에는 무엇이 들어가는가?](TROUBLESHOOTING.md#내-gpu에는-무엇이-들어가는가)를 참고하세요.
 
 medium 등급이 ATLAS 개발 타깃입니다 — `atlas-bootstrap.sh`는 그 모델+컨텍스트 설정을 기본값으로 합니다. 다른 등급에서는 부트스트랩 완료 후 **`atlas init`**(첫 실행 마법사)을 실행하세요. `atlas tier`로 하드웨어를 탐침하고, 레지스트리에서 알맞은 모델을 골라 SHA 검증과 함께 다운로드하고, `.env`를 다시 씁니다. 하드웨어나 레지스트리 기본 모델이 바뀔 때마다 `atlas init --reconfigure`로 다시 실행하세요. 마법사 실행 후에는 `atlas tier fit --write`가 마법사의 등급 수준 기본값을 선택된 모델에 맞게 조입니다.
 
@@ -747,7 +730,7 @@ VRAM 8GB 이상에 llama.cpp가 지원하는 백엔드를 갖춘 모든 GPU:
 | NVIDIA (Blackwell — RTX 50xx, B100, GB10) | CUDA | 지원(Supported) (게시된 이미지) | `inference/Dockerfile.v31` | RTX 5060 Ti 16GB (주 개발 GPU) |
 | NVIDIA (Blackwell 이전 — RTX 20xx–40xx, GTX 10xx, V100/A100/H100/T4/L4) | CUDA | 프리뷰(Preview) — 일회성 [로컬 재빌드 필요](#cuda-컴퓨트-캐퍼빌리티-dockerfilev31) | `inference/Dockerfile.v31` + `--build-arg CUDA_ARCH=<cc>` | — (업스트림 llama.cpp는 이들을 지원; ATLAS에서의 메인테이너 검증은 없음) |
 | AMD | ROCm / HIP | 커뮤니티 검증(Community-tested) | `inference/Dockerfile.rocm` | RX 7900 XTX (커뮤니티 스모크 테스트, [GH #26](https://github.com/inferstep/ATLAS/issues/26)) |
-| Apple Silicon | Metal | 지원 (macOS 하이브리드: 네이티브 llama-server + Docker, [#32](https://github.com/inferstep/ATLAS/issues/32)) | `scripts/atlas-setup-macos.sh` + `compose/docker-compose.macos.yml` | M2 Pro 32GB (검증됨); M3/M4 (목표) |
+| Apple Silicon | Metal | 지원 (macOS 하이브리드: 네이티브 llama-server + Docker, [#32](https://github.com/inferstep/ATLAS/issues/32)) | `scripts/install/atlas-setup-macos.sh` + `deploy/compose/docker-compose.macos.yml` | M2 Pro 32GB (검증됨); M3/M4 (목표) |
 | 모든 벤더 (크로스 벤더 폴백) | Vulkan | 프리뷰 | `inference/Dockerfile.vulkan` | lavapipe (CPU ICD) 스모크 테스트됨; 실제 GPU 검증은 아직 없음 |
 | Intel Arc | SYCL | 로드맵(Roadmap) — Intel Arc는 현재 Vulkan 사용 | 미정 | Arc A770 16GB (목표) |
 
@@ -795,7 +778,7 @@ docker compose build --build-arg CUDA_ARCH="86;89;90" llama-server
 
 ```bash
 # Single target — RX 7900 XT/XTX only (smaller image)
-ATLAS_GFX_TARGET=gfx1100 docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml build llama-server
+ATLAS_GFX_TARGET=gfx1100 docker compose -f docker-compose.yml -f deploy/compose/docker-compose.rocm.yml build llama-server
 
 # Two targets for RDNA3 + RDNA2 mixed-fleet
 docker build --build-arg GFX_TARGET="gfx1100;gfx1030" -f inference/Dockerfile.rocm -t atlas-llama-rocm:custom inference/
@@ -827,7 +810,7 @@ docker build --build-arg GFX_TARGET="gfx1100;gfx1030" -f inference/Dockerfile.ro
 
 ATLAS는 모든 요청에 Geometric Lens를 사용합니다([ADR 0011](../../adr/0011-the-lens-is-required.md)). 렌즈에는 서빙 중인 모델에 맞는 C(x)·G(x) 가중치가 필요합니다. 가중치가 없으면 프록시는 각 요청을 HTTP 503 `dependency_unavailable`으로 거부하면서 그 이유를 알려주고, `atlas doctor`는 실패합니다. 가중치는 있지만 아직 보정되지 않은 렌즈는 허용됩니다: 점수는 산출되고, 임계값 개입만 보정 이후로 미뤄집니다.
 
-[SUPPORT_MATRIX.md](../../SUPPORT_MATRIX.md)에 렌즈 아티팩트가 표기된 모델은 `atlas model install-artifacts`로 받을 수 있습니다. 사전 학습된 가중치와 학습 데이터도 HuggingFace에서 제공됩니다:
+[SUPPORT_MATRIX.md](../../guides/SUPPORT_MATRIX.md)에 렌즈 아티팩트가 표기된 모델은 `atlas model install-artifacts`로 받을 수 있습니다. 사전 학습된 가중치와 학습 데이터도 HuggingFace에서 제공됩니다:
 
 **[HuggingFace의 ATLAS 데이터셋](https://huggingface.co/datasets/itigges22/ATLAS)** — 임베딩, 학습 데이터, 가중치 파일이 포함되어 있습니다.
 
@@ -840,7 +823,7 @@ atlas bench --run-id mymodel_lens --tasks 200    # 후보 생성 및 셀프 라�
 atlas lens build --force --from-results benchmark/results/mymodel_lens/v3_lcb/per_task
 ```
 
-`atlas lens build`는 렌즈의 두 절반을 모두 학습시키고 임계값을 보정한 뒤, 활성화된 번들에 `provenance.json` 매니페스트를 기록합니다. [CLI.md § atlas lens](../../CLI.md#atlas-lens)를 참조하세요.
+`atlas lens build`는 렌즈의 두 절반을 모두 학습시키고 임계값을 보정한 뒤, 활성화된 번들에 `provenance.json` 매니페스트를 기록합니다. [CLI.md § atlas lens](../../reference/CLI.md#atlas-lens)를 참조하세요.
 
 ### 자체 llama-server 반입하기
 
@@ -886,25 +869,7 @@ mkdir -p secrets     # or set ATLAS_SECRETS_DIR
 
 ### 자체 모델 반입하기
 
-기본이 아닌 GGUF를 갈아 끼우고 싶다면, `atlas lens` 하위 명령이 탐침 + 학습 파이프라인을 감싸므로 밑단 스크립트를 배울 필요가 없습니다:
-
-```bash
-# 1. Drop your GGUF in models/ and update .env to point at it, restart llama-server.
-
-# 2. Probe whether the existing artifacts can score it (cheap, no training):
-atlas lens check
-# Reports: compat (artifacts work) | needs-build (different dim) | incompatible
-
-# 3. If 'needs-build', train fresh artifacts at the model's native embedding dim:
-atlas lens build --samples path/to/labeled.json
-# samples format: [{"text": str, "label": 0|1}, ...] where 1 = passing code
-# Canonical training set: huggingface.co/datasets/itigges22/ATLAS
-
-# 4. Re-run check — should now report compat:
-atlas lens check
-```
-
-전체 레퍼런스: [CLI.md § atlas lens](../../CLI.md#atlas-lens).
+기본이 아닌 GGUF로 바꾸려면 [CONFIGURATION.md § Adding your own model](../../guides/CONFIGURATION.md#adding-your-own-model-drop-in--unregistered)과 [CLI.md § atlas lens](../../reference/CLI.md#atlas-lens)를 참고하세요.
 
 ---
 
@@ -939,7 +904,7 @@ atlas lens check
 
 ## 다음 단계
 
-- [CLI.md](../../CLI.md) — 실행 후 ATLAS 사용 방법
-- [CONFIGURATION.md](../../CONFIGURATION.md) — 모든 환경 변수 및 튜닝 옵션
+- [CLI.md](../../reference/CLI.md) — 실행 후 ATLAS 사용 방법
+- [CONFIGURATION.md](../../guides/CONFIGURATION.md) — 모든 환경 변수 및 튜닝 옵션
 - [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — 일반적인 문제 및 해결 방법
 - [ARCHITECTURE.md](ARCHITECTURE.md) — 시스템 내부 동작 원리

@@ -10,6 +10,10 @@ import (
 	"net/http"
 	"path/filepath"
 	"sync"
+
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
+	"github.com/itigges22/atlas-proxy/internal/wire"
+	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
 // activeSessions tracks in-flight /v1/agent turns by session_id so
@@ -138,7 +142,7 @@ type agentRequest struct {
 	// Tools the client has approved for the whole session so the proxy
 	// skips the interactive prompt for them (see /v1/permission).
 	SessionAllowedTools []string `json:"session_allowed_tools,omitempty"`
-	// /demo split-pane flags — tags match tui/chat.go's agentRequest.
+	// /demo split-pane flags — tags match tui/internal/proxyclient/chat.go's agentRequest.
 	DisableFreshSlot bool   `json:"disable_fresh_slot,omitempty"` // keep the pre-warmed KV prefix
 	SandboxSubdir    string `json:"sandbox_subdir,omitempty"`     // confine writes to this workspace subdir
 	// Removed switches, read only to refuse them. V3 runs on every
@@ -150,7 +154,7 @@ type agentRequest struct {
 	RemovedFeasibilityMode string `json:"feasibility_mode,omitempty"`
 	// What the client declares about the request. Optional, and absent
 	// stays distinguishable from present-and-empty.
-	TaskContract *TaskContract `json:"task_contract,omitempty"`
+	TaskContract *taskcontract.TaskContract `json:"task_contract,omitempty"`
 }
 
 // readAgentRequest decodes a /v1/agent request, or answers it with the HTTP
@@ -195,8 +199,8 @@ func agentWorkingDirs(w http.ResponseWriter, req *agentRequest) (string, string,
 	// /demo: each pane works inside its own workspace subdir. A non-empty
 	// sandbox_subdir must be one allowed bare name, else HTTP 400 and no turn.
 	if sub := req.SandboxSubdir; sub != "" {
-		if !validSandboxSubdir(sub) {
-			writeError(w, http.StatusBadRequest, ErrInvalidInput, sandboxSubdirDetail)
+		if !workspacefs.ValidSandboxSubdir(sub) {
+			writeError(w, http.StatusBadRequest, ErrInvalidInput, workspacefs.SandboxSubdirDetail)
 			return "", "", false
 		}
 		workingDir = filepath.Join(workingDir, sub)
@@ -245,7 +249,7 @@ func seedPriorHistory(ctx *AgentContext, req *agentRequest) {
 		if n > 40 {
 			req.History = req.History[n-40:]
 		}
-		ctx.PriorHistory = make([]AgentMessage, 0, len(req.History))
+		ctx.PriorHistory = make([]wire.AgentMessage, 0, len(req.History))
 		for _, h := range req.History {
 			// Only accept the two roles that make sense as conversation
 			// history; anything else is skipped silently rather than
@@ -256,7 +260,7 @@ func seedPriorHistory(ctx *AgentContext, req *agentRequest) {
 			if h.Content == "" {
 				continue
 			}
-			ctx.PriorHistory = append(ctx.PriorHistory, AgentMessage{
+			ctx.PriorHistory = append(ctx.PriorHistory, wire.AgentMessage{
 				Role:    h.Role,
 				Content: h.Content,
 			})
@@ -341,7 +345,7 @@ func openEventStream(w http.ResponseWriter, ctx *AgentContext) (http.Flusher, bo
 	// events fire.
 	var streamMu sync.Mutex
 	ctx.StreamFn = func(eventType string, data interface{}) {
-		event := SSEEvent{Type: eventType, Data: data}
+		event := wire.SSEEvent{Type: eventType, Data: data}
 		eventJSON, _ := json.Marshal(event)
 		streamMu.Lock()
 		defer streamMu.Unlock()

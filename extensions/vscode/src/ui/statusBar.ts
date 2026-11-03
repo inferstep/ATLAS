@@ -2,7 +2,7 @@
 // streaming (the SSE connection is proof of connectivity, and /ready hits
 // four downstream health checks). /v1/calibration/status is only fetched at
 // activation and on explicit user refresh — each call re-probes the lens
-// service (docs/API.md).
+// service (docs/reference/API.md).
 
 import * as vscode from 'vscode';
 import { AtlasApiError, AtlasClient } from '../client/atlasClient';

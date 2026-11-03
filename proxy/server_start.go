@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // blockedServerStart reports whether a failed verification command failed
@@ -22,8 +24,8 @@ import (
 // executor sets it when it stops a command at the time limit, and a command
 // that is stopped writes nothing about it. That a port is taken is read from
 // what the command wrote: only the command knows it.
-func blockedServerStart(result *ToolResult) bool {
-	var out RunCommandOutput
+func blockedServerStart(result *wire.ToolResult) bool {
+	var out wire.RunCommandOutput
 	if json.Unmarshal(result.Data, &out) == nil && out.TimedOut {
 		return true
 	}

@@ -12,6 +12,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/fencing"
+	"github.com/itigges22/atlas-proxy/internal/logsafe"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // fencedWatchdog arms the fenced sub-call's progress watchdog on cancel, with
@@ -47,7 +51,7 @@ func fencedWatchdog(cancel context.CancelFunc) (*time.Timer, func(), func()) {
 // rawResponseForFence renders the tool call as the assistant turn the
 // fenced-content sub-call replays. Marshalling the parsed struct rather than
 // reusing raw model text keeps the sub-call deterministic.
-func rawResponseForFence(parsed ModelResponse) string {
+func rawResponseForFence(parsed wire.ModelResponse) string {
 	b, err := json.Marshal(parsed)
 	if err != nil {
 		return "{\"type\":\"tool_call\",\"name\":\"write_file\"}"
@@ -273,7 +277,7 @@ type fencedFetch struct {
 	ctx     *AgentContext
 	path    string
 	tag     string
-	msgs    []AgentMessage
+	msgs    []wire.AgentMessage
 	lastErr error
 }
 
@@ -281,7 +285,7 @@ type fencedFetch struct {
 // inline path reads a body.
 type fencedAnswer struct {
 	reply          string
-	framing        fenceFraming
+	framing        fencing.Framing
 	content        string
 	err            error
 	got            bool
@@ -301,13 +305,13 @@ func (f *fencedFetch) ask(grammar string, attempt int, attemptStart time.Time) f
 	ctx.FencedCalls++
 	ctx.FencedTokens += tokens
 	// Under the fence grammar a code file may end on three backticks
-	// (fenceBlockGrammar); that line is the closer the grammar accepted.
-	if isFenceBlockGrammar(grammar) && fenceShortCloserAllowed(tag) {
-		reply = closeShortFence(reply)
+	// (fencing.BlockGrammar); that line is the closer the grammar accepted.
+	if fencing.IsBlockGrammar(grammar) && fencing.ShortCloserAllowed(tag) {
+		reply = fencing.CloseShort(reply)
 	}
 	// The same framing decision the inline path makes, so a reply the
 	// parent would refuse inline cannot be accepted here instead.
-	framing, content := classifyFencedPayload(reply)
+	framing, content := fencing.ClassifyPayload(reply)
 	// The model sometimes wraps the SENTINEL in the fence instead of the
 	// file: "```python\n@fenced\n```". That extracts as
 	// non-empty and would land a file whose entire contents are the word
@@ -319,10 +323,10 @@ func (f *fencedFetch) ask(grammar string, attempt int, attemptStart time.Time) f
 	}
 	got := content != ""
 	contentBytes := len(content)
-	Emit(Envelope{
-		EventID:    NewEventID(),
+	Emit(wire.Envelope{
+		EventID:    wire.NewEventID(),
 		Timestamp:  float64(time.Now().UnixNano()) / 1e9,
-		Type:       EvtStageEnd,
+		Type:       wire.EvtStageEnd,
 		Stage:      "fenced_fetch",
 		DurationMS: elapsed.Milliseconds(),
 		Payload: map[string]interface{}{
@@ -408,9 +412,9 @@ func (f *fencedFetch) settle(a fencedAnswer, attempt int) (string, bool, error) 
 	log.Printf("[agent] fenced attempt %d for %s produced no usable block (%s, %d chars, cut=%q, session failures %d/%d): %q",
 		attempt+1, path, framing, len(reply), ctx.LastStreamCut,
 		ctx.FencedFailures[fencedKey(ctx, path)], maxFencedFailuresPerPath,
-		safeTextSummary(reply))
-	f.msgs = append(f.msgs, AgentMessage{Role: "assistant", Content: reply},
-		AgentMessage{Role: "user", Content: fencedRetryNote(framing, tag)})
+		logsafe.TextSummary(reply))
+	f.msgs = append(f.msgs, wire.AgentMessage{Role: "assistant", Content: reply},
+		wire.AgentMessage{Role: "user", Content: fencing.RetryNote(framing, tag)})
 	return "", false, nil
 }
 
@@ -422,7 +426,7 @@ func emitFencedFetch(ctx *AgentContext, path string, attempt int, grammar string
 	elapsed time.Duration, tokens int, outcome string) {
 	fs := ctx.LastFencedStream
 	g := "raw"
-	if isFenceBlockGrammar(grammar) {
+	if fencing.IsBlockGrammar(grammar) {
 		g = "fence"
 	}
 	ev := map[string]interface{}{

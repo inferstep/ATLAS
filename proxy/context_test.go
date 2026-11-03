@@ -302,7 +302,7 @@ func TestFormatGraphNeighborhood(t *testing.T) {
 
 func TestResolveWorkspacePathRejectsTraversalAndAbsolutePaths(t *testing.T) {
 	root := t.TempDir()
-	ctx := &AgentContext{WorkingDir: root}
+	ctx := &AgentContext{runSetup: runSetup{WorkingDir: root}}
 	for _, input := range []string{"../outside.txt", "/etc/passwd"} {
 		if _, err := resolveWorkspacePath(ctx, input); err == nil {
 			t.Errorf("resolveWorkspacePath(%q) succeeded, want rejection", input)
@@ -312,7 +312,7 @@ func TestResolveWorkspacePathRejectsTraversalAndAbsolutePaths(t *testing.T) {
 
 func TestResolveWorkspacePathAllowsHostPathTranslation(t *testing.T) {
 	root := t.TempDir()
-	ctx := &AgentContext{WorkingDir: root, HostWorkingDir: "/Users/test/project"}
+	ctx := &AgentContext{runSetup: runSetup{WorkingDir: root, HostWorkingDir: "/Users/test/project"}}
 	got, err := resolveWorkspacePath(ctx, "/Users/test/project/src/main.go")
 	if err != nil {
 		t.Fatalf("resolveWorkspacePath: %v", err)
@@ -329,7 +329,7 @@ func TestResolveWorkspacePathRejectsSymlinkEscape(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
-	ctx := &AgentContext{WorkingDir: root}
+	ctx := &AgentContext{runSetup: runSetup{WorkingDir: root}}
 	if _, err := resolveWorkspacePath(ctx, "escape/file.txt"); err == nil {
 		t.Fatal("symlink escape succeeded, want rejection")
 	}
@@ -346,7 +346,7 @@ func TestReadWorkspaceFileRejectsSymlinkEscape(t *testing.T) {
 		t.Skipf("symlink unavailable: %v", err)
 	}
 
-	ctx := &AgentContext{WorkingDir: root}
+	ctx := &AgentContext{runSetup: runSetup{WorkingDir: root}}
 	if _, _, err := readWorkspaceFile(ctx, "escape/secret.txt"); err == nil {
 		t.Fatal("readWorkspaceFile followed a symlink outside the workspace")
 	}
@@ -358,7 +358,7 @@ func TestReadWorkspaceFileReadsRegularWorkspaceFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, _, err := readWorkspaceFile(&AgentContext{WorkingDir: root}, "inside.txt")
+	got, _, err := readWorkspaceFile(&AgentContext{runSetup: runSetup{WorkingDir: root}}, "inside.txt")
 	if err != nil {
 		t.Fatalf("readWorkspaceFile: %v", err)
 	}
@@ -369,7 +369,7 @@ func TestReadWorkspaceFileReadsRegularWorkspaceFile(t *testing.T) {
 
 func TestExecuteToolCallRejectsWorkspaceEscape(t *testing.T) {
 	root := t.TempDir()
-	ctx := &AgentContext{WorkingDir: root}
+	ctx := &AgentContext{runSetup: runSetup{WorkingDir: root}}
 	res := executeToolCall("read_file", json.RawMessage(`{"path":"../secret"}`), ctx)
 	if res.Success || !strings.Contains(res.Error, "outside the workspace") {
 		t.Fatalf("result = %+v, want workspace rejection", res)
@@ -421,7 +421,7 @@ func TestAnArgumentNameThatIsNotLowercaseIsRefused(t *testing.T) {
 // map gave first, so one request got two texts: a real model's session did not
 // replay for it. The refusal names the first in sorted order, each time.
 func TestARefusalOfTwoNamesThatAreNotLowercaseNamesTheSameOneEachTime(t *testing.T) {
-	ctx := &AgentContext{WorkingDir: t.TempDir()}
+	ctx := &AgentContext{runSetup: runSetup{WorkingDir: t.TempDir()}}
 	args := json.RawMessage(`{"path":"app.py","Expected_last_line":"b","Expected_first_line":"a","content":"c"}`)
 	want := `replace_lines: argument names are lowercase, as the tool lists them; "Expected_first_line" is not`
 	for try := 1; try <= 100; try++ {

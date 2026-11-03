@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // When V3 fails on a write, the model's own bytes land, and the final summary
@@ -15,7 +17,7 @@ import (
 
 func TestTheV3NoteNamesOnlyTheUncheckedBytesOnDisk(t *testing.T) {
 	dir := t.TempDir()
-	ctx := &AgentContext{WorkingDir: dir}
+	ctx := &AgentContext{runSetup: runSetup{WorkingDir: dir}}
 	p := filepath.Join(dir, "app.py")
 	if err := os.WriteFile(p, []byte("x = 1\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -92,7 +94,7 @@ func TestAnIncompleteRunNamesTheFileToo(t *testing.T) {
 	r := editLoopFixture(t, nil, `{"task_mode":"work"}`, "Write stats.py.",
 		script(stepWrite("stats.py", lensFile), stepDone("wrote stats.py")),
 		editLoopOptions{})
-	if r.terminal["status"] == string(TerminalCompleted) {
+	if r.terminal["status"] == string(wire.TerminalCompleted) {
 		t.Fatalf("the run completed without running stats.py, so this test shows nothing: %s", r.describe())
 	}
 	if !strings.Contains(r.terminal["summary"], "stats.py (V3 was unavailable)") {

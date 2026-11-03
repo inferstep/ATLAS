@@ -2,7 +2,7 @@
 > **[English](../../../README.md)** | **简体中文** | **[日本語](../ja/README.md)** | **[한국어](../ko/README.md)**
 
 <p align="center">
-  <img src="../../images/herodemo.gif" alt="ATLAS TUI 实时演示"/><br/>
+  <img src="../../assets/herodemo.gif" alt="ATLAS TUI 实时演示"/><br/>
   <sub><i>ATLAS TUI 实况（10× 加速），V3 pipeline 正在处理一次文件创建。</i></sub>
 </p>
 
@@ -64,39 +64,39 @@
 
 ## 🧱 ATLAS 的功能
 
-1. **[atlas-tui](../../CLI.md)** - 基于 Bubbletea 的原生终端 UI，是官方聊天客户端。在任意项目目录中输入 `atlas` 即可启动。
-   - [实时 Pipeline 视图](../../CLI.md#panes) - 在侧边窗格中观看 V3 各阶段的实时流
-   - [斜杠命令](../../CLI.md#slash-commands) - `/add`、`/diff`、`/commit`、`/run` 操作本地文件上下文与 shell
-   - [输入模式](../../CLI.md#input-modes) - 聊天、`!bash`、`/slash` 三种模式带提示下拉
+1. **[atlas-tui](../../reference/CLI.md)** - 基于 Bubbletea 的原生终端 UI，是官方聊天客户端。在任意项目目录中输入 `atlas` 即可启动。
+   - [实时 Pipeline 视图](../../reference/CLI.md#panes) - 在侧边窗格中观看 V3 各阶段的实时流
+   - [斜杠命令](../../reference/CLI.md#slash-commands) - `/add`、`/diff`、`/commit`、`/run` 操作本地文件上下文与 shell
+   - [输入模式](../../reference/CLI.md#input-modes) - 聊天、`!bash`、`/slash` 三种模式带提示下拉
 
-2. **[atlas-proxy](../../ARCHITECTURE.md#3-atlas-proxy-outer-layer)** - 基于 Go 的 agent 循环，负责编排整个系统。
-   - [工具调用路由](../../ARCHITECTURE.md#tools) - 按复杂度层级分类文件操作
-   - [语法强制执行](../../ARCHITECTURE.md#grammar-enforcement) - GBNF 模式强力引导输出符合预期 JSON 结构，并由代理恢复格式错误或截断的输出
-   - [BiasBusters](../../ARCHITECTURE.md#tool-selection-bias-mitigations) - 四道组合的缓解措施（描述、语法禁用、系统提示、ASA 操控），把模型推向用 `structural_edit` 做结构性代码编辑
-   - [安全限制](../../ARCHITECTURE.md#safety-limits) - 轮次上限、token 预算、超时
+2. **[atlas-proxy](../../reference/ARCHITECTURE.md#3-atlas-proxy-outer-layer)** - 基于 Go 的 agent 循环，负责编排整个系统。
+   - [工具调用路由](../../reference/ARCHITECTURE.md#tools) - 按复杂度层级分类文件操作
+   - [语法强制执行](../../reference/ARCHITECTURE.md#grammar-enforcement) - GBNF 模式强力引导输出符合预期 JSON 结构，并由代理恢复格式错误或截断的输出
+   - [BiasBusters](../../reference/ARCHITECTURE.md#tool-selection-bias-mitigations) - 四道组合的缓解措施（描述、语法禁用、系统提示、ASA 操控），把模型推向用 `structural_edit` 做结构性代码编辑
+   - [安全限制](../../reference/ARCHITECTURE.md#safety-limits) - 轮次上限、token 预算、超时
 
-3. **[V3 Pipeline](../../ARCHITECTURE.md#4-v3-pipeline-inner-layer)** - 多阶段代码生成；把单个提示词转化为经过验证的候选。
-   - [PlanSearch](../../ARCHITECTURE.md#pipeline-flow) - 约束驱动的结构化规划
-   - [DivSampling](../../ARCHITECTURE.md#pipeline-flow) - 跨温度和策略的多样化候选生成
-   - [预算层级](../../ARCHITECTURE.md#pipeline-flow) - 分配器为每个任务选择计算层级；层级决定生成多少候选，以及每个候选的提示和 token 预算
-   - [PR-CoT Repair](../../ARCHITECTURE.md#pipeline-flow) - 根据沙箱的错误输出修复失败的候选
-   - [Refinement Loops](../../ARCHITECTURE.md#pipeline-flow) - 沙箱验证与修正，然后重复
+3. **[V3 Pipeline](../../reference/ARCHITECTURE.md#4-v3-pipeline-inner-layer)** - 多阶段代码生成；把单个提示词转化为经过验证的候选。
+   - [PlanSearch](../../reference/ARCHITECTURE.md#pipeline-flow) - 约束驱动的结构化规划
+   - [DivSampling](../../reference/ARCHITECTURE.md#pipeline-flow) - 跨温度和策略的多样化候选生成
+   - [预算层级](../../reference/ARCHITECTURE.md#pipeline-flow) - 分配器为每个任务选择计算层级；层级决定生成多少候选，以及每个候选的提示和 token 预算
+   - [PR-CoT Repair](../../reference/ARCHITECTURE.md#pipeline-flow) - 根据沙箱的错误输出修复失败的候选
+   - [Refinement Loops](../../reference/ARCHITECTURE.md#pipeline-flow) - 沙箱验证与修正，然后重复
 
-4. **[Geometric Lens](../../ARCHITECTURE.md#5-geometric-lens)** - 基于模型自身嵌入的能量打分，无需外部预言机。（[什么是 "Geometric Lens"？](../../ARCHITECTURE.md#why-geometric-lens)）
-   - [C(x) Cost Field](../../ARCHITECTURE.md#scoring-models) - 模型隐藏维度→512→128→1 的 MLP，用于评估候选质量
-   - [G(x) Quality Prediction](../../ARCHITECTURE.md#scoring-models) - 其评分有助于决定生成多少候选的 XGBoost 集成；候选选择本身取最低的 C(x)
+4. **[Geometric Lens](../../reference/ARCHITECTURE.md#5-geometric-lens)** - 基于模型自身嵌入的能量打分，无需外部预言机。（[什么是 "Geometric Lens"？](../../reference/ARCHITECTURE.md#why-geometric-lens)）
+   - [C(x) Cost Field](../../reference/ARCHITECTURE.md#scoring-models) - 模型隐藏维度→512→128→1 的 MLP，用于评估候选质量
+   - [G(x) Quality Prediction](../../reference/ARCHITECTURE.md#scoring-models) - 其评分有助于决定生成多少候选的 XGBoost 集成；候选选择本身取最低的 C(x)
 
-5. **[Sandbox](../../ARCHITECTURE.md#6-sandbox)** - 用于构建验证的隔离执行环境。
+5. **[Sandbox](../../reference/ARCHITECTURE.md#6-sandbox)** - 用于构建验证的隔离执行环境。
    - 多语言执行：Python、Rust、Go、C、Shell 等。Rust、Go、C 可在项目中作为命令运行；V3 检查其语法，沙箱的 `/execute` 只能编译，暂时无法运行 ([#163](https://github.com/inferstep/ATLAS/issues/163))
    - 评分前先做编译与检查
    - 同时运行自生成测试和已有测试套件
 
-6. **[llama-server](../../CONFIGURATION.md#6-llama-server)** - 在单块消费级 GPU 上的本地 LLM 推理。
+6. **[llama-server](../../guides/CONFIGURATION.md#6-llama-server)** - 在单块消费级 GPU 上的本地 LLM 推理。
    - GPU 加速的量化推理 (Q6_K / Q4_K_M) - NVIDIA CUDA、AMD ROCm、Apple Metal（macOS 混合方案）和 Vulkan；Intel SYCL 在路线图上
    - token 级的语法约束解码
    - 自嵌入，因此 lens 不需要第二个模型
 
-完整文档（安装、架构、配置、故障排查，以及[每个组件背后的研究依据](../../SOURCES.md)）位于 [docs/](../../) 目录中。
+完整文档（安装、架构、配置、故障排查，以及[每个组件背后的研究依据](../../reference/SOURCES.md)）位于 [docs/](../../) 目录中。
 
 ---
 
@@ -127,18 +127,18 @@ bash atlas-bootstrap.sh
 
 | | |
 |---|---|
-| GPU | 显存 16GB 以上。NVIDIA（CUDA，支持 (Supported)）、AMD（ROCm，社区验证 (Community-tested)）或 Apple Silicon（Metal，macOS 混合方案，支持）；其余大多数 GPU 由 Vulkan（预览 (Preview)）覆盖。预构建的 CUDA 镜像面向 Blackwell（RTX 50xx）；更早的 NVIDIA GPU 需要做一次性的本地重建（参见 [SETUP.md § CUDA Compute Capability](../../SETUP.md#cuda-compute-capability-dockerfilev31)）。级别定义见 [SUPPORT_MATRIX.md](../../SUPPORT_MATRIX.md)；GPU 列表见 [SETUP.md § Supported GPUs](../../SETUP.md#supported-gpus)。想估算某个具体模型能否放进你的显卡，参见 [What fits on my GPU?](../../TROUBLESHOOTING.md#what-fits-on-my-gpu)。 |
+| GPU | 显存 16GB 以上。NVIDIA（CUDA，支持 (Supported)）、AMD（ROCm，社区验证 (Community-tested)）或 Apple Silicon（Metal，macOS 混合方案，支持）；其余大多数 GPU 由 Vulkan（预览 (Preview)）覆盖。预构建的 CUDA 镜像面向 Blackwell（RTX 50xx）；更早的 NVIDIA GPU 需要做一次性的本地重建（参见 [SETUP.md § CUDA Compute Capability](../../guides/SETUP.md#cuda-compute-capability-dockerfilev31)）。级别定义见 [SUPPORT_MATRIX.md](../../guides/SUPPORT_MATRIX.md)；GPU 列表见 [SETUP.md § Supported GPUs](../../guides/SETUP.md#supported-gpus)。想估算某个具体模型能否放进你的显卡，参见 [What fits on my GPU?](../../guides/TROUBLESHOOTING.md#what-fits-on-my-gpu)。 |
 | 运行时 | Docker（NVIDIA：+ nvidia-container-toolkit；AMD：单独的 Docker 即可） |
 | Python | 3.9 及以上 |
 | 磁盘 | 约 20GB CUDA / 约 22GB ROCm（模型权重 + 容器镜像） |
 
-Apple Silicon 通过原生 macOS 混合 Metal 方案运行（原生 llama-server 负责推理，其余组件用 Docker - 详见 **[SETUP_MACOS.md](../../SETUP_MACOS.md)**）；Intel Arc (SYCL) 在路线图上。完整的手动安装路径（Docker Compose、裸机、K3s）和全部 bootstrap 参数请参见 **[SETUP.md](../../SETUP.md)**。
+Apple Silicon 通过原生 macOS 混合 Metal 方案运行（原生 llama-server 负责推理，其余组件用 Docker - 详见 **[SETUP_MACOS.md](../../guides/SETUP_MACOS.md)**）；Intel Arc (SYCL) 在路线图上。完整的手动安装路径（Docker Compose、裸机、K3s）和全部 bootstrap 参数请参见 **[SETUP.md](../../guides/SETUP.md)**。
 
 ---
 
 ## ⚠️ 已知限制
 
-- **Linux Docker 栈，外加一条原生 macOS 路径。** NVIDIA（支持 (Supported)）、AMD ROCm（社区验证 (Community-tested)）和 Vulkan（预览 (Preview)）的 Docker 路径今天即已存在；Apple Silicon（支持）通过原生 macOS 混合 Metal 方案运行 ([#32](https://github.com/inferstep/ATLAS/issues/32))。Intel Arc / SYCL 为路线图 (Roadmap) 级别。级别定义见 [SUPPORT_MATRIX.md](../../SUPPORT_MATRIX.md)。
+- **Linux Docker 栈，外加一条原生 macOS 路径。** NVIDIA（支持 (Supported)）、AMD ROCm（社区验证 (Community-tested)）和 Vulkan（预览 (Preview)）的 Docker 路径今天即已存在；Apple Silicon（支持）通过原生 macOS 混合 Metal 方案运行 ([#32](https://github.com/inferstep/ATLAS/issues/32))。Intel Arc / SYCL 为路线图 (Roadmap) 级别。级别定义见 [SUPPORT_MATRIX.md](../../guides/SUPPORT_MATRIX.md)。
 - **ATLAS 目前没有基准测试结果。** V3.0 的 LiveCodeBench 数字已撤回（见 [CHANGELOG](../../../CHANGELOG.md#withdrawn-the-v30-livecodebench-result-746)），当前版本的能力与可靠性数字尚未测量。只有在留出任务上重新测量后才会公布数字；逐模型结果在 [#28](https://github.com/inferstep/ATLAS/issues/28) 中跟踪。
 - **Lens 的信号尚未得到证实。** 在参考模型上它能评分，但仍未校准，因此干预保持中立。在 3.1.6 上它没有给出可用信号，`dev` 上尚未测量 ([#281](https://github.com/inferstep/ATLAS/issues/281))。
 - **复杂功能添加可能不稳定。** 紧凑模型有时会在陌生代码库上花掉几轮 agent 回合去探索而不是写代码。

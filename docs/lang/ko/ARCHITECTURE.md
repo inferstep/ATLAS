@@ -1,5 +1,5 @@
-<!-- source: docs/ARCHITECTURE.md synced-through: fb1a649f8ad3d23c19524227bf89ff811f985f03 -->
-> **[English](../../ARCHITECTURE.md)** | **[简体中文](../zh-CN/ARCHITECTURE.md)** | **[日本語](../ja/ARCHITECTURE.md)** | **한국어**
+<!-- source: docs/reference/ARCHITECTURE.md synced-through: fb1a649f8ad3d23c19524227bf89ff811f985f03 -->
+> **[English](../../reference/ARCHITECTURE.md)** | **[简体中文](../zh-CN/ARCHITECTURE.md)** | **[日本語](../ja/ARCHITECTURE.md)** | **한국어**
 
 # ATLAS 아키텍처
 
@@ -39,7 +39,7 @@ graph LR
 
 채팅 프론트엔드는 **atlas-tui**(Bubbletea)입니다. `/v1/agent`(턴별 채팅 SSE)와 `/events`(파이프라인 패널용 전역 타입 봉투 피드)를 소비하는 네이티브 Go 터미널 UI입니다. `atlas`(대화형 기본값) 또는 `atlas tui`(명시적)로 실행합니다. 파이프라인 패널은 V3 단계를 실시간으로 보여주고, 채팅 패널은 어시스턴트 마크다운을 glamour로 렌더링합니다. 슬래시 명령 `/add /diff /commit /run` 등이 로컬 파일 컨텍스트와 셸 호출을 처리합니다. 모드 인식 입력(채팅 / `!bash` / `/slash`)에 힌트 드롭다운이 함께 제공됩니다.
 
-도구 호출 + V3 파이프라인을 원하는 서드파티 클라이언트는 `/v1/agent`를 직접 대상으로 합니다. `/v1/chat/completions`는 llama-server로의 패스스루입니다(§3 참고). 계약은 [API.md](../../API.md)에 문서화되어 있습니다.
+도구 호출 + V3 파이프라인을 원하는 서드파티 클라이언트는 `/v1/agent`를 직접 대상으로 합니다. `/v1/chat/completions`는 llama-server로의 패스스루입니다(§3 참고). 계약은 [API.md](../../reference/API.md)에 문서화되어 있습니다.
 
 ### 1.1 지원 가속기
 
@@ -48,14 +48,14 @@ llama-server는 GPU를 사용하는 유일한 서비스입니다. 다른 모든 
 | 백엔드 | 상태 (V3.1.x) | 이미지 / 빌드 경로 | Compose 오버라이드 | 테스트된 카드 |
 |---|---|---|---|---|
 | **CUDA** (NVIDIA) | 지원(Supported) (V3.1.0부터) | `inference/Dockerfile.v31` → `atlas-llama` | (기본값) | RTX 5060 Ti 16GB (정규). 게시된 이미지는 Blackwell(컴퓨트 캐퍼빌리티 12.0/12.1) 전용으로 컴파일되어 있으며, 이전 세대는 로컬 재빌드가 필요합니다 — [SETUP.md](SETUP.md) 참고 |
-| **ROCm / HIP** (AMD) | 커뮤니티 검증(Community-tested) (V3.1.1부터) | `inference/Dockerfile.rocm` → `atlas-llama-rocm` | `compose/docker-compose.rocm.yml` | RX 7900 XTX (커뮤니티 스모크 테스트, GH #26) |
-| **Metal** (Apple Silicon) | 지원 ([#32](https://github.com/itigges22/ATLAS/issues/32)) | 하이브리드: 네이티브 llama-server (Metal) + 나머지는 Docker (macOS는 컨테이너로 GPU 패스스루 불가) | `compose/docker-compose.macos.yml` | M 시리즈; ≤16 GB에서 Q4_K_M, ≥24 GB 통합 메모리에서 Q6_K |
-| **Vulkan** (크로스 벤더 폴백) | 프리뷰(Preview) | `inference/Dockerfile.vulkan` → `atlas-llama-vulkan` | `compose/docker-compose.vulkan.yml` | lavapipe CPU 부팅 경로 (스모크 테스트됨); 실제 GPU 검증은 아직 없음 |
+| **ROCm / HIP** (AMD) | 커뮤니티 검증(Community-tested) (V3.1.1부터) | `inference/Dockerfile.rocm` → `atlas-llama-rocm` | `deploy/compose/docker-compose.rocm.yml` | RX 7900 XTX (커뮤니티 스모크 테스트, GH #26) |
+| **Metal** (Apple Silicon) | 지원 ([#32](https://github.com/itigges22/ATLAS/issues/32)) | 하이브리드: 네이티브 llama-server (Metal) + 나머지는 Docker (macOS는 컨테이너로 GPU 패스스루 불가) | `deploy/compose/docker-compose.macos.yml` | M 시리즈; ≤16 GB에서 Q4_K_M, ≥24 GB 통합 메모리에서 Q6_K |
+| **Vulkan** (크로스 벤더 폴백) | 프리뷰(Preview) | `inference/Dockerfile.vulkan` → `atlas-llama-vulkan` | `deploy/compose/docker-compose.vulkan.yml` | lavapipe CPU 부팅 경로 (스모크 테스트됨); 실제 GPU 검증은 아직 없음 |
 | **SYCL** (Intel Arc) | 로드맵(Roadmap) — Intel Arc는 현재 `vulkan` 사용 | 미정 | 미정 | — |
 
 **백엔드 선택은 런타임이 아니라 설치 시점에 이루어집니다.** `atlas init`는 `tier.detect_gpu()`(`atlas/commands/tier.py` 참고)를 실행해 감지된 모든 벤더 중 VRAM이 가장 큰 GPU를 고르고(`ATLAS_GPU_VENDOR` / `ATLAS_GPU_INDEX`로 재정의), `.env`에 `ATLAS_BACKEND={cuda|rocm|metal|vulkan}`를 기록합니다. 패키징된 네이티브 백엔드가 있으면 감지는 그것으로 귀결됩니다: NVIDIA는 CUDA, x86_64의 AMD는 ROCm, macOS는 하이브리드 Metal 경로. 호스트용으로 패키징된 네이티브 백엔드가 없으면(Intel Arc, arm64의 AMD, 인식되지 않는 벤더) 마법사가 Vulkan 범용 폴백을 제안합니다(기본값: 예) — 이미지 하나가 AMD, Intel, Adreno, MoltenVK, lavapipe CPU 래스터라이저를 커버하며, 성능은 튜닝된 네이티브 백엔드 대비 대략 20–40% 낮습니다. 마법사가 부팅되지 않을 `.env`를 쓰는 대신 거부하는 것은 쓸 수 있는 것이 아무것도 없을 때뿐입니다. 각 백엔드는 자체 사전 빌드 이미지를 가지므로, 사용자는 모든 백엔드의 라이브러리를 담은 무거운 이미지를 실행하지 않습니다.
 
-**자체 모델 반입(BYO model) 표면 (V3.1.1).** `atlas lens check`는 실행 중인 llama-server에 대한 저렴한 사전 점검으로, 로드된 모델이 Lens 호환인지 보고합니다. `atlas lens build --samples <path>`는 `geometric-lens/geometric_lens/training.py`를 감싸 모델의 네이티브 임베딩 차원에 맞춰 새로운 C(x)(`cost_field.pt`) **그리고** G(x)(XGBoost) 아티팩트를 학습시킵니다. 이 둘을 함께 쓰면 사용자가 lens 코드를 포크하지 않고도 기본이 아닌 GGUF를 갈아 끼울 수 있습니다 — C(x) 생성자가 임의의 `input_dim`을 받기 때문에, 모델마다 바뀌는 것은 학습된 가중치뿐입니다. 사용자 대상 흐름은 [CLI.md § atlas lens](../../CLI.md#atlas-lens)를 참고하세요. `atlas lens publish`(또는 통합 명령 `atlas publish`)는 아티팩트를 HuggingFace에 업로드하고 그 해시를 고정하는 레지스트리 PR을 엽니다.
+**자체 모델 반입(BYO model) 표면 (V3.1.1).** `atlas lens check`는 실행 중인 llama-server에 대한 저렴한 사전 점검으로, 로드된 모델이 Lens 호환인지 보고합니다. `atlas lens build --samples <path>`는 `geometric-lens/geometric_lens/training.py`를 감싸 모델의 네이티브 임베딩 차원에 맞춰 새로운 C(x)(`cost_field.pt`) **그리고** G(x)(XGBoost) 아티팩트를 학습시킵니다. 이 둘을 함께 쓰면 사용자가 lens 코드를 포크하지 않고도 기본이 아닌 GGUF를 갈아 끼울 수 있습니다 — C(x) 생성자가 임의의 `input_dim`을 받기 때문에, 모델마다 바뀌는 것은 학습된 가중치뿐입니다. 사용자 대상 흐름은 [CLI.md § atlas lens](../../reference/CLI.md#atlas-lens)를 참고하세요. `atlas lens publish`(또는 통합 명령 `atlas publish`)는 아티팩트를 HuggingFace에 업로드하고 그 해시를 고정하는 레지스트리 PR을 엽니다.
 
 **벤더 비의존적인 것**(모든 백엔드에서 동작): 문법 제약 JSON, 셀프 임베딩(`/embedding`), 레이어별 히든 스테이트, ASA 제어 벡터(백엔드와 무관하게 llama.cpp의 `control_vector_load`로 로드), KV 캐시 양자화, 바깥쪽 에이전트 루프 전체, V3 파이프라인, Geometric Lens, 샌드박스.
 
@@ -65,7 +65,7 @@ llama-server는 GPU를 사용하는 유일한 서비스입니다. 다른 모든 
 - **멀티 GPU + 텐서 병렬화.** V1은 모든 백엔드에서 단일 GPU만 지원합니다. 멀티 GPU는 특정 벤더에 묶이지 않은 GH #34입니다.
 - **Apple 통합 메모리.** macOS는 GPU+시스템 메모리를 공유합니다. "VRAM" 계산은 실제로는 "총 16 GB에서 OS + 앱을 뺀 것"입니다. §7 참고.
 
-K3s 배포 경로(`scripts/install.sh`, `templates/`의 매니페스트)는 V3.1.1 시점에 CUDA 전용입니다 — ROCm K8s 레시피는 V3.2 인프라 목록으로 연기되었습니다(`/dev/kfd` + `/dev/dri` hostPath 마운트와 `render`/`video` 그룹 멤버십, 즉 `compose/docker-compose.rocm.yml`의 클러스터 수준 등가물이 필요).
+K3s 배포 경로(`scripts/install.sh`, `deploy/k3s/`의 매니페스트)는 V3.1.1 시점에 CUDA 전용입니다 — ROCm K8s 레시피는 V3.2 인프라 목록으로 연기되었습니다(`/dev/kfd` + `/dev/dri` hostPath 마운트와 `render`/`video` 그룹 멤버십, 즉 `deploy/compose/docker-compose.rocm.yml`의 클러스터 수준 등가물이 필요).
 
 ---
 
@@ -84,7 +84,7 @@ K3s 배포 경로(`scripts/install.sh`, `templates/`의 매니페스트)는 V3.1
 
 ## 3. atlas-proxy (바깥 계층)
 
-프록시는 채팅 프론트엔드의 진입점입니다. `/v1/agent`(타입 이벤트 스트림 — TUI가 사용하는 것)에서 사용자 메시지를 받아들이고, llama-server를 호출하고 도구 호출을 파싱·실행해 이벤트를 다시 스트리밍하는 내부 에이전트 루프를 실행합니다. `/v1/chat/completions` 엔드포인트는 llama-server로의 투명한 패스스루입니다. SDK 호환성을 위해 유지되며 에이전트 루프를 실행하지 않습니다. 전체 이벤트 타입 카탈로그는 [API.md](../../API.md)를 참고하세요.
+프록시는 채팅 프론트엔드의 진입점입니다. `/v1/agent`(타입 이벤트 스트림 — TUI가 사용하는 것)에서 사용자 메시지를 받아들이고, llama-server를 호출하고 도구 호출을 파싱·실행해 이벤트를 다시 스트리밍하는 내부 에이전트 루프를 실행합니다. `/v1/chat/completions` 엔드포인트는 llama-server로의 투명한 패스스루입니다. SDK 호환성을 위해 유지되며 에이전트 루프를 실행하지 않습니다. 전체 이벤트 타입 카탈로그는 [API.md](../../reference/API.md)를 참고하세요.
 
 프록시는 12개의 Go 파일로 구성되며, 각 파일이 하나의 관심사를 담당합니다:
 
@@ -101,15 +101,15 @@ K3s 배포 경로(`scripts/install.sh`, `templates/`의 매니페스트)는 V3.1
 | `run_end.go`, `recovery.go` | 실행 종료(터미널, 시간 예산, 요약), 막힌 모델에게 보여 줄 내용과 남은 작업 |
 | `fenced_channel.go` | 파일 본문을 가져오는 서브콜과 그 예산 |
 | `tools.go`, `tool_*.go` | 16개 도구 정의와 실행기, 티어 분류, 도구 호출 문법 |
-| `gates*.go` | 정직성/플랜 게이트: 클레임 체크, 구조, 구문, 임베드 스크립트, 플랜 준수, 플랜 리마인더, 에셋 린트 |
+| `gates*.go` | 정직성/플랜 게이트: 클레임 체크, 구조, 구문, 임베드 스크립트, 플랜 준수, 플랜 리마인더, 에셋 린트(`internal/assetlint`) |
 | `detectors.go` | 스턱 패턴 검출: 도구 반복, 추론 반복, 트레이스백 지역화 |
 | `context.go` | 컨텍스트 보강: 심볼 인덱스, 프로젝트 스캔, 워크스페이스 봉쇄, 세션 파일 매니페스트 |
 | `permissions.go` | 권한 게이트(`/v1/permission`), 트러스트 모드, 하드 차단 패턴 |
 | `lens.go` | 렌즈 스코어링 호출, 캘리브레이션 상태 |
 | `guardrails*.go` | 도구별 스티어링 가드(축소, 누락된 명령/모듈 스티어, doctype 제거) |
-| `shell_wrapper.go` | `validateShellCommand` 뒤의 명령 정책: 복합 명령을 나누고, 실행 래퍼(`sh -c`, `eval` 등) 안을 최대 16단계까지 살펴보며, 치명적인 명령과 검사할 수 없는 래퍼를 거부 |
+| `internal/shellcmd/shell_wrapper.go` | `validateShellCommand` 뒤의 명령 정책: 복합 명령을 나누고, 실행 래퍼(`sh -c`, `eval` 등) 안을 최대 16단계까지 살펴보며, 치명적인 명령과 검사할 수 없는 래퍼를 거부 |
 | `events.go` | 타입 엔벨로프 브로커(`/events`)와 SSE 배관 |
-| `v3_bridge.go` | v3-service의 `/v3/generate` + `/v3/plan`용 SSE 클라이언트 |
+| `internal/v3client/client.go` | v3-service의 `/v3/generate` + `/v3/plan`용 SSE 클라이언트. 호출 상한 `ATLAS_V3_TIMEOUT`은 `v3_bridge.go`에 남습니다 |
 | `types.go` | 공유 타입, 티어, 턴 상한 |
 
 ```mermaid
@@ -172,26 +172,7 @@ flowchart LR
 
 ### 도구
 
-`proxy/tools.go`에 등록된 16개의 도구:
-
-| 도구 | 용도 | 읽기 전용 |
-|------|---------|-----------|
-| `read_file` | 파일 내용 읽기(선택적 offset/limit 포함) | 예 |
-| `outline_file` | 파일의 최상위 함수/클래스를 본문 없이 줄 범위와 함께 나열(`.py`는 tree-sitter, 그 외는 최선 노력 스캔). 정밀 읽기의 진입점: 먼저 아웃라인하고, 그다음 offset/limit으로 `read_file` | 예 |
-| `write_file` | 새(NEW) 파일 생성(5줄 초과의 기존 파일에 대해서는 거부 — 안전 제한 참고) | 아니오 |
-| `edit_file` | ≤10줄 변경을 위한 정밀 인라인 문자열 치환(old_str/new_str) | 아니오 |
-| `insert_after` | 주어진 줄 번호(`read_file` 이 출력하는 줄 번호) 뒤에 새 줄을 삽입합니다. 기존 코드가 전혀 바뀌지 않는 코드 **추가**(분기, 함수, import)에 적합: 재현해야 할 `old_str` 이 없으며, 긴 구간에서 실패하는 단계가 바로 그것입니다 | 아니오 |
-| `replace_lines` | 줄 범위(`start_line`..`end_line`, `read_file` 이 출력하는 줄 번호)를 새 내용으로 교체합니다. 코드를 재현하지 않고 **변경**할 때 사용: 앵커가 구간 전체가 아니라 주장된 두 줄(범위의 첫 줄과 마지막 줄, 공백 무시)이므로 그대로 옮겨 적어야 하는 분량이 N 줄이 아닌 2 줄입니다. 호출당 최대 60줄 | 아니오 |
-| `structural_edit` | tree-sitter 셀렉터(`function:NAME`, `class:NAME`, `<tag>`)를 통한 함수/클래스/HTML 요소 전체 재작성; 노드 전체 교체에는 edit_file보다 필수(REQUIRED). Python, HTML, Go, JavaScript, TypeScript 지원 | 아니오 |
-| `delete_file` | 파일 또는 빈 디렉토리 삭제 | 아니오 |
-| `move_file` | 워크스페이스 내에서 파일 이동 또는 이름 변경(예: `index.html` → `templates/`). 순수 재배치 — V3/정밀 편집 게이트를 우회하며, 기존 대상을 덮어쓰는 것은 거부. 셸 `mv`/`cp`가 거부되므로 "파일 재구성"을 위한 지원 경로 | 아니오 |
-| `find_file` | 파일 **이름**/경로에 대한 정규식 검색(저렴한 존재 확인 + 위치 파악). 파일 내용을 grep하는 `search_files`와 구별됨. | 예 |
-| `search_files` | 파일 내용 전체에 대한 정규식 검색(최대 200개 일치, .git/node_modules 건너뜀) | 예 |
-| `list_directory` | 타입과 크기와 함께 디렉토리 내용 나열 | 예 |
-| `run_command` | 샌드박스 컨테이너를 통한 셸 명령 실행; 5분 타임아웃 상한 | 아니오 |
-| `run_background` | 샌드박스에서 장기 실행 프로세스(예: `python app.py`) 시작; 즉시 `job_id` 반환 | 아니오 |
-| `tail_background` | `job_id`로 백그라운드 작업의 새 stdout/stderr 가져오기 | 예 |
-| `stop_background` | `job_id`로 백그라운드 작업을 SIGTERM/SIGKILL | 아니오 |
+`proxy/tools.go`에 16개의 도구가 등록되어 있습니다. 각 도구의 내용과 제한, 읽기 전용 여부는 [API.md § Tools available to the agent loop](../../reference/API.md#tools-available-to-the-agent-loop)를 참고하세요.
 
 ### 도구 선택 편향 완화
 
@@ -229,7 +210,7 @@ flowchart LR
    `needs-build` / `incompatible`을 보고합니다. `atlas asa build`는
    로드된 모델로부터 추출 레이어를 도출하고 벡터와 마커를 기록하며,
    lens 컨테이너 안에서 실행됩니다. `atlas asa publish`는 업로드 전에
-   누락되거나 불일치하는 마커를 거부합니다. [CLI.md § atlas asa](../../CLI.md#atlas-asa) 참고.
+   누락되거나 불일치하는 마커를 거부합니다. [CLI.md § atlas asa](../../reference/CLI.md#atlas-asa) 참고.
 
 ### 파일별 등급 분류
 
@@ -264,9 +245,126 @@ flowchart LR
 
 ### Plan 모드 (턴별 사전 점검)
 
-Plan 모드는 첫 도구 호출 전에 에이전트 턴마다 한 번 실행되는 사전 계획 단계입니다: 플래너가 후보 계획들을 샘플링하고 휴리스틱하게 채점해 우승 계획을 시스템 프롬프트에 렌더링하며, 모델이 계획을 벗어나 헤맬 때 준수 게이트가 자동으로 계획을 수정합니다. 탐색 헤맴을 줄이고, 계획의 verify 단계를 지켜 증거 없는 `done`을 차단합니다.
+Plan 모드는 모델이 도구를 호출하기 시작하기 전에 에이전트 턴마다 한 번 실행되는 사전 계획 단계입니다. 플래너는 서로 다른 온도로 LLM에서 후보 계획 3개를 샘플링하고, 각각을 휴리스틱하게 채점해 가장 좋은 것을 고릅니다. 우승 계획은 시스템 프롬프트에 들어가며, 모델이 계획을 벗어나 헤맬 때 자동으로 계획을 수정하는 준수 게이트의 기준이 됩니다.
 
-전체 흐름, 구성요소, 튜닝 항목, 건너뛰기 조건, 비용, 테스트 매트릭스는 [PLAN_MODE.md](../../PLAN_MODE.md)를 참고하세요.
+두 가지 실패 유형을 해결하도록 설계되었습니다:
+
+1. **탐색 헤맴.** 계획이 없으면 모델의 처음 2~4번의 도구 호출은 `read_file → list_directory → search_files → read_file → ...`처럼 행동 대신 탐색이 되기 쉽습니다. 계획이 있으면 시스템 프롬프트가 "이것을 읽고, 저것을 편집하고, curl로 검증하라"고 명시합니다.
+2. **증거 없는 "done".** 계획의 `verify_step`은 수정의 증거로 취급됩니다. 검증 게이트는 그 단계가 성공할 때까지 `done`을 거부합니다.
+
+#### 전체 흐름
+
+```mermaid
+flowchart TD
+    User["User msg"] --> Tier{T0?}
+    Tier -->|Yes| Skip["Skip planning"] --> Loop["Agent loop"]
+    Tier -->|No| Sample["samplePlanContext\n(read priority files)"]
+    Sample --> Plan["POST /v3/plan\n(3 candidates × different T)"]
+    Plan --> Score["Heuristic score\n(verify? steps in [2,6]? rationale?)"]
+    Score --> Best["Pick winner"]
+    Best --> System["Render plan in\nsystem prompt"]
+    System --> Loop
+    Loop --> Tool["Tool call"]
+    Tool --> Adhere{"matches\nunsatisfied step?"}
+    Adhere -->|Yes| Tick["satisfied[i]=true\nreset off_streak"] --> Loop
+    Adhere -->|No| Recon{"recon tool?\n(read/list/find/search)"}
+    Recon -->|"Yes — neutral"| Loop
+    Recon -->|No| Streak["off_streak++"]
+    Streak --> Cap{streak ≥ 5?}
+    Cap -->|No| Loop
+    Cap -->|Yes| Revise["revisePlan()\n(carry forward FilesRead\nas extra context)"] --> Loop
+
+    style Plan fill:#2d5016,color:#fff
+    style Revise fill:#5c3a1a,color:#fff
+```
+
+#### 구성요소
+
+##### v3-service: `/v3/plan` (Python)
+
+`v3-service/planning.py`에 정의되어 있고, `v3-service/main.py`가 라우트를 제공합니다. 핸들러는 다음을 수행합니다:
+
+1. 사용자 메시지, 작업 디렉터리, 잘라낸 프로젝트 파일로 `PLAN_PROMPT_TEMPLATE`을 렌더링합니다.
+2. 시드 오프셋과 온도 `[0.3, 0.5, 0.7]`로 LLM을 3번 호출합니다. 기본적으로 선택적 `chat_template_kwargs: {enable_thinking: false}` 제어를 보내고 계획 JSON용으로 출력 토큰 2,048개를 확보합니다. 이를 지원하는 템플릿은 추론 채널을 끄고, 다른 템플릿은 이 플래그를 무시합니다. `ATLAS_PLAN_THINKING=1`은 추론을 요청하고 예산을 8,192로 올립니다. 모델 계열별 프롬프트 지시문은 주입하지 않습니다.
+3. 각 원시 응답을 마크다운 펜스를 허용하고 중괄호 깊이를 인식하는 추출기(`_parse_plan_json`)로 파싱합니다.
+4. 파싱된 각 계획을 `_score_plan`으로 채점합니다(상한 1.0):
+   - `verify_step`이 있으면 **+0.3**
+   - `len(steps) ∈ [2, 6]`이면 **+0.2**, 그 밖의 1단계 이상이면 **+0.05**. 단계가 없는 계획은 0점입니다
+   - verify 단계가 프로그램이나 그 테스트를 실행하거나 페이지를 가져오면(`pytest`, `python3 app.py`, `curl`, `go test` 등) **+0.2**. 빌드, 파싱, 린트만 하는 단계(`py_compile`, `tsc`, `ruff`, `go build`)에는 점수가 없습니다. 에이전트 루프도 이를 검증으로 세지 않습니다
+   - verify 단계가 서버를 시작하기만 하면 **−0.3**. 이것으로 +0.3이 상쇄됩니다
+   - 이미 있는 파일을 만드는 단계가 있으면 **−0.5**
+   - 사용자가 이름을 말한 파일을 대상으로 하는 단계마다 **+0.1**(상한 +0.2)
+   - `rationale`이 비어 있지 않으면 **+0.1**
+5. 점수가 가장 높은 계획을 고릅니다. 동점이면 단계가 적은 계획이 우선합니다(군더더기를 줄이기 위해). 우승 계획의 verify 단계가 서버를 시작하기만 하면 그 `verify_step` 표시를 떼어 냅니다. 단계 자체는 계획에 남고, 루프 자체의 검증 게이트에 맡깁니다.
+6. 모든 후보의 파싱이 실패하면 한 단계짜리 폴백(`{action: "investigate the request and act"}`)을 반환하므로, 플래너 실패로 에이전트 루프가 멈추는 일은 없습니다.
+
+API 계약은 [API.md § POST /v3/plan](../../reference/API.md#post-v3plan)에 문서화되어 있습니다.
+
+##### proxy: 브리지, 훅, 게이트 (Go)
+
+| 파일 | 역할 |
+|---|---|
+| `proxy/internal/v3client/client.go` | `PlanStreaming(reqCtx, v3URL, requestID, req, onProgress)` — SSE 스트림을 열고, 진행 이벤트를 콜백으로 전달하며, `event: result` 프레임에서 최종 `Plan`을 반환합니다. `reqCtx`가 에이전트의 요청 컨텍스트를 묶으므로 `/cancel`은 진행 중인 계획을 중단합니다. V3 파이프라인 실행용 `GenerateStreaming`과 같은 구조입니다. |
+| `proxy/internal/wire/` | `V3PlanRequest`(`v3.go`), `Plan`, `PlanStep`(`messages.go`) 타입. |
+| `proxy/types.go` | `AgentContext`에 `Plan`, `PlanStepsSatisfied[]`, `PlanOffStreak`, `PlanRevisions`가 추가됩니다. |
+| `proxy/plan_generation.go` | `samplePlanContext()`는 플래너를 위해 우선 파일(app.py, templates/index.html, package.json, …)을 순회합니다. `shouldGeneratePlan()`은 티어, 메시지 길이, 읽기 전용 요청 여부로 판단합니다. `generatePlan()`은 브리지를 실행하고, 토큰별 잡음을 버리며, 전체 단계 목록과 함께 `plan_loaded`를 내보냅니다. |
+| `proxy/gates_plan.go` | `matchPlanStep()`(도구 이름과 경로 접미사의 느슨한 일치), `recordPlanAdherence()`(도구 호출별 집계. 어떤 단계와도 일치하지 않는 정찰 호출 — `read_file`/`list_directory`/`find_file`/`search_files` — 은 중립이며 `off_streak`를 늘리지 않습니다), `revisePlan()`(`FilesRead`를 추가 컨텍스트로 넘겨 다시 생성). |
+
+시스템 프롬프트 렌더링은 `buildSystemPrompt`에서 이루어집니다. 계획 단계는 번호 목록으로 렌더링되고 `✓` 표시는 verify 단계에만 붙으며, verify 단계는 검증 게이트가 `done`에 대해 지키는 "수정 증거" 단계로 명시됩니다. (단계별 ☐/✓/⚐ 글리프는 TUI 렌더링에 속합니다. 아래를 참고하세요.)
+
+##### tui: 렌더링 (Go)
+
+`tui/internal/pipelinestate/plan.go`는 `PlanView`(모델의 상태)를 정의하고, `tui/internal/app/state.go`는 `tui/internal/app/events.go`의 채팅 디스패처에 연결된 `applyPlan*` 핸들러 3개를 정의합니다:
+
+| 이벤트 | 핸들러 | UI 효과 |
+|---|---|---|
+| `plan_loaded` | `applyPlanLoaded` | `m.plan`을 새 계획으로 교체하고, 모든 단계를 상태 글리프와 함께 보여 주는 여러 줄의 채팅 행을 추가합니다. 수정본은 `m.plan`을 덮어쓰고 Satisfied 플래그를 초기화합니다. |
+| `plan_adherence` (일치) | `applyPlanAdherence` | 일치한 단계의 `Satisfied` 플래그를 바꾸고, 한 줄짜리 `✓ s2 satisfied · edit_file (1/3)`을 추가합니다. |
+| `plan_adherence` (불일치) | `applyPlanAdherence` | **조용함** — 계획 외 호출은 내부 상태만 갱신합니다. 이 필터가 없으면 계획 외 호출마다 채팅 행이 생겨 실제 진행 상황이 묻힙니다. |
+| `plan_revise` | `applyPlanRevise` | 현재 계획에 `Revising=true`를 설정하고 `Plan revising (rev 1): <reason>`을 추가합니다. 다음 `plan_loaded`(`revision>0`)가 이를 교체합니다. |
+| `v3_plan` | `formatV3StageEvent` | 플래너 자체의 진행 상황(`candidate 1 score=0.80`, `plan 1 won`)을 `plan` 채팅 행 메타 태그 아래에 렌더링합니다. |
+
+#### 튜닝 항목
+
+`proxy/gates_plan.go`에 정의:
+
+| 상수 | 기본값 | 이유 |
+|---|---|---|
+| `planAutoReviseThreshold` | 5 | 자동 수정이 실행되기 전까지의, 정찰이 아닌 계획 외 도구 호출 수입니다(정찰 도구는 연속 횟수를 늘리지 않으므로 자연스러운 탐색은 세지 않습니다). 잘못된 계획을 일찍 잡을 만큼 엄격하고, 빗나간 호출 몇 번으로 헤맴 판정을 하지 않을 만큼 느슨합니다. |
+| `planMaxRevisions` | 2 | 루프당 자동 수정 횟수의 상한입니다. 이를 넘으면 마지막 계획이 남고 수정만 멈춥니다. 수정 결과가 같은 단계를 돌려주면 계획을 버립니다. 계획을 벗어나는 비정상적인 입력이 `/v3/plan`을 끝없이 반복하는 것을 막습니다. |
+
+`v3-service/planning.py` 상수:
+
+| 상수 | 기본값 | 이유 |
+|---|---|---|
+| `n_candidates` | 3 | 온도 `[0.3, 0.5, 0.7]`로 다양하게 샘플링합니다. 후보가 많을수록 시간이 더 걸립니다(레퍼런스 모델에서 후보당 약 5~30초). |
+| `max_tokens` (후보별) | 2048 | 경험상 근거가 포함된 6단계 계획을 담기에 충분합니다. 초기 테스트에서 1024는 JSON 중간에서 잘렸습니다. |
+
+#### Plan 모드를 건너뛰는 경우
+
+`shouldGeneratePlan`의 세 가지 조건:
+
+1. **`ctx.Tier == Tier0Conversational`** — 사소한 대화("hi", "thanks")는 계획하지 않습니다.
+2. **`len(trimmed) < 12`** — 이전 턴의 계획에 기대는 짧은 응답("yes do it", "looks good")은 다시 계획하지 않습니다.
+3. **`isReadOnlyRequest(message)`** — 보기만 하는 요청("list the files")에는 계획이 필요 없고, 잘못된 계획은 모델을 편집으로 이끕니다.
+
+그 밖의 모든 턴은 계획합니다. 실패(`/v3/plan` 5xx, 네트워크 오류, 폴백으로도 구할 수 없을 만큼 모든 후보를 파싱할 수 없는 경우)는 조용히 축소 동작합니다. 루프는 `ctx.Plan` 없이 실행되고, 에이전트 루프는 Plan 모드가 꺼져 있을 때와 똑같이 동작합니다.
+
+#### 비용
+
+소요 시간: 레퍼런스 모델에서 **후보당 약 5~30초**(후보 3개 스윕). 토큰 비용: 예산은 `3 × 2048 max_tokens`이고, 실제로는 후보당 약 1500토큰 × 3 = 약 4500토큰입니다.
+
+둘 다 에이전트의 첫 도구 호출 전에 지불합니다. 이 투자는 모델이 쓸모없는 탐색 라운드를 건너뛰는 순간 회수됩니다(도구 호출마다 약 5~10초의 LLM 왕복과 도구 실행이 듭니다).
+
+#### 테스트
+
+| 계층 | 파일 | 다루는 내용 |
+|---|---|---|
+| v3-service 계획 엔드포인트 | `tests/v3-service/pipeline/test_plan_scoring.py`(채점기). 파서는 `curl /v3/plan`으로 스모크 테스트 | 채점기는 프로그램, 그 테스트 또는 프로브를 실행하는 verify 단계에 점수를 주고, 정적 검사(빌드, 파싱, 린터)와 정찰 호출에는 주지 않습니다. 파서의 허용 범위(펜스, 산문 머리말, 중괄호 중첩)는 후보 3개 샘플러로 확인합니다 |
+| 프록시 브리지 | `proxy/internal/v3client/client_test.go`, 스테이지 라우팅은 `proxy/v3_bridge_test.go` | SSE 파싱, 결과 누락 오류, 스테이지 라우팅 |
+| 프록시 훅 | `proxy/agent_test.go` | 우선 파일 선택, 잘라내기 임계값, 폴백 순회, 티어와 길이 판단 |
+| 프록시 준수 | `proxy/gates_plan_test.go`, 시스템 프롬프트는 `proxy/gates_test.go` | 일치 로직(도구 이름 + 경로 접미사), 실패한 호출 제외, 수정 횟수 상한, 시스템 프롬프트 렌더링 |
+| TUI 렌더링 | `tui/internal/pipelinestate/plan_test.go`, 핸들러는 `tui/internal/app/plan_test.go` | `PlanView` 상태 전이, 수정 시 plan_loaded 교체, 계획 외 호출의 무음 처리 |
 
 ### 안전 제한
 
@@ -552,9 +650,9 @@ graph LR
     style AP fill:#1a3a5c,color:#fff
 ```
 
-`llama-server`와 `sandbox`는 독립적으로 시작합니다. `geometric-lens`는 `llama-server`가 healthy해지기를 기다리고, `v3-service`는 `llama-server`와 `geometric-lens`를, `atlas-proxy`는 `llama-server`, `geometric-lens`, `v3-service`, `sandbox`를 기다립니다. Docker Compose, 베어메탈, K3s는 동일한 `inference/entrypoint-v3.1.sh`로 구동되므로, 컨텍스트 크기, KV 캐시 양자화, flash attention, mlock이 환경 변수로 제어되며 이 모드들 전반에서 동작이 동일합니다. macOS 하이브리드 경로는 엔트리포인트의 플래그를 미러링하는 `scripts/atlas-llama-macos.sh`를 통해 네이티브 llama-server를 실행합니다.
+`llama-server`와 `sandbox`는 독립적으로 시작합니다. `geometric-lens`는 `llama-server`가 healthy해지기를 기다리고, `v3-service`는 `llama-server`와 `geometric-lens`를, `atlas-proxy`는 `llama-server`, `geometric-lens`, `v3-service`, `sandbox`를 기다립니다. Docker Compose, 베어메탈, K3s는 동일한 `inference/entrypoint-v3.1.sh`로 구동되므로, 컨텍스트 크기, KV 캐시 양자화, flash attention, mlock이 환경 변수로 제어되며 이 모드들 전반에서 동작이 동일합니다. macOS 하이브리드 경로는 엔트리포인트의 플래그를 미러링하는 `scripts/install/atlas-llama-macos.sh`를 통해 네이티브 llama-server를 실행합니다.
 
-설치와 모드별 기동 절차(NVIDIA / ROCm 오버라이드, 베어메탈, macOS 하이브리드 Metal, K3s 매니페스트)는 [SETUP.md](SETUP.md)에, macOS 네이티브 경로는 [SETUP_MACOS.md](../../SETUP_MACOS.md)에 있습니다.
+설치와 모드별 기동 절차(NVIDIA / ROCm 오버라이드, 베어메탈, macOS 하이브리드 Metal, K3s 매니페스트)는 [SETUP.md](SETUP.md)에, macOS 네이티브 경로는 [SETUP_MACOS.md](../../guides/SETUP_MACOS.md)에 있습니다.
 
 ---
 

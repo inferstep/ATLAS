@@ -1,7 +1,7 @@
 // Protocol types for the atlas-proxy public client API.
 //
-// Mirrors extensions/vscode/src/client/types.ts and docs/API.md; the field
-// tags in proxy/types.go are the source of truth, so every name here that
+// Mirrors extensions/vscode/src/client/types.ts and docs/reference/API.md; the field
+// tags in proxy/internal/wire/ are the source of truth, so every name here that
 // differs from the Kotlin identifier is pinned with @SerialName to the exact
 // wire name.
 //
@@ -126,7 +126,7 @@ data class HistoryMessage(
  * The content of a replayed assistant history entry.
  *
  * An assistant turn is re-wrapped in the `{"type":"text","content":…}`
- * envelope rather than replayed as bare prose (tui/chat.go). The proxy keeps
+ * envelope rather than replayed as bare prose (tui/internal/app/model.go). The proxy keeps
  * one history format for both clients, so this is the client's half of that
  * convention, and the one place it is written.
  */
@@ -163,7 +163,7 @@ enum class TaskMode {
  * The obligation lists stay null from this client. A person typing into a chat
  * box has told the plugin nothing structured about which files must exist or
  * which command must run, and deriving them from prose is the thing the
- * contract exists to replace (tui/chat.go says the same of the TUI). A caller
+ * contract exists to replace (tui/internal/proxyclient/chat.go says the same of the TUI). A caller
  * that genuinely knows can fill them in.
  */
 @Serializable
@@ -175,7 +175,7 @@ data class TaskContract(
 
 /**
  * POST /v1/agent request body. Field names match the anonymous struct in
- * proxy/agent_handler.go's handleAgent (see tui/chat.go's agentRequest).
+ * proxy/agent_handler.go's handleAgent (see tui/internal/proxyclient/chat.go's agentRequest).
  */
 @Serializable
 data class AgentRequest(
@@ -318,7 +318,7 @@ data class StatusDimension(
 // ---------------------------------------------------------------------------
 
 /**
- * The closed error-code set (`docs/API.md` § Versioning and error codes).
+ * The closed error-code set (`docs/reference/API.md` § Versioning and error codes).
  *
  * Exactly the six codes `AllErrorCodes` in proxy/main.go emits, which a
  * contract test asserts. Switch on these, never on `detail`: the human
@@ -507,7 +507,7 @@ enum class DoneStatus {
     ;
 
     /** Only `completed` is a finished task; anything else, including an
-     * absent or unrecognized status, is incomplete (docs/API.md). */
+     * absent or unrecognized status, is incomplete (docs/reference/API.md). */
     fun isCompleted(): Boolean = this == COMPLETED
 
     companion object {

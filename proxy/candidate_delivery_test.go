@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // Spending an authorization on actual bytes.
@@ -194,7 +196,7 @@ func TestARefusedDeliveryLeavesTheTargetAlone(t *testing.T) {
 func TestAPostWriteValidationFailureNeverClaimsDelivery(t *testing.T) {
 	w := newDeliveryWorld(t)
 	// The bytes are what was authorized; the observation about them failed.
-	failed := checkOutcome{Status: ValidationFailed, Detail: "SyntaxError: invalid syntax"}
+	failed := checkOutcome{Status: wire.ValidationFailed, Detail: "SyntaxError: invalid syntax"}
 	res, out, err := deliverAuthorizedCandidate(w.ctx, w.path, w.code, w.grant, failed, nil, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -211,7 +213,7 @@ func TestAPostWriteValidationFailureNeverClaimsDelivery(t *testing.T) {
 	if res.AuthorizedDeliveryHash != "" {
 		t.Error("a delivery that did not settle named an authorization")
 	}
-	if res.ValidationStatus != ValidationFailed {
+	if res.ValidationStatus != wire.ValidationFailed {
 		t.Errorf("validation reported as %q", res.ValidationStatus)
 	}
 }
@@ -224,14 +226,14 @@ func TestRestorationRehashesRatherThanTrustingTheLedger(t *testing.T) {
 	// grant binds the target's ledger generation, so a checkpoint added later
 	// would be the very intervening change the delivery must refuse.
 	observeDeliverable(w.ctx, w.path, []byte(authPy),
-		ValidationKindSyntax, ValidationPassed, "")
+		wire.ValidationKindSyntax, wire.ValidationPassed, "")
 
 	ev, evID := w.mustObserve(t)
 	a := w.authorize(evID, nil, ev)
 	if a.Grant == nil {
 		t.Fatalf("no grant: %s (%s)", a.Refusal, a.Decision.Reason)
 	}
-	failed := checkOutcome{Status: ValidationFailed, Detail: "SyntaxError"}
+	failed := checkOutcome{Status: wire.ValidationFailed, Detail: "SyntaxError"}
 	_, out, err := deliverAuthorizedCandidate(w.ctx, w.path, w.code, a.Grant, failed, nil, true)
 	if err != nil {
 		t.Fatal(err)
@@ -287,7 +289,7 @@ func TestTheDeliveryOwnerLeaksNoContent(t *testing.T) {
 	const secret = "TOKEN = 'hunter2'\nprint(7)\n"
 	w := newGrantWorldWithCode(t, secret)
 	g := w.mint(t)
-	failed := checkOutcome{Status: ValidationFailed, Detail: "SyntaxError: line 1"}
+	failed := checkOutcome{Status: wire.ValidationFailed, Detail: "SyntaxError: line 1"}
 	_, out, _ := deliverAuthorizedCandidate(w.ctx, w.path, secret, g, failed, nil, true)
 	for _, needle := range []string{secret, "hunter2", "TOKEN", "print(7)", "SyntaxError"} {
 		if strings.Contains(out.Reason, needle) {
@@ -437,7 +439,7 @@ func dropConnection(w http.ResponseWriter) {
 // candidates. Feasibility is observe-only, so this must not move.
 func (w *routeWorld) generateCalls() int { return int(atomic.LoadInt32(w.gen)) }
 
-func (w *routeWorld) write(t *testing.T) (*ToolResult, error) {
+func (w *routeWorld) write(t *testing.T) (*wire.ToolResult, error) {
 	t.Helper()
 	return writeFileWithV3(w.path, routeBaseline, w.ctx)
 }
@@ -706,7 +708,7 @@ func TestARetainedBaselineLandsTheCallersOwnBytes(t *testing.T) {
 	if res.AuthorizedDeliveryHash != "" {
 		t.Error("a retained baseline claimed an authorized delivery")
 	}
-	if res.MutationStatus != MutationApplied {
+	if res.MutationStatus != wire.MutationApplied {
 		t.Errorf("mutation status %q", res.MutationStatus)
 	}
 }

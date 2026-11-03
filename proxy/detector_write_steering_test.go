@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // --- Ignored write_file steering ---------------------------------------------
@@ -267,7 +269,7 @@ func TestFollowingTheFirstSteerStillCompletes(t *testing.T) {
 	t.Logf("followed: turns=%d status=%q reason=%q disk=%q",
 		*turns, terminal["status"], terminal["reason"], string(got))
 
-	if terminal["status"] != string(TerminalCompleted) {
+	if terminal["status"] != string(wire.TerminalCompleted) {
 		t.Fatalf("following the steer did not complete: status=%q reason=%q",
 			terminal["status"], terminal["reason"])
 	}
@@ -608,7 +610,7 @@ func TestSteerRecoveryCausesConvergence(t *testing.T) {
 	t.Logf("causal: turns=%d status=%q reason=%q disk=%q",
 		*turns, terminal["status"], terminal["reason"], string(got))
 
-	if terminal["status"] != string(TerminalCompleted) {
+	if terminal["status"] != string(wire.TerminalCompleted) {
 		t.Fatalf("the recovery did not convert the loop: status=%q reason=%q",
 			terminal["status"], terminal["reason"])
 	}

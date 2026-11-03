@@ -6,6 +6,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/shellcmd"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // A server that is started in the foreground never exits, so the sandbox
@@ -16,14 +19,14 @@ const shellAnswerForAServerStoppedAtTheTimeLimit = `{"success":false,` +
 	`"stdout":" * Serving Flask app 'app'\n * Running on http://127.0.0.1:5000\n","stderr":"",` +
 	`"exit_code":-15,"elapsed_ms":30021,"timed_out":true,"outcome":"timed_out","peak_memory_bytes":31457280}`
 
-func resultOfRunCommand(t *testing.T, shellAnswer string) *ToolResult {
+func resultOfRunCommand(t *testing.T, shellAnswer string) *wire.ToolResult {
 	t.Helper()
 	sandbox := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(shellAnswer))
 	}))
 	defer sandbox.Close()
-	ctx := &AgentContext{WorkingDir: "/workspace", SandboxURL: sandbox.URL}
+	ctx := &AgentContext{runSetup: runSetup{WorkingDir: "/workspace", SandboxURL: sandbox.URL}}
 	result, err := runCommandTool().Execute(json.RawMessage(`{"command":"python app.py"}`), ctx)
 	if err != nil {
 		t.Fatalf("run_command: %v", err)
@@ -49,8 +52,8 @@ const shellAnswerForATestThatFailed = `{"success":false,"stdout":"","stderr":"As
 
 func TestTheGateGivesAServerThatTheTimeLimitStoppedTheAdviceForAServer(t *testing.T) {
 	state := &runState{}
-	ctx := &AgentContext{WorkingDir: t.TempDir()}
-	state.observeFailedCheck(ctx, 1, "python app.py", commandEvidence{},
+	ctx := &AgentContext{runSetup: runSetup{WorkingDir: t.TempDir()}}
+	state.observeFailedCheck(ctx, 1, "python app.py", shellcmd.CommandEvidence{},
 		resultOfRunCommand(t, shellAnswerForAServerStoppedAtTheTimeLimit))
 	if !state.serverStartBlocked {
 		t.Fatal("the gate's step for a failed check did not see that the time limit stopped a server")
@@ -65,8 +68,8 @@ func TestTheGateGivesAServerThatTheTimeLimitStoppedTheAdviceForAServer(t *testin
 
 func TestTheGateGivesATestThatFailedTheAdviceForARedTest(t *testing.T) {
 	state := &runState{}
-	ctx := &AgentContext{WorkingDir: t.TempDir()}
-	state.observeFailedCheck(ctx, 1, "pytest", commandEvidence{}, resultOfRunCommand(t, shellAnswerForATestThatFailed))
+	ctx := &AgentContext{runSetup: runSetup{WorkingDir: t.TempDir()}}
+	state.observeFailedCheck(ctx, 1, "pytest", shellcmd.CommandEvidence{}, resultOfRunCommand(t, shellAnswerForATestThatFailed))
 	if state.serverStartBlocked {
 		t.Fatal("a test that failed was taken for a server that never exits")
 	}

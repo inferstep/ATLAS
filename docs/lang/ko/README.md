@@ -2,7 +2,7 @@
 > **[English](../../../README.md)** | **[简体中文](../zh-CN/README.md)** | **[日本語](../ja/README.md)** | **한국어**
 
 <p align="center">
-  <img src="../../images/herodemo.gif" alt="ATLAS TUI 실행 모습"/><br/>
+  <img src="../../assets/herodemo.gif" alt="ATLAS TUI 실행 모습"/><br/>
   <sub><i>ATLAS TUI 라이브 데모(10배속). V3 파이프라인이 파일 생성을 처리하는 모습.</i></sub>
 </p>
 
@@ -63,39 +63,39 @@
 
 ## 🧱 ATLAS의 기능
 
-1. **[atlas-tui](../../CLI.md)** - 네이티브 Bubbletea 터미널 UI이자 공식 채팅 클라이언트. 아무 프로젝트 디렉토리에서나 `atlas`를 입력해 실행합니다.
-   - [라이브 파이프라인 뷰](../../CLI.md#panes) - 사이드 패널에서 V3 단계를 실시간으로 확인
-   - [슬래시 명령](../../CLI.md#slash-commands) - `/add`, `/diff`, `/commit`, `/run`으로 로컬 파일 컨텍스트와 셸 호출 처리
-   - [입력 모드](../../CLI.md#input-modes) - 채팅, `!bash`, `/slash` 모드와 힌트 드롭다운
+1. **[atlas-tui](../../reference/CLI.md)** - 네이티브 Bubbletea 터미널 UI이자 공식 채팅 클라이언트. 아무 프로젝트 디렉토리에서나 `atlas`를 입력해 실행합니다.
+   - [라이브 파이프라인 뷰](../../reference/CLI.md#panes) - 사이드 패널에서 V3 단계를 실시간으로 확인
+   - [슬래시 명령](../../reference/CLI.md#slash-commands) - `/add`, `/diff`, `/commit`, `/run`으로 로컬 파일 컨텍스트와 셸 호출 처리
+   - [입력 모드](../../reference/CLI.md#input-modes) - 채팅, `!bash`, `/slash` 모드와 힌트 드롭다운
 
-2. **[atlas-proxy](../../ARCHITECTURE.md#3-atlas-proxy-outer-layer)** - 시스템을 오케스트레이션하는 Go 에이전트 루프.
-   - [도구 호출 라우팅](../../ARCHITECTURE.md#tools) - 파일 작업을 복잡도 등급별로 분류
-   - [문법 강제](../../ARCHITECTURE.md#grammar-enforcement) - GBNF 스키마로 출력을 예상 JSON 형식 쪽으로 강하게 유도하고, 잘못되거나 잘린 출력은 프록시에서 복구
-   - [BiasBusters](../../ARCHITECTURE.md#tool-selection-bias-mitigations) - 구조적 코드 편집에서 모델을 `structural_edit` 쪽으로 밀어주는 네 가지 결합 완화책(설명, 문법 금지, 시스템 노트, ASA 스티어링)
-   - [안전 제한](../../ARCHITECTURE.md#safety-limits) - 턴 상한, 토큰 예산, 타임아웃
+2. **[atlas-proxy](../../reference/ARCHITECTURE.md#3-atlas-proxy-outer-layer)** - 시스템을 오케스트레이션하는 Go 에이전트 루프.
+   - [도구 호출 라우팅](../../reference/ARCHITECTURE.md#tools) - 파일 작업을 복잡도 등급별로 분류
+   - [문법 강제](../../reference/ARCHITECTURE.md#grammar-enforcement) - GBNF 스키마로 출력을 예상 JSON 형식 쪽으로 강하게 유도하고, 잘못되거나 잘린 출력은 프록시에서 복구
+   - [BiasBusters](../../reference/ARCHITECTURE.md#tool-selection-bias-mitigations) - 구조적 코드 편집에서 모델을 `structural_edit` 쪽으로 밀어주는 네 가지 결합 완화책(설명, 문법 금지, 시스템 노트, ASA 스티어링)
+   - [안전 제한](../../reference/ARCHITECTURE.md#safety-limits) - 턴 상한, 토큰 예산, 타임아웃
 
-3. **[V3 파이프라인](../../ARCHITECTURE.md#4-v3-pipeline-inner-layer)** - 단일 프롬프트를 검증된 후보로 바꾸는 멀티 페이즈 코드 생성.
-   - [PlanSearch](../../ARCHITECTURE.md#pipeline-flow) - 제약 기반 구조화 계획
-   - [DivSampling](../../ARCHITECTURE.md#pipeline-flow) - 온도와 전략에 걸친 다양한 후보 생성
-   - [예산 티어](../../ARCHITECTURE.md#pipeline-flow) - 할당기가 과제마다 계산 티어를 고릅니다. 티어는 생성할 후보 수와 후보마다의 프롬프트·토큰 예산을 정합니다
-   - [PR-CoT Repair](../../ARCHITECTURE.md#pipeline-flow) - 샌드박스의 오류 출력을 바탕으로 실패한 후보를 수리
-   - [Refinement Loops](../../ARCHITECTURE.md#pipeline-flow) - 샌드박스 검증과 수정의 반복
+3. **[V3 파이프라인](../../reference/ARCHITECTURE.md#4-v3-pipeline-inner-layer)** - 단일 프롬프트를 검증된 후보로 바꾸는 멀티 페이즈 코드 생성.
+   - [PlanSearch](../../reference/ARCHITECTURE.md#pipeline-flow) - 제약 기반 구조화 계획
+   - [DivSampling](../../reference/ARCHITECTURE.md#pipeline-flow) - 온도와 전략에 걸친 다양한 후보 생성
+   - [예산 티어](../../reference/ARCHITECTURE.md#pipeline-flow) - 할당기가 과제마다 계산 티어를 고릅니다. 티어는 생성할 후보 수와 후보마다의 프롬프트·토큰 예산을 정합니다
+   - [PR-CoT Repair](../../reference/ARCHITECTURE.md#pipeline-flow) - 샌드박스의 오류 출력을 바탕으로 실패한 후보를 수리
+   - [Refinement Loops](../../reference/ARCHITECTURE.md#pipeline-flow) - 샌드박스 검증과 수정의 반복
 
-4. **[Geometric Lens](../../ARCHITECTURE.md#5-geometric-lens)** - 모델 자체 임베딩 위에서 동작하는 에너지 기반 스코어링. 외부 오라클 불필요. (["Geometric Lens"란?](../../ARCHITECTURE.md#why-geometric-lens))
-   - [C(x) Cost Field](../../ARCHITECTURE.md#scoring-models) - 후보 품질을 스코어링하는 모델 hidden-dim→512→128→1 MLP
-   - [G(x) Quality Prediction](../../ARCHITECTURE.md#scoring-models) - 생성할 후보 수를 정하는 데 쓰이는 XGBoost 앙상블. 후보 선택 자체는 가장 낮은 C(x)로 합니다
+4. **[Geometric Lens](../../reference/ARCHITECTURE.md#5-geometric-lens)** - 모델 자체 임베딩 위에서 동작하는 에너지 기반 스코어링. 외부 오라클 불필요. (["Geometric Lens"란?](../../reference/ARCHITECTURE.md#why-geometric-lens))
+   - [C(x) Cost Field](../../reference/ARCHITECTURE.md#scoring-models) - 후보 품질을 스코어링하는 모델 hidden-dim→512→128→1 MLP
+   - [G(x) Quality Prediction](../../reference/ARCHITECTURE.md#scoring-models) - 생성할 후보 수를 정하는 데 쓰이는 XGBoost 앙상블. 후보 선택 자체는 가장 낮은 C(x)로 합니다
 
-5. **[Sandbox](../../ARCHITECTURE.md#6-sandbox)** - 빌드 검증을 위한 격리 실행 환경.
+5. **[Sandbox](../../reference/ARCHITECTURE.md#6-sandbox)** - 빌드 검증을 위한 격리 실행 환경.
    - 다중 언어 실행: Python, Rust, Go, C, Shell 등. Rust, Go, C는 프로젝트에서 명령으로 실행할 수 있습니다. V3는 구문을 검사하고, 샌드박스의 `/execute`는 컴파일만 하고 아직 실행하지 못합니다 ([#163](https://github.com/inferstep/ATLAS/issues/163))
    - 스코어링 전 컴파일과 린팅
    - 생성된 테스트와 기존 테스트 스위트 모두 실행
 
-6. **[llama-server](../../CONFIGURATION.md#6-llama-server)** - 소비자용 GPU 한 장에서의 로컬 LLM 추론.
+6. **[llama-server](../../guides/CONFIGURATION.md#6-llama-server)** - 소비자용 GPU 한 장에서의 로컬 LLM 추론.
    - GPU 가속 양자화 추론(Q6_K / Q4_K_M) - NVIDIA CUDA, AMD ROCm, Apple Metal(macOS 하이브리드), Vulkan; Intel SYCL은 로드맵에 있음
    - 토큰 수준의 문법 제약 디코딩
    - 셀프 임베딩 — lens에 별도 모델이 필요 없음
 
-전체 문서(설정, 아키텍처, 구성, 문제 해결, 그리고 각 구성요소의 [연구 배경](../../SOURCES.md))는 [docs/](../../) 디렉토리에 있습니다.
+전체 문서(설정, 아키텍처, 구성, 문제 해결, 그리고 각 구성요소의 [연구 배경](../../reference/SOURCES.md))는 [docs/](../../) 디렉토리에 있습니다.
 
 ---
 
@@ -126,18 +126,18 @@ bash atlas-bootstrap.sh
 
 | | |
 |---|---|
-| GPU | VRAM 16GB 이상. NVIDIA (CUDA, 지원(Supported)), AMD (ROCm, 커뮤니티 검증(Community-tested)), 또는 Apple Silicon (Metal, macOS 하이브리드, 지원); 그 외 대부분의 GPU는 Vulkan(프리뷰(Preview))으로 커버됩니다. 사전 빌드된 CUDA 이미지는 Blackwell(RTX 50xx)을 대상으로 하며, 구형 NVIDIA GPU는 일회성 로컬 재빌드가 필요합니다([SETUP.md § CUDA Compute Capability](../../SETUP.md#cuda-compute-capability-dockerfilev31) 참고). 지원 수준: [SUPPORT_MATRIX.md](../../SUPPORT_MATRIX.md); GPU 목록: [SETUP.md § Supported GPUs](../../SETUP.md#supported-gpus). 특정 모델이 본인 카드에 맞는지 가늠하려면 [내 GPU에는 무엇이 들어가는가?](../../TROUBLESHOOTING.md#what-fits-on-my-gpu)를 참고하세요. |
+| GPU | VRAM 16GB 이상. NVIDIA (CUDA, 지원(Supported)), AMD (ROCm, 커뮤니티 검증(Community-tested)), 또는 Apple Silicon (Metal, macOS 하이브리드, 지원); 그 외 대부분의 GPU는 Vulkan(프리뷰(Preview))으로 커버됩니다. 사전 빌드된 CUDA 이미지는 Blackwell(RTX 50xx)을 대상으로 하며, 구형 NVIDIA GPU는 일회성 로컬 재빌드가 필요합니다([SETUP.md § CUDA Compute Capability](../../guides/SETUP.md#cuda-compute-capability-dockerfilev31) 참고). 지원 수준: [SUPPORT_MATRIX.md](../../guides/SUPPORT_MATRIX.md); GPU 목록: [SETUP.md § Supported GPUs](../../guides/SETUP.md#supported-gpus). 특정 모델이 본인 카드에 맞는지 가늠하려면 [내 GPU에는 무엇이 들어가는가?](../../guides/TROUBLESHOOTING.md#what-fits-on-my-gpu)를 참고하세요. |
 | 런타임 | Docker (NVIDIA: + nvidia-container-toolkit; AMD: 단독 Docker로 충분) |
 | Python | 3.9 이상 |
 | 디스크 | 약 20GB CUDA / 약 22GB ROCm (모델 가중치 + 컨테이너 이미지) |
 
-Apple Silicon은 macOS 하이브리드 Metal 경로(추론은 네이티브 llama-server, 나머지 스택은 Docker — **[SETUP_MACOS.md](../../SETUP_MACOS.md)** 참고)를 통해 네이티브로 동작합니다. Intel Arc (SYCL)는 로드맵에 있습니다. 수동 설치 경로(Docker Compose, 베어메탈, K3s)와 부트스트랩 플래그 전체 목록은 **[SETUP.md](SETUP.md)**를 참고하세요.
+Apple Silicon은 macOS 하이브리드 Metal 경로(추론은 네이티브 llama-server, 나머지 스택은 Docker — **[SETUP_MACOS.md](../../guides/SETUP_MACOS.md)** 참고)를 통해 네이티브로 동작합니다. Intel Arc (SYCL)는 로드맵에 있습니다. 수동 설치 경로(Docker Compose, 베어메탈, K3s)와 부트스트랩 플래그 전체 목록은 **[SETUP.md](SETUP.md)**를 참고하세요.
 
 ---
 
 ## ⚠️ 알려진 제한 사항
 
-- **Linux Docker 스택과 네이티브 macOS 경로.** NVIDIA(지원(Supported)), AMD ROCm(커뮤니티 검증(Community-tested)), Vulkan(프리뷰(Preview)) Docker 경로가 현재 존재합니다. Apple Silicon(지원)은 네이티브 macOS 하이브리드 Metal 경로([#32](https://github.com/inferstep/ATLAS/issues/32))로 동작합니다. Intel Arc / SYCL은 로드맵(Roadmap)입니다. 수준 정의: [SUPPORT_MATRIX.md](../../SUPPORT_MATRIX.md).
+- **Linux Docker 스택과 네이티브 macOS 경로.** NVIDIA(지원(Supported)), AMD ROCm(커뮤니티 검증(Community-tested)), Vulkan(프리뷰(Preview)) Docker 경로가 현재 존재합니다. Apple Silicon(지원)은 네이티브 macOS 하이브리드 Metal 경로([#32](https://github.com/inferstep/ATLAS/issues/32))로 동작합니다. Intel Arc / SYCL은 로드맵(Roadmap)입니다. 수준 정의: [SUPPORT_MATRIX.md](../../guides/SUPPORT_MATRIX.md).
 - **ATLAS에는 현재 벤치마크 결과가 없습니다.** V3.0 LiveCodeBench 수치는 철회되었고([CHANGELOG](../../../CHANGELOG.md#withdrawn-the-v30-livecodebench-result-746) 참조), 현재 릴리스의 능력·신뢰성 수치는 아직 측정되지 않았습니다. 수치는 보류 과제로 재측정한 뒤에만 공개하며, 모델별 결과는 [#28](https://github.com/inferstep/ATLAS/issues/28)에서 추적합니다.
 - **렌즈의 신호는 아직 입증되지 않았습니다.** 기준 모델에서는 점수를 내지만 보정되지 않은 상태이므로 개입은 중립입니다. 3.1.6에서는 쓸 만한 신호를 주지 못했고, `dev`에서는 아직 측정하지 않았습니다 ([#281](https://github.com/inferstep/ATLAS/issues/281)).
 - **복잡한 기능 추가는 일관성이 떨어질 수 있습니다.** 콤팩트 모델은 코드를 쓰기 전에 낯선 코드베이스 탐색으로 에이전트 턴을 소비하기도 합니다.

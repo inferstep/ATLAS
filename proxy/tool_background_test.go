@@ -12,6 +12,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/shellcmd"
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // A background job that already exited did not start. When the job exits
@@ -264,7 +268,7 @@ func TestTheImmediateExitMessageCarriesTheJobsOwnOutput(t *testing.T) {
 	dir := t.TempDir()
 	ctx := NewAgentContext(dir, Tier2Medium)
 	code := 1
-	out := RunBackgroundOutput{JobID: "j1", ExitCode: &code, Stderr: []string{
+	out := wire.RunBackgroundOutput{JobID: "j1", ExitCode: &code, Stderr: []string{
 		"Traceback (most recent call last):", "ModuleNotFoundError: No module named 'flask'"}}
 	msg := immediateExitMessage(ctx, "python app.py", out)
 	for _, want := range []string{"exited immediately with status 1", "nothing to probe",
@@ -343,10 +347,10 @@ func TestATLASRunsNoInstallOfItsOwn(t *testing.T) {
 // response cannot show that the page works. Declined in silence, the run
 // repeats the same probe until it runs out of turns.
 func TestAHeadersOnlyProbeIsDeclinedOutLoud(t *testing.T) {
-	if classifyCommandEvidence("curl -I http://127.0.0.1:5001").Kind.verifies() {
+	if shellcmd.ClassifyCommandEvidence("curl -I http://127.0.0.1:5001").Kind.Verifies() {
 		t.Fatal("precondition changed: a HEAD probe now counts as verification")
 	}
-	if !isHeadOnlyProbe("curl -I http://127.0.0.1:5001") || isHeadOnlyProbe("curl http://127.0.0.1:5001/") {
+	if !shellcmd.IsHeadOnlyProbe("curl -I http://127.0.0.1:5001") || shellcmd.IsHeadOnlyProbe("curl http://127.0.0.1:5001/") {
 		t.Fatal("head-only detection is wrong")
 	}
 	w := startBgWorld(t, map[string]string{"app.py": importsMissing, "requirements.txt": "flask\n"},
@@ -458,7 +462,7 @@ func serverWorld(t *testing.T, script []string) *bgWorld {
 // "work"} and nothing else.
 func contractWork(t *testing.T, ctx *AgentContext) {
 	t.Helper()
-	tc, err := validateTaskContract(&TaskContract{TaskMode: TaskModeWork}, ctx.WorkingDir)
+	tc, err := validateTaskContract(&taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork}, ctx.WorkingDir)
 	if err != nil {
 		t.Fatal(err)
 	}

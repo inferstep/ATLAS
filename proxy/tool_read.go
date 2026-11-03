@@ -15,6 +15,9 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
+	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
 // ---------------------------------------------------------------------------
@@ -24,13 +27,13 @@ import (
 func readFileTool() *ToolDef {
 	return &ToolDef{
 		Name:        "read_file",
-		Effect:      ToolEffectReadOnly,
+		Effect:      wire.ToolEffectReadOnly,
 		Description: "Read the contents of a file. Returns numbered lines. Use offset and limit for large files.",
-		InputSchema: ReadFileInput{},
+		InputSchema: wire.ReadFileInput{},
 		ReadOnly:    true,
 		Destructive: false,
-		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*ToolResult, error) {
-			var input ReadFileInput
+		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*wire.ToolResult, error) {
+			var input wire.ReadFileInput
 			if err := json.Unmarshal(rawInput, &input); err != nil {
 				return nil, fmt.Errorf("invalid input: %w", err)
 			}
@@ -40,7 +43,7 @@ func readFileTool() *ToolDef {
 			// can't recover from. Reject early with a hint at how to
 			// discover the file.
 			if strings.TrimSpace(input.Path) == "" {
-				return &ToolResult{
+				return &wire.ToolResult{
 					Success: false,
 					Error:   "read_file: path cannot be empty. Call list_directory with path \".\" to see what files exist, or find_file with a name regex (e.g. \"snake_game\\.py\").",
 				}, nil
@@ -48,7 +51,7 @@ func readFileTool() *ToolDef {
 
 			path := resolveAgentPath(ctx, input.Path)
 
-			data, err := readRegularFile(path)
+			data, err := workspacefs.ReadRegularFile(path)
 			if err != nil {
 				return nil, fmt.Errorf("cannot read %s: %w", input.Path, err)
 			}
@@ -58,7 +61,7 @@ func readFileTool() *ToolDef {
 			// then gives up or loops. Point it at the inspection tools
 			// instead of returning the raw bytes.
 			if isBinaryContent(data) {
-				return &ToolResult{
+				return &wire.ToolResult{
 					Success: false,
 					Error: fmt.Sprintf("read_file: %q is a binary file, not text — reading it as text is not useful. Inspect it with run_command instead: `strings %q` (printable strings), `readelf -a %q` or `objdump -d %q` (ELF headers / disassembly), `nm %q` (symbols), `file %q` (type), or `xxd %q | head` (hex dump).",
 						input.Path, input.Path, input.Path, input.Path, input.Path, input.Path, input.Path),
@@ -85,21 +88,21 @@ func readFileTool() *ToolDef {
 
 			content = withCallGraphFooter(ctx, input, data, start, content)
 
-			out := ReadFileOutput{
+			out := wire.ReadFileOutput{
 				Content:    content,
 				TotalLines: totalLines,
 				StartLine:  start + 1,
 				EndLine:    shownEnd, // actual last line returned, not the pre-truncation end
 			}
 			outBytes, _ := json.Marshal(out)
-			return &ToolResult{Success: true, Data: outBytes}, nil
+			return &wire.ToolResult{Success: true, Data: outBytes}, nil
 		},
 	}
 }
 
 // readFileWindow is the range of lines a read returns: from the offset, for at
 // most the limit, within the file.
-func readFileWindow(input ReadFileInput, totalLines int) (int, int) {
+func readFileWindow(input wire.ReadFileInput, totalLines int) (int, int) {
 	start := 0
 	if input.Offset != nil {
 		start = *input.Offset
@@ -143,7 +146,7 @@ func numberedReadFileLines(lines []string, start, end int) string {
 // capReadFileBytes cuts a read's text at a line boundary within the byte cap
 // and appends the notice that says so. It returns the text, whether it was
 // cut, and the line after the last one it still shows.
-func capReadFileBytes(content string, input ReadFileInput, data []byte, start, end, totalLines int) (string, bool, int) {
+func capReadFileBytes(content string, input wire.ReadFileInput, data []byte, start, end, totalLines int) (string, bool, int) {
 	// Cap the returned bytes so one huge read cannot blow the model's
 	// context window: a single message that alone overflows the window
 	// is something the force-trim retry cannot fix. The cap is
@@ -179,7 +182,7 @@ func capReadFileBytes(content string, input ReadFileInput, data []byte, start, e
 
 // withCallGraphFooter appends the file's call graph to a .py read that starts
 // at the top of the file.
-func withCallGraphFooter(ctx *AgentContext, input ReadFileInput, data []byte, start int, content string) string {
+func withCallGraphFooter(ctx *AgentContext, input wire.ReadFileInput, data []byte, start int, content string) string {
 	// Call-graph footer. The model reads a
 	// file far more often than it outlines one, so attach the
 	// intra-file call edges to a .py read where the localization
@@ -208,7 +211,7 @@ func withCallGraphFooter(ctx *AgentContext, input ReadFileInput, data []byte, st
 func outlineFileTool() *ToolDef {
 	return &ToolDef{
 		Name:   "outline_file",
-		Effect: ToolEffectReadOnly,
+		Effect: wire.ToolEffectReadOnly,
 		Description: "List a file's top-level functions and classes with their " +
 			"line ranges. Returns NO code: an outline tells you WHERE something is " +
 			"defined and never what it does, so you cannot answer a question, " +
@@ -220,20 +223,20 @@ func outlineFileTool() *ToolDef {
 			"read, go straight to read_file. " +
 			"Python is parsed precisely (tree-sitter, decorator-aware); other " +
 			"languages get a best-effort definition scan.",
-		InputSchema: OutlineInput{},
+		InputSchema: wire.OutlineInput{},
 		ReadOnly:    true,
 		Destructive: false,
-		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*ToolResult, error) {
-			var input OutlineInput
+		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*wire.ToolResult, error) {
+			var input wire.OutlineInput
 			if err := json.Unmarshal(rawInput, &input); err != nil {
 				return nil, fmt.Errorf("invalid input: %w", err)
 			}
 			if strings.TrimSpace(input.Path) == "" {
-				return &ToolResult{Success: false,
+				return &wire.ToolResult{Success: false,
 					Error: "outline_file: path cannot be empty. Pass {\"path\":\"<file>\"}."}, nil
 			}
 			path := resolveAgentPath(ctx, input.Path)
-			data, err := readRegularFile(path)
+			data, err := workspacefs.ReadRegularFile(path)
 			if err != nil {
 				return nil, fmt.Errorf("cannot read %s: %w", input.Path, err)
 			}
@@ -243,8 +246,8 @@ func outlineFileTool() *ToolDef {
 			// Prefer the v3 tree-sitter outline for .py (accurate, matches
 			// structural_edit selectors). Fall back to a language-agnostic regex
 			// scan for everything else and whenever v3 is unavailable.
-			var syms []OutlineSymbol
-			var regions []EmbeddedRegion
+			var syms []wire.OutlineSymbol
+			var regions []wire.EmbeddedRegion
 			if strings.HasSuffix(input.Path, ".py") {
 				if v3, ok, emb := outlineViaV3(ctx, input.Path, src); ok {
 					syms, regions = v3, emb
@@ -258,17 +261,17 @@ func outlineFileTool() *ToolDef {
 
 			ctx.RecordFileRead(path, src)
 
-			out := OutlineOutput{Symbols: syms, Supported: len(syms) > 0, EmbeddedRegions: regions,
+			out := wire.OutlineOutput{Symbols: syms, Supported: len(syms) > 0, EmbeddedRegions: regions,
 				Outline: outlineText(input.Path, totalLines, syms, engine) + embeddedRegionNote(regions)}
 			outBytes, _ := json.Marshal(out)
-			return &ToolResult{Success: true, Data: outBytes}, nil
+			return &wire.ToolResult{Success: true, Data: outBytes}, nil
 		},
 	}
 }
 
 // outlineText renders the outline the model reads: one line per symbol, with
 // its call edges when V3 found any.
-func outlineText(path string, totalLines int, syms []OutlineSymbol, engine string) string {
+func outlineText(path string, totalLines int, syms []wire.OutlineSymbol, engine string) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "%s — %d lines, %d symbols (%s)\n",
 		path, totalLines, len(syms), engine)
@@ -340,7 +343,7 @@ func callGraphFooter(ctx *AgentContext, path, source string) string {
 
 // outlineViaV3 asks v3-service for a tree-sitter outline. Returns (nil,false)
 // on any failure so the caller can fall back to the regex scan.
-func outlineViaV3(ctx *AgentContext, path, source string) ([]OutlineSymbol, bool, []EmbeddedRegion) {
+func outlineViaV3(ctx *AgentContext, path, source string) ([]wire.OutlineSymbol, bool, []wire.EmbeddedRegion) {
 	if ctx.V3URL == "" {
 		return nil, false, nil
 	}
@@ -359,7 +362,7 @@ func outlineViaV3(ctx *AgentContext, path, source string) ([]OutlineSymbol, bool
 	if resp.StatusCode != 200 {
 		return nil, false, nil
 	}
-	var out OutlineOutput
+	var out wire.OutlineOutput
 	if json.NewDecoder(serviceAnswer(resp.Body)).Decode(&out) != nil || !out.Supported {
 		return nil, false, nil
 	}
@@ -371,7 +374,7 @@ func outlineViaV3(ctx *AgentContext, path, source string) ([]OutlineSymbol, bool
 //
 // It names the symbols AND says they are unreachable by selector, because
 // naming them alone would invite exactly the call it is meant to prevent.
-func embeddedRegionNote(regions []EmbeddedRegion) string {
+func embeddedRegionNote(regions []wire.EmbeddedRegion) string {
 	if len(regions) == 0 {
 		return ""
 	}
@@ -394,7 +397,7 @@ func embeddedRegionNote(regions []EmbeddedRegion) string {
 // outlineByRegex is the language-agnostic fallback: any line starting (at
 // column 0, allowing common keywords) with a definition. Good enough to give
 // the model line anchors to read from; not as precise as tree-sitter.
-func outlineByRegex(path, source string) []OutlineSymbol {
+func outlineByRegex(path, source string) []wire.OutlineSymbol {
 	type pat struct {
 		re   *regexp.Regexp
 		kind string
@@ -409,11 +412,11 @@ func outlineByRegex(path, source string) []OutlineSymbol {
 		{regexp.MustCompile(`^(?:export\s+)?class\s+([A-Za-z_$][\w$]*)`), "class"},
 	}
 	lines := strings.Split(source, "\n")
-	var out []OutlineSymbol
+	var out []wire.OutlineSymbol
 	for i, ln := range lines {
 		for _, p := range pats {
 			if m := p.re.FindStringSubmatch(ln); m != nil {
-				out = append(out, OutlineSymbol{
+				out = append(out, wire.OutlineSymbol{
 					Name: m[1], Kind: p.kind,
 					StartLine: i + 1, EndLine: i + 1, // single-line anchor; body follows
 				})
@@ -431,13 +434,13 @@ func outlineByRegex(path, source string) []OutlineSymbol {
 func searchFilesTool() *ToolDef {
 	return &ToolDef{
 		Name:        "search_files",
-		Effect:      ToolEffectReadOnly,
+		Effect:      wire.ToolEffectReadOnly,
 		Description: "Search for a regex pattern inside file CONTENTS. Returns matching lines with file paths and line numbers. Use glob to filter by filename pattern. To find a file by its name (not contents), use find_file or list_directory instead.",
-		InputSchema: SearchFilesInput{},
+		InputSchema: wire.SearchFilesInput{},
 		ReadOnly:    true,
 		Destructive: false,
-		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*ToolResult, error) {
-			var input SearchFilesInput
+		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*wire.ToolResult, error) {
+			var input wire.SearchFilesInput
 			if err := json.Unmarshal(rawInput, &input); err != nil {
 				return nil, fmt.Errorf("invalid input: %w", err)
 			}
@@ -445,7 +448,7 @@ func searchFilesTool() *ToolDef {
 			// Reject empty pattern: same reasoning as find_file. An empty
 			// regex matches every line in every file.
 			if strings.TrimSpace(input.Pattern) == "" {
-				return &ToolResult{
+				return &wire.ToolResult{
 					Success: false,
 					Error:   "search_files: pattern cannot be empty. Provide a regex to grep file contents for (e.g. \"def main\" or \"TODO\\(.*\\)\").",
 				}, nil
@@ -468,14 +471,14 @@ func searchFilesTool() *ToolDef {
 				return nil, fmt.Errorf("search error: %w", err)
 			}
 
-			out := SearchFilesOutput{
+			out := wire.SearchFilesOutput{
 				Matches:                matches,
 				TotalCount:             len(matches),
 				Truncated:              len(matches) >= maxMatches,
 				SkippedCredentialFiles: skippedCredentials,
 			}
 			outBytes, _ := json.Marshal(out)
-			return &ToolResult{Success: true, Data: outBytes}, nil
+			return &wire.ToolResult{Success: true, Data: outBytes}, nil
 		},
 	}
 }
@@ -483,9 +486,9 @@ func searchFilesTool() *ToolDef {
 // searchFileContents walks searchPath and collects the lines that match re, up
 // to maxMatches, from every file the search may read. It also returns how many
 // credential files it left out.
-func searchFileContents(ctx *AgentContext, input SearchFilesInput, searchPath string,
-	re *regexp.Regexp, maxMatches int) ([]SearchMatch, int, error) {
-	var matches []SearchMatch
+func searchFileContents(ctx *AgentContext, input wire.SearchFilesInput, searchPath string,
+	re *regexp.Regexp, maxMatches int) ([]wire.SearchMatch, int, error) {
+	var matches []wire.SearchMatch
 	skippedCredentials := 0
 
 	err := filepath.WalkDir(searchPath, func(path string, d fs.DirEntry, walkErr error) error {
@@ -520,7 +523,7 @@ func searchFileContents(ctx *AgentContext, input SearchFilesInput, searchPath st
 
 // searchReadsEntry says whether the search reads an entry of its walk, and
 // whether it passes over the entry's whole folder instead.
-func searchReadsEntry(input SearchFilesInput, d fs.DirEntry, walkErr error) (read, skipDir bool) {
+func searchReadsEntry(input wire.SearchFilesInput, d fs.DirEntry, walkErr error) (read, skipDir bool) {
 	if walkErr != nil {
 		return false, false // skip unreadable dirs
 	}
@@ -554,8 +557,8 @@ func searchReadsEntry(input SearchFilesInput, d fs.DirEntry, walkErr error) (rea
 
 // appendFileMatches adds the lines of one file that match re, and stops once
 // there are maxMatches in all. A file it cannot read adds none.
-func appendFileMatches(matches []SearchMatch, re *regexp.Regexp, relPath, path string, maxMatches int) []SearchMatch {
-	data, err := readRegularFile(path)
+func appendFileMatches(matches []wire.SearchMatch, re *regexp.Regexp, relPath, path string, maxMatches int) []wire.SearchMatch {
+	data, err := workspacefs.ReadRegularFile(path)
 	if err != nil {
 		return matches
 	}
@@ -566,7 +569,7 @@ func appendFileMatches(matches []SearchMatch, re *regexp.Regexp, relPath, path s
 		lineNum++
 		line := scanner.Text()
 		if re.MatchString(line) {
-			matches = append(matches, SearchMatch{
+			matches = append(matches, wire.SearchMatch{
 				File:    relPath,
 				Line:    lineNum,
 				Content: truncateStr(line, 200),
@@ -586,13 +589,13 @@ func appendFileMatches(matches []SearchMatch, re *regexp.Regexp, relPath, path s
 func listDirectoryTool() *ToolDef {
 	return &ToolDef{
 		Name:        "list_directory",
-		Effect:      ToolEffectReadOnly,
+		Effect:      wire.ToolEffectReadOnly,
 		Description: "List the contents of a directory. Returns file names, types (file/dir/symlink), and sizes.",
-		InputSchema: ListDirectoryInput{},
+		InputSchema: wire.ListDirectoryInput{},
 		ReadOnly:    true,
 		Destructive: false,
-		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*ToolResult, error) {
-			var input ListDirectoryInput
+		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*wire.ToolResult, error) {
+			var input wire.ListDirectoryInput
 			if err := json.Unmarshal(rawInput, &input); err != nil {
 				return nil, fmt.Errorf("invalid input: %w", err)
 			}
@@ -604,7 +607,7 @@ func listDirectoryTool() *ToolDef {
 				return nil, fmt.Errorf("cannot list %s: %w", input.Path, err)
 			}
 
-			var dirEntries []DirEntry
+			var dirEntries []wire.DirEntry
 			for _, e := range entries {
 				entryType := "file"
 				if e.IsDir() {
@@ -618,19 +621,19 @@ func listDirectoryTool() *ToolDef {
 					size = info.Size()
 				}
 
-				dirEntries = append(dirEntries, DirEntry{
+				dirEntries = append(dirEntries, wire.DirEntry{
 					Name: e.Name(),
 					Type: entryType,
 					Size: size,
 				})
 			}
 
-			out := ListDirectoryOutput{
+			out := wire.ListDirectoryOutput{
 				Entries: dirEntries,
 				Path:    dirPath,
 			}
 			outBytes, _ := json.Marshal(out)
-			return &ToolResult{Success: true, Data: outBytes}, nil
+			return &wire.ToolResult{Success: true, Data: outBytes}, nil
 		},
 	}
 }
@@ -747,13 +750,13 @@ func readFileTruncationNotice(start, shown, totalLines, totalBytes int, isSource
 func findFileTool() *ToolDef {
 	return &ToolDef{
 		Name:        "find_file",
-		Effect:      ToolEffectReadOnly,
+		Effect:      wire.ToolEffectReadOnly,
 		Description: "Find files by NAME using a regex against the filename or relative path. Use this to check whether a file exists or to locate it. For searching inside file contents, use search_files instead.",
-		InputSchema: FindFileInput{},
+		InputSchema: wire.FindFileInput{},
 		ReadOnly:    true,
 		Destructive: false,
-		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*ToolResult, error) {
-			var input FindFileInput
+		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*wire.ToolResult, error) {
+			var input wire.FindFileInput
 			if err := json.Unmarshal(rawInput, &input); err != nil {
 				return nil, fmt.Errorf("invalid input: %w", err)
 			}
@@ -768,9 +771,9 @@ func findFileTool() *ToolDef {
 				// `path` looks like a filename rather than a directory, hand
 				// back the exact call.
 				if hint := findFileArgSwapHint(input.Path); hint != "" {
-					return &ToolResult{Success: false, Error: hint}, nil
+					return &wire.ToolResult{Success: false, Error: hint}, nil
 				}
-				return &ToolResult{
+				return &wire.ToolResult{
 					Success: false,
 					Error:   "find_file: pattern cannot be empty. Provide a regex matching the filename you want to locate (e.g. \"snake_game\\.py\" or \"^main\\.\").",
 				}, nil
@@ -791,13 +794,13 @@ func findFileTool() *ToolDef {
 				return nil, fmt.Errorf("find error: %w", err)
 			}
 
-			out := FindFileOutput{
+			out := wire.FindFileOutput{
 				Matches:    matches,
 				TotalCount: len(matches),
 				Truncated:  len(matches) >= maxFindFileMatches,
 			}
 			outBytes, _ := json.Marshal(out)
-			return &ToolResult{Success: true, Data: outBytes}, nil
+			return &wire.ToolResult{Success: true, Data: outBytes}, nil
 		},
 	}
 }
@@ -807,8 +810,8 @@ const maxFindFileMatches = 200
 
 // findFilesByName walks searchPath for files whose name or workspace-relative
 // path matches re, up to maxFindFileMatches.
-func findFilesByName(ctx *AgentContext, searchPath string, re *regexp.Regexp) ([]FindFileMatch, error) {
-	var matches []FindFileMatch
+func findFilesByName(ctx *AgentContext, searchPath string, re *regexp.Regexp) ([]wire.FindFileMatch, error) {
+	var matches []wire.FindFileMatch
 	err := filepath.WalkDir(searchPath, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return nil
@@ -824,7 +827,7 @@ func findFilesByName(ctx *AgentContext, searchPath string, re *regexp.Regexp) ([
 			relPath = path
 		}
 		if re.MatchString(d.Name()) || re.MatchString(relPath) {
-			matches = append(matches, FindFileMatch{Path: relPath, Name: d.Name()})
+			matches = append(matches, wire.FindFileMatch{Path: relPath, Name: d.Name()})
 			if len(matches) >= maxFindFileMatches {
 				return filepath.SkipAll
 			}
@@ -863,14 +866,14 @@ func isUnsearchedDir(name string) bool {
 // (so a re-read after an edit still returns the new content). Returns nil
 // to mean "no short-circuit — execute the read normally." Model-agnostic:
 // keys off whether this exact content was already served, not the model.
-func redundantReadShortCircuit(name string, args json.RawMessage, ctx *AgentContext) *ToolResult {
+func redundantReadShortCircuit(name string, args json.RawMessage, ctx *AgentContext) *wire.ToolResult {
 	if name != "read_file" {
 		return nil
 	}
 	if envOr("ATLAS_DEDUP_READS", "1") == "0" {
 		return nil
 	}
-	var input ReadFileInput
+	var input wire.ReadFileInput
 	if err := json.Unmarshal(args, &input); err != nil {
 		return nil
 	}
@@ -879,7 +882,7 @@ func redundantReadShortCircuit(name string, args json.RawMessage, ctx *AgentCont
 	}
 	path, err := resolveWorkspacePath(ctx, input.Path)
 	if err != nil {
-		return &ToolResult{Success: false, Error: "read_file: " + err.Error()}
+		return &wire.ToolResult{Success: false, Error: "read_file: " + err.Error()}
 	}
 	ctx.mu.Lock()
 	prev, ok := ctx.FilesRead[path]
@@ -913,14 +916,14 @@ func redundantReadShortCircuit(name string, args json.RawMessage, ctx *AgentCont
 		log.Printf("[read-dedup] %q content was trimmed from context — re-serving full read", truncateStr(path, 240))
 		return nil
 	}
-	out := ReadFileOutput{
+	out := wire.ReadFileOutput{
 		Content:    fmt.Sprintf("(You already read %s earlier in this session and it has not changed — its full content is above in the conversation. Do not read it again. Make your edit now with structural_edit or edit_file.)", input.Path),
 		TotalLines: strings.Count(prev, "\n") + 1,
 		StartLine:  1,
 		EndLine:    strings.Count(prev, "\n") + 1,
 	}
 	b, _ := json.Marshal(out)
-	return &ToolResult{Success: true, Data: b}
+	return &wire.ToolResult{Success: true, Data: b}
 }
 
 // fileContentInContext reports whether a file's content is still present in

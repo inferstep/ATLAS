@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // --- Live workspace hazards at completion ------------------------------------
@@ -182,7 +184,7 @@ func TestAnExitedUnchangedJobIsReapedAndMayComplete(t *testing.T) {
 		t.Error("the hazard survived a confirmed exit")
 	}
 	d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
-	if _, s := d.CurrentValidation(); s != ValidationPassed {
+	if _, s := d.CurrentValidation(); s != wire.ValidationPassed {
 		t.Errorf("an untouched file lost its verdict: %v", s)
 	}
 }
@@ -215,7 +217,7 @@ func TestAJobThatChangedTheFileOnExitVoidsTheOldVerdict(t *testing.T) {
 	if d.CurrentHash == before {
 		t.Fatal("the rehash did not notice the change")
 	}
-	if s == ValidationPassed {
+	if s == wire.ValidationPassed {
 		t.Error("a verdict about the old bytes survived")
 	}
 	if status.Completed() {
@@ -434,13 +436,13 @@ func bgStartCtx(t *testing.T, dir, url string) *AgentContext {
 func seedValidSolve(t *testing.T, ctx *AgentContext) {
 	t.Helper()
 	w, _ := json.Marshal(map[string]string{"path": "solve.py", "content": validSolveSource})
-	if res := executeToolCall("write_file", w, ctx); res.ValidationStatus != ValidationPassed {
+	if res := executeToolCall("write_file", w, ctx); res.ValidationStatus != wire.ValidationPassed {
 		t.Fatalf("seed did not validate: %s", res.ValidationStatus)
 	}
 }
 
 // startPythonApp starts `python app.py` through run_background.
-func startPythonApp(ctx *AgentContext) *ToolResult {
+func startPythonApp(ctx *AgentContext) *wire.ToolResult {
 	args, _ := json.Marshal(map[string]string{"command": "python app.py"})
 	return executeToolCall("run_background", args, ctx)
 }
@@ -521,7 +523,7 @@ func TestAnImmediateExitWithoutMutationSettlesAtOnce(t *testing.T) {
 	if d.CurrentHash != before {
 		t.Error("an untouched file was re-recorded")
 	}
-	if _, s := d.CurrentValidation(); s != ValidationPassed {
+	if _, s := d.CurrentValidation(); s != wire.ValidationPassed {
 		t.Errorf("an untouched file lost its verdict: %v", s)
 	}
 	if status, reason := finalizeCompletion(ctx, solveRunState(), "Create solve.py.", ""); !status.Completed() {
@@ -548,7 +550,7 @@ func TestAnImmediateExitAfterMutationInvalidates(t *testing.T) {
 	if d.CurrentHash == before {
 		t.Fatal("the rehash did not notice the change")
 	}
-	if _, s := d.CurrentValidation(); s == ValidationPassed {
+	if _, s := d.CurrentValidation(); s == wire.ValidationPassed {
 		t.Error("a verdict about the old bytes survived")
 	}
 	if status, reason := finalizeCompletion(ctx, solveRunState(), "Create solve.py.", ""); status.Completed() {

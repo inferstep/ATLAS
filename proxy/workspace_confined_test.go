@@ -8,12 +8,15 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
+	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
 // rejectedWrite is the conversation tail that makes the next step name the
 // selectors of path: a write_file refused because the file exists.
-func rejectedWrite(path string) []AgentMessage {
-	return []AgentMessage{
+func rejectedWrite(path string) []wire.AgentMessage {
+	return []wire.AgentMessage{
 		{Role: "user", Content: "fix it"},
 		{Role: "tool", ToolName: "write_file", Content: `{"success":false,"error":"File ` + path +
 			` already exists (41 lines). Use structural_edit"}`},
@@ -44,7 +47,7 @@ func TestStepNoteReadsItsTargetInsideTheWorkspace(t *testing.T) {
 func probeEcho(t *testing.T, workspace string) string {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		data, _ := os.ReadFile(filepath.Join(workspace, mountProbeName))
+		data, _ := os.ReadFile(filepath.Join(workspace, workspacefs.MountProbeName))
 		out, _ := json.Marshal(map[string]string{"stdout": string(data)})
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(out)
@@ -56,8 +59,8 @@ func probeEcho(t *testing.T, workspace string) string {
 func TestMountProbeIsNeverWrittenThroughALink(t *testing.T) {
 	t.Run("a link that leaves the workspace", func(t *testing.T) {
 		workspace := t.TempDir()
-		linkOutOfWorkspace(t, workspace, mountProbeName, outsideMarker)
-		outside, err := os.Readlink(filepath.Join(workspace, mountProbeName))
+		linkOutOfWorkspace(t, workspace, workspacefs.MountProbeName, outsideMarker)
+		outside, err := os.Readlink(filepath.Join(workspace, workspacefs.MountProbeName))
 		if err != nil {
 			t.Fatalf("read the link: %v", err)
 		}
@@ -69,7 +72,7 @@ func TestMountProbeIsNeverWrittenThroughALink(t *testing.T) {
 	t.Run("a link to a file of the workspace", func(t *testing.T) {
 		workspace := t.TempDir()
 		writeInWorkspace(t, workspace, "app.py", "inside")
-		if err := os.Symlink("app.py", filepath.Join(workspace, mountProbeName)); err != nil {
+		if err := os.Symlink("app.py", filepath.Join(workspace, workspacefs.MountProbeName)); err != nil {
 			t.Fatalf("make the link: %v", err)
 		}
 		checkMountProbe(t, workspace)
@@ -90,44 +93,8 @@ func checkMountProbe(t *testing.T, workspace string) {
 	if problem := verifyWorkspaceAlignment(ctx); problem != "" {
 		t.Errorf("a shared folder was reported as split: %s", problem)
 	}
-	if _, err := os.Lstat(filepath.Join(workspace, mountProbeName)); !os.IsNotExist(err) {
+	if _, err := os.Lstat(filepath.Join(workspace, workspacefs.MountProbeName)); !os.IsNotExist(err) {
 		t.Errorf("the probe name is still taken after the check (%v)", err)
-	}
-}
-
-func TestConfinedDirWritesOnlyANewNameAndRemovesOnlyTheNameItself(t *testing.T) {
-	workspace := t.TempDir()
-	writeInWorkspace(t, workspace, "taken.txt", "inside")
-	linkOutOfWorkspace(t, workspace, "link.txt", outsideMarker)
-	outside, err := os.Readlink(filepath.Join(workspace, "link.txt"))
-	if err != nil {
-		t.Fatalf("read the link: %v", err)
-	}
-	dir := openConfinedDir(workspace)
-	defer dir.Close()
-
-	if err := dir.WriteNewFile("new.txt", []byte("new"), 0o600); err != nil {
-		t.Errorf("WriteNewFile of a free name: %v", err)
-	}
-	if data, _ := os.ReadFile(filepath.Join(workspace, "new.txt")); string(data) != "new" {
-		t.Errorf("the new file holds %q, want the content", data)
-	}
-	for _, name := range []string{"taken.txt", "link.txt"} {
-		if err := dir.WriteNewFile(name, []byte("changed"), 0o600); err == nil {
-			t.Errorf("WriteNewFile(%s) wrote over a name that was taken, want an error", name)
-		}
-	}
-	if data, _ := os.ReadFile(filepath.Join(workspace, "taken.txt")); string(data) != "inside" {
-		t.Errorf("the taken file now holds %q, want it unchanged", data)
-	}
-	if err := dir.Remove("link.txt"); err != nil {
-		t.Errorf("Remove of a link: %v", err)
-	}
-	if data, err := os.ReadFile(outside); err != nil || string(data) != outsideMarker {
-		t.Errorf("the file outside the workspace now holds %q (%v), want it unchanged", data, err)
-	}
-	if err := openConfinedDir("").WriteNewFile("a.txt", nil, 0o600); err == nil {
-		t.Error("WriteNewFile in a folder that is not open succeeded, want an error")
 	}
 }
 

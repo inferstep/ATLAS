@@ -4,7 +4,7 @@
 # Parallel to Dockerfile.v31 (NVIDIA CUDA). Same llama.cpp build with the
 # HIP backend instead of CUDA, same PC-202 hidden-states patch, same
 # entrypoint contract. Bring up via:
-#   docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml up -d
+#   docker compose -f docker-compose.yml -f deploy/compose/docker-compose.rocm.yml up -d
 #
 # Tested target: AMD Radeon RX 7900 XTX (gfx1100). Smoke-tested by
 # community contributor (issue #26). For full V3.1.1 release, the
@@ -53,7 +53,7 @@ ARG LLAMA_CPP_REV=2e97c5f96f9fe2bb26f794a348e05d7a1c74baa1
 # compiled object files keyed on source content hash.
 
 # 1. Fetch llama.cpp at the pinned SHA. Invalidated by LLAMA_CPP_REV.
-#    See docs/TROUBLESHOOTING.md "llama.cpp clone times out".
+#    See docs/guides/TROUBLESHOOTING.md "llama.cpp clone times out".
 RUN git init /llama.cpp && \
     cd /llama.cpp && \
     git remote add origin https://github.com/ggml-org/llama.cpp && \
@@ -136,7 +136,7 @@ RUN chmod +x /entrypoint.sh
 
 # The HIP runtime needs the calling user in the `render` and `video`
 # groups on the host for /dev/kfd + /dev/dri access. The compose
-# override (compose/docker-compose.rocm.yml) handles the device passthrough +
+# override (deploy/compose/docker-compose.rocm.yml) handles the device passthrough +
 # group_add.
 # No USER here: compose sets the account. A compose file from before 3.2.0 sets
 # none, and there the server must stay able to read the service token.

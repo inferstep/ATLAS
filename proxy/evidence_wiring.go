@@ -2,40 +2,37 @@ package main
 
 import (
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/shadowcapture"
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
-// Where the evidence producers actually run, and where they cannot.
+// Where the evidence producers actually run.
 //
 // The producers landed with no production caller: correct for a slice that had
 // to prove inertness, and useless past it. This file is the one place either
-// producer is invoked on a live request, and the one place the missing
-// producer is recorded as missing rather than quietly absent.
+// producer is invoked on a live request.
 //
-// Nothing here changes what lands. Records go to the private shadow sink and
-// to nowhere else: no SSE event, no ToolResult, no model-visible text, and no
-// input to any delivery, completion or generation decision.
+// The evidence these return feeds the delivery decision, and a staged pass also
+// reaches the completion gate through recordStagedCommandFulfillment. The
+// records themselves go to the private shadow sink and to nowhere else: no SSE
+// event, no ToolResult, no model-visible text.
 
-// evidenceProducerAvailability says, for each trusted source, whether a live
-// production path can actually produce it on this build.
-//
-// The distinction matters because "no caller" has two very different causes. A
-// producer with a wiring bug and a producer with nothing to observe look the
-// same to a structural guard, and only one of them is acceptable to ship.
+// evidenceProducerAvailability says, for each trusted source, that a live
+// production path produces it on this build. A producer with no caller fails
+// the structural guard.
 type evidenceProducerAvailability string
 
 const (
 	// evidenceProducerWired: exactly one live production call path exists.
 	evidenceProducerWired evidenceProducerAvailability = "wired"
-	// evidenceProducerUnavailable: the mechanism this producer would observe
-	// does not exist in this build. Named here so the absence is a registered
-	// fact rather than an oversight.
-	evidenceProducerUnavailable evidenceProducerAvailability = "unavailable"
 )
 
 // evidenceProducerStatus is the enumerated inventory. A structural guard reads
 // it and fails when a producer's real wiring disagrees with its entry.
 var evidenceProducerStatus = map[string]evidenceProducerAvailability{
-	ProvenanceProxyOwnedValidation: evidenceProducerWired,
+	wire.ProvenanceProxyOwnedValidation: evidenceProducerWired,
 
 	// Staging supplies what this producer needs and nothing else could: the
 	// exact declared command, run against an isolated workspace holding the
@@ -47,7 +44,7 @@ var evidenceProducerStatus = map[string]evidenceProducerAvailability{
 	// calling its own endpoint. The MODEL running the same command through
 	// run_command is a different, untrusted event against the production
 	// workspace after bytes have landed. Neither reaches this producer.
-	ProvenanceClientDeclaredVerification: evidenceProducerWired,
+	wire.ProvenanceClientDeclaredVerification: evidenceProducerWired,
 }
 
 // candidateEvidenceIdentity is the identity a candidate carries through one
@@ -107,9 +104,8 @@ func proposedCandidateIdentity(ctx *AgentContext, entry routeEntry, code string)
 // just reported on exactly those bytes. Nothing is re-checked and no second
 // sandbox call is made -- the verdict is handed over, not recomputed.
 //
-// Returns the evidence for the caller's own inspection in tests. Production
-// ignores the return value: the record goes to private telemetry and the
-// delivery decision above is unchanged.
+// Returns the evidence for the caller's delivery decision. The record also goes
+// to private telemetry.
 func observeDeliveredCandidateSyntax(ctx *AgentContext, entry routeEntry, path, code string,
 	outcome checkOutcome) (proxyEvidence, candidateEvidenceIdentity, bool) {
 	if ctx == nil || ctx.TaskContract == nil {
@@ -122,12 +118,12 @@ func observeDeliveredCandidateSyntax(ctx *AgentContext, entry routeEntry, path, 
 	resolved := resolveAgentPath(ctx, path)
 	// Only a target the client declared. A delivery elsewhere is not a
 	// delivery this evidence has anything to say about.
-	if !targetIsAuthorized(obs, resolved) {
+	if !taskcontract.TargetIsAuthorized(obs, resolved) {
 		return proxyEvidence{}, candidateEvidenceIdentity{}, false
 	}
-	var syntax taskObligation
-	for _, o := range authorizationPrerequisites(obs) {
-		if o.Kind == ObligationSyntacticValidity && o.Subject == resolved {
+	var syntax taskcontract.TaskObligation
+	for _, o := range taskcontract.AuthorizationPrerequisites(obs) {
+		if o.Kind == taskcontract.ObligationSyntacticValidity && o.Subject == resolved {
 			syntax = o
 			break
 		}
@@ -228,7 +224,7 @@ func observeCandidateVerification(ctx *AgentContext, path, code string,
 		return nil, unmetForAll(declared, ReasonEvidenceExecutionFailed), false
 	}
 
-	byID := map[string]taskObligation{}
+	byID := map[string]taskcontract.TaskObligation{}
 	for _, o := range declared {
 		byID[o.ID] = o
 	}
@@ -247,7 +243,7 @@ func observeCandidateVerification(ctx *AgentContext, path, code string,
 		if r.MutatedTarget || r.MutatedWorkspace {
 			mutated = true
 		}
-		if r.Outcome != stagingExitedZero || r.MutatedTarget || r.MutatedWorkspace {
+		if !r.passedClean() {
 			unmet[o.ID] = stagingUnmetReason(r)
 		}
 		// The same execution, kept for the completion gate as well as the
@@ -273,9 +269,9 @@ func observeCandidateVerification(ctx *AgentContext, path, code string,
 // verificationTargetGrounded reports whether the target is grounded the way a
 // grant needs it: a declared output or, where the request declared no outputs,
 // the target the model's own structured call named.
-func verificationTargetGrounded(ctx *AgentContext, obs []taskObligation, resolved string,
+func verificationTargetGrounded(ctx *AgentContext, obs []taskcontract.TaskObligation, resolved string,
 	scope mutationScope) bool {
-	if !targetIsAuthorized(obs, resolved) {
+	if !taskcontract.TargetIsAuthorized(obs, resolved) {
 		if outputKnowledgeDeclared(ctx) {
 			return false
 		}
@@ -288,10 +284,10 @@ func verificationTargetGrounded(ctx *AgentContext, obs []taskObligation, resolve
 
 // requiredDeclaredCommands is every required declared-command obligation among
 // the request's authorization prerequisites, in their order.
-func requiredDeclaredCommands(obs []taskObligation) []taskObligation {
-	var declared []taskObligation
-	for _, o := range authorizationPrerequisites(obs) {
-		if o.Kind == ObligationDeclaredCommand && o.Required {
+func requiredDeclaredCommands(obs []taskcontract.TaskObligation) []taskcontract.TaskObligation {
+	var declared []taskcontract.TaskObligation
+	for _, o := range taskcontract.AuthorizationPrerequisites(obs) {
+		if o.Kind == taskcontract.ObligationDeclaredCommand && o.Required {
 			declared = append(declared, o)
 		}
 	}
@@ -302,7 +298,7 @@ func requiredDeclaredCommands(obs []taskObligation) []taskObligation {
 // exact candidate bytes, the identity the proxy bound them to, and each
 // declared command in order.
 func stagingRequestFor(ctx *AgentContext, resolved, code string,
-	id candidateEvidenceIdentity, declared []taskObligation) stagingRequest {
+	id candidateEvidenceIdentity, declared []taskcontract.TaskObligation) stagingRequest {
 	hash := contentSHA256(code)
 	generation, stateHash := workspaceIdentity(ctx)
 	req := stagingRequest{
@@ -364,7 +360,7 @@ func stagingUnmetReason(r stagingCommandResult) AuthorizationReason {
 
 // unmetForAll marks every declared obligation with one reason, for the cases
 // where nothing ran at all.
-func unmetForAll(declared []taskObligation, why AuthorizationReason) map[string]AuthorizationReason {
+func unmetForAll(declared []taskcontract.TaskObligation, why AuthorizationReason) map[string]AuthorizationReason {
 	out := map[string]AuthorizationReason{}
 	for _, o := range declared {
 		out[o.ID] = why
@@ -380,12 +376,12 @@ func unmetForAll(declared []taskObligation, why AuthorizationReason) map[string]
 // influences_live_decision is false and is a fact about this build, not a
 // hope: no production consumer of provenance exists.
 func recordEvidenceObservation(ctx *AgentContext, ev proxyEvidence) {
-	sink := activeShadowSink.Load()
-	if !sink.enabled() {
+	sink := shadowcapture.Active()
+	if !sink.Enabled() {
 		return
 	}
 	p := ev.Provenance
-	sink.submit(map[string]interface{}{
+	sink.Submit(map[string]interface{}{
 		"schema_version":           shadowSchemaVersionEvidence,
 		"record_kind":              "candidate_evidence_observation",
 		"request_id":               p.RequestID,

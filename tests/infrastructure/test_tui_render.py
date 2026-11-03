@@ -1,6 +1,6 @@
 """The TUI actually runs, paints, and consumes the proxy's event stream.
 
-`tests/contracts/test_event_contract.py` proves the proxy and the TUI agree on
+`tests/contracts/api/test_event_contract.py` proves the proxy and the TUI agree on
 event NAMES by reading both sources. It cannot prove the binary starts, paints a
 frame, or survives the events it is sent — and a Bubble Tea program refuses to
 run at all without a terminal, so a subprocess pipe would only ever prove that

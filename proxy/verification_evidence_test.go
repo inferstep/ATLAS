@@ -10,6 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // A command the client required, run exactly, against these exact bytes.
@@ -23,7 +26,7 @@ const declaredCmd = "python3 solve.py"
 // declared one command, and a green record of that command naming the file.
 type verificationFixture struct {
 	ctx  *AgentContext
-	obl  taskObligation
+	obl  taskcontract.TaskObligation
 	path string
 	hash string
 }
@@ -55,7 +58,7 @@ func newVerificationFixture(t *testing.T, commands ...string) *verificationFixtu
 	if hash == "" {
 		t.Fatal("no hash for the candidate on disk")
 	}
-	obl, ok := newTaskObligation(ObligationDeclaredCommand, commands[0], VerificationKindRuntime, true)
+	obl, ok := taskcontract.NewTaskObligation(taskcontract.ObligationDeclaredCommand, commands[0], taskcontract.VerificationKindRuntime, true)
 	if !ok {
 		t.Fatal("declared command obligation refused")
 	}
@@ -98,11 +101,11 @@ func bumpWorkspace(ctx *AgentContext, path, hash string) {
 	ctx.LedgerMu.Lock()
 	defer ctx.LedgerMu.Unlock()
 	if ctx.Ledger == nil {
-		ctx.Ledger = map[string]*DeliverableState{}
+		ctx.Ledger = map[string]*taskcontract.DeliverableState{}
 	}
 	d := ctx.Ledger[path]
 	if d == nil {
-		d = &DeliverableState{Path: path}
+		d = &taskcontract.DeliverableState{Path: path}
 		ctx.Ledger[path] = d
 	}
 	d.CurrentHash = hash
@@ -117,18 +120,18 @@ func TestAnExactDeclaredCommandAgainstExactCandidateBytesAuthorizes(t *testing.T
 	if !ok {
 		t.Fatal("an exact declared command against exact bytes produced nothing")
 	}
-	if ev.Outcome != ValidationPassed {
+	if ev.Outcome != wire.ValidationPassed {
 		t.Errorf("outcome %q, want passed", ev.Outcome)
 	}
 	p := ev.Provenance
-	if p.Source != ProvenanceClientDeclaredVerification {
+	if p.Source != wire.ProvenanceClientDeclaredVerification {
 		t.Errorf("source %q, want client_declared_verification", p.Source)
 	}
 	// The fixture declares the command without a type, so what it demands and
 	// what it demonstrates are both runtime: it ran against these exact bytes
 	// and exited zero.
-	if p.ObservedStrength != VerificationKindRuntime ||
-		p.RequiredStrength != VerificationKindRuntime {
+	if p.ObservedStrength != taskcontract.VerificationKindRuntime ||
+		p.RequiredStrength != taskcontract.VerificationKindRuntime {
 		t.Errorf("strengths %q/%q, want runtime/runtime",
 			p.RequiredStrength, p.ObservedStrength)
 	}
@@ -158,7 +161,7 @@ func TestADeclaredCommandIsNeverLabelledAnOracle(t *testing.T) {
 	if ev.Provenance.ObservedStrength == "oracle" {
 		t.Error("an arbitrary exit-zero command was labelled oracle evidence")
 	}
-	oracleObligation, _ := newTaskObligation(ObligationDeclaredExample, "case-1", "", true)
+	oracleObligation, _ := taskcontract.NewTaskObligation(taskcontract.ObligationDeclaredExample, "case-1", "", true)
 	forged := ev
 	forged.Provenance.ObligationID = oracleObligation.ID
 	forged.Provenance.RequiredStrength = "oracle"
@@ -337,14 +340,14 @@ func TestOnlyACleanForegroundSuccessAuthorizes(t *testing.T) {
 			if !ok {
 				return // declining outright is also a correct answer
 			}
-			if ev.Outcome == ValidationPassed {
+			if ev.Outcome == wire.ValidationPassed {
 				t.Error("recorded as a pass")
 			}
 			if authorized, _ := ev.Authorizes(); authorized {
 				t.Error("authorized its obligation")
 			}
 			if _, missing := declaredVerificationCoverage(
-				[]taskObligation{f.obl}, []proxyEvidence{ev}); len(missing) != 1 {
+				[]taskcontract.TaskObligation{f.obl}, []proxyEvidence{ev}); len(missing) != 1 {
 				t.Error("covered its obligation")
 			}
 		})
@@ -366,9 +369,9 @@ func TestACancelledRunProducesNothing(t *testing.T) {
 // the obligation's kind, so the refusal comes from the kind alone.
 func TestTheProducerRefusesAnyOtherObligationKind(t *testing.T) {
 	for _, kind := range []string{
-		ObligationSyntacticValidity, ObligationArtifactExists,
-		ObligationDeclaredExample, ObligationBaselinePreserved,
-		ObligationUnsupported,
+		taskcontract.ObligationSyntacticValidity, taskcontract.ObligationArtifactExists,
+		taskcontract.ObligationDeclaredExample, taskcontract.ObligationBaselinePreserved,
+		taskcontract.ObligationUnsupported,
 	} {
 		t.Run(kind, func(t *testing.T) {
 			f := newVerificationFixture(t)
@@ -387,7 +390,7 @@ func TestTheProducerRefusesAnyOtherObligationKind(t *testing.T) {
 // owed, and evidence for both meets both.
 func TestEachDeclaredCommandNeedsItsOwnEvidence(t *testing.T) {
 	f := newVerificationFixture(t, declaredCmd, "ruff check .")
-	second, ok := newTaskObligation(ObligationDeclaredCommand, "ruff check .", VerificationKindRuntime, true)
+	second, ok := taskcontract.NewTaskObligation(taskcontract.ObligationDeclaredCommand, "ruff check .", taskcontract.VerificationKindRuntime, true)
 	if !ok {
 		t.Fatal("second obligation refused")
 	}
@@ -405,7 +408,7 @@ func TestEachDeclaredCommandNeedsItsOwnEvidence(t *testing.T) {
 	}
 
 	met, missing := declaredVerificationCoverage(
-		[]taskObligation{f.obl, second}, []proxyEvidence{firstEv})
+		[]taskcontract.TaskObligation{f.obl, second}, []proxyEvidence{firstEv})
 	if len(met) != 1 || met[0] != f.obl.ID {
 		t.Errorf("one run: met %v, want only the command that ran", met)
 	}
@@ -414,7 +417,7 @@ func TestEachDeclaredCommandNeedsItsOwnEvidence(t *testing.T) {
 	}
 
 	met, missing = declaredVerificationCoverage(
-		[]taskObligation{f.obl, second}, []proxyEvidence{firstEv, secondEv})
+		[]taskcontract.TaskObligation{f.obl, second}, []proxyEvidence{firstEv, secondEv})
 	if len(met) != 2 || len(missing) != 0 {
 		t.Errorf("both runs: met %v missing %v, want both met", met, missing)
 	}
@@ -511,6 +514,7 @@ func TestTheProducerExecutesNothing(t *testing.T) {
 func TestNoHiddenEvaluatorIsReachableFromTheProducers(t *testing.T) {
 	for _, path := range []string{
 		"verification_evidence.go", "syntax_evidence.go", "obligation_kinds.go",
+		"internal/taskcontract/obligation_kinds.go",
 	} {
 		body, err := os.ReadFile(path)
 		if err != nil {

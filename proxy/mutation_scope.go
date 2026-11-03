@@ -2,6 +2,8 @@ package main
 
 import (
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/shadowcapture"
 )
 
 // What the model actually asked to change, read off its own tool call.
@@ -245,11 +247,11 @@ func scopeAdmitsCandidate(ctx *AgentContext, s mutationScope, candidate string) 
 // Hashes and closed values. No candidate byte, no path content, no prompt, no
 // command. The target travels as a hash like every other subject.
 func recordMutationScope(ctx *AgentContext, s mutationScope, admitted bool, reason string) {
-	sink := activeShadowSink.Load()
-	if !sink.enabled() {
+	sink := shadowcapture.Active()
+	if !sink.Enabled() {
 		return
 	}
-	sink.submit(map[string]interface{}{
+	sink.Submit(map[string]interface{}{
 		"schema_version":       shadowSchemaVersionMutationScope,
 		"record_kind":          "candidate_mutation_scope",
 		"request_id":           s.RequestID,

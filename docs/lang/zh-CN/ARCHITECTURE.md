@@ -1,5 +1,5 @@
-<!-- source: docs/ARCHITECTURE.md synced-through: fb1a649f8ad3d23c19524227bf89ff811f985f03 -->
-> **[English](../../ARCHITECTURE.md)** | **简体中文** | **[日本語](../ja/ARCHITECTURE.md)** | **[한국어](../ko/ARCHITECTURE.md)**
+<!-- source: docs/reference/ARCHITECTURE.md synced-through: fb1a649f8ad3d23c19524227bf89ff811f985f03 -->
+> **[English](../../reference/ARCHITECTURE.md)** | **简体中文** | **[日本語](../ja/ARCHITECTURE.md)** | **[한국어](../ko/ARCHITECTURE.md)**
 
 # ATLAS 架构
 
@@ -39,7 +39,7 @@ graph LR
 
 聊天前端是 **atlas-tui**（Bubbletea）：一个原生 Go 终端 UI，消费 `/v1/agent`（按轮次的聊天 SSE）和 `/events`（面向 pipeline 窗格的全局类型化信封事件流）。用 `atlas`（默认交互模式）或 `atlas tui`（显式指定）启动。Pipeline 窗格实时展示 V3 各阶段；聊天窗格通过 glamour 渲染助手的 markdown；斜杠命令 `/add /diff /commit /run` 等负责处理本地文件上下文与 shell 调用。输入是模式感知的（chat / `!bash` / `/slash`），并带有提示下拉。
 
-希望使用工具调用 + V3 pipeline 的第三方客户端应直接对接 `/v1/agent`；`/v1/chat/completions` 是对 llama-server 的透传（见 §3）。该契约记录在 [API.md](../../API.md) 中。
+希望使用工具调用 + V3 pipeline 的第三方客户端应直接对接 `/v1/agent`；`/v1/chat/completions` 是对 llama-server 的透传（见 §3）。该契约记录在 [API.md](../../reference/API.md) 中。
 
 ### 1.1 支持的加速器
 
@@ -47,15 +47,15 @@ llama-server 是唯一使用 GPU 的服务；其余每个 ATLAS 服务都跑在 
 
 | 后端 | 状态 (V3.1.x) | 镜像 / 构建路径 | Compose override | 已测试显卡 |
 |---|---|---|---|---|
-| **CUDA** (NVIDIA) | 支持 (Supported)（自 V3.1.0 起） | `inference/Dockerfile.v31` → `atlas-llama` | （默认） | RTX 5060 Ti 16GB（基准）。发布的镜像只针对 Blackwell（计算能力 12.0/12.1）编译；更早的代次需要本地重建 —— 见 [SETUP.md](../../SETUP.md) |
-| **ROCm / HIP** (AMD) | 社区验证 (Community-tested)（自 V3.1.1 起） | `inference/Dockerfile.rocm` → `atlas-llama-rocm` | `compose/docker-compose.rocm.yml` | RX 7900 XTX（社区冒烟测试，GH #26） |
-| **Metal** (Apple Silicon) | 支持 ([#32](https://github.com/inferstep/ATLAS/issues/32)) | 混合方案：原生 llama-server (Metal) + 其余组件用 Docker（macOS 无法将 GPU 直通给容器） | `compose/docker-compose.macos.yml` | M 系列；≤16 GB 用 Q4_K_M，≥24 GB 统一内存用 Q6_K |
-| **Vulkan**（跨厂商回退） | 预览 (Preview) | `inference/Dockerfile.vulkan` → `atlas-llama-vulkan` | `compose/docker-compose.vulkan.yml` | lavapipe CPU 启动路径（已冒烟测试）；尚无真实 GPU 验证 |
+| **CUDA** (NVIDIA) | 支持 (Supported)（自 V3.1.0 起） | `inference/Dockerfile.v31` → `atlas-llama` | （默认） | RTX 5060 Ti 16GB（基准）。发布的镜像只针对 Blackwell（计算能力 12.0/12.1）编译；更早的代次需要本地重建 —— 见 [SETUP.md](../../guides/SETUP.md) |
+| **ROCm / HIP** (AMD) | 社区验证 (Community-tested)（自 V3.1.1 起） | `inference/Dockerfile.rocm` → `atlas-llama-rocm` | `deploy/compose/docker-compose.rocm.yml` | RX 7900 XTX（社区冒烟测试，GH #26） |
+| **Metal** (Apple Silicon) | 支持 ([#32](https://github.com/inferstep/ATLAS/issues/32)) | 混合方案：原生 llama-server (Metal) + 其余组件用 Docker（macOS 无法将 GPU 直通给容器） | `deploy/compose/docker-compose.macos.yml` | M 系列；≤16 GB 用 Q4_K_M，≥24 GB 统一内存用 Q6_K |
+| **Vulkan**（跨厂商回退） | 预览 (Preview) | `inference/Dockerfile.vulkan` → `atlas-llama-vulkan` | `deploy/compose/docker-compose.vulkan.yml` | lavapipe CPU 启动路径（已冒烟测试）；尚无真实 GPU 验证 |
 | **SYCL** (Intel Arc) | 路线图 (Roadmap) —— Intel Arc 目前使用 `vulkan` | 待定 | 待定 | — |
 
 **后端选择发生在安装时，而非运行时。** `atlas init` 运行 `tier.detect_gpu()`（见 `atlas/commands/tier.py`），在所有检测到的厂商中挑选显存最大的 GPU（可用 `ATLAS_GPU_VENDOR` / `ATLAS_GPU_INDEX` 覆盖），并把 `ATLAS_BACKEND={cuda|rocm|metal|vulkan}` 写入 `.env`。当主机存在打包好的原生后端时，检测会解析到它：NVIDIA 用 CUDA，x86_64 上的 AMD 用 ROCm，macOS 用混合 Metal 路径。当主机没有打包好的原生后端时（Intel Arc、arm64 上的 AMD、无法识别的厂商），向导会提供 Vulkan 通用回退（默认选是）：一个镜像覆盖 AMD、Intel、Adreno、MoltenVK 和 lavapipe CPU 光栅化器，性能比调优过的原生后端低大约 20–40%。只有当完全不存在可用的后端时，它才会拒绝 —— 而不是写出一个无法启动的 `.env`。每个后端都有自己预构建的镜像；用户不会运行一个打包了所有后端库的臃肿镜像。
 
-**自带模型的表面（V3.1.1）。** `atlas lens check` 是针对运行中的 llama-server 的一次廉价预检，用于报告当前加载的模型是否与 Lens 兼容。`atlas lens build --samples <path>` 封装了 `geometric-lens/geometric_lens/training.py`，按模型原生的嵌入维度训练全新的 C(x)（`cost_field.pt`）**和** G(x)（XGBoost）工件。二者结合让用户无需 fork lens 代码即可换入非默认的 GGUF —— C(x) 构造函数接受任意 `input_dim`，因此逐模型变化的只有训练出来的权重。面向用户的流程见 [CLI.md § atlas lens](../../CLI.md#atlas-lens)；`atlas lens publish`（或合并的 `atlas publish`）会把工件上传到 HuggingFace，并开出固定其哈希的注册表 PR。
+**自带模型的表面（V3.1.1）。** `atlas lens check` 是针对运行中的 llama-server 的一次廉价预检，用于报告当前加载的模型是否与 Lens 兼容。`atlas lens build --samples <path>` 封装了 `geometric-lens/geometric_lens/training.py`，按模型原生的嵌入维度训练全新的 C(x)（`cost_field.pt`）**和** G(x)（XGBoost）工件。二者结合让用户无需 fork lens 代码即可换入非默认的 GGUF —— C(x) 构造函数接受任意 `input_dim`，因此逐模型变化的只有训练出来的权重。面向用户的流程见 [CLI.md § atlas lens](../../reference/CLI.md#atlas-lens)；`atlas lens publish`（或合并的 `atlas publish`）会把工件上传到 HuggingFace，并开出固定其哈希的注册表 PR。
 
 **与厂商无关的部分**（在每个后端上都可用）：语法约束的 JSON、自嵌入（`/embedding`）、逐层隐藏状态、ASA 控制向量（由 llama.cpp 的 `control_vector_load` 加载，与后端无关）、KV 缓存量化、整个外层 agent 循环、V3 pipeline、Geometric Lens 以及 sandbox。
 
@@ -65,7 +65,7 @@ llama-server 是唯一使用 GPU 的服务；其余每个 ATLAS 服务都跑在 
 - **多 GPU + 张量并行。** V1 在每个后端上都只支持单 GPU；多 GPU 是 GH #34，不绑定到特定厂商。
 - **Apple 统一内存。** macOS 共享 GPU+系统内存；"VRAM" 的算法实际上是"总共 16 GB 减去操作系统 + 应用"。见 §7。
 
-K3s 部署路径（`scripts/install.sh`，清单在 `templates/` 中）截至 V3.1.1 仅支持 CUDA —— ROCm K8s 方案已推迟到 V3.2 的基础设施清单（需要 `/dev/kfd` + `/dev/dri` hostPath 挂载以及 `render`/`video` 组成员身份，相当于集群级别的 `compose/docker-compose.rocm.yml`）。
+K3s 部署路径（`scripts/install.sh`，清单在 `deploy/k3s/` 中）截至 V3.1.1 仅支持 CUDA —— ROCm K8s 方案已推迟到 V3.2 的基础设施清单（需要 `/dev/kfd` + `/dev/dri` hostPath 挂载以及 `render`/`video` 组成员身份，相当于集群级别的 `deploy/compose/docker-compose.rocm.yml`）。
 
 ---
 
@@ -84,7 +84,7 @@ K3s 部署路径（`scripts/install.sh`，清单在 `templates/` 中）截至 V3
 
 ## 3. atlas-proxy（外层）
 
-代理是聊天前端的入口点。它在 `/v1/agent` 上接收用户消息（类型化事件流 —— TUI 使用的就是它），并运行一个内部 agent 循环：调用 llama-server、解析工具调用、执行它们，然后把事件流式回传。`/v1/chat/completions` 端点是对 llama-server 的透明透传；保留它是为了 SDK 兼容性，它并不运行 agent 循环。完整的事件类型目录见 [API.md](../../API.md)。
+代理是聊天前端的入口点。它在 `/v1/agent` 上接收用户消息（类型化事件流 —— TUI 使用的就是它），并运行一个内部 agent 循环：调用 llama-server、解析工具调用、执行它们，然后把事件流式回传。`/v1/chat/completions` 端点是对 llama-server 的透明透传；保留它是为了 SDK 兼容性，它并不运行 agent 循环。完整的事件类型目录见 [API.md](../../reference/API.md)。
 
 代理由 12 个 Go 文件组成，每个文件只负责一件事：
 
@@ -101,15 +101,15 @@ K3s 部署路径（`scripts/install.sh`，清单在 `templates/` 中）截至 V3
 | `run_end.go`, `recovery.go` | 运行如何结束（终止事件、时间预算、摘要）；给卡住的模型看的内容以及尚欠的工作 |
 | `fenced_channel.go` | 获取文件正文的子调用及其预算 |
 | `tools.go`, `tool_*.go` | 16 个工具定义与执行器、层级分类、工具调用语法 |
-| `gates*.go` | 诚实性/计划闸门：声明校验、结构、语法、内嵌脚本、计划遵循、计划提醒、资源 lint |
+| `gates*.go` | 诚实性/计划闸门：声明校验、结构、语法、内嵌脚本、计划遵循、计划提醒、资源 lint（`internal/assetlint`） |
 | `detectors.go` | 卡死模式检测：工具重复、推理重复、traceback 定位 |
 | `context.go` | 上下文增强：符号索引、项目扫描、工作区隔离、会话文件清单 |
 | `permissions.go` | 权限闸门（`/v1/permission`）、信任模式、硬阻断模式 |
 | `lens.go` | lens 打分调用、校准状态 |
 | `guardrails*.go` | 按工具的引导防护（收缩、缺失命令/模块的引导、doctype 剥离） |
-| `shell_wrapper.go` | `validateShellCommand` 背后的命令策略：拆分复合命令，最多深入 16 层检查执行包装器（`sh -c`、`eval` 等），拒绝灾难性命令和无法检查的包装器 |
+| `internal/shellcmd/shell_wrapper.go` | `validateShellCommand` 背后的命令策略：拆分复合命令，最多深入 16 层检查执行包装器（`sh -c`、`eval` 等），拒绝灾难性命令和无法检查的包装器 |
 | `events.go` | 类型化信封 broker（`/events`）与 SSE 管道 |
-| `v3_bridge.go` | 面向 v3-service `/v3/generate` + `/v3/plan` 的 SSE 客户端 |
+| `internal/v3client/client.go` | 面向 v3-service `/v3/generate` + `/v3/plan` 的 SSE 客户端；调用上限 `ATLAS_V3_TIMEOUT` 留在 `v3_bridge.go` |
 | `types.go` | 共享类型、层级、轮次上限 |
 
 ```mermaid
@@ -197,26 +197,7 @@ run-first 门本身引用一条指令，`runFirstInstruction`：运行该扩展�
 
 ### 工具
 
-`proxy/tools.go` 中注册了 16 个工具：
-
-| 工具 | 用途 | 只读 |
-|------|---------|-----------|
-| `read_file` | 读取文件内容（可选 offset/limit） | 是 |
-| `outline_file` | 列出文件的顶层函数/类及其行号范围，不含函数体（`.py` 使用 tree-sitter，其余为尽力而为的扫描）。外科式读取的入口点：先 outline，再用带 offset/limit 的 `read_file` | 是 |
-| `write_file` | 创建一个新文件（对超过 5 行的已有文件会被拒绝 —— 见安全限制） | 否 |
-| `edit_file` | 针对 ≤10 行改动的外科式内联字符串替换（old_str/new_str） | 否 |
-| `insert_after` | 在给定行号（`read_file` 打印的行号）之后插入新行。适用于**新增**代码（分支、函数、import）且不改动任何已有内容的场景：没有需要复现的 `old_str`，而这正是长跨度下失败的那一步 | 否 |
-| `replace_lines` | 用新内容替换一个行范围（`start_line`..`end_line`，即 `read_file` 打印的行号）。适用于**修改**代码而无需复现它：锚点是断言的两行（范围的首行与末行，忽略空白），而不是整个跨度，因此逐字复现的负担是 2 行而非 N 行。每次调用上限 60 行 | 否 |
-| `structural_edit` | 通过 tree-sitter 选择器（`function:NAME`、`class:NAME`、`<tag>`）对整个函数/类/HTML 元素进行重写；对整节点替换而言，必须优先于 edit_file 使用。支持 Python、HTML、Go、JavaScript 和 TypeScript | 否 |
-| `delete_file` | 删除文件或空目录 | 否 |
-| `move_file` | 在工作区内移动或重命名文件（例如 `index.html` → `templates/`）。纯粹的重定位 —— 绕过 V3/外科式编辑门控，拒绝覆盖已存在的目标。由于 shell `mv`/`cp` 会被拒绝，这是"重新组织文件"的受支持路径 | 否 |
-| `find_file` | 按文件**名**/路径做正则搜索（廉价的存在性检查 + 定位）。区别于在文件内容中 grep 的 `search_files`。 | 是 |
-| `search_files` | 跨文件内容做正则搜索（最多 200 个匹配，跳过 .git/node_modules） | 是 |
-| `list_directory` | 列出目录内容及其类型和大小 | 是 |
-| `run_command` | 通过 sandbox 容器执行 shell 命令；5 分钟超时上限 | 否 |
-| `run_background` | 在 sandbox 中启动一个长时间运行的进程（例如 `python app.py`）；立即返回一个 `job_id` | 否 |
-| `tail_background` | 通过 `job_id` 获取某个后台任务新增的 stdout/stderr | 是 |
-| `stop_background` | 通过 `job_id` 对某个后台任务发送 SIGTERM/SIGKILL | 否 |
+`proxy/tools.go` 中注册了 16 个工具。各工具的说明、限制及是否只读请参见 [API.md § Tools available to the agent loop](../../reference/API.md#tools-available-to-the-agent-loop)。
 
 ### 交付物账本（观测性）
 
@@ -271,7 +252,7 @@ run-first 门本身引用一条指令，`runFirstInstruction`：运行该扩展�
 
 #### 终端契约与会话预算
 
-每个会话恰好以一个终端事件结束，来自一个发射器。它携带原样的遗留 `summary` 加一个增量的 `status`——`completed`、`incomplete`、`stopped`、`timed_out`、`failed`——以及一个稳定的机器可读 `reason`。客户端把缺失的 status 读作 `incomplete`，无法识别的词按原样显示，绝不读作完成（`tui/events.go` 的 `onDone`，VS Code 与 JetBrains 扩展的 `doneOutcome`）。broker 的 `done`/`stage_end` 信封报告同一结果，而不是断言 `success: true`。
+每个会话恰好以一个终端事件结束，来自一个发射器。它携带原样的遗留 `summary` 加一个增量的 `status`——`completed`、`incomplete`、`stopped`、`timed_out`、`failed`——以及一个稳定的机器可读 `reason`。客户端把缺失的 status 读作 `incomplete`，无法识别的词按原样显示，绝不读作完成（`tui/internal/app/events.go` 的 `onDone`，VS Code 与 JetBrains 扩展的 `doneOutcome`）。broker 的 `done`/`stage_end` 信封报告同一结果，而不是断言 `success: true`。
 
 对除 `completed` 之外的任何状态，句子与字段都归服务器所有。模型自己的陈述只在完成门授权之处被放行；一个没有 summary 的非完成终端会得到一句服务器撰写的陈述，点名结果、磁盘上是否有东西、它是否被证明有效；而在非完成状态上抵达发射器的完成主张会被整个替换，而非围绕其编辑。这关闭了 Phase 2B 留下的缺口：一个只读 `summary` 的客户端——`status` 存在之前的所有客户端——现在读到与同时读两者者相同的真相。
 
@@ -295,7 +276,7 @@ run-first 门本身引用一条指令，`runFirstInstruction`：运行该扩展�
 
 `SessionWrites` 是另一张更旧的、以模型提供的原始路径为键的表；`proxy/types.go` 记录了由此而来的别名问题。其读者是 write_file 覆盖守卫对模型自身草稿的概念、活跃调试快速路径、会话清单注记、V3 项目上下文、制品门的漂移检查与编辑工具的宽松门；这些都不在此改变。
 
-工作契约的验证要求（`decideVerificationDemand`）把它问及的代码交付物取自账本，每个变更工具的落地都被 `recordLedgerEffect` 规范记录。回答它的覆盖——一次通过的运行点名了哪些路径、持有的是什么字节——由 `proxy/guardrails.go` 的 `changedPathsForCoverage` 计算：会话写入加账本的规范代码交付物，因此要求与其覆盖读同一身份。在那之前，覆盖只读会话写入表，而 `edit_file` 与 `structural_edit` 从不写入它、任何编辑工具也不为交付的候选写入它，因此 `task_mode: work` 下的每个编辑任务无论模型运行了什么都以 `verification_demanded_unmet` 收场。覆盖只陈述一次运行在其当前字节上点名了一条变更路径；完成仍需要那次运行，后续变更仍重新武装该要求，账本自身的验证仍结算变更债。只有运行了程序或其测试、或抓取了页面的片段才绑定覆盖，且仅当命令行报告该片段的退出状态时（`classifyCommandEvidence`）：一次解析、一次 lint 或一次构建不绑定任何东西，管道进 `tail` 的测试也不。不点名文件的运行器绑定它发现的会话文件（`runnerEntries`）：一个裸 `pytest` 或 `pytest tests/` 绑定其测试文件，`python -m unittest` 绑定其 `test*.py`，`go run .` 绑定其包，`go test ./...` 绑定含测试的包（无测试时只编译），`npm test`、`jest` 或 `vitest` 绑定其默认模式匹配的文件；import 从那里如同从点名入口一样被跟随。失败的运行同样被记录，同一字节上的失败收回更早的通过，因此最新结果说了算。要求在退出时未满足，验证门在终结器拒绝退出之前言明，附上本可运行该文件的命令。一次被取消的编辑不报告变更，账本对它无观测。
+工作契约的验证要求（`decideVerificationDemand`）把它问及的代码交付物取自账本，每个变更工具的落地都被 `recordLedgerEffect` 规范记录。回答它的覆盖——一次通过的运行点名了哪些路径、持有的是什么字节——由 `proxy/guardrails.go` 的 `changedPathsForCoverage` 计算：会话写入加账本的规范代码交付物，因此要求与其覆盖读同一身份。在那之前，覆盖只读会话写入表，而 `edit_file` 与 `structural_edit` 从不写入它、任何编辑工具也不为交付的候选写入它，因此 `task_mode: work` 下的每个编辑任务无论模型运行了什么都以 `verification_demanded_unmet` 收场。覆盖只陈述一次运行在其当前字节上点名了一条变更路径；完成仍需要那次运行，后续变更仍重新武装该要求，账本自身的验证仍结算变更债。只有运行了程序或其测试、或抓取了页面的片段才绑定覆盖，且仅当命令行报告该片段的退出状态时（`shellcmd.ClassifyCommandEvidence`）：一次解析、一次 lint 或一次构建不绑定任何东西，管道进 `tail` 的测试也不。不点名文件的运行器绑定它发现的会话文件（`shellcmd.RunnerEntries`）：一个裸 `pytest` 或 `pytest tests/` 绑定其测试文件，`python -m unittest` 绑定其 `test*.py`，`go run .` 绑定其包，`go test ./...` 绑定含测试的包（无测试时只编译），`npm test`、`jest` 或 `vitest` 绑定其默认模式匹配的文件；import 从那里如同从点名入口一样被跟随。失败的运行同样被记录，同一字节上的失败收回更早的通过，因此最新结果说了算。要求在退出时未满足，验证门在终结器拒绝退出之前言明，附上本可运行该文件的命令。一次被取消的编辑不报告变更，账本对它无观测。
 
 
 ### 工具选择偏差缓解
@@ -330,7 +311,7 @@ run-first 门本身引用一条指令，`runFirstInstruction`：运行该扩展�
    解析 GGUF 层元数据，并报告 `compat` / `needs-build` /
    `incompatible`。`atlas asa build` 从已加载的模型推导提取层，
    写出向量和标记，并运行在 lens 容器内部。`atlas asa publish`
-   在上传前会拒绝缺失或不匹配的标记。见 [CLI.md § atlas asa](../../CLI.md#atlas-asa)。
+   在上传前会拒绝缺失或不匹配的标记。见 [CLI.md § atlas asa](../../reference/CLI.md#atlas-asa)。
 
 ### 逐文件 Tier 分类
 
@@ -373,7 +354,7 @@ tier 上限为 0（无上限）；由循环内部的检测器栈决定何时中�
 - **不授权任何破坏性操作。** `question` 模式既不允许变更，也不抹除变更债、损坏的交付物、失败的校验、后台危害或删除义务；若模型仍然变更，同样的安全与完成规则管辖那些字节。删除仍需要其自身那绑定路径与身份的确认。
 - **从不到达模型。** 任务模式不出现在任何提示中，任何模型、V3 或 lens 输出都无法设置它。一个内部畸形的模式在失败时闭合到要求工作一侧，而不是被读作问题。
 
-影子诊断记录（私有、仅观测、默认关闭 —— 见 [OPERATIONS.md](../../OPERATIONS.md#private-diagnostics-task-contract-shadow-capture)）**按记录种类**版本化，因为给其中一种加字段不得静默重定义另一种：
+影子诊断记录（私有、仅观测、默认关闭 —— 见 [OPERATIONS.md](../../guides/OPERATIONS.md#private-diagnostics-task-contract-shadow-capture)）**按记录种类**版本化，因为给其中一种加字段不得静默重定义另一种：
 
 | 记录 | 版本 | 契约 |
 | --- | --- | --- |
@@ -384,13 +365,130 @@ tier 上限为 0（无上限）；由循环内部的检测器栈决定何时中�
 
 `comparison` 仍描述契约与旧有机制的对比；`influences_live_decision` 仍描述观察者及其 sink 能否影响策略，且保持为 false。一次 schema 变更意味着一个新版本 —— 封闭字段集加一个为它编写的读取器 —— 从不是对既有版本的重定义，也从不是一个对未知字段耸肩放行的解析器。
 
-客户端：TUI 对普通消息发送 `work`，对一次性 `/ask <message>` 发送 `question`；VS Code 扩展与 JetBrains 插件发送用户选择的 Work/Question 模式，默认为 `work`；e2e 与可靠性 harness 发送 `work`。每个自有客户端都会声明，因此没有契约的请求来自外部调用者，不获得 V3 候选（[CANDIDATE_POLICY.md](../../CANDIDATE_POLICY.md)）。`expected_outputs` 与 `verification` 会被携带与校验，但**尚未迁移** —— 交付物与验证义务仍按旧方式推导。
+客户端：TUI 对普通消息发送 `work`，对一次性 `/ask <message>` 发送 `question`；VS Code 扩展与 JetBrains 插件发送用户选择的 Work/Question 模式，默认为 `work`；e2e 与可靠性 harness 发送 `work`。每个自有客户端都会声明，因此没有契约的请求来自外部调用者，不获得 V3 候选（[CANDIDATE_POLICY.md](../../reference/CANDIDATE_POLICY.md)）。`expected_outputs` 与 `verification` 会被携带与校验，但**尚未迁移** —— 交付物与验证义务仍按旧方式推导。
 
 ### Plan 模式（按轮次预检）
 
-Plan 模式是一个预检式的规划步骤，在每个 agent 轮次、第一次工具调用之前运行一次：规划器采样候选计划，用启发式打分，并把获胜者渲染进系统提示；当模型偏离计划胡乱折腾时，一个遵循门控会自动修订计划。它减少了探索折腾，并通过守住计划的验证步骤来阻止无证据的 `done`。
+Plan 模式是一个预检式的规划步骤，在每个 agent 轮次、模型开始调用工具之前运行一次。规划器以不同的温度从 LLM 采样 3 个候选计划，用启发式给每个打分，并选出最好的一个。获胜的计划进入系统提示，并成为遵循门控的依据：当模型偏离计划胡乱折腾时，门控会自动修订计划。
 
-完整的流程、组件、可调项、跳过条件、成本和测试矩阵见 [PLAN_MODE.md](../../PLAN_MODE.md)。
+它针对两种失败模式而设计：
+
+1. **探索折腾。** 没有计划时，模型最初的 2–4 次工具调用往往是 `read_file → list_directory → search_files → read_file → ...`，在探索而不是行动。有了计划，系统提示会明确告诉它：读这个，改那个，用 curl 验证。
+2. **无证据的 "done"。** 计划的 `verify_step` 被视为修复的证明。在该步骤成功运行之前，验证门控会拒绝 `done`。
+
+#### 端到端流程
+
+```mermaid
+flowchart TD
+    User["User msg"] --> Tier{T0?}
+    Tier -->|Yes| Skip["Skip planning"] --> Loop["Agent loop"]
+    Tier -->|No| Sample["samplePlanContext\n(read priority files)"]
+    Sample --> Plan["POST /v3/plan\n(3 candidates × different T)"]
+    Plan --> Score["Heuristic score\n(verify? steps in [2,6]? rationale?)"]
+    Score --> Best["Pick winner"]
+    Best --> System["Render plan in\nsystem prompt"]
+    System --> Loop
+    Loop --> Tool["Tool call"]
+    Tool --> Adhere{"matches\nunsatisfied step?"}
+    Adhere -->|Yes| Tick["satisfied[i]=true\nreset off_streak"] --> Loop
+    Adhere -->|No| Recon{"recon tool?\n(read/list/find/search)"}
+    Recon -->|"Yes — neutral"| Loop
+    Recon -->|No| Streak["off_streak++"]
+    Streak --> Cap{streak ≥ 5?}
+    Cap -->|No| Loop
+    Cap -->|Yes| Revise["revisePlan()\n(carry forward FilesRead\nas extra context)"] --> Loop
+
+    style Plan fill:#2d5016,color:#fff
+    style Revise fill:#5c3a1a,color:#fff
+```
+
+#### 组件
+
+##### v3-service：`/v3/plan`（Python）
+
+定义在 `v3-service/planning.py`，由 `v3-service/main.py` 提供路由。处理程序：
+
+1. 用用户消息、工作目录和截断后的项目文件渲染 `PLAN_PROMPT_TEMPLATE`。
+2. 以种子偏移和温度 `[0.3, 0.5, 0.7]` 调用 LLM 3 次。默认发送可选的 `chat_template_kwargs: {enable_thinking: false}` 控制项，并为计划 JSON 预留 2,048 个输出 token。支持的模板会关闭其推理通道，其他模板忽略该标志。`ATLAS_PLAN_THINKING=1` 请求推理，并把预算提高到 8,192。不注入任何针对模型系列的提示指令。
+3. 用一个容忍 Markdown 围栏、能识别花括号深度的提取器（`_parse_plan_json`）解析每个原始响应。
+4. 用 `_score_plan` 给每个解析出的计划打分（上限 1.0）：
+   - 有 `verify_step`：**+0.3**
+   - `len(steps) ∈ [2, 6]`：**+0.2**；其他情况下只要有步骤：**+0.05**。没有步骤的计划得 0 分
+   - 验证步骤运行程序或其测试，或抓取页面（`pytest`、`python3 app.py`、`curl`、`go test` 等）：**+0.2**。只做构建、解析或 lint 的步骤（`py_compile`、`tsc`、`ruff`、`go build`）不得分：agent 循环也不把它算作验证
+   - 验证步骤只启动服务器：**−0.3**，抵消它的 +0.3
+   - 某个步骤要创建已存在的文件：**−0.5**
+   - 每个以用户点名的文件为目标的步骤 **+0.1**（上限 +0.2）
+   - `rationale` 非空：**+0.1**
+5. 选出得分最高的计划；平局时步骤较少者优先（少些冗余）。如果获胜计划的验证步骤只启动服务器，就去掉其 `verify_step` 标记，但该步骤仍留在计划中，交由循环自身的验证门控把关。
+6. 如果所有候选都解析失败，返回一个单步回退（`{action: "investigate the request and act"}`），这样 agent 循环绝不会因规划器失败而阻塞。
+
+API 契约见 [API.md § POST /v3/plan](../../reference/API.md#post-v3plan)。
+
+##### proxy：桥接、钩子、门控（Go）
+
+| 文件 | 作用 |
+|---|---|
+| `proxy/internal/v3client/client.go` | `PlanStreaming(reqCtx, v3URL, requestID, req, onProgress)` — 打开 SSE 流，把进度事件转发给回调，并从 `event: result` 帧返回最终的 `Plan`。`reqCtx` 绑定 agent 的请求上下文，因此 `/cancel` 会中止进行中的计划。与 V3 流水线运行所用的 `GenerateStreaming` 结构相同。 |
+| `proxy/internal/wire/` | `V3PlanRequest`（`v3.go`）、`Plan` 与 `PlanStep`（`messages.go`）类型。 |
+| `proxy/types.go` | `AgentContext` 增加 `Plan`、`PlanStepsSatisfied[]`、`PlanOffStreak`、`PlanRevisions`。 |
+| `proxy/plan_generation.go` | `samplePlanContext()` 为规划器遍历优先文件（app.py、templates/index.html、package.json 等）。`shouldGeneratePlan()` 依据层级、消息长度以及是否为只读请求来判断。`generatePlan()` 运行桥接，丢弃逐 token 的噪声，并携带完整步骤列表发出 `plan_loaded`。 |
+| `proxy/gates_plan.go` | `matchPlanStep()`（工具名加路径后缀的宽松匹配）、`recordPlanAdherence()`（按工具调用记账；不匹配任何步骤的侦察调用 — `read_file`/`list_directory`/`find_file`/`search_files` — 是中性的：绝不延长 `off_streak`）、`revisePlan()`（把 `FilesRead` 作为额外上下文带入并重新生成）。 |
+
+系统提示的渲染在 `buildSystemPrompt` 中完成。计划步骤渲染为编号列表，`✓` 标记只出现在验证步骤上，并把验证步骤标明为验证门控针对 `done` 所守护的“修复证据”步骤。（逐步骤的 ☐/✓/⚐ 字形属于 TUI 渲染，见下文。）
+
+##### tui：渲染（Go）
+
+`tui/internal/pipelinestate/plan.go` 定义了 `PlanView`（模型上的状态），`tui/internal/app/state.go` 定义了接入 `tui/internal/app/events.go` 聊天分发器的三个 `applyPlan*` 处理程序：
+
+| 事件 | 处理程序 | UI 效果 |
+|---|---|---|
+| `plan_loaded` | `applyPlanLoaded` | 用新计划替换 `m.plan`；追加一个多行聊天行，用状态字形显示所有步骤。修订版会覆盖 `m.plan` 并重置 Satisfied 标志。 |
+| `plan_adherence`（匹配） | `applyPlanAdherence` | 翻转所匹配步骤的 `Satisfied` 标志；追加一行 `✓ s2 satisfied · edit_file (1/3)`。 |
+| `plan_adherence`（未匹配） | `applyPlanAdherence` | **静默** — 偏离计划的调用只更新内部状态。没有这个过滤，每次偏离计划的调用都会产生一个聊天行，淹没真正的进展。 |
+| `plan_revise` | `applyPlanRevise` | 在当前计划上设置 `Revising=true`；追加 `Plan revising (rev 1): <reason>`。下一个 `plan_loaded`（`revision>0`）会替换它。 |
+| `v3_plan` | `formatV3StageEvent` | 在 `plan` 聊天行元标签下渲染规划器自身的进度（`candidate 1 score=0.80`、`plan 1 won`）。 |
+
+#### 可调项
+
+定义在 `proxy/gates_plan.go`：
+
+| 常量 | 默认值 | 理由 |
+|---|---|---|
+| `planAutoReviseThreshold` | 5 | 触发自动修订前，非侦察的偏离计划工具调用次数（侦察工具绝不延长连续计数，因此自然的探索不算在内）。足够严格，能及早发现错误的计划；又足够宽松，几次零星的偏离调用不会被判为折腾。 |
+| `planMaxRevisions` | 2 | 每个循环的自动修订上限。超过之后，最后的计划保留，只是不再修订。如果一次修订返回相同的步骤，则丢弃计划。防止偏离计划的异常输入让 `/v3/plan` 无休止地循环。 |
+
+`v3-service/planning.py` 常量：
+
+| 常量 | 默认值 | 理由 |
+|---|---|---|
+| `n_candidates` | 3 | 在温度 `[0.3, 0.5, 0.7]` 下做多样化采样。候选越多，耗时越长（参考模型上每个候选约 5–30 秒）。 |
+| `max_tokens`（每个候选） | 2048 | 经验上足以容纳带理由的 6 步计划。早期测试中 1024 会在 JSON 中途被截断。 |
+
+#### 何时跳过 Plan 模式
+
+`shouldGeneratePlan` 中的三个条件：
+
+1. **`ctx.Tier == Tier0Conversational`** — 琐碎的聊天（"hi"、"thanks"）绝不规划。
+2. **`len(trimmed) < 12`** — 依赖上一轮计划的简短回应（"yes do it"、"looks good"）不再重新规划。
+3. **`isReadOnlyRequest(message)`** — 只是查看的请求（"list the files"）不需要计划，而错误的计划会把模型引向编辑。
+
+除此之外，每一轮都会规划。失败（`/v3/plan` 5xx、网络错误、连回退也救不了的所有候选都无法解析）会静默降级：循环在没有 `ctx.Plan` 的情况下运行，agent 循环的行为与关闭 Plan 模式时相同。
+
+#### 成本
+
+耗时：参考模型上**每个候选约 5–30 秒**（3 个候选的扫描）。token 成本：预算为 `3 × 2048 max_tokens`，实际约每个候选 1500 token × 3 = 约 4500 token。
+
+两者都在 agent 第一次工具调用之前支付。一旦模型省去一轮无用的探索，这笔投入就收回了（每次工具调用本身就是约 5–10 秒的 LLM 往返再加工具执行）。
+
+#### 测试
+
+| 层 | 文件 | 覆盖内容 |
+|---|---|---|
+| v3-service 计划端点 | `tests/v3-service/pipeline/test_plan_scoring.py`（打分器）；解析器通过 `curl /v3/plan` 做冒烟测试 | 打分器为运行程序、其测试或探针的验证步骤加分，对静态检查（构建、解析、linter）和侦察调用都不加分；解析器的容错（围栏、前置说明文字、花括号嵌套）由 3 候选采样器验证 |
+| 代理桥接 | `proxy/internal/v3client/client_test.go`；阶段路由见 `proxy/v3_bridge_test.go` | SSE 解析、缺少结果时的错误、阶段路由 |
+| 代理钩子 | `proxy/agent_test.go` | 优先文件选取、截断阈值、回退遍历、层级与长度判断 |
+| 代理遵循 | `proxy/gates_plan_test.go`；系统提示见 `proxy/gates_test.go` | 匹配逻辑（工具名 + 路径后缀）、排除失败的调用、修订上限、系统提示渲染 |
+| TUI 渲染 | `tui/internal/pipelinestate/plan_test.go`；处理程序见 `tui/internal/app/plan_test.go` | `PlanView` 状态转换、修订时由 plan_loaded 替换、偏离计划时静默 |
 
 ### 安全限制
 
@@ -683,9 +781,9 @@ graph LR
     style AP fill:#1a3a5c,color:#fff
 ```
 
-`llama-server` 和 `sandbox` 独立启动。`geometric-lens` 等待 `llama-server` 变为健康；`v3-service` 等待 `llama-server` 和 `geometric-lens`；`atlas-proxy` 等待 `llama-server`、`geometric-lens`、`v3-service` 和 `sandbox`。同一个 `inference/entrypoint-v3.1.sh` 驱动 Docker Compose、裸机和 K3s，因此上下文大小、KV 缓存量化、flash attention 和 mlock 都由环境变量控制，行为在这些模式之间完全一致；macOS 混合路径通过 `scripts/atlas-llama-macos.sh` 启动原生 llama-server，该脚本复刻了入口点的各项标志。
+`llama-server` 和 `sandbox` 独立启动。`geometric-lens` 等待 `llama-server` 变为健康；`v3-service` 等待 `llama-server` 和 `geometric-lens`；`atlas-proxy` 等待 `llama-server`、`geometric-lens`、`v3-service` 和 `sandbox`。同一个 `inference/entrypoint-v3.1.sh` 驱动 Docker Compose、裸机和 K3s，因此上下文大小、KV 缓存量化、flash attention 和 mlock 都由环境变量控制，行为在这些模式之间完全一致；macOS 混合路径通过 `scripts/install/atlas-llama-macos.sh` 启动原生 llama-server，该脚本复刻了入口点的各项标志。
 
-安装及各模式的拉起步骤（NVIDIA / ROCm override、裸机、macOS 混合 Metal、K3s 清单）见 [SETUP.md](../../SETUP.md)；macOS 原生路径见 [SETUP_MACOS.md](../../SETUP_MACOS.md)。
+安装及各模式的拉起步骤（NVIDIA / ROCm override、裸机、macOS 混合 Metal、K3s 清单）见 [SETUP.md](../../guides/SETUP.md)；macOS 原生路径见 [SETUP_MACOS.md](../../guides/SETUP_MACOS.md)。
 
 ---
 

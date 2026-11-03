@@ -9,6 +9,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/v3client"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // The lens is required (docs/adr/0011-the-lens-is-required.md).
@@ -24,18 +27,9 @@ import (
 // non-finite number -- is reported as unscored and does not stop anything:
 // the lens is up, and that input is the problem (ADR 0010).
 
-// lensUnavailableError is how a lens that cannot score reaches a route. V3
-// reports it in its result, and the bridge returns this instead of an error
-// the route would answer with a fallback write.
-type lensUnavailableError struct{ Reason string }
-
-func (e *lensUnavailableError) Error() string {
-	return "the geometric lens cannot score: " + e.Reason
-}
-
 // lensUnavailable returns the reason when err says the lens cannot score.
 func lensUnavailable(err error) (string, bool) {
-	var e *lensUnavailableError
+	var e *v3client.LensUnavailableError
 	if errors.As(err, &e) {
 		return e.Reason, true
 	}
@@ -207,7 +201,7 @@ func (s *runState) stopLensDown(ctx *AgentContext, tool, reason string) error {
 		"success": false,
 		"error":   "not run: the geometric lens stopped answering",
 	})
-	emitTerminal(ctx, s, TerminalFailed, "lens_unavailable",
+	emitTerminal(ctx, s, wire.TerminalFailed, "lens_unavailable",
 		lensUnavailableSummary(reason, s.madeProductiveChange)+liveBackgroundJobNote(ctx))
 	return nil
 }

@@ -57,12 +57,12 @@ GATE_FILES = (
     "extensions/vscode/eslint.config.mjs", "extensions/jetbrains/scripts/check-distribution.sh",
     "tests/perf/budgets.json", "tests/replay/recordings/",
     "tests/infrastructure/gradle_wrapper_jar_sums.txt",
-    "scripts/integrity_check.py", "scripts/code_health.py", "scripts/production-readiness.py", "scripts/fix_tests.py",
-    "scripts/checks_ran.py", "scripts/change_base.py", "scripts/queue_run.py", "scripts/go_test_build.py",
-    "scripts/verify.py", "scripts/canary.py", "scripts/smoke_result.py",
-    "scripts/dockerfile_lint.py", "scripts/check_dockerfile_sources.py", "scripts/check_min_python.py",
-    "scripts/staging-integration.py", "scripts/licence_names.py",
-    "scripts/ci-lock.sh", "scripts/release-tag.sh", "scripts/setup/environments.sh", "scripts/setup/rulesets.sh",
+    "scripts/integrity_check.py", "scripts/ci/code_health.py", "scripts/ci/production-readiness.py", "scripts/fix_tests.py",
+    "scripts/checks_ran.py", "scripts/change_base.py", "scripts/ci/queue_run.py", "scripts/ci/go_test_build.py",
+    "scripts/ci/verify.py", "scripts/canary.py", "scripts/smoke_result.py",
+    "scripts/ci/dockerfile_lint.py", "scripts/ci/check_dockerfile_sources.py", "scripts/ci/check_min_python.py",
+    "scripts/ci/staging-integration.py", "scripts/licence_names.py",
+    "scripts/ci/ci-lock.sh", "scripts/release-tag.sh", "scripts/setup/environments.sh", "scripts/setup/rulesets.sh",
     # The settings file of each linter of the pipeline, should one appear.
     ".hadolint.yaml", ".hadolint.yml", ".github/zizmor.yml", "zizmor.yml", ".github/actionlint.yaml",
     ".github/actionlint.yml", ".yamllint", ".yamllint.yml", ".yamllint.yaml", ".shellcheckrc", "ruff.toml",
@@ -85,6 +85,7 @@ LINTER_MARKERS = {
     "ESLint": ("script",), "vitest coverage": ("script",),
     "SonarQube": ("go", "python", "script", "shell", "workflow", "dockerfile"),
     "actionlint": "none", "CodeScene": "none", "Codecov": "none", "Trivy": "none", "CodeQL": "none",
+    "govulncheck": "none",
 }
 LOCK_FILES = ("package-lock.json", "go.sum", ".github/requirements/ci.txt")
 SIZE_BASELINE = ".github/code-health-baseline.json"
@@ -730,7 +731,7 @@ LEFT_OUT_WHY = ("The plain test jobs do not run a test that carries this mark. A
                 "then pass a pull request.")
 LEFT_OUT_FIX = ("Keep the test in the plain jobs. If it needs a running service, say so in a comment next to the mark "
                 "and name the job that runs it.")
-BORN_LEFT_OUT_FIX = "Check that a job runs it (docs/quality/gates.md, \"Tests that the plain jobs leave out\")."
+BORN_LEFT_OUT_FIX = "Check that a job runs it (docs/project/gates.md, \"Tests that the plain jobs leave out\")."
 
 
 def left_out_marks(settings: str | None) -> tuple[str, ...]:

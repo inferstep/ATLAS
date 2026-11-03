@@ -4,7 +4,7 @@
 # huggingface_hub, which `atlas lens publish` and `atlas asa publish` take when
 # it is installed. A package that ci.txt also holds keeps its version there,
 # because the job installs ci.txt first.
-# Make lens.txt again with scripts/ci-lock.sh.
+# Make lens.txt again with scripts/ci/ci-lock.sh.
 --index-url https://download.pytorch.org/whl/cpu
 --extra-index-url https://pypi.org/simple
 -c ci.txt

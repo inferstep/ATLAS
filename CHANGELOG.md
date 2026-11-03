@@ -20,15 +20,17 @@ come from your checkout, so run `git pull` first.
   A model folder that holds only `gx_xgboost.pkl` runs without G(x) and says so in
   the lens's log. Run `atlas lens build` to rebuild it.
 
-### Changed: the Compose overlays moved to `compose/`
+### Changed: the Compose overlays and the K3s templates moved to `deploy/`
 
 `docker-compose.{cpu,macos,rocm,vulkan}.yml` and
-`docker-compose.override.yml.example` are now in `compose/`. `docker-compose.yml`
-and your own `docker-compose.override.yml` stay at the root. `atlas` and the
-installers find the overlays themselves. If you run `docker compose -f` by hand
-or from a script of your own, add `compose/` to the overlay's path. Relative
-paths in the overlays are unchanged: Compose reads them from the folder of the
-first `-f` file.
+`docker-compose.override.yml.example` are now in `deploy/compose/`.
+`docker-compose.yml` and your own `docker-compose.override.yml` stay at the
+root. `atlas` and the installers find the overlays themselves. If you run
+`docker compose -f` by hand or from a script of your own, add `deploy/compose/`
+to the overlay's path. Relative paths in the overlays are unchanged: Compose
+reads them from the folder of the first `-f` file. The K3s manifest templates
+moved from `templates/` to `deploy/k3s/`; `scripts/install.sh` and
+`scripts/install/generate-manifests.sh` read them there.
 
 ### Changed: ruff catches swallowed exceptions and complex functions, and lints scripts/
 
@@ -1447,7 +1449,7 @@ lens change could not reach the running stack while `DEPLOYED_SHA` said it
 had. The script also refuses a dirty checkout, requires every service to be
 healthy, checks that each container runs the image just built, and checks
 the running stack before it records the commit. See
-[OPERATIONS.md](docs/OPERATIONS.md#deploying-a-checkout-gated).
+[OPERATIONS.md](docs/guides/OPERATIONS.md#deploying-a-checkout-gated).
 
 ### Changed: V3 candidates run only where the request lets one be delivered
 
@@ -1456,7 +1458,7 @@ with each `/v1/agent` request: `task_mode` (`work` or `question`), optional
 `expected_outputs` and `verification` commands, and a `candidate_policy`.
 The proxy, not v3-service, decides whether a V3 candidate may replace the
 model's own bytes, under one of three policies
-([docs/CANDIDATE_POLICY.md](docs/CANDIDATE_POLICY.md)):
+([docs/CANDIDATE_POLICY.md](docs/reference/CANDIDATE_POLICY.md)):
 
 - `strict`, the default: a candidate lands only when a verification the
   client declared passes against those exact bytes.
@@ -2417,9 +2419,9 @@ contributor setup, on top of the changes since 3.1.3 listed further down.
 
 - New issue forms for bugs, features, tasks, docs, spikes and RFCs, and a
   fuller pull request template. [CONTRIBUTING](.github/CONTRIBUTING.md) is
-  rewritten as the path from an issue to a release. [GOVERNANCE](docs/GOVERNANCE.md)
+  rewritten as the path from an issue to a release. [GOVERNANCE](.github/GOVERNANCE.md)
   describes the trust ladder and the RFC flow. New
-  [TRIAGE](docs/GOVERNANCE.md#triage) and [INCIDENT_RESPONSE](docs/INCIDENT_RESPONSE.md)
+  [TRIAGE](.github/GOVERNANCE.md#triage) and [INCIDENT_RESPONSE](docs/project/INCIDENT_RESPONSE.md)
   guides.
 - The public [Roadmap board](https://github.com/orgs/inferstep/projects/1)
   has a Start Here view. The atlas-bot handles `/claim` and `/unclaim`,

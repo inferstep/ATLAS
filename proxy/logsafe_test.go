@@ -5,22 +5,12 @@ import (
 	"encoding/json"
 	"log"
 	"os"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
-)
 
-// Operator logs carry shape, never bodies. Log lines land in container
-// stdout, which is captured and shared, so a line that quotes a content or
-// command argument puts model-authored source, or a secret, into that
-// record. A length bound is not a policy: it decides how much source leaks,
-// not whether any does.
-//
-// Every assertion below drives the real logger and searches its real output
-// for a sentinel that went in through the real argument shapes.
-
-const (
-	sentinelBody   = "ZZQBODYZZ_5f1a7c"
-	sentinelSecret = "ZZQSECRETZZ_a31b90"
+	"github.com/itigges22/atlas-proxy/internal/logsafe"
 )
 
 // captureLog installs a buffer as the standard logger's sink, through the
@@ -29,166 +19,96 @@ func captureLog(t *testing.T, fn func()) string {
 	t.Helper()
 	var buf bytes.Buffer
 	oldOut, oldFlags := log.Writer(), log.Flags()
-	log.SetOutput(filteringWriter{w: &buf})
+	log.SetOutput(logsafe.Writer{W: &buf})
 	log.SetFlags(0)
 	t.Cleanup(func() { log.SetOutput(oldOut); log.SetFlags(oldFlags) })
 	fn()
 	return buf.String()
 }
 
-// bodyBearingCalls is one call per registered tool that can carry a body,
-// command, or model-authored text, with the sentinel in every such field.
-func bodyBearingCalls() map[string]string {
-	return map[string]string{
-		"write_file":      `{"path":"a.py","content":"` + sentinelBody + `"}`,
-		"edit_file":       `{"path":"a.py","old_str":"` + sentinelBody + `","new_str":"` + sentinelBody + `x"}`,
-		"insert_after":    `{"path":"a.py","line":3,"content":"` + sentinelBody + `"}`,
-		"replace_lines":   `{"path":"a.py","start_line":1,"end_line":2,"expected_first_line":"` + sentinelBody + `","expected_last_line":"` + sentinelBody + `","content":"` + sentinelBody + `"}`,
-		"structural_edit": `{"path":"a.py","selector":"function:f","content":"` + sentinelBody + `"}`,
-		"run_command":     `{"command":"echo ` + sentinelSecret + `","cwd":"/workspace"}`,
-		"run_background":  `{"command":"echo ` + sentinelSecret + `","cwd":"/workspace"}`,
-		"search_files":    `{"pattern":"` + sentinelBody + `","path":"."}`,
-		"find_file":       `{"pattern":"` + sentinelBody + `","path":"."}`,
-	}
-}
-
-func TestNoBodyBearingToolLeaksItsBodyThroughTheLogger(t *testing.T) {
-	for tool, args := range bodyBearingCalls() {
-		out := captureLog(t, func() {
-			log.Printf("[agent] turn=%d type=tool_call name=%s args=%s",
-				1, tool, safeArgsSummary(tool, json.RawMessage(args)))
-		})
-		if strings.Contains(out, sentinelBody) || strings.Contains(out, sentinelSecret) {
-			t.Errorf("%s leaked its body into the log: %s", tool, out)
-		}
-	}
-}
-
-// A tool nobody classified yet must not be a hole.
-func TestAnUnregisteredToolIsRedactedWholesale(t *testing.T) {
-	args := `{"path":"a.py","brand_new_body_field":"` + sentinelBody + `"}`
-	got := safeArgsSummary("tool_invented_tomorrow", json.RawMessage(args))
-	if strings.Contains(got, sentinelBody) {
-		t.Fatalf("an unregistered tool leaked: %s", got)
-	}
-}
-
-// A new field on a KNOWN tool is redacted until it is declared safe, so a
-// body-bearing field cannot be added and silently logged.
-func TestANewFieldOnAKnownToolIsRedactedUntilDeclaredSafe(t *testing.T) {
-	args := `{"path":"a.py","content":"x","future_body":"` + sentinelBody + `"}`
-	got := safeArgsSummary("write_file", json.RawMessage(args))
-	if strings.Contains(got, sentinelBody) {
-		t.Fatalf("an undeclared field leaked: %s", got)
-	}
-}
-
 // Every registered tool must be structurally classified.
 func TestEveryRegisteredToolIsClassified(t *testing.T) {
 	for _, def := range allTools() {
-		if _, ok := toolSafeArgFields[def.Name]; !ok {
+		if !logsafe.Classified(def.Name) {
 			t.Errorf("tool %q has no logging classification; declare its safe "+
-				"argument fields in toolSafeArgFields", def.Name)
+				"argument fields in internal/logsafe", def.Name)
 		}
 	}
 }
 
-// --- what must survive ----------------------------------------------------
-
-func TestSafeSummaryKeepsShapeAndProvenance(t *testing.T) {
-	body := strings.Repeat("q", 1106)
-	got := safeArgsSummary("write_file",
-		json.RawMessage(`{"path":"pkg/a.py","content":"`+body+`"}`))
-	for _, want := range []string{
-		`"path":"pkg/a.py"`,          // canonical path, already permitted
-		"1106B",                      // body length
-		hashBytes([]byte(body))[:12], // stable content hash
+// A logged value keeps no control character but tab and no Unicode line break,
+// so it cannot pass for a record or act on a terminal. Sites that already call
+// logPath escape the same text twice, which must change nothing.
+func TestALoggedValueStaysInsideItsRecord(t *testing.T) {
+	for _, c := range []struct{ name, value, want string }{
+		{"line feed", "a\nb", `a\nb`},
+		{"carriage return", "a\rb", `a\rb`},
+		{"backslash", `a\b`, `a\b`},
+		{"text that reads as an escape", `a\nb`, `a\nb`},
+		{"tab", "a\tb", "a\tb"},
+		{"escape character", "a\x1b[0mb", `a\u001b[0mb`},
+		{"null", "a\x00b", `a\u0000b`},
+		{"delete", "a\x7fb", `a\u007fb`},
+		{"control character above ASCII", "a\xc2\x85b", `a\u0085b`},
+		{"line and paragraph separators", "a\xe2\x80\xa8b\xe2\x80\xa9c", `a\u2028b\u2029c`},
+		{"letter above ASCII", "a\xc3\xa9b", "a\xc3\xa9b"},
+		{"byte that is not UTF-8", "a\xffb", "a\xef\xbf\xbdb"},
+		{"stack trace", "main.f()\n\tmain.go:1\nmain.main()",
+			`main.f()\n` + "\t" + `main.go:1\nmain.main()`},
 	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("summary dropped %q: %s", want, got)
+		want := "name=" + c.want + " status=500\n"
+		once := captureLog(t, func() { log.Printf("name=%s status=500", c.value) })
+		if once != want {
+			t.Errorf("%s: got %q, want %q", c.name, once, want)
 		}
-	}
-	if strings.Contains(got, body) {
-		t.Fatalf("summary kept the body")
-	}
-	// The hash is stable across calls.
-	if again := safeArgsSummary("write_file",
-		json.RawMessage(`{"path":"pkg/a.py","content":"`+body+`"}`)); again != got {
-		t.Fatalf("summary is not stable: %q vs %q", got, again)
-	}
-}
-
-func TestSafeSummaryKeepsSelectorAndRangeMetadata(t *testing.T) {
-	got := safeArgsSummary("structural_edit",
-		json.RawMessage(`{"path":"a.py","selector":"function:solve","content":"`+sentinelBody+`"}`))
-	if !strings.Contains(got, "function:solve") {
-		t.Errorf("selector metadata lost: %s", got)
-	}
-	got = safeArgsSummary("replace_lines",
-		json.RawMessage(`{"path":"a.py","start_line":4,"end_line":9,"content":"`+sentinelBody+`"}`))
-	if !strings.Contains(got, `"start_line":4`) || !strings.Contains(got, `"end_line":9`) {
-		t.Errorf("range metadata lost: %s", got)
-	}
-	if strings.Contains(got, sentinelBody) {
-		t.Fatalf("body survived: %s", got)
-	}
-}
-
-func TestSafeSummaryHandlesDegenerateArgs(t *testing.T) {
-	for _, c := range []struct{ name, args string }{
-		{"empty", ``},
-		{"null", `null`},
-		{"not an object", `["` + sentinelBody + `"]`},
-		{"malformed", `{"path":"a.py","content":`},
-	} {
-		got := safeArgsSummary("write_file", json.RawMessage(c.args))
-		if strings.Contains(got, sentinelBody) {
-			t.Errorf("%s leaked: %s", c.name, got)
-		}
-		if got == "" {
-			t.Errorf("%s produced no diagnostic at all", c.name)
+		twice := captureLog(t, func() { log.Printf("name=%s status=500", logPath(c.value)) })
+		if twice != want {
+			t.Errorf("%s, logPath first: got %q, want %q", c.name, twice, want)
 		}
 	}
 }
 
-// --- raw model output, syntax diagnostics -------------------------------
+// logEvent's finished JSON passes through the writer too. An escape that is
+// not valid JSON would make jsonLineWriter read the record as plain text, and
+// the record's own fields would be lost.
+func TestAJSONRecordStaysWholeWithAControlCharacterInIt(t *testing.T) {
+	var buf bytes.Buffer
+	oldOut, oldFlags, oldJSON := log.Writer(), log.Flags(), logJSON
+	log.SetOutput(logsafe.Writer{W: jsonLineWriter{w: &buf}})
+	log.SetFlags(0)
+	logJSON = true
+	t.Cleanup(func() { log.SetOutput(oldOut); log.SetFlags(oldFlags); logJSON = oldJSON })
 
-func TestRawModelOutputIsSummarisedNotQuoted(t *testing.T) {
-	raw := "some reasoning then " + sentinelBody + " and more"
-	out := captureLog(t, func() {
-		log.Printf("[agent] turn=%d EMPTY ARGS — model output: %s", 2, safeTextSummary(raw))
-	})
-	if strings.Contains(out, sentinelBody) {
-		t.Fatalf("raw model output leaked: %s", out)
-	}
-	if !strings.Contains(out, "chars") {
-		t.Fatalf("summary lost the size: %s", out)
-	}
-}
+	logEvent("warn", "a\x7fb\xc2\x85c", "req-7", nil)
 
-func TestSyntaxDiagnosticsCannotLeakTheOffendingSourceLine(t *testing.T) {
-	// Real checker detail quotes the source line back.
-	detail := "SyntaxError: invalid syntax (line 16)\n    " + sentinelBody + "\n    ^"
-	out := captureLog(t, func() {
-		log.Printf("[write_file] fallback content for %s failed syntax gate: %s",
-			"a.py", safeDiagnosticSummary(detail))
-	})
-	if strings.Contains(out, sentinelBody) {
-		t.Fatalf("a syntax diagnostic leaked the source line: %s", out)
+	var rec map[string]interface{}
+	if err := json.Unmarshal(buf.Bytes(), &rec); err != nil {
+		t.Fatalf("not JSON: %v (%q)", err, buf.String())
 	}
-	if !strings.Contains(out, "SyntaxError") {
-		t.Fatalf("the useful classification was dropped: %s", out)
+	if rec["level"] != "warn" || rec["request_id"] != "req-7" || rec["msg"] != "a\x7fb\xc2\x85c" {
+		t.Fatalf("the record lost its fields: %v", rec)
 	}
 }
 
-// --- defence in depth -----------------------------------------------------
-
-func TestCredentialFilteringStillApplies(t *testing.T) {
-	out := captureLog(t, func() {
-		log.Printf("api_key=%s", "SUPERSECRETVALUE1234567890")
-	})
-	if strings.Contains(out, "SUPERSECRETVALUE1234567890") {
-		t.Fatalf("credential filtering regressed: %s", out)
+// logsafe.Writer is the one place every log line is filtered and escaped, so
+// nothing in the proxy may reach stdout or stderr around it.
+func TestNothingWritesBesideTheLogFilter(t *testing.T) {
+	output := regexp.MustCompile(`.*(os\.Std(out|err)|fmt\.Print|log\.New\(|\.SetOutput\().*`)
+	var found []string
+	for _, path := range moduleGoFiles(t) {
+		if !strings.HasSuffix(path, "_test.go") {
+			for _, line := range output.FindAllString(readSourceForTest(t, path), -1) {
+				found = append(found, path+": "+strings.TrimSpace(line))
+			}
+		}
+	}
+	want := []string{
+		"main.go: out := io.Writer(os.Stderr)",
+		"main.go: out = jsonLineWriter{w: os.Stderr}",
+		"main.go: log.SetOutput(logsafe.Writer{W: out})",
+	}
+	if !slices.Equal(found, want) {
+		t.Errorf("a log output beside logsafe.Writer:\n got %q\nwant %q", found, want)
 	}
 }
 
@@ -196,7 +116,7 @@ func TestCredentialFilteringStillApplies(t *testing.T) {
 // to an external client.
 func TestHashesAreNotOfferedToTheModel(t *testing.T) {
 	body := strings.Repeat("z", 40)
-	summary := safeArgsSummary("write_file",
+	summary := logsafe.ArgsSummary("write_file",
 		json.RawMessage(`{"path":"a.py","content":"`+body+`"}`))
 	h := hashBytes([]byte(body))[:12]
 	if !strings.Contains(summary, h) {
@@ -211,8 +131,8 @@ func TestHashesAreNotOfferedToTheModel(t *testing.T) {
 // --- the surface stays closed --------------------------------------------
 
 // Operator log call sites may not hand a body-bearing expression straight to
-// the logger; a new one must go through safeArgsSummary, safeTextSummary or
-// safeDiagnosticSummary. The test reads the files it lists and fails when one
+// the logger; a new one must go through logsafe.ArgsSummary, TextSummary or
+// DiagnosticSummary. The test reads the files it lists and fails when one
 // of the forbidden expressions is on a log.Printf or logEvent line, or up to
 // five lines below one. Walking back stops at a return, a "Warning:" text or
 // a NewEnvelope call: those build text the MODEL reads back (it authored the
@@ -229,7 +149,8 @@ func TestOperatorLogSitesCannotQuoteABody(t *testing.T) {
 	}
 	// Lines that are logger calls, or continuations of one.
 	for _, file := range append(append([]string{"gates.go",
-		"gates_asset_lint.go", "gates_background_jobs.go", "gates_command_line.go",
+		"internal/assetlint/lint.go", "internal/assetlint/findings.go", "gates_background_jobs.go", "internal/shellcmd/shell_wrapper.go",
+		"internal/shellcmd/destructive.go",
 		"gates_completion.go", "gates_edit_requests.go", "gates_ledger.go", "gates_plan.go",
 		"gates_syntax_rejection.go", "gates_workspace_alignment.go",
 		"guardrails.go",

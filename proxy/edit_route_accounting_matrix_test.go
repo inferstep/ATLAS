@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // The work completes only when a passing run covers the file's current bytes.
@@ -272,9 +274,9 @@ func TestCoverablePathsComeFromTheLedgerAndTheSessionMap(t *testing.T) {
 		}
 	}
 	ctx := NewAgentContext(dir, Tier2Medium)
-	observeDeliverable(ctx, "edited.py", []byte("A = 1\n"), ValidationKindSyntax, ValidationPassed, "edit_file")
-	observeDeliverable(ctx, "notes.md", []byte("A = 1\n"), ValidationKindNone, ValidationNotApplicable, "edit_file")
-	observeDeliverable(ctx, "gone.py", []byte("A = 1\n"), ValidationKindSyntax, ValidationPassed, "edit_file")
+	observeDeliverable(ctx, "edited.py", []byte("A = 1\n"), wire.ValidationKindSyntax, wire.ValidationPassed, "edit_file")
+	observeDeliverable(ctx, "notes.md", []byte("A = 1\n"), wire.ValidationKindNone, wire.ValidationNotApplicable, "edit_file")
+	observeDeliverable(ctx, "gone.py", []byte("A = 1\n"), wire.ValidationKindSyntax, wire.ValidationPassed, "edit_file")
 	tombstoneDeliverable(ctx, "gone.py", "deleted")
 	ctx.SessionWrites["written.py"] = true
 	ctx.SessionWrites["./edited.py"] = true
@@ -297,7 +299,7 @@ func TestCoverageAndDemandReadTheSameIdentity(t *testing.T) {
 	}
 	ctx := NewAgentContext(dir, Tier2Medium)
 	ctx.TaskContract = mustContract(t, dir, tuiStrictWork)
-	observeDeliverable(ctx, "mod.py", []byte(accountingSeed), ValidationKindSyntax, ValidationPassed, "edit_file")
+	observeDeliverable(ctx, "mod.py", []byte(accountingSeed), wire.ValidationKindSyntax, wire.ValidationPassed, "edit_file")
 	var covered []string
 	for _, p := range changedPathsForCoverage(ctx) {
 		if commandNamesPath("python3 mod.py", p) {

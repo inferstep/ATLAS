@@ -15,18 +15,15 @@
 //
 // Also here: the V3 candidate checks (a candidate worse than the content it
 // was made from, one that rewrote lines the edit left alone, one no longer in
-// the file's language), the asset lint's findings (assetLintFindings,
-// routeContractFindings, and assetLintFindingsFor, which runs the checks over
-// the project's files), the exit check for functions a run added that nothing
+// the file's language), the exit check for functions a run added that nothing
 // calls, invalidateTrackedValidation (what a shell effect does to the
 // deliverable ledger), readLedgerBytes (how the ledger reads a file),
 // recordLedgerEffect (where each resolved tool call reaches the ledger), and
 // the note that a mandatory check could not run.
 //
 // The other gates have files of their own: gates_completion.go (the claim
-// check on a `done` summary), gates_plan.go (plan adherence and the
-// plan-progress reminder) and gates_asset_lint.go (the rest of the asset
-// lint). The checks on what an edit or write tool was sent are in
+// check on a `done` summary) and gates_plan.go (plan adherence and the
+// plan-progress reminder), and the asset lint is internal/assetlint. The checks on what an edit or write tool was sent are in
 // gates_edit_requests.go, and the text of a syntax refusal is in
 // gates_syntax_rejection.go.
 //
@@ -53,6 +50,9 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
+	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
 // Structural gate for the edit and write paths. The V3 structural veto
@@ -182,7 +182,7 @@ func editIntroducesUnresolved(ctx *AgentContext, path, original, edited string) 
 // rather than treat the file as empty and count pre-existing unresolved
 // calls as newly introduced.
 func readOriginalForGate(path string) (string, bool) {
-	data, err := readRegularFile(path)
+	data, err := workspacefs.ReadRegularFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", true
@@ -277,7 +277,7 @@ func addSessionWrites(ctx *AgentContext, cleanTarget string, addContext func(p, 
 		if filepath.Clean(abs) == cleanTarget {
 			continue // pre-edit self; skip the read
 		}
-		if data, err := readRegularFile(abs); err == nil {
+		if data, err := workspacefs.ReadRegularFile(abs); err == nil {
 			addContext(abs, string(data))
 		}
 	}
@@ -353,7 +353,7 @@ var syntaxGateLanguages = map[string]syntaxLanguage{
 // ValidationUnknown is an invalid internal state here and is never emitted
 // intentionally.
 type checkOutcome struct {
-	Status ValidationStatus
+	Status wire.ValidationStatus
 	Detail string
 	// ProducerUnavailable says the check could not run because the thing that
 	// runs it was not reachable, as distinct from not being attempted.
@@ -367,7 +367,7 @@ type checkOutcome struct {
 }
 
 func (o checkOutcome) attempted() bool {
-	return o.Status == ValidationPassed || o.Status == ValidationFailed
+	return o.Status == wire.ValidationPassed || o.Status == wire.ValidationFailed
 }
 
 // fallbackSyntaxOutcome keeps the two checks as named observations rather than
@@ -396,27 +396,27 @@ type fallbackSyntaxOutcome struct {
 func (f fallbackSyntaxOutcome) aggregate() checkOutcome {
 	checks := []checkOutcome{f.WholeFile, f.Embedded}
 	for _, c := range checks {
-		if c.Status == ValidationFailed {
+		if c.Status == wire.ValidationFailed {
 			return c
 		}
 	}
 	for _, c := range checks {
-		if c.Status == ValidationUnknown {
-			return checkOutcome{Status: ValidationUnknown, Detail: c.Detail}
+		if c.Status == wire.ValidationUnknown {
+			return checkOutcome{Status: wire.ValidationUnknown, Detail: c.Detail}
 		}
 	}
 	for _, c := range checks {
-		if c.Status == ValidationNotRun {
-			return checkOutcome{Status: ValidationNotRun, Detail: c.Detail,
+		if c.Status == wire.ValidationNotRun {
+			return checkOutcome{Status: wire.ValidationNotRun, Detail: c.Detail,
 				ProducerUnavailable: c.ProducerUnavailable}
 		}
 	}
 	for _, c := range checks {
-		if c.Status == ValidationPassed {
-			return checkOutcome{Status: ValidationPassed}
+		if c.Status == wire.ValidationPassed {
+			return checkOutcome{Status: wire.ValidationPassed}
 		}
 	}
-	return checkOutcome{Status: ValidationNotApplicable}
+	return checkOutcome{Status: wire.ValidationNotApplicable}
 }
 
 // baselineAllowsRepair reports whether a DEMONSTRATED failure on the proposed
@@ -431,7 +431,7 @@ func (f fallbackSyntaxOutcome) aggregate() checkOutcome {
 // as "already broken" would let an unverifiable baseline unlock a regression --
 // the exact direction this gate must not fail in.
 func baselineAllowsRepair(baseline checkOutcome) bool {
-	return baseline.Status == ValidationFailed
+	return baseline.Status == wire.ValidationFailed
 }
 
 // checkFallbackSyntax returns ("", true) when `content` is safe to write
@@ -446,7 +446,7 @@ func baselineAllowsRepair(baseline checkOutcome) bool {
 // markup only, so a stray `)` in embedded JavaScript passes it.
 func checkFallbackSyntax(ctx *AgentContext, path, content string) (string, bool) {
 	agg := fallbackSyntaxOutcomeFor(ctx, path, content).aggregate()
-	return agg.Detail, agg.Status != ValidationFailed
+	return agg.Detail, agg.Status != wire.ValidationFailed
 }
 
 // sandboxSyntaxRequest builds the /syntax-check body, carrying the filename
@@ -493,20 +493,24 @@ func workspaceRelativeName(ctx *AgentContext, path string) (string, bool) {
 	return filepath.ToSlash(rel), true
 }
 
+// requestNotBuilt is the detail of a check that could not build its request.
+const requestNotBuilt = "request could not be built"
+
 // sandboxSyntaxOutcome is the whole-file half of checkFallbackSyntax: the
 // sandbox's /syntax-check in the file's own language. APPLICABILITY IS EVALUATED
 // FIRST: the extension decides whether this check applies at all, before any
 // service availability question, so a missing sandbox cannot mask genuinely
 // non-applicable content. That changes the structured evidence only -- the
 // allow/refuse decision is identical either way.
+
 func sandboxSyntaxOutcome(ctx *AgentContext, path, content string) checkOutcome {
 	meta, gated := syntaxGateLanguages[strings.ToLower(filepath.Ext(path))]
 	if !gated {
-		return checkOutcome{Status: ValidationNotApplicable}
+		return checkOutcome{Status: wire.ValidationNotApplicable}
 	}
 	lang := meta.Language
 	if ctx == nil || ctx.SandboxURL == "" {
-		return checkOutcome{Status: ValidationNotRun, Detail: "no sandbox configured", ProducerUnavailable: true}
+		return checkOutcome{Status: wire.ValidationNotRun, Detail: "no sandbox configured", ProducerUnavailable: true}
 	}
 	// The path travels too: the sandbox scopes its Jinja-template check to
 	// files that are actually templates (a templates/ directory, a .jinja
@@ -527,12 +531,12 @@ func sandboxSyntaxOutcome(ctx *AgentContext, path, content string) checkOutcome 
 	// pre-existing behaviour, which only forgoes path-scoped checks).
 	body, err := json.Marshal(sandboxSyntaxRequest(ctx, path, lang, content))
 	if err != nil {
-		return checkOutcome{Status: ValidationNotRun, Detail: "request could not be built"}
+		return checkOutcome{Status: wire.ValidationNotRun, Detail: requestNotBuilt}
 	}
 	client := &http.Client{Timeout: 15 * time.Second}
 	req, err := http.NewRequest("POST", ctx.SandboxURL+"/syntax-check", bytes.NewReader(body))
 	if err != nil {
-		return checkOutcome{Status: ValidationNotRun, Detail: "request could not be built"}
+		return checkOutcome{Status: wire.ValidationNotRun, Detail: requestNotBuilt}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if serviceToken != "" {
@@ -540,11 +544,11 @@ func sandboxSyntaxOutcome(ctx *AgentContext, path, content string) checkOutcome 
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return checkOutcome{Status: ValidationNotRun, Detail: "sandbox unreachable", ProducerUnavailable: true}
+		return checkOutcome{Status: wire.ValidationNotRun, Detail: "sandbox unreachable", ProducerUnavailable: true}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return checkOutcome{Status: ValidationNotRun, Detail: "sandbox returned a non-200", ProducerUnavailable: true}
+		return checkOutcome{Status: wire.ValidationNotRun, Detail: "sandbox returned a non-200", ProducerUnavailable: true}
 	}
 	var out struct {
 		Valid   bool     `json:"valid"`
@@ -553,22 +557,22 @@ func sandboxSyntaxOutcome(ctx *AgentContext, path, content string) checkOutcome 
 		Outcome string   `json:"outcome"`
 	}
 	if json.NewDecoder(serviceAnswer(resp.Body)).Decode(&out) != nil {
-		return checkOutcome{Status: ValidationNotRun, Detail: "sandbox response was undecodable", ProducerUnavailable: true}
+		return checkOutcome{Status: wire.ValidationNotRun, Detail: "sandbox response was undecodable", ProducerUnavailable: true}
 	}
 	// The sandbox answered, and its checker was stopped before a verdict (a
 	// wall-clock or memory ceiling, or it never started). Not a pass, not a
 	// syntax error, and not the service being down.
 	if out.Status == "not_run" {
-		return checkOutcome{Status: ValidationNotRun, Detail: "the syntax checker stopped before a verdict (" + out.Outcome + ")"}
+		return checkOutcome{Status: wire.ValidationNotRun, Detail: "the syntax checker stopped before a verdict (" + out.Outcome + ")"}
 	}
 	if out.Valid {
-		return checkOutcome{Status: ValidationPassed}
+		return checkOutcome{Status: wire.ValidationPassed}
 	}
 	first := "syntax error"
 	if len(out.Errors) > 0 {
 		first = out.Errors[0]
 	}
-	return checkOutcome{Status: ValidationFailed, Detail: first}
+	return checkOutcome{Status: wire.ValidationFailed, Detail: first}
 }
 
 // ---------------------------------------------------------------------------
@@ -633,7 +637,7 @@ type embeddedScriptFinding struct {
 // already has the JavaScript parsed.
 func checkEmbeddedScript(ctx *AgentContext, path, content, previous string) (string, bool) {
 	o := embeddedScriptOutcome(ctx, path, content, previous)
-	return o.Detail, o.Status != ValidationFailed
+	return o.Detail, o.Status != wire.ValidationFailed
 }
 
 // embeddedScriptOutcome is the structured core. APPLICABILITY FIRST: the
@@ -642,24 +646,24 @@ func checkEmbeddedScript(ctx *AgentContext, path, content, previous string) (str
 // needed checking.
 func embeddedScriptOutcome(ctx *AgentContext, path, content, previous string) checkOutcome {
 	if !embeddedScriptExts[strings.ToLower(filepath.Ext(path))] {
-		return checkOutcome{Status: ValidationNotApplicable}
+		return checkOutcome{Status: wire.ValidationNotApplicable}
 	}
 	// Cheap local pre-filter: no <script/<style anywhere means nothing to
 	// check and no network call. Most gated writes stop here.
 	low := strings.ToLower(content)
 	if !strings.Contains(low, "<script") && !strings.Contains(low, "<style") {
-		return checkOutcome{Status: ValidationNotApplicable}
+		return checkOutcome{Status: wire.ValidationNotApplicable}
 	}
 	if ctx == nil {
-		return checkOutcome{Status: ValidationNotRun, Detail: "no agent context"}
+		return checkOutcome{Status: wire.ValidationNotRun, Detail: "no agent context"}
 	}
 	if ctx.V3URL == "" {
-		return checkOutcome{Status: ValidationNotRun, Detail: "no embedded-script service configured", ProducerUnavailable: true}
+		return checkOutcome{Status: wire.ValidationNotRun, Detail: "no embedded-script service configured", ProducerUnavailable: true}
 	}
 	body, err := json.Marshal(map[string]string{
 		"path": path, "source": content, "previous": previous})
 	if err != nil {
-		return checkOutcome{Status: ValidationNotRun, Detail: "request could not be built"}
+		return checkOutcome{Status: wire.ValidationNotRun, Detail: requestNotBuilt}
 	}
 	base := ctx.Ctx
 	if base == nil {
@@ -670,7 +674,7 @@ func embeddedScriptOutcome(ctx *AgentContext, path, content, previous string) ch
 	req, err := http.NewRequestWithContext(reqCtx, "POST",
 		ctx.V3URL+"/internal/embedded_script_check", bytes.NewReader(body))
 	if err != nil {
-		return checkOutcome{Status: ValidationNotRun, Detail: "request could not be built"}
+		return checkOutcome{Status: wire.ValidationNotRun, Detail: requestNotBuilt}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if serviceToken != "" {
@@ -679,28 +683,28 @@ func embeddedScriptOutcome(ctx *AgentContext, path, content, previous string) ch
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		noteCheckServiceUnavailable(ctx, "embedded-script", "service unreachable")
-		return checkOutcome{Status: ValidationNotRun, Detail: "service unreachable"}
+		return checkOutcome{Status: wire.ValidationNotRun, Detail: "service unreachable"}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		noteCheckServiceUnavailable(ctx, "embedded-script", fmt.Sprintf("service returned %d", resp.StatusCode))
-		return checkOutcome{Status: ValidationNotRun, Detail: "service returned a non-200"}
+		return checkOutcome{Status: wire.ValidationNotRun, Detail: "service returned a non-200"}
 	}
 	var out struct {
 		OK       bool                    `json:"ok"`
 		Findings []embeddedScriptFinding `json:"findings"`
 	}
 	if json.NewDecoder(serviceAnswer(resp.Body)).Decode(&out) != nil {
-		return checkOutcome{Status: ValidationNotRun, Detail: "response was undecodable"}
+		return checkOutcome{Status: wire.ValidationNotRun, Detail: "response was undecodable"}
 	}
 	if !out.OK {
-		return checkOutcome{Status: ValidationNotRun, Detail: "grammar missing or content not analysable"}
+		return checkOutcome{Status: wire.ValidationNotRun, Detail: "grammar missing or content not analysable"}
 	}
 	if len(out.Findings) == 0 {
-		return checkOutcome{Status: ValidationPassed}
+		return checkOutcome{Status: wire.ValidationPassed}
 	}
 	return checkOutcome{
-		Status: ValidationFailed,
+		Status: wire.ValidationFailed,
 		Detail: embeddedScriptErrPrefix + formatEmbeddedScriptRejection(path, out.Findings[0]),
 	}
 }
@@ -711,7 +715,7 @@ func embeddedScriptOutcome(ctx *AgentContext, path, content, previous string) ch
 // observation is then recorded from LOCAL applicability only.
 func fallbackSyntaxOutcomeFor(ctx *AgentContext, path, content string) fallbackSyntaxOutcome {
 	whole := sandboxSyntaxOutcome(ctx, path, content)
-	if whole.Status == ValidationFailed {
+	if whole.Status == wire.ValidationFailed {
 		return fallbackSyntaxOutcome{WholeFile: whole, Embedded: embeddedLocalApplicability(path, content)}
 	}
 	return fallbackSyntaxOutcome{WholeFile: whole, Embedded: embeddedScriptOutcome(ctx, path, content, "")}
@@ -721,13 +725,13 @@ func fallbackSyntaxOutcomeFor(ctx *AgentContext, path, content string) fallbackS
 // touching the service, for the skipped-after-failure case.
 func embeddedLocalApplicability(path, content string) checkOutcome {
 	if !embeddedScriptExts[strings.ToLower(filepath.Ext(path))] {
-		return checkOutcome{Status: ValidationNotApplicable}
+		return checkOutcome{Status: wire.ValidationNotApplicable}
 	}
 	low := strings.ToLower(content)
 	if !strings.Contains(low, "<script") && !strings.Contains(low, "<style") {
-		return checkOutcome{Status: ValidationNotApplicable}
+		return checkOutcome{Status: wire.ValidationNotApplicable}
 	}
-	return checkOutcome{Status: ValidationNotRun, Detail: "skipped after decisive whole-file failure"}
+	return checkOutcome{Status: wire.ValidationNotRun, Detail: "skipped after decisive whole-file failure"}
 }
 
 // embeddedScriptGate applies the healthy->broken rule the other write gates
@@ -766,156 +770,6 @@ func v3CandidateRegression(ctx *AgentContext, path, baseline, candidate string) 
 		return fmt.Sprintf("it introduces unresolved call(s) %v", logPaths(introduced))
 	}
 	return ""
-}
-
-// assetLintFindings is every finding, advisory and contract alike, in one
-// list. The mutation-time note and the exit gate ask the two halves
-// separately; this keeps the single-list callers unchanged.
-//
-// It walks the project under workingDir, and returns nil for a project too
-// large to judge.
-func assetLintFindings(workingDir string) []string {
-	files, ok := assetLintFiles(workingDir)
-	if !ok {
-		return nil
-	}
-	advisory, contract := assetLintFindingsFor(workingDir, files)
-	return append(advisory, contract...)
-}
-
-// routeContractFindings is only the findings that describe a page which
-// cannot work: a form action or fetch() target that no declared route serves.
-// These are not advice. A user clicking that form gets a 404 whatever else the
-// project does right, so the exit gate asks for this list by itself.
-func routeContractFindings(workingDir string) []string {
-	files, ok := assetLintFiles(workingDir)
-	if !ok {
-		return nil
-	}
-	_, contract := assetLintFindingsFor(workingDir, files)
-	return contract
-}
-
-// assetLintFindingsFor separates what is advice (an orphaned template, a
-// dangling href) from what is a broken contract between two files the model
-// wrote (a submit target with no handler).
-func assetLintFindingsFor(workingDir string, files []lintFile) (advisory, contract []string) {
-	var findings []string
-	allOther := func(self string) string {
-		var b strings.Builder
-		for _, f := range files {
-			if f.rel != self {
-				b.WriteString(f.content)
-				b.WriteByte('\n')
-			}
-		}
-		return b.String()
-	}
-	htmlCount, routeSet, routeRaw := pagesAndRoutes(files)
-
-	for _, f := range files {
-		switch {
-		case strings.HasPrefix(f.rel, "templates/"):
-			findings = append(findings, orphanedTemplateFindings(f, allOther)...)
-		case strings.HasPrefix(f.rel, "static/"):
-			findings = append(findings, orphanedStaticFindings(f, allOther)...)
-		default:
-			findings = append(findings, orphanedFlatFindings(f, allOther, htmlCount)...)
-		}
-
-		// Referenced-but-missing templates: render_template('x') in .py,
-		// {% extends/include %} in templates. The snake fix session
-		// shipped an errorhandler rendering templates/404.html that did
-		// not exist — every 404 became a 500.
-		ext := strings.ToLower(filepath.Ext(f.rel))
-		tmplRefs := templateReferences(f, ext)
-		for _, name := range tmplRefs {
-			if strings.Contains(name, "{{") {
-				continue
-			}
-			rel := filepath.FromSlash(name)
-			// A name escaping templates/ is dangling by definition (Jinja
-			// loaders refuse traversal) — report it WITHOUT the Stat probe,
-			// which stays contained to workingDir.
-			dangling := !filepath.IsLocal(rel)
-			if !dangling {
-				_, err := os.Stat(filepath.Join(workingDir, "templates", rel))
-				dangling = err != nil
-			}
-			if dangling {
-				findings = append(findings, fmt.Sprintf(
-					"%s references template %q, but templates/%s does not exist.",
-					f.rel, name, name))
-			}
-		}
-
-		// Route-contract check: fetch()/form-action URLs must correspond
-		// to a declared Flask route. Mini-bench t01 generated a JS
-		// frontend calling REST endpoints in a style the backend half
-		// implemented differently — page loads, halves can't talk.
-		if len(routeSet) > 0 && (ext == ".js" || ext == ".html" || ext == ".htm") {
-			contract = append(contract, unservedRouteFindings(f, routeSet, routeRaw)...)
-		}
-	}
-
-	// Dangling local references: src/href/url_for pointing at files that
-	// don't exist in the workspace.
-	seenDangling := map[string]bool{}
-	for _, f := range files {
-		for _, m := range reSrcHref.FindAllStringSubmatch(f.content, -1) {
-			target := m[1]
-			if strings.Contains(target, "://") || strings.HasPrefix(target, "//") ||
-				strings.HasPrefix(target, "#") || strings.HasPrefix(target, "data:") ||
-				strings.HasPrefix(target, "mailto:") || strings.Contains(target, "{{") ||
-				strings.Contains(target, "{%") {
-				continue
-			}
-			target = strings.SplitN(target, "?", 2)[0]
-			target = strings.SplitN(target, "#", 2)[0]
-			if target == "" || target == "/" {
-				continue
-			}
-			rel := filepath.FromSlash(strings.TrimPrefix(target, "/"))
-			// A target escaping the workspace can't be served from it —
-			// report as dangling without the Stat probe (contained to
-			// workingDir).
-			dangling := !filepath.IsLocal(rel)
-			if !dangling {
-				_, err := os.Stat(filepath.Join(workingDir, rel))
-				dangling = err != nil
-			}
-			if dangling {
-				key := f.rel + "→" + target
-				if !seenDangling[key] {
-					seenDangling[key] = true
-					findings = append(findings, fmt.Sprintf(
-						"%s references %q, which does not exist in the workspace.", f.rel, target))
-				}
-			}
-		}
-		for _, m := range reURLFor.FindAllStringSubmatch(f.content, -1) {
-			rel := filepath.FromSlash(m[1])
-			// A filename escaping static/ 404s at runtime (Flask refuses
-			// traversal) — report as dangling without the Stat probe.
-			dangling := !filepath.IsLocal(rel)
-			if !dangling {
-				_, err := os.Stat(filepath.Join(workingDir, filepath.Join("static", rel)))
-				dangling = err != nil
-			}
-			if dangling {
-				key := f.rel + "→" + m[1]
-				if !seenDangling[key] {
-					seenDangling[key] = true
-					findings = append(findings, fmt.Sprintf(
-						"%s references url_for('static', filename=%q), but static/%s does not exist.",
-						f.rel, m[1], m[1]))
-				}
-			}
-		}
-	}
-
-	sort.Strings(findings)
-	return findings, contract
 }
 
 // v3RewroteBeyondTheEdit reports whether a V3 candidate changed text the
@@ -1136,7 +990,7 @@ func invalidateTrackedValidation(ctx *AgentContext) {
 			if d := ctx.Ledger[k]; d != nil {
 				d.CurrentHash = ""
 				d.ValidatedHash = ""
-				d.ValidationStatus = ValidationUnknown
+				d.ValidationStatus = wire.ValidationUnknown
 			}
 			ctx.LedgerMu.Unlock()
 			continue
@@ -1149,8 +1003,8 @@ func invalidateTrackedValidation(ctx *AgentContext) {
 			d.CurrentSize = len(b)
 			d.Generation++
 			d.ValidatedHash = ""
-			d.ValidationStatus = ValidationUnknown
-			d.ValidationKind = ValidationKindUnknown
+			d.ValidationStatus = wire.ValidationUnknown
+			d.ValidationKind = wire.ValidationKindUnknown
 		}
 		ctx.LedgerMu.Unlock()
 	}
@@ -1164,7 +1018,7 @@ func readLedgerBytes(key string) ([]byte, bool) {
 	if err != nil || fi.IsDir() || fi.Size() > maxLedgerReadBytes {
 		return nil, false
 	}
-	b, err := readRegularFile(key)
+	b, err := workspacefs.ReadRegularFile(key)
 	if err != nil {
 		return nil, false
 	}
@@ -1178,8 +1032,8 @@ func readLedgerBytes(key string) ([]byte, bool) {
 //
 // A path that cannot be read gets an entry only if it already had one, and
 // that entry's current hash is cleared so CurrentValidation fails closed.
-func observePathFromDisk(ctx *AgentContext, path string, kind ValidationKind,
-	status ValidationStatus, detail string) {
+func observePathFromDisk(ctx *AgentContext, path string, kind wire.ValidationKind,
+	status wire.ValidationStatus, detail string) {
 	key := ledgerKey(ctx, path)
 	b, ok := readLedgerBytes(key)
 	if !ok {
@@ -1187,8 +1041,8 @@ func observePathFromDisk(ctx *AgentContext, path string, kind ValidationKind,
 		if d := ctx.Ledger[key]; d != nil {
 			d.CurrentHash = ""
 			d.ValidatedHash = ""
-			d.ValidationStatus = ValidationUnknown
-			d.ValidationKind = ValidationKindUnknown
+			d.ValidationStatus = wire.ValidationUnknown
+			d.ValidationKind = wire.ValidationKindUnknown
 		}
 		ctx.LedgerMu.Unlock()
 		return
@@ -1203,7 +1057,7 @@ func observePathFromDisk(ctx *AgentContext, path string, kind ValidationKind,
 // It observes; it decides nothing. It never inspects Success: a tool's own
 // MutationStatus/ValidationStatus and the filesystem are the only inputs, and
 // where they disagree the filesystem wins.
-func recordLedgerEffect(name string, args json.RawMessage, ctx *AgentContext, result *ToolResult) {
+func recordLedgerEffect(name string, args json.RawMessage, ctx *AgentContext, result *wire.ToolResult) {
 	if ctx == nil || result == nil || ctx.WorkingDir == "" {
 		return
 	}
@@ -1216,7 +1070,7 @@ func recordLedgerEffect(name string, args json.RawMessage, ctx *AgentContext, re
 	//
 	// Unknown, unobserved and failed all fall through and are read from disk,
 	// because each of them is compatible with partial bytes having landed.
-	if result.MutationStatus == MutationNone || result.MutationStatus == MutationRefused {
+	if result.MutationStatus == wire.MutationNone || result.MutationStatus == wire.MutationRefused {
 		return
 	}
 
@@ -1230,54 +1084,10 @@ func recordLedgerEffect(name string, args json.RawMessage, ctx *AgentContext, re
 		}
 
 	case "delete_file":
-		p := ledgerArgPath(args, "path")
-		if p == "" {
-			return
-		}
-		// A refused or failed delete leaves the file in place. Tombstone on
-		// the file being GONE, never on the call having been made.
-		if _, err := os.Stat(ledgerKey(ctx, p)); err == nil {
-			observePathFromDisk(ctx, p, ValidationKindUnknown, ValidationUnknown,
-				"delete_file did not remove the file")
-			return
-		}
-		// A path the ledger never observed and that the tool did not report
-		// removing is not this session's deliverable; inventing a tombstone
-		// for it would fabricate history from a failed call.
-		if ledgerTracks(ctx, p) || result.MutationStatus.Applied() {
-			tombstoneDeliverable(ctx, p, "deleted")
-			// The one place that both confirms the absence and writes the
-			// tombstone is the only place that can promote an approved
-			// attempt into a fulfilled deletion. It re-checks every fact.
-			promoteFulfilledDeletion(ctx, ledgerKey(ctx, p))
-		}
+		recordLedgerDeletion(ctx, args, result)
 
 	case "move_file":
-		src := ledgerArgPath(args, "source")
-		dst := ledgerArgPath(args, "destination")
-		// move_file accepts a directory as the destination, so take the path
-		// the tool actually resolved when it reported one.
-		var out MoveFileOutput
-		if len(result.Data) > 0 && json.Unmarshal(result.Data, &out) == nil && out.Destination != "" {
-			dst = out.Destination
-		}
-		if dst != "" {
-			// Fresh observation, unknown verdict: a syntax pass earned under
-			// the old name says nothing about this path, and inheriting it
-			// would let a rename manufacture evidence.
-			observePathFromDisk(ctx, dst, ValidationKindUnknown, ValidationUnknown, "move_file destination")
-		}
-		if src == "" {
-			return
-		}
-		if _, err := os.Stat(ledgerKey(ctx, src)); err == nil {
-			observePathFromDisk(ctx, src, ValidationKindUnknown, ValidationUnknown,
-				"move_file left the source in place")
-			return
-		}
-		if ledgerTracks(ctx, src) || result.MutationStatus.Applied() {
-			tombstoneDeliverable(ctx, src, "moved:"+ledgerKey(ctx, dst))
-		}
+		recordLedgerMove(ctx, args, result)
 
 	// Shell effects. An arbitrary command may have rewritten anything, so
 	// every tracked verdict is re-proved by rehash or dropped.
@@ -1292,9 +1102,63 @@ func recordLedgerEffect(name string, args json.RawMessage, ctx *AgentContext, re
 	}
 }
 
+// recordLedgerDeletion records what a delete_file call left behind.
+func recordLedgerDeletion(ctx *AgentContext, args json.RawMessage, result *wire.ToolResult) {
+	p := ledgerArgPath(args, "path")
+	if p == "" {
+		return
+	}
+	// A refused or failed delete leaves the file in place. Tombstone on
+	// the file being GONE, never on the call having been made.
+	if _, err := os.Stat(ledgerKey(ctx, p)); err == nil {
+		observePathFromDisk(ctx, p, wire.ValidationKindUnknown, wire.ValidationUnknown,
+			"delete_file did not remove the file")
+		return
+	}
+	// A path the ledger never observed and that the tool did not report
+	// removing is not this session's deliverable; inventing a tombstone
+	// for it would fabricate history from a failed call.
+	if ledgerTracks(ctx, p) || result.MutationStatus.Applied() {
+		tombstoneDeliverable(ctx, p, "deleted")
+		// The one place that both confirms the absence and writes the
+		// tombstone is the only place that can promote an approved
+		// attempt into a fulfilled deletion. It re-checks every fact.
+		promoteFulfilledDeletion(ctx, ledgerKey(ctx, p))
+	}
+}
+
+// recordLedgerMove records what a move_file call left at both of its paths.
+func recordLedgerMove(ctx *AgentContext, args json.RawMessage, result *wire.ToolResult) {
+	src := ledgerArgPath(args, "source")
+	dst := ledgerArgPath(args, "destination")
+	// move_file accepts a directory as the destination, so take the path
+	// the tool actually resolved when it reported one.
+	var out wire.MoveFileOutput
+	if len(result.Data) > 0 && json.Unmarshal(result.Data, &out) == nil && out.Destination != "" {
+		dst = out.Destination
+	}
+	if dst != "" {
+		// Fresh observation, unknown verdict: a syntax pass earned under
+		// the old name says nothing about this path, and inheriting it
+		// would let a rename manufacture evidence.
+		observePathFromDisk(ctx, dst, wire.ValidationKindUnknown, wire.ValidationUnknown, "move_file destination")
+	}
+	if src == "" {
+		return
+	}
+	if _, err := os.Stat(ledgerKey(ctx, src)); err == nil {
+		observePathFromDisk(ctx, src, wire.ValidationKindUnknown, wire.ValidationUnknown,
+			"move_file left the source in place")
+		return
+	}
+	if ledgerTracks(ctx, src) || result.MutationStatus.Applied() {
+		tombstoneDeliverable(ctx, src, "moved:"+ledgerKey(ctx, dst))
+	}
+}
+
 // recordBackgroundStart records a run_background call: every tracked verdict
 // is re-proved, and the job it may have started is held as a workspace hazard.
-func recordBackgroundStart(ctx *AgentContext, args json.RawMessage, result *ToolResult) {
+func recordBackgroundStart(ctx *AgentContext, args json.RawMessage, result *wire.ToolResult) {
 	// The hazard has to describe work that may exist, not attempts that
 	// were made. A call the tool refused before it could dispatch created
 	// nothing to be hazardous about; a dispatch whose outcome is unknown
@@ -1303,7 +1167,7 @@ func recordBackgroundStart(ctx *AgentContext, args json.RawMessage, result *Tool
 		return
 	}
 	invalidateTrackedValidation(ctx)
-	var out RunBackgroundOutput
+	var out wire.RunBackgroundOutput
 	decoded := len(result.Data) > 0 && json.Unmarshal(result.Data, &out) == nil
 	switch {
 	case decoded && out.JobID != "" && out.Running:
@@ -1323,12 +1187,12 @@ func recordBackgroundStart(ctx *AgentContext, args json.RawMessage, result *Tool
 
 // recordBackgroundStop records a stop_background call: every tracked verdict
 // is re-proved, and the job's hazard is lowered only on a reaped exit code.
-func recordBackgroundStop(ctx *AgentContext, result *ToolResult) {
+func recordBackgroundStop(ctx *AgentContext, result *wire.ToolResult) {
 	invalidateTrackedValidation(ctx)
 	// A reaped exit code is the only proof the writer is gone. SIGTERM
 	// sent, SIGKILL sent, and "stop returned" are all compatible with a
 	// process still flushing.
-	var out StopBackgroundOutput
+	var out wire.StopBackgroundOutput
 	if len(result.Data) > 0 && json.Unmarshal(result.Data, &out) == nil && out.ExitCode != nil {
 		clearWorkspaceHazard(ctx, out.JobID)
 	}
@@ -1345,7 +1209,7 @@ const hazardUnidentifiedJob = "\x00unidentified-background-job"
 // before it dispatches. A refusal here is provable: no request was sent, so
 // no process exists and no hazard is owed.
 func backgroundStartDispatched(ctx *AgentContext, args json.RawMessage) bool {
-	var in RunBackgroundInput
+	var in wire.RunBackgroundInput
 	if json.Unmarshal(args, &in) != nil {
 		return false
 	}

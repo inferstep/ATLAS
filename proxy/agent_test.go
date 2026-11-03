@@ -17,18 +17,22 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/assetlint"
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 func TestTrimMessagesPinsRecentUser(t *testing.T) {
 	// system + user instruction + 10 tool exchanges. keepLast=8 means the
 	// raw tail starts at index 3 — the user instruction (index 1) is gone.
 	// Pin must restore it.
-	msgs := []AgentMessage{{Role: "system", Content: "sys"}}
-	msgs = append(msgs, AgentMessage{Role: "user", Content: "fix the bug"})
+	msgs := []wire.AgentMessage{{Role: "system", Content: "sys"}}
+	msgs = append(msgs, wire.AgentMessage{Role: "user", Content: "fix the bug"})
 	for i := 0; i < 10; i++ {
 		msgs = append(msgs,
-			AgentMessage{Role: "assistant", Content: "tool call"},
-			AgentMessage{Role: "tool", Content: "result"})
+			wire.AgentMessage{Role: "assistant", Content: "tool call"},
+			wire.AgentMessage{Role: "tool", Content: "result"})
 	}
 
 	got := trimMessages(msgs, 8)
@@ -47,7 +51,7 @@ func TestTrimMessagesPinsRecentUser(t *testing.T) {
 func TestTrimMessagesNoDuplicateWhenPinInWindow(t *testing.T) {
 	// Short conversation: user instruction is already in the tail window.
 	// Don't duplicate it.
-	msgs := []AgentMessage{
+	msgs := []wire.AgentMessage{
 		{Role: "system", Content: "sys"},
 		{Role: "user", Content: "u1"},
 		{Role: "assistant", Content: "a1"},
@@ -81,7 +85,7 @@ func TestTrimMessagesNoDuplicateWhenPinInWindow(t *testing.T) {
 
 func TestTrimMessagesPinAlreadyInTailNoDuplicate(t *testing.T) {
 	// User msg is inside tail window — function shouldn't pin (would dup).
-	msgs := []AgentMessage{
+	msgs := []wire.AgentMessage{
 		{Role: "system", Content: "sys"},
 		{Role: "assistant", Content: "old1"},
 		{Role: "tool", Content: "old2"},
@@ -112,7 +116,7 @@ func TestTrimMessagesPinAlreadyInTailNoDuplicate(t *testing.T) {
 }
 
 func TestTrimMessagesShortConversationUnchanged(t *testing.T) {
-	msgs := []AgentMessage{
+	msgs := []wire.AgentMessage{
 		{Role: "system", Content: "sys"},
 		{Role: "user", Content: "hi"},
 		{Role: "assistant", Content: "hello"},
@@ -127,7 +131,7 @@ func TestTrimMessagesPriorHistoryDoesNotConfusePin(t *testing.T) {
 	// Reproduces the bug: PriorHistory put a prior-turn user msg at idx 1.
 	// Hardcoded ctx.Messages[1] would have pinned the WRONG user message.
 	// trimMessages scans backwards, so it picks the current-turn user.
-	msgs := []AgentMessage{
+	msgs := []wire.AgentMessage{
 		{Role: "system", Content: "sys"},
 		{Role: "user", Content: "PRIOR turn ask"},        // from PriorHistory
 		{Role: "assistant", Content: "PRIOR turn reply"}, // from PriorHistory
@@ -135,8 +139,8 @@ func TestTrimMessagesPriorHistoryDoesNotConfusePin(t *testing.T) {
 	}
 	for i := 0; i < 10; i++ {
 		msgs = append(msgs,
-			AgentMessage{Role: "assistant", Content: "tool call"},
-			AgentMessage{Role: "tool", Content: "result"})
+			wire.AgentMessage{Role: "assistant", Content: "tool call"},
+			wire.AgentMessage{Role: "tool", Content: "result"})
 	}
 
 	got := trimMessages(msgs, 8)
@@ -330,16 +334,16 @@ func TestBudgetedKeepLastCountsPinnedFile(t *testing.T) {
 	t.Setenv("ATLAS_PARALLEL_SLOTS", "4")
 	// Budget ≈ 32768 - 8192 - 2048 - 4096 = 18432 tokens.
 	bigFile := strings.Repeat("x", 40000) // ~10k tokens, pinned read_file
-	msgs := []AgentMessage{{Role: "system", Content: "sys"}}
-	msgs = append(msgs, AgentMessage{Role: "user", Content: "task"})
-	msgs = append(msgs, AgentMessage{Role: "tool", ToolName: "read_file", Content: bigFile})
+	msgs := []wire.AgentMessage{{Role: "system", Content: "sys"}}
+	msgs = append(msgs, wire.AgentMessage{Role: "user", Content: "task"})
+	msgs = append(msgs, wire.AgentMessage{Role: "tool", ToolName: "read_file", Content: bigFile})
 	// 40 tool exchanges of ~1k tokens each — far beyond budget together
 	// with the pinned file.
 	chunk := strings.Repeat("y", 4000)
 	for i := 0; i < 40; i++ {
 		msgs = append(msgs,
-			AgentMessage{Role: "assistant", Content: "call"},
-			AgentMessage{Role: "tool", Content: chunk})
+			wire.AgentMessage{Role: "assistant", Content: "call"},
+			wire.AgentMessage{Role: "tool", Content: chunk})
 	}
 
 	keep := budgetedKeepLast(msgs)
@@ -740,9 +744,13 @@ func TestARepeatingProseTailIsALoop(t *testing.T) {
 
 func llmTestCtx(url string) *AgentContext {
 	return &AgentContext{
-		InferenceURL: url,
-		Ctx:          context.Background(),
-		Messages:     []AgentMessage{{Role: "user", Content: "hi"}},
+		runSetup: runSetup{
+			InferenceURL: url,
+			Ctx:          context.Background(),
+		},
+		modelExchange: modelExchange{
+			Messages: []wire.AgentMessage{{Role: "user", Content: "hi"}},
+		},
 	}
 }
 
@@ -965,15 +973,17 @@ func TestBuildPlanReminderNoPlan(t *testing.T) {
 
 func TestBuildPlanReminderRendersProgress(t *testing.T) {
 	ctx := &AgentContext{
-		Plan: &Plan{
-			Steps: []PlanStep{
-				{ID: "s1", Action: "read_file", Target: "app.py"},
-				{ID: "s2", Action: "structural_edit", Target: "templates/dashboard.html"},
-				{ID: "s3", Action: "run_command", Target: "curl localhost:5000/dashboard"},
+		planProgress: planProgress{
+			Plan: &wire.Plan{
+				Steps: []wire.PlanStep{
+					{ID: "s1", Action: "read_file", Target: "app.py"},
+					{ID: "s2", Action: "structural_edit", Target: "templates/dashboard.html"},
+					{ID: "s3", Action: "run_command", Target: "curl localhost:5000/dashboard"},
+				},
+				VerifyStep: "s3",
 			},
-			VerifyStep: "s3",
+			PlanStepsSatisfied: []bool{true, false, false},
 		},
-		PlanStepsSatisfied: []bool{true, false, false},
 	}
 	got := buildPlanReminder(ctx)
 	if got == "" {
@@ -988,11 +998,13 @@ func TestBuildPlanReminderRendersProgress(t *testing.T) {
 
 func TestBuildPlanReminderAllSatisfied(t *testing.T) {
 	ctx := &AgentContext{
-		Plan: &Plan{
-			Steps:      []PlanStep{{ID: "s1"}, {ID: "s2"}},
-			VerifyStep: "s2",
+		planProgress: planProgress{
+			Plan: &wire.Plan{
+				Steps:      []wire.PlanStep{{ID: "s1"}, {ID: "s2"}},
+				VerifyStep: "s2",
+			},
+			PlanStepsSatisfied: []bool{true, true},
 		},
-		PlanStepsSatisfied: []bool{true, true},
 	}
 	got := buildPlanReminder(ctx)
 	for _, s := range []string{"plan complete", "2/2", "s2"} {
@@ -1006,8 +1018,10 @@ func TestBuildPlanReminderLazyInitsSatisfied(t *testing.T) {
 	// PlanStepsSatisfied can be nil at first turn — the reminder
 	// should lazily initialize it so it doesn't panic.
 	ctx := &AgentContext{
-		Plan: &Plan{
-			Steps: []PlanStep{{ID: "s1", Action: "read_file", Target: "app.py"}},
+		planProgress: planProgress{
+			Plan: &wire.Plan{
+				Steps: []wire.PlanStep{{ID: "s1", Action: "read_file", Target: "app.py"}},
+			},
 		},
 	}
 	got := buildPlanReminder(ctx)
@@ -1247,7 +1261,7 @@ func TestShouldGeneratePlanGates(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := &AgentContext{Tier: tc.tier}
+			ctx := &AgentContext{runSetup: runSetup{Tier: tc.tier}}
 			if got := shouldGeneratePlan(ctx, tc.msg); got != tc.want {
 				t.Errorf("shouldGeneratePlan(%q, tier=%v) = %v, want %v",
 					tc.msg, tc.tier, got, tc.want)
@@ -1658,13 +1672,13 @@ func TestAToolNameInTheTypeFieldIsReadAsACall(t *testing.T) {
 func TestStepExclusions(t *testing.T) {
 	cases := []struct {
 		name      string
-		messages  []AgentMessage
+		messages  []wire.AgentMessage
 		wantTools []string
 		wantExt   string
 	}{
 		{
 			name: "fresh write_file rejection on .html — fires",
-			messages: []AgentMessage{
+			messages: []wire.AgentMessage{
 				{Role: "system", Content: "sys"},
 				{Role: "user", Content: "expand dashboard.html"},
 				{Role: "assistant", Content: `{"type":"tool_call","name":"write_file","args":{"path":"templates/dashboard.html","content":"..."}}`},
@@ -1675,7 +1689,7 @@ func TestStepExclusions(t *testing.T) {
 		},
 		{
 			name: "fresh write_file rejection on .py — fires",
-			messages: []AgentMessage{
+			messages: []wire.AgentMessage{
 				{Role: "tool", ToolName: "write_file", Content: `{"success":false,"error":"File app.py already exists (42 lines). write_file is for creating new files..."}`},
 			},
 			wantTools: []string{"edit_file", "write_file"},
@@ -1683,7 +1697,7 @@ func TestStepExclusions(t *testing.T) {
 		},
 		{
 			name: "fresh write_file rejection on .htm — fires",
-			messages: []AgentMessage{
+			messages: []wire.AgentMessage{
 				{Role: "tool", ToolName: "write_file", Content: `{"success":false,"error":"File legacy.htm already exists (200 lines). write_file is for creating new files..."}`},
 			},
 			wantTools: []string{"edit_file", "write_file"},
@@ -1691,7 +1705,7 @@ func TestStepExclusions(t *testing.T) {
 		},
 		{
 			name: "rejection on .css — does not fire (not a tree-sitter target)",
-			messages: []AgentMessage{
+			messages: []wire.AgentMessage{
 				{Role: "tool", ToolName: "write_file", Content: `{"success":false,"error":"File styles.css already exists (50 lines). write_file is for creating new files..."}`},
 			},
 			wantTools: nil,
@@ -1699,7 +1713,7 @@ func TestStepExclusions(t *testing.T) {
 		},
 		{
 			name: "stale rejection — assistant has already corrected — does not fire",
-			messages: []AgentMessage{
+			messages: []wire.AgentMessage{
 				{Role: "tool", ToolName: "write_file", Content: `{"success":false,"error":"File app.py already exists (42 lines)..."}`},
 				{Role: "assistant", Content: `{"type":"tool_call","name":"structural_edit","args":{...}}`},
 				{Role: "tool", ToolName: "structural_edit", Content: `{"success":true}`},
@@ -1709,7 +1723,7 @@ func TestStepExclusions(t *testing.T) {
 		},
 		{
 			name: "edit_file rejection (wrong tool, not the trigger) — does not fire",
-			messages: []AgentMessage{
+			messages: []wire.AgentMessage{
 				{Role: "tool", ToolName: "edit_file", Content: `{"success":false,"error":"old_str not found in app.py"}`},
 			},
 			wantTools: nil,
@@ -1717,7 +1731,7 @@ func TestStepExclusions(t *testing.T) {
 		},
 		{
 			name: "ephemeral system note already injected last turn — still fires",
-			messages: []AgentMessage{
+			messages: []wire.AgentMessage{
 				{Role: "tool", ToolName: "write_file", Content: `{"success":false,"error":"File templates/index.html already exists (150 lines)..."}`},
 				{Role: "user", Content: "[system note]: For this single decision, edit_file and write_file are unavailable..."},
 			},
@@ -1726,7 +1740,7 @@ func TestStepExclusions(t *testing.T) {
 		},
 		{
 			name: "the same refusal from another tool — does not fire",
-			messages: []AgentMessage{
+			messages: []wire.AgentMessage{
 				{Role: "tool", ToolName: "edit_file", Content: `{"success":false,"error":"File app.py already exists (10 lines)."}`},
 			},
 			wantTools: nil,
@@ -1734,7 +1748,7 @@ func TestStepExclusions(t *testing.T) {
 		},
 		{
 			name: "a write_file failure of another kind — does not fire",
-			messages: []AgentMessage{
+			messages: []wire.AgentMessage{
 				{Role: "tool", ToolName: "write_file", Content: `{"success":false,"error":"File app.py is read-only."}`},
 			},
 			wantTools: nil,
@@ -1742,7 +1756,7 @@ func TestStepExclusions(t *testing.T) {
 		},
 		{
 			name: "a read after the refusal, inside the window — still fires",
-			messages: []AgentMessage{
+			messages: []wire.AgentMessage{
 				{Role: "tool", ToolName: "write_file", Content: `{"success":false,"error":"File app.py already exists (10 lines)."}`},
 				{Role: "tool", ToolName: "read_file", Content: "x = 1"},
 			},
@@ -1751,7 +1765,7 @@ func TestStepExclusions(t *testing.T) {
 		},
 		{
 			name: "no space after the path — does not fire",
-			messages: []AgentMessage{
+			messages: []wire.AgentMessage{
 				{Role: "tool", ToolName: "write_file", Content: "already exists: File app.py"},
 			},
 			wantTools: nil,
@@ -1759,7 +1773,7 @@ func TestStepExclusions(t *testing.T) {
 		},
 		{
 			name: "a refusal seven tool results back — out of the window",
-			messages: []AgentMessage{
+			messages: []wire.AgentMessage{
 				{Role: "tool", ToolName: "write_file", Content: `{"success":false,"error":"File app.py already exists (10 lines)."}`},
 				{Role: "tool", ToolName: "read_file"}, {Role: "tool", ToolName: "read_file"},
 				{Role: "tool", ToolName: "read_file"}, {Role: "tool", ToolName: "read_file"},
@@ -1771,7 +1785,7 @@ func TestStepExclusions(t *testing.T) {
 		},
 		{
 			name:      "empty conversation — does not fire",
-			messages:  []AgentMessage{},
+			messages:  []wire.AgentMessage{},
 			wantTools: nil,
 			wantExt:   "",
 		},
@@ -1779,7 +1793,7 @@ func TestStepExclusions(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := &AgentContext{Messages: tc.messages}
+			ctx := &AgentContext{modelExchange: modelExchange{Messages: tc.messages}}
 			gotTools, gotExt := stepExclusions(ctx)
 			if !equalStringSlices(gotTools, tc.wantTools) {
 				t.Errorf("stepExclusions() tools = %v, want %v", gotTools, tc.wantTools)
@@ -2203,9 +2217,13 @@ func TestWriteFileV3CancelDuringGateWritesNothing(t *testing.T) {
 // to identify — an observed session spent its remaining turns on that conflict.
 // The failure must name the model's own job.
 func TestOwnBackgroundJobHintNamesTheCulprit(t *testing.T) {
-	ctx := &AgentContext{BackgroundJobs: map[string]string{
-		"7216f34ccea3": "python app.py",
-	}}
+	ctx := &AgentContext{
+		backgroundWork: backgroundWork{
+			BackgroundJobs: map[string]string{
+				"7216f34ccea3": "python app.py",
+			},
+		},
+	}
 	hint := ownBackgroundJobHint(ctx, "Address already in use\nPort 5001 is in use by another program.")
 	if !strings.Contains(hint, "7216f34ccea3") || !strings.Contains(hint, "python app.py") {
 		t.Errorf("hint must name the job id and its command, got %q", hint)
@@ -2216,7 +2234,7 @@ func TestOwnBackgroundJobHintNamesTheCulprit(t *testing.T) {
 }
 
 func TestOwnBackgroundJobHintSilentWhenUnrelated(t *testing.T) {
-	ctx := &AgentContext{BackgroundJobs: map[string]string{"abc": "python app.py"}}
+	ctx := &AgentContext{backgroundWork: backgroundWork{BackgroundJobs: map[string]string{"abc": "python app.py"}}}
 	if h := ownBackgroundJobHint(ctx, "ModuleNotFoundError: No module named 'flask'"); h != "" {
 		t.Errorf("unrelated failure must not get a job hint, got %q", h)
 	}
@@ -2233,7 +2251,7 @@ func TestOwnBackgroundJobHintSilentWithNoJobs(t *testing.T) {
 // The defect was that they did so silently: the next turn hits a bound port
 // with no explanation and the user is never told anything is still running.
 func TestLiveBackgroundJobNoteNamesRunningJobs(t *testing.T) {
-	ctx := &AgentContext{BackgroundJobs: map[string]string{"7216f34ccea3": "python app.py"}}
+	ctx := &AgentContext{backgroundWork: backgroundWork{BackgroundJobs: map[string]string{"7216f34ccea3": "python app.py"}}}
 	note := liveBackgroundJobNote(ctx)
 	if !strings.Contains(note, "7216f34ccea3") || !strings.Contains(note, "python app.py") {
 		t.Errorf("note must name the job and its command, got %q", note)
@@ -2293,7 +2311,7 @@ func TestWriteFileRejectsUnparseableContentWithoutCallingV3(t *testing.T) {
 	if res == nil || !res.Success {
 		t.Fatalf("a new file lands with a warning, got %+v", res)
 	}
-	var out WriteFileOutput
+	var out wire.WriteFileOutput
 	if json.Unmarshal(res.Data, &out) != nil || out.Warning == "" {
 		t.Fatalf("the result must warn that the content does not parse: %s", string(res.Data))
 	}
@@ -2313,7 +2331,9 @@ func TestWriteFileRejectsUnparseableContentWithoutCallingV3(t *testing.T) {
 func TestBounceToolCallEmitsAMatchingResult(t *testing.T) {
 	var events []string
 	ctx := &AgentContext{
-		StreamFn: func(evt string, data interface{}) { events = append(events, evt) },
+		runSetup: runSetup{
+			StreamFn: func(evt string, data interface{}) { events = append(events, evt) },
+		},
 	}
 	st := &runState{turn: 3, response: "{}", pendingToolCall: "write_file"}
 	st.bounceToolCall(ctx, "write_file", "write_file is for creating files")
@@ -2350,7 +2370,9 @@ func TestBounceToolCallEmitsAMatchingResult(t *testing.T) {
 func TestPlainBounceEmitsNoToolResult(t *testing.T) {
 	var events []string
 	ctx := &AgentContext{
-		StreamFn: func(evt string, data interface{}) { events = append(events, evt) },
+		runSetup: runSetup{
+			StreamFn: func(evt string, data interface{}) { events = append(events, evt) },
+		},
 	}
 	st := &runState{turn: 1, response: "{}"}
 	st.bounce(ctx, "verification_gate", "run the tests first")
@@ -2467,7 +2489,7 @@ func TestShortOldStrMismatchKeepsNormalAdvice(t *testing.T) {
 // The model listed the directory as asked, then followed the plan into
 // editing the file it found. A wrong plan is worse than no plan.
 func TestReadOnlyRequestsGetNoPlan(t *testing.T) {
-	ctx := &AgentContext{Tier: Tier1Simple}
+	ctx := &AgentContext{runSetup: runSetup{Tier: Tier1Simple}}
 	for _, m := range []string{
 		"Yes, please list the files",
 		"please list the files in this directory",
@@ -2935,7 +2957,7 @@ func TestTheRouteContractMessageSteersToTheCheapRepair(t *testing.T) {
 	os.MkdirAll(filepath.Join(dir, "templates"), 0o755)
 	os.WriteFile(filepath.Join(dir, "app.py"), []byte(bookSiteApp), 0o644)
 	os.WriteFile(filepath.Join(dir, "templates/index.html"), []byte(bookSiteBadPage), 0o644)
-	msg := routeContractMessage(routeContractFindings(dir))
+	msg := assetlint.RouteContractMessage(assetlint.RouteContractFindings(dir))
 	if !strings.Contains(msg, "insert_after") || !strings.Contains(msg, "not a whole-file write_file") {
 		t.Errorf("the gate must say how to repair without re-entering the pipeline: %s", msg)
 	}
@@ -2951,7 +2973,7 @@ func TestRouteContractGateLeavesAQuestionAboutAnOldProjectAlone(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "app.py"), []byte("from flask import Flask\napp = Flask(__name__)\n@app.route('/')\ndef index():\n    return 'x'\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, "templates/index.html"), []byte("<form action=\"/add_book\"></form>\n"), 0o644)
 	ctx := NewAgentContext(dir, Tier0Conversational)
-	if len(routeContractFindings(dir)) == 0 {
+	if len(assetlint.RouteContractFindings(dir)) == 0 {
 		t.Fatal("fixture has no mismatch; the test proves nothing")
 	}
 	// Nothing written this session: the gate must stay out of the way.
@@ -2979,14 +3001,14 @@ func TestACleanExecutionSettlesContentDebt(t *testing.T) {
 	ctx := NewAgentContext(dir, Tier2Medium)
 	key := ledgerKey(ctx, "app.py")
 	// A prior syntax checkpoint that restoration may still need...
-	observeDeliverable(ctx, key, []byte("print('old')\n"), ValidationKindSyntax, ValidationPassed, "")
+	observeDeliverable(ctx, key, []byte("print('old')\n"), wire.ValidationKindSyntax, wire.ValidationPassed, "")
 	// ...and then the state a content debt actually lives in: new bytes on
 	// disk that no route ever gave a verdict (a structural_edit that landed
 	// through V3). The ledger knows the bytes changed and knows nothing else.
 	ctx.LedgerMu.Lock()
 	d0 := ctx.Ledger[key]
 	d0.CurrentHash, d0.CurrentSize = hashBytes([]byte("print('served')\n")), len("print('served')\n")
-	d0.ValidationKind, d0.ValidationStatus, d0.ValidatedHash = ValidationKindUnknown, ValidationUnknown, ""
+	d0.ValidationKind, d0.ValidationStatus, d0.ValidatedHash = wire.ValidationKindUnknown, wire.ValidationUnknown, ""
 	ctx.LedgerMu.Unlock()
 	newState := func() *runState {
 		return &runState{mutationDebt: map[string]*mutationDebtEntry{
@@ -3012,36 +3034,39 @@ func TestACleanExecutionSettlesContentDebt(t *testing.T) {
 		t.Fatalf("a clean run left the debt: %v", st.mutationDebt)
 	}
 	d := ctx.Ledger[key]
-	if k, s := d.CurrentValidation(); k != ValidationKindExecution || s != ValidationPassed {
+	if k, s := d.CurrentValidation(); k != wire.ValidationKindExecution || s != wire.ValidationPassed {
 		t.Errorf("verdict = %s/%s, want execution/passed", k, s)
 	}
 	if d.CurrentHash != hashBytes([]byte("print('served')\n")) {
 		t.Error("the verdict does not describe the bytes that ran")
 	}
 	// The syntax checkpoint was not disturbed: an execution is not a write.
-	if d.CheckpointKind != ValidationKindSyntax || string(d.CheckpointBytes) != "print('old')\n" {
+	if d.CheckpointKind != wire.ValidationKindSyntax || string(d.CheckpointBytes) != "print('old')\n" {
 		t.Errorf("execution overwrote the syntax checkpoint: kind=%s bytes=%q", d.CheckpointKind, d.CheckpointBytes)
 	}
 
 	// The executor's own answer decides success.
 	zero, one := 0, 1
-	mk := func(v interface{}) *ToolResult { b, _ := json.Marshal(v); return &ToolResult{Success: true, Data: b} }
-	if !executionSucceeded("run_command", mk(RunCommandOutput{ExitCode: 0})) {
+	mk := func(v interface{}) *wire.ToolResult {
+		b, _ := json.Marshal(v)
+		return &wire.ToolResult{Success: true, Data: b}
+	}
+	if !executionSucceeded("run_command", mk(wire.RunCommandOutput{ExitCode: 0})) {
 		t.Error("exit 0 is a success")
 	}
-	if executionSucceeded("run_command", mk(RunCommandOutput{ExitCode: 1})) {
+	if executionSucceeded("run_command", mk(wire.RunCommandOutput{ExitCode: 1})) {
 		t.Error("exit 1 is not a success")
 	}
-	if executionSucceeded("run_command", mk(RunCommandOutput{ExitCode: 0, TimedOut: true})) {
+	if executionSucceeded("run_command", mk(wire.RunCommandOutput{ExitCode: 0, TimedOut: true})) {
 		t.Error("a killed command is not a success")
 	}
-	if !executionSucceeded("run_background", mk(RunBackgroundOutput{Running: true})) {
+	if !executionSucceeded("run_background", mk(wire.RunBackgroundOutput{Running: true})) {
 		t.Error("a server still serving after its settle window is a success")
 	}
-	if executionSucceeded("run_background", mk(RunBackgroundOutput{Running: false, ExitCode: &one})) {
+	if executionSucceeded("run_background", mk(wire.RunBackgroundOutput{Running: false, ExitCode: &one})) {
 		t.Error("a background job that died with exit 1 is not a success")
 	}
-	if !executionSucceeded("run_background", mk(RunBackgroundOutput{Running: false, ExitCode: &zero})) {
+	if !executionSucceeded("run_background", mk(wire.RunBackgroundOutput{Running: false, ExitCode: &zero})) {
 		t.Error("a background script that exited 0 is a success")
 	}
 }
@@ -3077,7 +3102,7 @@ func TestAnUnescapedQuoteTruncatesTheWriteAndIsCaught(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the envelope is valid JSON and must parse: %v", err)
 	}
-	var in WriteFileInput
+	var in wire.WriteFileInput
 	if e := json.Unmarshal(parsed.Args, &in); e != nil {
 		t.Fatalf("args decode: %v", e)
 	}
@@ -3096,7 +3121,7 @@ func TestAnUnescapedQuoteTruncatesTheWriteAndIsCaught(t *testing.T) {
 }
 
 func TestACleanWriteIsNotFlaggedAsSwallowed(t *testing.T) {
-	args, _ := json.Marshal(WriteFileInput{
+	args, _ := json.Marshal(wire.WriteFileInput{
 		Path:    "templates/index.html",
 		Content: "<!DOCTYPE html>\n<html>\n<script>const x = \"ok\";</script>\n</html>\n",
 	})
@@ -3104,7 +3129,7 @@ func TestACleanWriteIsNotFlaggedAsSwallowed(t *testing.T) {
 		t.Error("a well-formed write must not be flagged")
 	}
 	// An edit_file with real, correctly-escaped multi-line bodies is clean too.
-	eargs, _ := json.Marshal(EditFileInput{
+	eargs, _ := json.Marshal(wire.EditFileInput{
 		Path: "app.py", OldStr: "def f():\n    return 1\n", NewStr: "def f():\n    return 2\n",
 	})
 	if _, bad := swallowedContentFeedback("edit_file", eargs); bad {
@@ -3332,14 +3357,14 @@ func TestADeclaredWorkRequestIsNeverTieredAsAQuestion(t *testing.T) {
 	}
 	for _, c := range []struct {
 		name string
-		tc   *TaskContract
+		tc   *taskcontract.TaskContract
 		in   Tier
 		want Tier
 	}{
-		{"declared work", &TaskContract{TaskMode: TaskModeWork}, classified, Tier2Medium},
-		{"declared question", &TaskContract{TaskMode: TaskModeQuestion}, classified, Tier0Conversational},
+		{"declared work", &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork}, classified, Tier2Medium},
+		{"declared question", &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeQuestion}, classified, Tier0Conversational},
 		{"no contract", nil, classified, Tier0Conversational},
-		{"work never lowers a tier", &TaskContract{TaskMode: TaskModeWork}, Tier3Hard, Tier3Hard},
+		{"work never lowers a tier", &taskcontract.TaskContract{TaskMode: taskcontract.TaskModeWork}, Tier3Hard, Tier3Hard},
 	} {
 		if got := declaredTier(c.tc, c.in); got != c.want {
 			t.Errorf("%s: declaredTier = %v, want %v", c.name, got, c.want)
@@ -3403,13 +3428,13 @@ func TestTheSystemPromptSaysWhatTheProjectRuns(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			prompt := buildSystemPrompt(&AgentContext{WorkingDir: t.TempDir(), Project: tc.project})
+			prompt := buildSystemPrompt(&AgentContext{runSetup: runSetup{WorkingDir: t.TempDir(), Project: tc.project}})
 			if !strings.Contains(prompt, tc.want) {
 				t.Errorf("the system prompt does not hold %q", tc.want)
 			}
 		})
 	}
-	if prompt := buildSystemPrompt(&AgentContext{WorkingDir: t.TempDir()}); strings.Contains(prompt, "## Project Context") {
+	if prompt := buildSystemPrompt(&AgentContext{runSetup: runSetup{WorkingDir: t.TempDir()}}); strings.Contains(prompt, "## Project Context") {
 		t.Error("a project nothing was detected for has a project section")
 	}
 }
@@ -3420,7 +3445,7 @@ func TestTheSystemPromptNamesTheProjectsToolchain(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	prompt := buildSystemPrompt(&AgentContext{WorkingDir: dir})
+	prompt := buildSystemPrompt(&AgentContext{runSetup: runSetup{WorkingDir: dir}})
 
 	want := "## Toolchains\n- **go** — runner `go run .`, install `go mod download`, tests `go test ./...`"
 	if !strings.Contains(prompt, want) {

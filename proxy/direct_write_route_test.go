@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // The ordinary existing-file write: the model rewrites a file this session
@@ -63,16 +65,16 @@ func TestDirectWriteRoute(t *testing.T) {
 		baseline string // the file on disk before the write
 		proposal string // the content the model sends
 
-		unavailableFor string       // the syntax check answers 500 for content holding this
-		introduces     string       // the structural check reports this name as unresolved
-		lastTool       AgentMessage // the last tool message; the zero value means a read_file
-		readOnlyDir    bool         // the folder is read-only, so the write itself fails
+		unavailableFor string            // the syntax check answers 500 for content holding this
+		introduces     string            // the structural check reports this name as unresolved
+		lastTool       wire.AgentMessage // the last tool message; the zero value means a read_file
+		readOnlyDir    bool              // the folder is read-only, so the write itself fails
 
 		wantSuccess         bool
 		wantDisk            string
-		wantMutation        MutationStatus
-		wantKind            ValidationKind
-		wantStatus          ValidationStatus
+		wantMutation        wire.MutationStatus
+		wantKind            wire.ValidationKind
+		wantStatus          wire.ValidationStatus
 		wantSyntaxCalls     int
 		wantStructuralCalls int
 		wantError           string // the exact error, when set
@@ -83,7 +85,7 @@ func TestDirectWriteRoute(t *testing.T) {
 		{name: "proposal parses",
 			rel: "draft.py", baseline: directBaselineHealthy, proposal: directProposalHealthy,
 			wantSuccess: true, wantDisk: directProposalHealthy,
-			wantMutation: MutationApplied, wantKind: ValidationKindSyntax, wantStatus: ValidationPassed,
+			wantMutation: wire.MutationApplied, wantKind: wire.ValidationKindSyntax, wantStatus: wire.ValidationPassed,
 			wantSyntaxCalls: 1, wantStructuralCalls: 1},
 		// One attempt, and its failure to run is the observation. The write
 		// fails open, and the result says not_run.
@@ -91,25 +93,25 @@ func TestDirectWriteRoute(t *testing.T) {
 			rel: "draft.py", baseline: directBaselineHealthy, proposal: directProposalHealthy,
 			unavailableFor: "CIRCUMFERENCE",
 			wantSuccess:    true, wantDisk: directProposalHealthy,
-			wantMutation: MutationApplied, wantKind: ValidationKindSyntax, wantStatus: ValidationNotRun,
+			wantMutation: wire.MutationApplied, wantKind: wire.ValidationKindSyntax, wantStatus: wire.ValidationNotRun,
 			wantSyntaxCalls: 1, wantStructuralCalls: 1},
 		// Applicability is decided locally, so no service is asked anything.
 		{name: "no check applies",
 			rel: "NOTES.txt", baseline: "release notes\n", proposal: "release notes\nsecond line\n",
 			wantSuccess: true, wantDisk: "release notes\nsecond line\n",
-			wantMutation: MutationApplied, wantKind: ValidationKindNone, wantStatus: ValidationNotApplicable,
+			wantMutation: wire.MutationApplied, wantKind: wire.ValidationKindNone, wantStatus: wire.ValidationNotApplicable,
 			wantSyntaxCalls: 0, wantStructuralCalls: 0},
 		// A repair of a file that already fails may land, and the result
 		// says the landed bytes do not parse.
 		{name: "failed proposal over a broken baseline lands",
 			rel: "draft.py", baseline: directBaselineBroken, proposal: directProposalBroken,
 			wantSuccess: true, wantDisk: directProposalBroken,
-			wantMutation: MutationApplied, wantKind: ValidationKindSyntax, wantStatus: ValidationFailed,
+			wantMutation: wire.MutationApplied, wantKind: wire.ValidationKindSyntax, wantStatus: wire.ValidationFailed,
 			wantSyntaxCalls: 2, wantStructuralCalls: 1},
 		{name: "failed proposal over a healthy baseline is refused",
 			rel: "draft.py", baseline: directBaselineHealthy, proposal: directProposalBroken,
 			wantSuccess: false, wantDisk: directBaselineHealthy,
-			wantMutation: MutationRefused, wantKind: ValidationKindSyntax, wantStatus: ValidationFailed,
+			wantMutation: wire.MutationRefused, wantKind: wire.ValidationKindSyntax, wantStatus: wire.ValidationFailed,
 			wantSyntaxCalls: 2, wantStructuralCalls: 0,
 			wantError:  fallbackSyntaxRejection("draft.py", directProposalBroken, writeRouteSyntaxDetail),
 			wantDetail: writeRouteSyntaxDetail},
@@ -119,7 +121,7 @@ func TestDirectWriteRoute(t *testing.T) {
 			rel: "draft.py", baseline: directBaselineHealthy, proposal: directProposalBroken,
 			unavailableFor: writeRouteBaselineMark,
 			wantSuccess:    false, wantDisk: directBaselineHealthy,
-			wantMutation: MutationRefused, wantKind: ValidationKindSyntax, wantStatus: ValidationFailed,
+			wantMutation: wire.MutationRefused, wantKind: wire.ValidationKindSyntax, wantStatus: wire.ValidationFailed,
 			wantSyntaxCalls: 2, wantStructuralCalls: 0},
 		// Bytes that were checked and passed can still fail to land, and the
 		// file keeps its old bytes.
@@ -127,7 +129,7 @@ func TestDirectWriteRoute(t *testing.T) {
 			rel: "ro/draft.py", baseline: directBaselineHealthy, proposal: directProposalHealthy,
 			readOnlyDir: true,
 			wantSuccess: false, wantDisk: directBaselineHealthy,
-			wantMutation: MutationFailed, wantKind: ValidationKindSyntax, wantStatus: ValidationPassed,
+			wantMutation: wire.MutationFailed, wantKind: wire.ValidationKindSyntax, wantStatus: wire.ValidationPassed,
 			wantSyntaxCalls: 1, wantStructuralCalls: 1, errorHas: "cannot write"},
 		// Syntax passed on these bytes and the structural check refused them,
 		// so structural is the deciding verdict. The structural check needs
@@ -136,17 +138,17 @@ func TestDirectWriteRoute(t *testing.T) {
 			rel: "draft.py", baseline: directBaselineHealthy, proposal: directProposalUnresolved,
 			introduces:  "missing_helper",
 			wantSuccess: false, wantDisk: directBaselineHealthy,
-			wantMutation: MutationRefused, wantKind: ValidationKindStructural, wantStatus: ValidationFailed,
+			wantMutation: wire.MutationRefused, wantKind: wire.ValidationKindStructural, wantStatus: wire.ValidationFailed,
 			wantSyntaxCalls: 1, wantStructuralCalls: 2, errorHas: "missing_helper", detailHas: "missing_helper"},
 		// The last run failed, but it names webapp.py, and app.py is not a
 		// whole file name inside it. So the session is not in the
 		// edit-test-fix loop, and this ordinary route runs.
 		{name: "failed run names another file",
 			rel: "app.py", baseline: directBaselineHealthy, proposal: directProposalHealthy,
-			lastTool: AgentMessage{Role: "tool", ToolName: "run_command",
+			lastTool: wire.AgentMessage{Role: "tool", ToolName: "run_command",
 				Content: `{"success":false,"data":{"stderr":"  File \"./webapp.py\", line 3\nSyntaxError"}}`},
 			wantSuccess: true, wantDisk: directProposalHealthy,
-			wantMutation: MutationApplied, wantKind: ValidationKindSyntax, wantStatus: ValidationPassed,
+			wantMutation: wire.MutationApplied, wantKind: wire.ValidationKindSyntax, wantStatus: wire.ValidationPassed,
 			wantSyntaxCalls: 1, wantStructuralCalls: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -171,9 +173,9 @@ func TestDirectWriteRoute(t *testing.T) {
 			ctx.SessionWrites[tc.rel] = true
 			last := tc.lastTool
 			if last.Role == "" {
-				last = AgentMessage{Role: "tool", ToolName: "read_file", Content: tc.baseline}
+				last = wire.AgentMessage{Role: "tool", ToolName: "read_file", Content: tc.baseline}
 			}
-			ctx.Messages = []AgentMessage{
+			ctx.Messages = []wire.AgentMessage{
 				{Role: "user", Content: "extend the module"},
 				{Role: "assistant", Content: "rewriting it"},
 				last,

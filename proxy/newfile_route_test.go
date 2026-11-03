@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // The direct new-file gate: a new file that is below Tier2 does not go to V3,
@@ -24,39 +26,39 @@ func TestNewFileRoute(t *testing.T) {
 
 		wantSuccess     bool
 		wantDisk        string
-		wantMutation    MutationStatus
-		wantKind        ValidationKind
-		wantStatus      ValidationStatus
+		wantMutation    wire.MutationStatus
+		wantKind        wire.ValidationKind
+		wantStatus      wire.ValidationStatus
 		wantSyntaxCalls int
 		warns           bool // the result tells the model the file does not parse
 	}{
 		{name: "syntax passes",
 			rel: "m.py", content: smallOK,
 			wantSuccess: true, wantDisk: smallOK,
-			wantMutation: MutationApplied, wantKind: ValidationKindSyntax, wantStatus: ValidationPassed,
+			wantMutation: wire.MutationApplied, wantKind: wire.ValidationKindSyntax, wantStatus: wire.ValidationPassed,
 			wantSyntaxCalls: 1},
 		{name: "sandbox unavailable",
 			rel: "m.py", content: smallOK, noSandbox: true,
 			wantSuccess: true, wantDisk: smallOK,
-			wantMutation: MutationApplied, wantKind: ValidationKindSyntax, wantStatus: ValidationNotRun,
+			wantMutation: wire.MutationApplied, wantKind: wire.ValidationKindSyntax, wantStatus: wire.ValidationNotRun,
 			wantSyntaxCalls: 0},
 		{name: "no check applies",
 			rel: "notes.txt", content: "hello\n",
 			wantSuccess: true, wantDisk: "hello\n",
-			wantMutation: MutationApplied, wantKind: ValidationKindNone, wantStatus: ValidationNotApplicable,
+			wantMutation: wire.MutationApplied, wantKind: wire.ValidationKindNone, wantStatus: wire.ValidationNotApplicable,
 			wantSyntaxCalls: 0},
 		// A new file has nothing on disk to protect, so it lands with a
 		// warning. The failure is not checked a second time.
 		{name: "syntax fails, file lands with a warning",
 			rel: "m.py", content: smallBad,
 			wantSuccess: true, wantDisk: smallBad,
-			wantMutation: MutationApplied, wantKind: ValidationKindSyntax, wantStatus: ValidationFailed,
+			wantMutation: wire.MutationApplied, wantKind: wire.ValidationKindSyntax, wantStatus: wire.ValidationFailed,
 			wantSyntaxCalls: 1, warns: true},
 		// The check on these bytes still stands when the write fails.
 		{name: "syntax passes, then the write fails",
 			rel: "ro/new.py", content: smallOK, readOnlyDir: true,
 			wantSuccess: false, wantDisk: "",
-			wantMutation: MutationFailed, wantKind: ValidationKindSyntax, wantStatus: ValidationPassed,
+			wantMutation: wire.MutationFailed, wantKind: wire.ValidationKindSyntax, wantStatus: wire.ValidationPassed,
 			wantSyntaxCalls: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -1,5 +1,5 @@
-<!-- source: docs/ARCHITECTURE.md synced-through: 466a1142e05780965df4e27c30fd389eb9fa701c -->
-> **[English](../../ARCHITECTURE.md)** | **[简体中文](../zh-CN/ARCHITECTURE.md)** | **日本語** | **[한국어](../ko/ARCHITECTURE.md)**
+<!-- source: docs/reference/ARCHITECTURE.md synced-through: 466a1142e05780965df4e27c30fd389eb9fa701c -->
+> **[English](../../reference/ARCHITECTURE.md)** | **[简体中文](../zh-CN/ARCHITECTURE.md)** | **日本語** | **[한국어](../ko/ARCHITECTURE.md)**
 
 # ATLAS アーキテクチャ
 
@@ -39,7 +39,7 @@ graph LR
 
 チャットフロントエンドは **atlas-tui**（Bubbletea）です。ネイティブ Go 製のターミナル UI で、`/v1/agent`（ターンごとのチャット SSE）と `/events`（パイプラインペイン向けのグローバルな型付きエンベロープフィード）を消費します。`atlas`（対話モードのデフォルト）または `atlas tui`（明示指定）で起動します。パイプラインペインは V3 ステージをライブ表示し、チャットペインはアシスタントの Markdown を glamour でレンダリングします。スラッシュコマンド `/add /diff /commit /run` などがローカルファイルのコンテキストとシェルアウトを処理します。モードを意識した入力（チャット / `!bash` / `/slash`）にヒントドロップダウンが付きます。
 
-ツールコール + V3 パイプラインを使いたいサードパーティクライアントは `/v1/agent` を直接対象にしてください。`/v1/chat/completions` は llama-server へのパススルーです（§3 を参照）。この契約は [API.md](../../API.md) に記載されています。
+ツールコール + V3 パイプラインを使いたいサードパーティクライアントは `/v1/agent` を直接対象にしてください。`/v1/chat/completions` は llama-server へのパススルーです（§3 を参照）。この契約は [API.md](../../reference/API.md) に記載されています。
 
 ### 1.1 対応アクセラレータ
 
@@ -47,15 +47,15 @@ llama-server は GPU を使用する唯一のサービスです。それ以外�
 
 | バックエンド | ステータス (V3.1.x) | イメージ / ビルドパス | Compose オーバーライド | 検証済みカード |
 |---|---|---|---|---|
-| **CUDA** (NVIDIA) | サポート対象 (Supported)（V3.1.0 以降） | `inference/Dockerfile.v31` → `atlas-llama` | (デフォルト) | RTX 5060 Ti 16GB（標準構成）。公開イメージは Blackwell（compute capability 12.0/12.1）のみを対象にコンパイルされており、それより前の世代はローカル再ビルドが必要 — [SETUP.md](../../SETUP.md) を参照 |
-| **ROCm / HIP** (AMD) | コミュニティ検証済み (Community-tested)（V3.1.1 以降） | `inference/Dockerfile.rocm` → `atlas-llama-rocm`、ホスト上でビルド（`pull_policy: build`; GHCR イメージなし） | `compose/docker-compose.rocm.yml` | RX 7900 XTX（コミュニティによるスモークテスト、GH #26） |
-| **Metal** (Apple Silicon) | サポート対象 ([#32](https://github.com/inferstep/ATLAS/issues/32)) | ハイブリッド: ネイティブ llama-server (Metal) + 残りは Docker（macOS は GPU をコンテナにパススルーできないため） | `compose/docker-compose.macos.yml` | M シリーズ; 16 GB 以下では Q4_K_M、24 GB 以上のユニファイドメモリでは Q6_K |
-| **Vulkan**（クロスベンダーフォールバック） | プレビュー (Preview) | `inference/Dockerfile.vulkan` → `atlas-llama-vulkan` | `compose/docker-compose.vulkan.yml` | lavapipe の CPU 起動パス（スモークテスト済み）。実 GPU での検証はまだなし |
+| **CUDA** (NVIDIA) | サポート対象 (Supported)（V3.1.0 以降） | `inference/Dockerfile.v31` → `atlas-llama` | (デフォルト) | RTX 5060 Ti 16GB（標準構成）。公開イメージは Blackwell（compute capability 12.0/12.1）のみを対象にコンパイルされており、それより前の世代はローカル再ビルドが必要 — [SETUP.md](../../guides/SETUP.md) を参照 |
+| **ROCm / HIP** (AMD) | コミュニティ検証済み (Community-tested)（V3.1.1 以降） | `inference/Dockerfile.rocm` → `atlas-llama-rocm`、ホスト上でビルド（`pull_policy: build`; GHCR イメージなし） | `deploy/compose/docker-compose.rocm.yml` | RX 7900 XTX（コミュニティによるスモークテスト、GH #26） |
+| **Metal** (Apple Silicon) | サポート対象 ([#32](https://github.com/inferstep/ATLAS/issues/32)) | ハイブリッド: ネイティブ llama-server (Metal) + 残りは Docker（macOS は GPU をコンテナにパススルーできないため） | `deploy/compose/docker-compose.macos.yml` | M シリーズ; 16 GB 以下では Q4_K_M、24 GB 以上のユニファイドメモリでは Q6_K |
+| **Vulkan**（クロスベンダーフォールバック） | プレビュー (Preview) | `inference/Dockerfile.vulkan` → `atlas-llama-vulkan` | `deploy/compose/docker-compose.vulkan.yml` | lavapipe の CPU 起動パス（スモークテスト済み）。実 GPU での検証はまだなし |
 | **SYCL** (Intel Arc) | ロードマップ (Roadmap) — Intel Arc は現在 `vulkan` を使用 | 未定 | 未定 | — |
 
 **バックエンドの選択は実行時ではなくインストール時に行われます。** `atlas init` は `tier.detect_gpu()`（`atlas/commands/tier.py` を参照）を実行し、検出されたすべてのベンダーの中から VRAM が最大の GPU を選び（`ATLAS_GPU_VENDOR` / `ATLAS_GPU_INDEX` でオーバーライド可能）、`.env` に `ATLAS_BACKEND={cuda|rocm|metal|vulkan}` を書き込みます。パッケージ済みのネイティブバックエンドが存在する場合、検出はそれに解決されます: NVIDIA には CUDA、x86_64 上の AMD には ROCm、macOS にはハイブリッド Metal パス。ホスト向けのネイティブバックエンドがパッケージされていない場合（Intel Arc、arm64 上の AMD、未認識のベンダー）、ウィザードは Vulkan ユニバーサルフォールバックを提案します（デフォルトは yes）: 1 つのイメージで AMD、Intel、Adreno、MoltenVK、lavapipe CPU ラスタライザをカバーし、性能はチューニング済みのネイティブバックエンドよりおおよそ 20〜40% 低くなります。起動しない `.env` を書き込む代わりに拒否するのは、使えるものが何も存在しない場合だけです。各バックエンドにはそれぞれ事前ビルド済みのイメージがあります。ユーザーがすべてのバックエンドのライブラリを同梱した肥大化したイメージを実行することはありません。
 
-**持ち込みモデルの対応面 (V3.1.1)。** `atlas lens check` は、稼働中の llama-server に対する安価な事前チェックで、ロード済みモデルが Lens 互換かどうかを報告します。`atlas lens build --samples <path>` は `geometric-lens/geometric_lens/training.py` をラップし、モデルのネイティブ埋め込み次元で新しい C(x)（`cost_field.pt`）**と** G(x)（XGBoost）のアーティファクトをトレーニングします。この2つを組み合わせることで、ユーザーは Lens コードをフォークすることなくデフォルト以外の GGUF を差し込めます — C(x) コンストラクタは任意の `input_dim` を受け付けるため、モデルごとに変わるのはトレーニング済み重みだけです。ユーザー向けのフローは [CLI.md § atlas lens](../../CLI.md#atlas-lens) を参照してください。`atlas lens publish`（または統合コマンドの `atlas publish`）がアーティファクトを HuggingFace にアップロードし、そのハッシュを固定するレジストリ PR を開きます。
+**持ち込みモデルの対応面 (V3.1.1)。** `atlas lens check` は、稼働中の llama-server に対する安価な事前チェックで、ロード済みモデルが Lens 互換かどうかを報告します。`atlas lens build --samples <path>` は `geometric-lens/geometric_lens/training.py` をラップし、モデルのネイティブ埋め込み次元で新しい C(x)（`cost_field.pt`）**と** G(x)（XGBoost）のアーティファクトをトレーニングします。この2つを組み合わせることで、ユーザーは Lens コードをフォークすることなくデフォルト以外の GGUF を差し込めます — C(x) コンストラクタは任意の `input_dim` を受け付けるため、モデルごとに変わるのはトレーニング済み重みだけです。ユーザー向けのフローは [CLI.md § atlas lens](../../reference/CLI.md#atlas-lens) を参照してください。`atlas lens publish`（または統合コマンドの `atlas publish`）がアーティファクトを HuggingFace にアップロードし、そのハッシュを固定するレジストリ PR を開きます。
 
 **ベンダー非依存な要素**（すべてのバックエンドで動作）: 文法制約付き JSON、セルフ埋め込み（`/embedding`）、レイヤーごとの隠れ状態、ASA 制御ベクトル（バックエンドを問わず llama.cpp の `control_vector_load` でロードされる）、KV キャッシュ量子化、外側のエージェントループ全体、V3 パイプライン、Geometric Lens、サンドボックス。
 
@@ -65,7 +65,7 @@ llama-server は GPU を使用する唯一のサービスです。それ以外�
 - **マルチ GPU + テンソル並列。** V1 はすべてのバックエンドでシングル GPU のみをサポートします。マルチ GPU は GH #34 で、特定のベンダーに紐づいてはいません。
 - **Apple ユニファイドメモリ。** macOS は GPU とシステムメモリを共有します。「VRAM」の計算は実際には「合計 16 GB から OS + アプリを引いたもの」です。§7 を参照してください。
 
-K3s デプロイパス（`scripts/install.sh`、`templates/` 内のマニフェスト）は V3.1.1 時点では CUDA 専用です — ROCm の K8s レシピは V3.2 のインフラ項目に延期されています（`/dev/kfd` + `/dev/dri` の hostPath マウントと `render`/`video` グループ所属が必要で、これは `compose/docker-compose.rocm.yml` のクラスターレベル相当です）。
+K3s デプロイパス（`scripts/install.sh`、`deploy/k3s/` 内のマニフェスト）は V3.1.1 時点では CUDA 専用です — ROCm の K8s レシピは V3.2 のインフラ項目に延期されています（`/dev/kfd` + `/dev/dri` の hostPath マウントと `render`/`video` グループ所属が必要で、これは `deploy/compose/docker-compose.rocm.yml` のクラスターレベル相当です）。
 
 ---
 
@@ -84,9 +84,9 @@ K3s デプロイパス（`scripts/install.sh`、`templates/` 内のマニフェ�
 
 ## 3. atlas-proxy（外側のレイヤー）
 
-プロキシはチャットフロントエンドのエントリーポイントです。`/v1/agent`（型付きイベントストリーム — TUI が使うもの）でユーザーメッセージを受け取り、llama-server を呼び出し、ツールコールをパースし、それらを実行し、イベントをストリームバックする内部エージェントループを実行します。`/v1/chat/completions` エンドポイントは llama-server への透過パススルーです。SDK 互換性のために残してあり、エージェントループは実行しません。イベントタイプの完全なカタログは [API.md](../../API.md) を参照してください。
+プロキシはチャットフロントエンドのエントリーポイントです。`/v1/agent`（型付きイベントストリーム — TUI が使うもの）でユーザーメッセージを受け取り、llama-server を呼び出し、ツールコールをパースし、それらを実行し、イベントをストリームバックする内部エージェントループを実行します。`/v1/chat/completions` エンドポイントは llama-server への透過パススルーです。SDK 互換性のために残してあり、エージェントループは実行しません。イベントタイプの完全なカタログは [API.md](../../reference/API.md) を参照してください。
 
-`proxy/` 直下の非テスト Go ファイルすべてと、それぞれの担当領域:
+`proxy/` とそのサブフォルダーの非テスト Go ファイルすべてと、それぞれの担当領域:
 
 | ファイル | 担当 |
 |---|---|
@@ -96,31 +96,43 @@ K3s デプロイパス（`scripts/install.sh`、`templates/` 内のマニフェ�
 | `agent_handler.go` | `/v1/agent` と `/cancel` エンドポイント |
 | `agent.go` | `runAgentLoop`、フェンス取得、ツールチェーン検出 |
 | `gates_exit.go` | 終了ゲートと、それらが読む実行状態 |
-| `loop_turn.go`, `loop_checks.go`, `loop_results.go` | ループの 1 ターン: モデル呼び出しと応答、ツール実行前のチェック、結果とスタックループのブレーカー |
+| `loop_turn.go`, `loop_checks.go`, `loop_results.go` | ループの 1 ターン: モデル呼び出しと応答、ツール実行前のチェック、結果とスタックループのブレーカー。`loop_turn.go` は読み取り専用コールの反復の後、リクエストが要求するものに応じて実行に行動か応答を促す |
 | `plan_generation.go`, `task_intake.go` | リクエストにプランが必要かの判定とプランナーに渡すサンプル、リクエストが宣言するタスクコントラクト |
 | `run_end.go`, `recovery.go` | 実行の終わり方（ターミナル、時間予算、サマリー）、行き詰まったモデルに示す内容と未完了の作業 |
 | `fenced_channel.go` | ファイル本体を取得するサブコールとその予算 |
 | `tools.go`, `tool_*.go` | 16 個のツール定義 + 実行系、ティア分類、ツールコール文法 |
-| `gates*.go` | 誠実性 / プランゲート: クレームチェック、構造、構文、埋め込みスクリプト、プラン遵守、プランリマインダ、アセットリント |
+| `gates*.go` | 誠実性 / プランゲート: クレームチェック、構造、構文、埋め込みスクリプト、プラン遵守、プランリマインダ |
 | `detectors.go` | スタックパターン検出: ツールの繰り返し、推論の繰り返し、トレースバックの局所化 |
 | `context.go` | コンテキストの拡充: シンボルインデックス、プロジェクトスキャン、ワークスペース封じ込め、セッションファイルマニフェスト |
 | `permissions.go` | パーミッションゲート（`/v1/permission`）、トラストモード、ハードブロックされたパターン |
-| `lens.go` | レンズのスコアリング呼び出し、各検証実行（合格・失敗を問わず、その証拠種別とともに）に対してループが保持する `VerificationRecord`、キャリブレーション状態 |
+| `lens.go` | レンズのスコアリング呼び出し、キャリブレーション状態 |
 | `lens_identity.go` | レンズサービスへの直接呼び出しに使う、プロキシ所有の呼び出し識別子を作成して付与する |
 | `lens_required.go` | Geometric Lens が利用可能であることを強制し、Lens の失敗を追跡し、スコアリング不能なときに実行を停止する |
-| `logsafe.go` | ログ向けのプライバシーセーフなツール引数サマリを構築する。承認済みフィールドのみを許可し、機微な内容をマスクする |
-| `memory_envelope.go` | 宣言されたデプロイのメモリ予算をオペレーター申告のホスト容量と照合し、未強制の予算超過を報告する |
-| `object_handle_linux.go` | 削除承認の間、Linux のファイルシステムオブジェクトを開いたまま保持し、承認されたオブジェクトが除去前に差し替えられないようにする |
-| `object_handle_other.go` | 非 Linux プラットフォームでは、ファイルシステムオブジェクトを安全にピン留めして検証できないため、削除承認を拒否する |
+| `internal/logsafe/logsafe.go` | ログ向けのプライバシーセーフなツール引数サマリを構築する。承認済みフィールドのみを許可し、機微な内容をマスクする |
+| `internal/logsafe/filter.go` | すべてのログ行が通るライター。資格情報に見える値をマスクし、制御文字をテキストとして出力する |
+| `internal/assetlint/lint.go`, `internal/assetlint/findings.go` | アセットグラフのリント：どのルートも描画しないテンプレート、どのページも読み込まないスクリプトやスタイルシート、存在しないファイルへの参照、どのルートも受けないフォームや `fetch()` の宛先 |
+| `internal/shadowcapture/sink.go` | 非公開のシャドーキャプチャ。リクエストが宣言した内容と ATLAS がその文から読み取った内容を比べるレコードを、1 つのゴルーチンがファイルに書き、どの判断もそれを読まない。`ATLAS_SHADOW_CAPTURE` がファイルを指定しない限りオフ |
+| `internal/memoryenvelope/envelope.go` | 宣言されたデプロイのメモリ予算をオペレーター申告のホスト容量と照合し、未強制の予算超過を報告する |
+| `internal/workspacefs/object_handle_linux.go` | 削除承認の間、Linux のファイルシステムオブジェクトを開いたまま保持し、承認されたオブジェクトが除去前に差し替えられないようにする |
+| `internal/workspacefs/object_handle_other.go` | 非 Linux プラットフォームでは、ファイルシステムオブジェクトを安全にピン留めして検証できないため、削除承認を拒否する |
 | `mutation_scope.go` | モデルのツールコールから正確なファイル・編集スコープを導出し、候補が要求対象以外を変更できないようにする |
-| `obligation_kinds.go` | 閉じた義務タイプの集合、必要な証拠の強度、各義務がどう充足されるかを定義する |
+| `obligation_kinds.go` | リクエストの義務を判断と台帳から導出し、配信がそれを満たしたかを確かめる |
 | `obligations.go` | 実行の義務が呼び出し側の宣言した契約と ATLAS のレガシー推論のどちらに由来するかを選び、その決定をリクエストに束ねたまま保つ |
-| `command_evidence.go` | シェルコマンドが何を実証するか: 実行、プローブ、静的チェック、または無。またコマンドラインがその部位の終了ステータスを報告するかどうか |
-| `guardrails*.go` | ツールごとのステアリングガード（縮約、コマンド/モジュール欠落のステア、doctype 除去） |
-| `shell_wrapper.go` | `validateShellCommand` の背後にあるコマンドポリシー: 複合コマンドを分割し、実行ラッパー（`sh -c`、`eval` など）の中を最大 16 層まで調べ、壊滅的なコマンドと検査できないラッパーを拒否 |
+| `internal/shellcmd/command_evidence.go` | シェルコマンドが何を実証するか: 実行、プローブ、静的チェック、または無。またコマンドラインがその部位の終了ステータスを報告するかどうか |
+| `guardrails*.go` | ツールごとのステアリングガード（縮約、コマンド/モジュール欠落のステア、doctype 除去）。`guardrails_reply.go` は序文のフレーズを正規化し、完了チェックが将来の作業を告知するだけの応答を認識できるようにする |
+| `internal/shellcmd/shell_wrapper.go` | `validateShellCommand` の背後にあるコマンドポリシー: 複合コマンドを分割し、実行ラッパー（`sh -c`、`eval` など）の中を最大 16 層まで調べ、壊滅的なコマンドと検査できないラッパーを拒否 |
+| `internal/shellcmd/destructive.go` | どのコマンドにも許されないシェルの形。破壊的な削除、フォークボム、デバイスへの書き込み |
 | `events.go` | 型付きエンベロープのブローカー（`/events`）と SSE の配管 |
-| `v3_bridge.go` | v3-service の `/v3/generate` + `/v3/plan` 向け SSE クライアント |
+| `internal/v3client/client.go` | v3-service の `/v3/generate` + `/v3/plan` 向け SSE クライアント。呼び出しの上限 `ATLAS_V3_TIMEOUT` は `v3_bridge.go` に残ります |
 | `types.go` | 共有型、ティア、ターン上限 |
+| `internal/wire/messages.go` | モデルのメッセージ、ツール結果、計画など、境界を越える型 |
+| `internal/wire/v3.go` | V3 サービスのリクエスト、レスポンス、証拠エンベロープとその検証 |
+| `internal/wire/tool_io.go` | 各ツールの引数と出力。モデルが読み書きする JSON |
+| `internal/wire/tool_classification.go` | ツール結果が起きたことを表す閉じた語彙 |
+| `internal/wire/events.go` | `/events` のエンベロープ |
+| `internal/taskcontract/task_contract.go` | タスク契約と成果物の記録。リクエストが求めたもの |
+| `internal/taskcontract/obligation_kinds.go` | 義務の閉じた語彙、必要な強度、義務の構築 |
+| `internal/taskcontract/verification_requirements.go` | 型付きのクライアント検証要件、実行の記録、その検証 |
 | `advisory_policy.go` | モデルの提案を保持するか候補を配信するかを決定する。検証と選択ルールの前にハード拒否権を適用する |
 | `authorization_decision.go` | 候補の証拠がタスクの認可要件（対象スコープと、既存ファイルの検証済み挙動の保存を含む）を満たすかチェックする |
 | `authorization_grant.go` | 正確な候補・対象・ワークスペース状態に束ねられた一回使い切りの許可を作成・消費・退役させる |
@@ -137,13 +149,11 @@ K3s デプロイパス（`scripts/install.sh`、`templates/` 内のマニフェ�
 | `delivery_settlement.go` | 完了した候補配信を記録し、認可された成果物が一致するバイトと台帳状態でまだ存在するかチェックする |
 | `edit_route_delivery.go` | 編集ツールの候補を認可と配信に通し、発元ツールの結果形式とフォールバック内容を保持する |
 | `evidence_wiring.go` | 構文と宣言コマンドの証拠生成者を候補ルートに接続し、候補識別子を割り当て、利用可能・欠落の証拠を記録する |
-| `execution_outcome.go` | コマンドの完了・中断・リソース枯渇を分類し、不完全な実行が成功した検証として数えられないようにする |
-| `exploration_budget.go` | 読み取り専用コールの反復の後、リクエストが要求するものに応じて実行に行動か応答を促す |
+| `internal/wire/execution_outcome.go` | コマンドの完了・中断・リソース枯渇を分類し、不完全な実行が成功した検証として数えられないようにする |
 | `feasibility_decision.go` | 生成の前に、利用可能な証拠生成者がタスクを充足できるかを評価し、生成を制御せずにその評価を記録する |
-| `fenced_framing.go` | 完全なフェンス済みファイルペイロードを認識し、その内容を抽出し、フレーミング文法とリトライガイダンスを供給する |
+| `internal/fencing/framing.go` | 完全なフェンス済みファイルペイロードを認識し、その内容を抽出し、フレーミング文法とリトライガイダンスを供給する |
 | `old_str_watch.go` | ストリーミング中の編集テキストが対象ファイルに一致できなくなった時点で暴走を止め、回復ガイダンスを供給する |
 | `repair.go` | セッションの書き込みが残した未解決の構文リペアを追跡し、 premature な完了をブロックし、ハンドオフ時に未解決のリペアを報告する |
-| `reply_lead_ins.go` | 序文のフレーズを正規化し、完了チェックが将来の作業を告知するだけの応答を認識できるようにする |
 | `route_disposition.go` | 各候補ルートがどう終わったか、その配信許可が内容のディスク到達に至ったかを追跡する |
 | `route_entry.go` | 各候補生成の試行に一意の識別子を作成し、その証拠・認可・配信の記録をリンク可能にする |
 | `staged_command_evidence.go` | 候補のバイト・ワークスペース・配信が最新である間のみ、ステージング済み検証を完了に対してクレジットする |
@@ -153,7 +163,7 @@ K3s デプロイパス（`scripts/install.sh`、`templates/` 内のマニフェ�
 | `v3_delivery_registry.go` | サービス作成の候補内容を配信してよい本番ルートと発元ツールのリスト |
 | `v3_fallback_note.go` | V3 が失敗・タイムアウトした後に書かれたファイルを追跡し、最終サマリでまだ現行の未チェック内容を開示する |
 | `verification_evidence.go` | クライアント宣言のコマンド観測から証拠を生成し、それが個々の検証義務のどれを充足するかを追跡する |
-| `verification_requirements.go` | 型付きのクライアント検証要件を検証し、宣言されたチェックとテスト資産の出自に応じて証拠の強度を制限する |
+| `verification_requirements.go` | 宣言された検証の証拠の強度を、このセッションが観測したテスト資産の出自に応じて制限する |
 | `workspace_observation.go` | フォアグラウンドとバックグラウンドのコマンドが行ったファイル変更を観測し、成果物と削除をセッション台帳に記録する |
 
 ### エージェントループのフロー
@@ -218,26 +228,7 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 
 ### ツール
 
-`proxy/tools.go` に登録された16個のツール:
-
-| ツール | 役割 | 読み取り専用 |
-|------|---------|-----------|
-| `read_file` | ファイル内容を読む（任意の offset/limit 付き） | はい |
-| `outline_file` | ファイルのトップレベルの関数/クラスを行範囲付きで一覧表示し、本体は含めない（`.py` は tree-sitter、それ以外はベストエフォートのスキャン）。全体を読むには大きすぎるファイル内の対象を位置特定する: まずアウトラインし、次に offset/limit 付きで `read_file` する。コードを返さないため、診断を接地できない — `read_file` がデフォルトのエントリーポイント | はい |
-| `write_file` | 新規ファイルを作成（既存の5行超ファイルでは拒否 — 安全制限を参照） | いいえ |
-| `edit_file` | ≤10 行の変更向けの外科的なインライン文字列置換（old_str/new_str） | いいえ |
-| `insert_after` | 指定した行番号（`read_file` が表示する行番号）の後ろに新しい行を挿入する。何も既存のものを変えずにコード（分岐、関数、import）を**追加**する場合向け: 再現すべき `old_str` がなく、長いスパンで失敗するのはまさにその工程 | いいえ |
-| `replace_lines` | 行範囲（`start_line`..`end_line`、`read_file` が表示する行番号）を新しい内容で置き換える。コードを再現せずに**変更**する場合向け: アンカーはスパン全体ではなく主張された2行（範囲の先頭行と末尾行、空白は無視）なので、逐語での再現負担は N 行ではなく 2 行になる。1回の呼び出しにつき最大60行 | いいえ |
-| `structural_edit` | tree-sitter セレクタ（`function:NAME`、`class:NAME`、`<tag>`）による関数/クラス/HTML 要素全体の書き換え; ノード全体の差し替えでは edit_file より優先して必須。Python、HTML、Go、JavaScript、TypeScript に対応 | いいえ |
-| `delete_file` | ファイルまたは空ディレクトリを削除 | いいえ |
-| `move_file` | ワークスペース内でファイルを移動またはリネーム（例: `index.html` → `templates/`）。純粋な移動 — V3/外科的編集のゲートをバイパスし、既存の宛先の上書きは拒否。シェルの `mv`/`cp` が拒否されるため「ファイルを再編成する」ための正規のパス | いいえ |
-| `find_file` | ファイル**名** / パスによる正規表現検索（安価な存在確認 + 位置特定）。ファイル内容を grep する `search_files` とは区別される。 | はい |
-| `search_files` | ファイル内容にまたがる正規表現検索（最大200件、.git/node_modules をスキップ） | はい |
-| `list_directory` | ディレクトリ内容を種別とサイズ付きで一覧表示 | はい |
-| `run_command` | サンドボックスコンテナ経由でシェルコマンドを実行; 5分のタイムアウト上限。シェルがまったくパースできないコマンドは、実行できなかった理由を返します: 原因が `-c`/`-e` の後ろにインラインで引用されたプログラムである場合、拒否はそのスニペットをファイルに書くようリダイレクトします。生の `syntax error near unexpected token` はモデルに変更すべきものを何も与えず、同一の行を再送させるためです | いいえ |
-| `run_background` | サンドボックス内で長時間実行プロセス（例: `python app.py`）を開始; `job_id` を即座に返す | いいえ |
-| `tail_background` | バックグラウンドジョブの新しい stdout/stderr を `job_id` で取得 | はい |
-| `stop_background` | バックグラウンドジョブを `job_id` で SIGTERM/SIGKILL | いいえ |
+`proxy/tools.go` に 16 個のツールが登録されています。各ツールの内容、制限、読み取り専用かどうかは [API.md § Tools available to the agent loop](../../reference/API.md#tools-available-to-the-agent-loop) をご覧ください。
 
 ### 成果物台帳（観測的）
 
@@ -292,7 +283,7 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 
 #### ターミナル契約とセッション予算
 
-すべてのセッションは、1つのエミッタから発せられるちょうど1つのターミナルイベントで終わります。それはレガシーの `summary` を変更せず運び、加算的な `status` — `completed`、`incomplete`、`stopped`、`timed_out`、`failed` — と安定した機械可読な `reason` を伴います。クライアントは、不在の status を `incomplete` として読み、未認識の語はそのまま表示し、完了としては読みません（`tui/events.go` の `onDone`、VS Code と JetBrains の拡張機能の `doneOutcome`）。ブローカーの `done`/`stage_end` エンベロープは、`success: true` を主張する代わりに同じ結果を報告します。
+すべてのセッションは、1つのエミッタから発せられるちょうど1つのターミナルイベントで終わります。それはレガシーの `summary` を変更せず運び、加算的な `status` — `completed`、`incomplete`、`stopped`、`timed_out`、`failed` — と安定した機械可読な `reason` を伴います。クライアントは、不在の status を `incomplete` として読み、未認識の語はそのまま表示し、完了としては読みません（`tui/internal/app/events.go` の `onDone`、VS Code と JetBrains の拡張機能の `doneOutcome`）。ブローカーの `done`/`stage_end` エンベロープは、`success: true` を主張する代わりに同じ結果を報告します。
 
 `completed` 以外のすべてのステータスについて、サーバーはフィールドと同じくその文も所有します。モデル自身の説明が通されるのは、完了ゲートがそれを認可した場合のみです。サマリのない非完了ターミナルには、結果・ディスク上に何かが存在するか・それが有効と示されたかを名指しするサーバー作成のサマリが与えられ、非完了ステータスでエミッタに到達した完了の主張は、周囲を編集するのではなく全面的に差し替えられます。これによりフェーズ 2B が残したギャップが閉じられます: `summary` だけを読むクライアント — `status` が存在する前に書かれたすべてのクライアント — は今、両方を読むクライアントと同じ真実を読みます。
 
@@ -316,7 +307,7 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 
 `SessionWrites` は、モデルが供給した生のパスをキーとした別の古いマップです。そこから生じるエイリアシングについては `proxy/types.go` が文書化しています。その読み手は、write_file の上書きガードにおけるモデル自身のドラフトの概念、アクティブなデバッグのファストパス、セッションマニフェストのノート、V3 のプロジェクトコンテキスト、アーティファクトゲートのドリフトチェック、そして編集ツールのレニエンシーゲートです。ここでそのいずれも変わりません。
 
-作業契約の検証要求（`decideVerificationDemand`）は、その問い合わせ対象のコード成果物をレジャーから取ります。そこではすべてのミューテーションツールの着地が `recordLedgerEffect` によって正規の形で記録されています。それに答えるカバレッジ — 合格した実行がどのパスを名指ししたか、そしてそのバイトが何だったか — は `proxy/guardrails.go` の `changedPathsForCoverage` によって計算されます: セッションの書き込みとレジャーの正規のコード成果物の和集合であり、要求とそのカバレッジは1つの同一性を読みます。それ以前は、カバレッジはセッション書き込みマップだけを読んでいました。`edit_file` と `structural_edit` はそこに書き込まず、納品済み候補についてはどの編集ツールも書き込まなかったため、`task_mode: work` の下のすべての編集タスクは、モデルが何を実行しても `verification_demanded_unmet` で終わっていました。カバレッジは、実行が現在のバイトの上の変更されたパスを名指ししたと述べるのみです。完了には依然としてその実行が必要であり、後のミューテーションは依然として要求を再武装させ、レジャー自身の検証は依然としてミューテーション債務を決着させます。プログラムかそのテストを実行した、またはページを取得したセグメントだけがカバレッジを結び付けます。そしてそれは、コマンドラインがそのセグメントの終了ステータスを報告するときに限ります（`classifyCommandEvidence`）: パースやリントやビルドは何も結び付けず、`tail` にパイプされたテストも同様です。ファイルを名指ししないランナーは、それが発見するセッションのファイルを結び付けます（`runnerEntries`）: 裸の `pytest` や `pytest tests/` はそのテストファイル、`python -m unittest` はその `test*.py`、`go run .` はそのパッケージ、`go test ./...` はテストを含むパッケージ（テストがなければコンパイルのみ）、そして `npm test`、`jest`、`vitest` はそのデフォルトパターンに一致するファイルです。インポートは、名指しされたエントリポイントからと同様に、そこから辿られます。失敗した実行も記録され、同じバイトの上の失敗は以前の合格を取り消すため、最新の結果が決定します。出口で要求が未充足のとき、検証ゲートは、ファイナライザーが出口を拒否する前に、そのファイルを実行するであろうコマンドとともにその旨を述べます。キャンセルされた編集はミューテーションを報告せず、レジャーはそれについて何も観察しません。
+作業契約の検証要求（`decideVerificationDemand`）は、その問い合わせ対象のコード成果物をレジャーから取ります。そこではすべてのミューテーションツールの着地が `recordLedgerEffect` によって正規の形で記録されています。それに答えるカバレッジ — 合格した実行がどのパスを名指ししたか、そしてそのバイトが何だったか — は `proxy/guardrails.go` の `changedPathsForCoverage` によって計算されます: セッションの書き込みとレジャーの正規のコード成果物の和集合であり、要求とそのカバレッジは1つの同一性を読みます。それ以前は、カバレッジはセッション書き込みマップだけを読んでいました。`edit_file` と `structural_edit` はそこに書き込まず、納品済み候補についてはどの編集ツールも書き込まなかったため、`task_mode: work` の下のすべての編集タスクは、モデルが何を実行しても `verification_demanded_unmet` で終わっていました。カバレッジは、実行が現在のバイトの上の変更されたパスを名指ししたと述べるのみです。完了には依然としてその実行が必要であり、後のミューテーションは依然として要求を再武装させ、レジャー自身の検証は依然としてミューテーション債務を決着させます。プログラムかそのテストを実行した、またはページを取得したセグメントだけがカバレッジを結び付けます。そしてそれは、コマンドラインがそのセグメントの終了ステータスを報告するときに限ります（`shellcmd.ClassifyCommandEvidence`）: パースやリントやビルドは何も結び付けず、`tail` にパイプされたテストも同様です。ファイルを名指ししないランナーは、それが発見するセッションのファイルを結び付けます（`shellcmd.RunnerEntries`）: 裸の `pytest` や `pytest tests/` はそのテストファイル、`python -m unittest` はその `test*.py`、`go run .` はそのパッケージ、`go test ./...` はテストを含むパッケージ（テストがなければコンパイルのみ）、そして `npm test`、`jest`、`vitest` はそのデフォルトパターンに一致するファイルです。インポートは、名指しされたエントリポイントからと同様に、そこから辿られます。失敗した実行も記録され、同じバイトの上の失敗は以前の合格を取り消すため、最新の結果が決定します。出口で要求が未充足のとき、検証ゲートは、ファイナライザーが出口を拒否する前に、そのファイルを実行するであろうコマンドとともにその旨を述べます。キャンセルされた編集はミューテーションを報告せず、レジャーはそれについて何も観察しません。
 
 ### ツール選択バイアスの緩和策
 
@@ -327,7 +318,7 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 3. **ステップごとのツールリストフィルタ**（同じトリガー）。一時的な `[system note]` のユーザーメッセージが注入され、このステップでは structural_edit が唯一の構造的編集ツールであることをモデルに思い出させる。
 4. **ASA ステアリングベクトル**（`geometric-lens/asa_calibration/`）。活性化ステアリングが残差ストリームの分布を上流でシフトさせ、いかなる拒否が発火する前の初回の判断でも structural_edit が優先される。`inference/entrypoint-v3.1.sh` が `/models/ast_edit_steering.gguf` から自動ロードするのは、その `.model` サイドカーが選択中のモデルと一致する場合のみ — `geometric-lens/asa_calibration/README.md` のワークフローで互換性のあるビルドを行えば、以降は常時オン。パス/スケール/レイヤー範囲は `ATLAS_CONTROL_VECTOR*` 環境変数でオーバーライドする。
 
-   **モデル別の結合。** 各 ASA ベクトルは特定モデルの残差ストリーム幾何に対してトレーニングされます。モデルをまたぐフォールバックに安全なものはありません。`atlas asa check` は `.model` サイドカーを検証し、ロード済みの埋め込み次元をプローブし、GGUF のレイヤーメタデータをパースして、`compat` / `needs-build` / `incompatible` を報告します。`atlas asa build` はロード済みモデルから抽出レイヤーを導出し、ベクトルとマーカーを書き込み、lens コンテナ内で実行されます。`atlas asa publish` はアップロード前に、マーカーの欠落や不一致を拒否します。[CLI.md § atlas asa](../../CLI.md#atlas-asa) を参照。
+   **モデル別の結合。** 各 ASA ベクトルは特定モデルの残差ストリーム幾何に対してトレーニングされます。モデルをまたぐフォールバックに安全なものはありません。`atlas asa check` は `.model` サイドカーを検証し、ロード済みの埋め込み次元をプローブし、GGUF のレイヤーメタデータをパースして、`compat` / `needs-build` / `incompatible` を報告します。`atlas asa build` はロード済みモデルから抽出レイヤーを導出し、ベクトルとマーカーを書き込み、lens コンテナ内で実行されます。`atlas asa publish` はアップロード前に、マーカーの欠落や不一致を拒否します。[CLI.md § atlas asa](../../reference/CLI.md#atlas-asa) を参照。
 
 ### ファイルごとのティア分類
 
@@ -352,7 +343,7 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 
 これらのゲートのうち3つは、リクエストの言い回しではなく、実行が観測したものから発火するかどうかを決めます。リクエストの言い回しは、どんなリストも完結できない開放語彙だからです:
 
-- **検証ゲート** — ユーザーが修復を求めた場合、*または*実行・テスト・チェックが実際に非ゼロで終了し、その後何も合格していない場合に `done` をブロックします。2番目の条件は、ユーザーのメッセージのどんな読みからも予測できなかった、モデルが自ら持ち込んだ失敗テストを捕捉します。後の失敗は以前の合格を取り消します。失敗した lint やパースは、同じチェックが再び合格するか、実行が合格することで解消され、lint は失敗したテストを解消しません。プログラムまたはそのテストを実行した実行、または HTTP エラーなら失敗する形でページを取得した実行（`curl -f`、または本文を `grep` にパイプ）のみが検証として数えられ、コマンドラインがその部位の終了ステータスを報告している場合に限ります（`proxy/command_evidence.go`）。パース、lint、ビルド、`--version` は検証ではなく、`pytest | tail`、`pytest || true`、`app.py; echo`、`app.py &` も同様です。ゲートはそのようなコマンドを理由付きでモデルに名指しして返します。その台帳はブール値ではなく成果物に束ねられています。すべての検証実行は `VerificationRecord` — コマンドライン、その証拠種別、失敗したかどうか、その stdin 契約、検証セグメントが名指ししたセッション書き込みファイルごとの sha256 — を追記し、終了時にそれらのファイルを再ハッシュし、ディスク上のバイトが実行が保証したバイトでなくなった時点で `done` を弾きます。出力を要求するプロンプトのタスクで何も表示しなかったグリーンの実行は、数えられる代わりに*失敗した検証としてラッチ*します。`prog < file` としてしか実行されなかったプログラム（リダイレクトはセグメント内のどこで認識され、`cat file | prog` も同様）は、呼び出し元が使わないかもしれない契約の下で検証されたとみなされ、終了時にスタンドアロン実行を1回要求します。パース警告付きで着地した書き込みは、そのパスを保留中実行としてマークします: そのパスへの以後の書き込みと編集は、コマンドが実際にそれの*実行を試みる*まで弾かれます — インタープリタ起動または `./file`。ファイルを名指しする `cat`/`grep`/`ls` は何も証明せず何も解消せず、`python -m py_compile` のようなパースも同様です。そして赤実行の連続が2を超えると、ループはモデルが同じテキストに `done` を試みるのを待つ代わりに、即座に書き直しの助言（パッチをやめて、白紙から書き直す）を注入します。
+- **検証ゲート** — ユーザーが修復を求めた場合、*または*実行・テスト・チェックが実際に非ゼロで終了し、その後何も合格していない場合に `done` をブロックします。2番目の条件は、ユーザーのメッセージのどんな読みからも予測できなかった、モデルが自ら持ち込んだ失敗テストを捕捉します。後の失敗は以前の合格を取り消します。失敗した lint やパースは、同じチェックが再び合格するか、実行が合格することで解消され、lint は失敗したテストを解消しません。プログラムまたはそのテストを実行した実行、または HTTP エラーなら失敗する形でページを取得した実行（`curl -f`、または本文を `grep` にパイプ）のみが検証として数えられ、コマンドラインがその部位の終了ステータスを報告している場合に限ります（`proxy/internal/shellcmd/command_evidence.go`）。パース、lint、ビルド、`--version` は検証ではなく、`pytest | tail`、`pytest || true`、`app.py; echo`、`app.py &` も同様です。ゲートはそのようなコマンドを理由付きでモデルに名指しして返します。その台帳はブール値ではなく成果物に束ねられています。すべての検証実行は `VerificationRecord` — コマンドライン、その証拠種別、失敗したかどうか、その stdin 契約、検証セグメントが名指ししたセッション書き込みファイルごとの sha256 — を追記し、終了時にそれらのファイルを再ハッシュし、ディスク上のバイトが実行が保証したバイトでなくなった時点で `done` を弾きます。出力を要求するプロンプトのタスクで何も表示しなかったグリーンの実行は、数えられる代わりに*失敗した検証としてラッチ*します。`prog < file` としてしか実行されなかったプログラム（リダイレクトはセグメント内のどこで認識され、`cat file | prog` も同様）は、呼び出し元が使わないかもしれない契約の下で検証されたとみなされ、終了時にスタンドアロン実行を1回要求します。パース警告付きで着地した書き込みは、そのパスを保留中実行としてマークします: そのパスへの以後の書き込みと編集は、コマンドが実際にそれの*実行を試みる*まで弾かれます — インタープリタ起動または `./file`。ファイルを名指しする `cat`/`grep`/`ls` は何も証明せず何も解消せず、`python -m py_compile` のようなパースも同様です。そして赤実行の連続が2を超えると、ループはモデルが同じテキストに `done` を試みるのを待つ代わりに、即座に書き直しの助言（パッチをやめて、白紙から書き直す）を注入します。
 - **行動なき done ゲート** — リクエストが状態変更を要求し、ディスクに何も着地していない場合に `done` をブロックします。**クライアントが検証済みの `task_contract` を送る場合、その `task_mode` がその問いを決めます**: `work` は状態変更が必要、`question` は不要で、メッセージの言い回しはどちらも上書きしません。契約が送られない場合、レガシーヒューリスティックが従来どおり決めます — 明示的な動作の言い回しでブロックするか、*または*モデルが非会話メッセージでプロジェクトを開き、何も変わらなかった場合にブロックします。1つのヘルパーがこの選択を所有し（`proxy/guardrails.go::decideActionDemand`）、両方の action-demand 呼び出しサイトがそれを消費します。ヒューリスティックはそこで一度評価され、契約が決める場合でも比較のために記録されます。これにより、インテントリストにない動詞（"remove the debug logging" はどれにも一致しない）もカバーされます。一方で質問は免除されたままです: それらは会話であり、ファイルを読んで何も書かずに1つに答えるのは正しい動作です。
 - **証拠ゲート** — 実行が内容を一度も見せられていないワークスペースファイルを応答が名指しする終了をブロックします。書き込みツールは既に、最初に読まれていないパスの編集を拒否します。これは同じルールを、応答そのものが成果物である回答に適用します。`AgentContext.BodySeen` — モデルの前に実際に置かれたファイルを記録する、`FilesRead` より意図的に狭い集合（`outline_file` は最新性追跡のためにファイルのソース全体をキャッシュするが、モデルにはシグネチャと行範囲しか見せないため）— をキーとします。ファイルを読むか、それを自分で書いていれば、ゲートは解消されます。
 
@@ -366,7 +357,7 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 - **破壊的なものは何も許可しない。** `question` モードはミューテーションを許可せず、ミューテーション債務、壊れた成果物、失敗した検証、バックグラウンドハザード、削除義務を消去もしません。モデルがそれでもミューテートする場合、同じ安全性と完了のルールがそれらのバイトを統治します。削除は依然として、それ自体のパスと識別子に束ねられた確認を必要とします。
 - **モデルには決して届かない。** タスクモードはどのプロンプトにも含まれず、モデル・V3・レンズの出力はそれを設定できません。内部的に不正なモードは、質問として読まれるのではなく、作業を要求する側へフェイルクローズします。
 
-シャドー診断記録（非公開、観測的、デフォルトでオフ — [OPERATIONS.md](../../OPERATIONS.md#private-diagnostics-task-contract-shadow-capture) を参照）は、**記録種別ごと**にバージョンを持ちます。1つにフィールドを追加しても、別のものが黙って再定義されないようにするためです:
+シャドー診断記録（非公開、観測的、デフォルトでオフ — [OPERATIONS.md](../../guides/OPERATIONS.md#private-diagnostics-task-contract-shadow-capture) を参照）は、**記録種別ごと**にバージョンを持ちます。1つにフィールドを追加しても、別のものが黙って再定義されないようにするためです:
 
 | 記録 | バージョン | 契約 |
 | --- | --- | --- |
@@ -377,7 +368,7 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 
 `comparison` は引き続き契約対レガシーを記述し、`influences_live_decision` は、観測者とそのシンクがポリシーに影響を与えられるかを記述し続け、false のままです。スキーマ変更とは、閉じたフィールド集合とその読み取り側を持つ新しいバージョンのことです — 既存バージョンの再定義でも、未知のフィールドを黙って無視するパーサでもありません。
 
-クライアント: TUI は通常メッセージに `work` を、ワンショットの `/ask <message>` に `question` を送ります。VS Code 拡張と JetBrains プラグインはユーザーが選んだ Work/Question モードを送り、既定は `work` です。e2e と信頼性ハーネスは `work` を送ります。すべての自前クライアントが宣言するため、契約のないリクエストは外部の呼び出し元のものであり、V3 候補を得られません（[CANDIDATE_POLICY.md](../../CANDIDATE_POLICY.md)）。`expected_outputs` と `verification` は運ばれ検証されますが、**まだ移行されていません** — 成果物と検証の義務は依然として古い方法で導出されます。
+クライアント: TUI は通常メッセージに `work` を、ワンショットの `/ask <message>` に `question` を送ります。VS Code 拡張と JetBrains プラグインはユーザーが選んだ Work/Question モードを送り、既定は `work` です。e2e と信頼性ハーネスは `work` を送ります。すべての自前クライアントが宣言するため、契約のないリクエストは外部の呼び出し元のものであり、V3 候補を得られません（[CANDIDATE_POLICY.md](../../reference/CANDIDATE_POLICY.md)）。`expected_outputs` と `verification` は運ばれ検証されますが、**まだ移行されていません** — 成果物と検証の義務は依然として古い方法で導出されます。
 
 証拠ゲートが存在するのは、上の行動なき done ゲートの免除 — 質問は会話であるため決してゲートされない — が、回答パスに完了チェックを1つも残さなかったためです。3つのモジュールにまたがる診断的な質問で計測しました: 12セッションにわたり、モデルは `list_directory` を実行し、ちょうど1つのファイルをアウトラインし、応答しました。本体を1度も読まずに。結果は、検査したものではなく当てたファイル名を追跡しました（`scoring.py` は 11/11 で誤り、`planning.py` は 1/1 で正解。プロンプトに "scored" という語が含まれていたためです）。ある応答は、一度も見ていないファイルの「134-142行」を引用しました。
 
@@ -393,7 +384,7 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 
 設定ファイルの正確なリストと拡張子集合は `proxy/tools.go:classifyFileTier` にあります。
 
-すべてのコンテンツ編集ツールは `runEditPipeline`（`proxy/tool_write_v3.go`）を通じてパイプラインに入ります — `edit_file`、`insert_after`、`replace_lines` は直接、`structural_edit` と `write_file` はそれぞれの V3 パス経由。ティア分類は `max(oldTier, newTier)` を使うため、T2+ ファイルを T1 のスタブへ縮小する破壊的な編集も依然として対象になります。これをスキップするツールは、ティアにかかわらず候補生成もレンズスコアリングもない貪欲サンプルを1つだけ生成します。ティアシステムが防ぐために存在するのはまさにそれです。`tests/contracts/test_write_gate_coverage.py` が、すべての書き込みパスがそこに到達することを表明します。
+すべてのコンテンツ編集ツールは `runEditPipeline`（`proxy/tool_write_v3.go`）を通じてパイプラインに入ります — `edit_file`、`insert_after`、`replace_lines` は直接、`structural_edit` と `write_file` はそれぞれの V3 パス経由。ティア分類は `max(oldTier, newTier)` を使うため、T2+ ファイルを T1 のスタブへ縮小する破壊的な編集も依然として対象になります。これをスキップするツールは、ティアにかかわらず候補生成もレンズスコアリングもない貪欲サンプルを1つだけ生成します。ティアシステムが防ぐために存在するのはまさにそれです。`tests/contracts/api/test_write_gate_coverage.py` が、すべての書き込みパスがそこに到達することを表明します。
 
 **T2（V3 パイプライン）** — ファイルが以下の場合に該当:
 - `hasLogicIndicators(content)` が true を返す — 関数/メソッド定義、制御フロー、エラー処理、Flask/FastAPI/Django ルーティング、Express/Node API、React の状態/データ、バリデーション、データベース呼び出し、JSX/React コンポーネントパターン、インポートをカバーするパターンファミリーにわたる **2+ 一致**（リテラルトークンリストは `proxy/tools.go:hasLogicIndicators`）
@@ -403,9 +394,126 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 
 ### プランモード（ターンごとの事前準備）
 
-プランモードは、エージェントの各ターンで最初のツールコールより前に1回実行される事前プランニングステップです: プランナーが候補プランをサンプリングし、ヒューリスティックにスコア化し、勝者をシステムプロンプトにレンダリングします。そこでは、モデルがプランから逸脱して空回りすると遵守ゲートが自動修正します。探索の空回りを減らし、プランの検証ステップを守ることで証拠のない `done` をブロックします。
+プランモードは、モデルがツールを呼び出し始める前に、エージェントの各ターンで1回実行される事前プランニングステップです。プランナーは異なる温度で LLM から 3 つの候補プランをサンプリングし、それぞれをヒューリスティックにスコア化して最良のものを選びます。勝者のプランはシステムプロンプトに入り、モデルがプランから逸脱して空回りすると自動修正する遵守ゲートの起点になります。
 
-完全なフロー、コンポーネント、調整可能な値、スキップ条件、コスト、テストマトリクスは [PLAN_MODE.md](../../PLAN_MODE.md) を参照してください。
+次の 2 つの失敗モードに対処するために設計されています:
+
+1. **探索の空回り。** プランがないと、モデルの最初の 2〜4 回のツールコールは `read_file → list_directory → search_files → read_file → ...` のように、行動ではなく探索になりがちです。プランがあれば、システムプロンプトが「これを読み、あれを編集し、curl で検証する」と明示します。
+2. **証拠のない「done」。** プランの `verify_step` は修正の証拠として扱われます。検証ゲートは、そのステップが成功するまで `done` を拒否します。
+
+#### エンドツーエンドのフロー
+
+```mermaid
+flowchart TD
+    User["User msg"] --> Tier{T0?}
+    Tier -->|Yes| Skip["Skip planning"] --> Loop["Agent loop"]
+    Tier -->|No| Sample["samplePlanContext\n(read priority files)"]
+    Sample --> Plan["POST /v3/plan\n(3 candidates × different T)"]
+    Plan --> Score["Heuristic score\n(verify? steps in [2,6]? rationale?)"]
+    Score --> Best["Pick winner"]
+    Best --> System["Render plan in\nsystem prompt"]
+    System --> Loop
+    Loop --> Tool["Tool call"]
+    Tool --> Adhere{"matches\nunsatisfied step?"}
+    Adhere -->|Yes| Tick["satisfied[i]=true\nreset off_streak"] --> Loop
+    Adhere -->|No| Recon{"recon tool?\n(read/list/find/search)"}
+    Recon -->|"Yes — neutral"| Loop
+    Recon -->|No| Streak["off_streak++"]
+    Streak --> Cap{streak ≥ 5?}
+    Cap -->|No| Loop
+    Cap -->|Yes| Revise["revisePlan()\n(carry forward FilesRead\nas extra context)"] --> Loop
+
+    style Plan fill:#2d5016,color:#fff
+    style Revise fill:#5c3a1a,color:#fff
+```
+
+#### コンポーネント
+
+##### v3-service: `/v3/plan` (Python)
+
+`v3-service/planning.py` で定義され、`v3-service/main.py` がルートを提供します。ハンドラーの処理:
+
+1. ユーザーメッセージ、作業ディレクトリ、切り詰めたプロジェクトファイルで `PLAN_PROMPT_TEMPLATE` をレンダリングします。
+2. シードオフセットと温度 `[0.3, 0.5, 0.7]` で LLM を 3 回呼び出します。デフォルトではオプションの `chat_template_kwargs: {enable_thinking: false}` 制御を送り、プラン JSON 用に 2,048 出力トークンを確保します。対応するテンプレートは推論チャンネルを無効にし、それ以外のテンプレートはこのフラグを無視します。`ATLAS_PLAN_THINKING=1` は推論を要求し、予算を 8,192 に引き上げます。モデルファミリー固有のプロンプト指示は注入しません。
+3. 各生レスポンスを、Markdown フェンスに寛容で波括弧の深さを認識する抽出器（`_parse_plan_json`）で解析します。
+4. 解析した各プランを `_score_plan` でスコア化します（上限 1.0）:
+   - `verify_step` がある: **+0.3**
+   - `len(steps) ∈ [2, 6]`: **+0.2**。それ以外で 1 ステップ以上: **+0.05**。ステップのないプランのスコアは 0
+   - 検証ステップがプログラムやそのテストを実行する、またはページを取得する（`pytest`、`python3 app.py`、`curl`、`go test` など）: **+0.2**。ビルド、解析、リントだけのステップ（`py_compile`、`tsc`、`ruff`、`go build`）には加点しません。エージェントループもそれを検証として数えません
+   - 検証ステップがサーバーを起動するだけ: **−0.3**。これで +0.3 が打ち消されます
+   - 既に存在するファイルを作成するステップがある: **−0.5**
+   - ユーザーが名前を挙げたファイルを対象とするステップごとに **+0.1**（上限 +0.2）
+   - `rationale` が空でない: **+0.1**
+5. 最高スコアのプランを選びます。同点の場合はステップ数の少ないプランを優先します（冗長さを避けるため）。勝者の検証ステップがサーバーを起動するだけなら、その `verify_step` の印を外します。ステップ自体はプランに残り、ループ自身の検証ゲートに委ねます。
+6. すべての候補の解析に失敗した場合は、1 ステップのフォールバック（`{action: "investigate the request and act"}`）を返すため、プランナーの失敗でエージェントループが止まることはありません。
+
+API の契約は [API.md § POST /v3/plan](../../reference/API.md#post-v3plan) に記載されています。
+
+##### proxy: ブリッジ、フック、ゲート (Go)
+
+| ファイル | 役割 |
+|---|---|
+| `proxy/internal/v3client/client.go` | `PlanStreaming(reqCtx, v3URL, requestID, req, onProgress)` — SSE ストリームを開き、進捗イベントをコールバックに転送し、`event: result` フレームから最終的な `Plan` を返します。`reqCtx` がエージェントのリクエストコンテキストを結び付けるので、`/cancel` は実行中のプランを中止します。V3 パイプライン実行用の `GenerateStreaming` と同じ形です。 |
+| `proxy/internal/wire/` | `V3PlanRequest`（`v3.go`）、`Plan` と `PlanStep`（`messages.go`）の型。 |
+| `proxy/types.go` | `AgentContext` に `Plan`、`PlanStepsSatisfied[]`、`PlanOffStreak`、`PlanRevisions` が加わります。 |
+| `proxy/plan_generation.go` | `samplePlanContext()` はプランナーのために優先ファイル（app.py、templates/index.html、package.json など）をたどります。`shouldGeneratePlan()` はティア、メッセージ長、読み取り専用のリクエストかどうかで判定します。`generatePlan()` はブリッジを実行し、トークンごとのノイズを捨て、全ステップのリストを付けて `plan_loaded` を発行します。 |
+| `proxy/gates_plan.go` | `matchPlanStep()`（ツール名とパス末尾の緩い一致）、`recordPlanAdherence()`（ツールコールごとの集計。どのステップにも一致しない偵察コール — `read_file`/`list_directory`/`find_file`/`search_files` — は中立で、`off_streak` を延ばしません）、`revisePlan()`（`FilesRead` を追加コンテキストとして引き継いで再生成）。 |
+
+システムプロンプトのレンダリングは `buildSystemPrompt` で行われます。プランのステップは番号付きリストとしてレンダリングされ、`✓` マーカーは検証ステップにのみ付きます。検証ステップは、検証ゲートが `done` に対して守る「修正の証拠」のステップとして明示されます。（ステップごとの ☐/✓/⚐ グリフは TUI のレンダリングのものです。下記を参照してください。）
+
+##### tui: レンダリング (Go)
+
+`tui/internal/pipelinestate/plan.go` は `PlanView`（モデル上の状態）を定義し、`tui/internal/app/state.go` は `tui/internal/app/events.go` のチャットディスパッチャーに接続された 3 つの `applyPlan*` ハンドラーを定義します:
+
+| イベント | ハンドラー | UI への効果 |
+|---|---|---|
+| `plan_loaded` | `applyPlanLoaded` | `m.plan` を新しいプランに置き換え、全ステップを状態グリフ付きで示す複数行のチャット行を追加します。修正版は `m.plan` を上書きし、Satisfied フラグをリセットします。 |
+| `plan_adherence`（一致） | `applyPlanAdherence` | 一致したステップの `Satisfied` フラグを切り替え、1 行の `✓ s2 satisfied · edit_file (1/3)` を追加します。 |
+| `plan_adherence`（不一致） | `applyPlanAdherence` | **無言** — プラン外のコールは内部状態を更新するだけです。このフィルターがないと、プラン外のコールごとにチャット行が増え、実際の進捗が埋もれてしまいます。 |
+| `plan_revise` | `applyPlanRevise` | 現在のプランに `Revising=true` を設定し、`Plan revising (rev 1): <reason>` を追加します。次の `plan_loaded`（`revision>0`）がそれを置き換えます。 |
+| `v3_plan` | `formatV3StageEvent` | プランナー自身の進捗（`candidate 1 score=0.80`、`plan 1 won`）を `plan` チャット行のメタタグの下にレンダリングします。 |
+
+#### 調整可能な値
+
+`proxy/gates_plan.go` で定義:
+
+| 定数 | デフォルト | 理由 |
+|---|---|---|
+| `planAutoReviseThreshold` | 5 | 自動修正が発動するまでの、偵察以外のプラン外ツールコールの数（偵察ツールは連続回数を延ばさないので、自然な探索は数えられません）。誤ったプランを早く捕まえられる程度に厳しく、はぐれたコールが少しあった程度では空回りと判定しない程度に緩い値です。 |
+| `planMaxRevisions` | 2 | ループごとの自動修正の上限。これを超えると、最後のプランが残り、修正だけが止まります。修正が同じステップを返した場合は、プランを破棄します。プランから外れ続ける異常な入力で `/v3/plan` が永遠に繰り返されるのを防ぎます。 |
+
+`v3-service/planning.py` の定数:
+
+| 定数 | デフォルト | 理由 |
+|---|---|---|
+| `n_candidates` | 3 | 温度 `[0.3, 0.5, 0.7]` での多様なサンプリング。候補が増えるほど所要時間が延びます（リファレンスモデルで候補あたり約 5〜30 秒）。 |
+| `max_tokens`（候補ごと） | 2048 | 経験上、根拠付きの 6 ステップのプランに足ります。初期のテストでは 1024 だと JSON の途中で切れました。 |
+
+#### プランモードがスキップされるとき
+
+`shouldGeneratePlan` の 3 つの条件:
+
+1. **`ctx.Tier == Tier0Conversational`** — 些細なチャット（"hi"、"thanks"）ではプランしません。
+2. **`len(trimmed) < 12`** — 前のターンのプランに依存する短い応答（"yes do it"、"looks good"）では再度プランしません。
+3. **`isReadOnlyRequest(message)`** — 見るだけのリクエスト（"list the files"）にプランは不要で、誤ったプランはモデルを編集へ誘導してしまいます。
+
+それ以外のターンはすべてプランします。失敗（`/v3/plan` の 5xx、ネットワークエラー、フォールバックでも救えないほどすべての候補を解析できない場合）は静かに縮退します。ループは `ctx.Plan` なしで動き、エージェントループはプランモードがオフのときと同じように振る舞います。
+
+#### コスト
+
+所要時間: リファレンスモデルで**候補あたり約 5〜30 秒**（3 候補のスイープ）。トークンコスト: 予算は `3 × 2048 max_tokens` で、実際は候補あたり約 1500 トークン × 3 = 約 4500 トークンです。
+
+どちらもエージェントの最初のツールコールの前に支払います。この投資は、モデルが無駄な探索のラウンドを省いた時点で回収されます（ツールコールは 1 回ごとに約 5〜10 秒の LLM 往復とツール実行がかかります）。
+
+#### テスト
+
+| レイヤー | ファイル | カバー範囲 |
+|---|---|---|
+| v3-service のプランエンドポイント | `tests/v3-service/pipeline/test_plan_scoring.py`（スコアラー）。パーサーは `curl /v3/plan` でスモークテスト | スコアラーは、プログラムやそのテスト、プローブを実行する検証ステップに加点し、静的チェック（ビルド、解析、リンター）にも偵察コールにも加点しません。パーサーの許容範囲（フェンス、散文の前置き、波括弧のネスト）は 3 候補のサンプラーで確かめます |
+| プロキシのブリッジ | `proxy/internal/v3client/client_test.go`。ステージのルーティングは `proxy/v3_bridge_test.go` | SSE の解析、結果が欠けたときのエラー、ステージのルーティング |
+| プロキシのフック | `proxy/agent_test.go` | 優先ファイルの取得、切り詰めのしきい値、フォールバックの走査、ティアと長さの判定 |
+| プロキシの遵守 | `proxy/gates_plan_test.go`。システムプロンプトは `proxy/gates_test.go` | 一致ロジック（ツール名 + パス末尾）、失敗したコールの除外、修正回数の上限、システムプロンプトのレンダリング |
+| TUI のレンダリング | `tui/internal/pipelinestate/plan_test.go`。ハンドラーは `tui/internal/app/plan_test.go` | `PlanView` の状態遷移、修正時の plan_loaded による置き換え、プラン外での無言 |
 
 ### 安全制限
 
@@ -716,9 +824,9 @@ graph LR
     style AP fill:#1a3a5c,color:#fff
 ```
 
-`llama-server` と `sandbox` は独立して起動します。`geometric-lens` は `llama-server` が healthy になるのを待ちます; `v3-service` は `llama-server` と `geometric-lens` を待ちます; `atlas-proxy` は `llama-server`、`geometric-lens`、`v3-service`、`sandbox` を待ちます。同じ `inference/entrypoint-v3.1.sh` が Docker Compose、ベアメタル、K3s を駆動するため、コンテキストサイズ、KV キャッシュ量子化、flash attention、mlock は環境変数で制御され、挙動はこれらのモード間で同一です。macOS ハイブリッドパスは `scripts/atlas-llama-macos.sh` 経由でネイティブ llama-server を起動し、このスクリプトはエントリーポイントのフラグをミラーします。
+`llama-server` と `sandbox` は独立して起動します。`geometric-lens` は `llama-server` が healthy になるのを待ちます; `v3-service` は `llama-server` と `geometric-lens` を待ちます; `atlas-proxy` は `llama-server`、`geometric-lens`、`v3-service`、`sandbox` を待ちます。同じ `inference/entrypoint-v3.1.sh` が Docker Compose、ベアメタル、K3s を駆動するため、コンテキストサイズ、KV キャッシュ量子化、flash attention、mlock は環境変数で制御され、挙動はこれらのモード間で同一です。macOS ハイブリッドパスは `scripts/install/atlas-llama-macos.sh` 経由でネイティブ llama-server を起動し、このスクリプトはエントリーポイントのフラグをミラーします。
 
-インストールとモード別の立ち上げ手順（NVIDIA / ROCm オーバーライド、ベアメタル、macOS ハイブリッド Metal、K3s マニフェスト）は [SETUP.md](./SETUP.md) に、macOS ネイティブパスは [SETUP_MACOS.md](../../SETUP_MACOS.md) にあります。
+インストールとモード別の立ち上げ手順（NVIDIA / ROCm オーバーライド、ベアメタル、macOS ハイブリッド Metal、K3s マニフェスト）は [SETUP.md](./SETUP.md) に、macOS ネイティブパスは [SETUP_MACOS.md](../../guides/SETUP_MACOS.md) にあります。
 
 ---
 

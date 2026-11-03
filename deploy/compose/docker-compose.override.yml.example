@@ -1,0 +1,50 @@
+# deploy/compose/docker-compose.override.yml.example — dev iteration mode
+#
+# Compose automatically merges `docker-compose.override.yml` on top of
+# `docker-compose.yml` if it exists. This file shows the override we use
+# during active development to skip the COPY-and-rebuild loop on every
+# Python edit.
+#
+# Activate by copying:
+#
+#     cp deploy/compose/docker-compose.override.yml.example docker-compose.override.yml
+#     docker compose up -d
+#
+# Deactivate by deleting (or renaming) `docker-compose.override.yml`,
+# then `docker compose up -d` again.
+#
+# Scope:
+# - geometric-lens — bind-mount source + `uvicorn --reload`. Saves to .py
+#   files reload the worker in <1s.
+# - v3-service — bind-mount source. The service uses stdlib http.server
+#   (no built-in reloader); after a code change, run
+#   `docker compose restart v3-service` to pick it up. Still skips the
+#   image rebuild.
+# - atlas-proxy is intentionally NOT overridden here. The runtime image
+#   is alpine-based with no Go toolchain, so bind-mounting source won't
+#   recompile inside the container. For Go iteration, run the proxy on
+#   the host instead — see .github/CONTRIBUTING.md (Development workflow).
+# - llama-server, sandbox not overridden — they don't change
+#   during typical dev work.
+#
+# See: .github/CONTRIBUTING.md (Development workflow), ISSUES.md PC-030.
+
+services:
+  geometric-lens:
+    volumes:
+      - ./geometric-lens:/app
+      - ${ATLAS_LENS_MODELS:-./geometric-lens/geometric_lens/models}:/app/geometric_lens/models:ro
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8099", "--reload"]
+
+  v3-service:
+    volumes:
+      - ./v3-service/main.py:/app/main.py
+      - ./v3-service/adapters.py:/app/adapters.py
+      - ./v3-service/scoring.py:/app/scoring.py
+      - ./v3-service/symbols.py:/app/symbols.py
+      - ./v3-service/grammars.py:/app/grammars.py
+      - ./v3-service/edit_checks.py:/app/edit_checks.py
+      - ./v3-service/embedded_script.py:/app/embedded_script.py
+      - ./v3-service/planning.py:/app/planning.py
+      - ./v3-service/pipeline.py:/app/pipeline.py
+      - ./v3-service/stages:/app/stages

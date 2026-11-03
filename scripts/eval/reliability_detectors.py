@@ -28,7 +28,7 @@ REPO = Path(__file__).resolve().parents[2]
 # integrity only in the sense that undetected classes exist — never inflated by
 # a false positive.
 
-# Terminal outcomes a `done` payload may carry (proxy/types.go owns the
+# Terminal outcomes a `done` payload may carry (proxy/internal/wire/messages.go owns the
 # vocabulary). Kept literal here because this script runs standalone against a
 # deployed proxy and must not import the CLI package.
 TERMINAL_STATUSES = ("completed", "incomplete", "stopped", "timed_out", "failed")
@@ -406,7 +406,7 @@ def tui_handled_types() -> set[str]:
     silently empty the set (the repo's contract-test convention).
     """
     out: set[str] = set()
-    for go in sorted((REPO / "tui").glob("*.go")):
+    for go in sorted((REPO / "tui").rglob("*.go")):
         if go.name.endswith("_test.go"):
             continue
         src = go.read_text()

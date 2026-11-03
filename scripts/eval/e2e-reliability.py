@@ -1134,7 +1134,7 @@ def stack_changes(before: dict | None, after: dict | None) -> list[str]:
     return out
 
 
-# The five services a stack runs, as scripts/deploy-gated.sh names them.
+# The five services a stack runs, as scripts/install/deploy-gated.sh names them.
 STACK_SERVICES = ("llama-server", "geometric-lens", "v3-service", "sandbox", "atlas-proxy")
 
 
@@ -1258,7 +1258,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                          "and OOM kills around each session; '' to skip")
     ap.add_argument("--deploy-dir", default=os.environ.get(
                         "ATLAS_DEPLOY_DIR", str(Path.home() / "atlas-ralph")),
-                    help="the gated deploy's record directory (scripts/deploy-gated.sh)")
+                    help="the gated deploy's record directory (scripts/install/deploy-gated.sh)")
     ap.add_argument("--commit", default="",
                     help="the commit this run claims to measure; default: this checkout's HEAD")
     ap.add_argument("--tasks", default=",".join(TASKS))

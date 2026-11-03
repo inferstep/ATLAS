@@ -57,5 +57,5 @@ atlas lens build --force --from-results benchmark/results/mymodel_lens/v3_lcb/pe
 atlas lens build --samples path/to/labeled.json
 ```
 
-See [docs/CLI.md § atlas lens](../../../docs/CLI.md#atlas-lens) for flags
+See [docs/reference/CLI.md § atlas lens](../../../docs/reference/CLI.md#atlas-lens) for flags
 and minimum sample requirements.

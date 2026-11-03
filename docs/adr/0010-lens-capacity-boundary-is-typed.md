@@ -70,11 +70,11 @@ bench's `/internal/lens/score-text` answers `models_not_loaded` when no
 model is loaded (`geometric-lens/main.py`).
 
 Consumers read a score field that is not a finite number as unscored as
-well (`tests/v3-service/test_lens_nonfinite_scores.py`). Consumers keep the
+well (`tests/v3-service/lens/test_lens_nonfinite_scores.py`). Consumers keep the
 candidate, its identity and its sandbox result, record the failure, rank
 the candidate after every scored one, and deliver it only as the last
 verified candidate standing, saying so
-(`tests/v3-service/test_lens_unscored_candidates.py`). The proxy logs
+(`tests/v3-service/lens/test_lens_unscored_candidates.py`). The proxy logs
 an unscored write and applies no threshold to it. The bench does the same
 for its own pool.
 

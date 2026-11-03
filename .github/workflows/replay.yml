@@ -50,4 +50,4 @@ jobs:
       - name: replay the recorded sessions
         # The tests build the proxy from this checkout themselves. The gate
         # fails when pytest ran no test.
-        run: python scripts/production-readiness.py --only python-tests --pytest-path tests/replay
+        run: python scripts/ci/production-readiness.py --only python-tests --pytest-path tests/replay

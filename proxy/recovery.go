@@ -11,6 +11,11 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/fencing"
+	"github.com/itigges22/atlas-proxy/internal/shellcmd"
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // --- The run-first recovery transition ---------------------------------------
@@ -40,7 +45,7 @@ const fencedRecoveryFloor = 90 * time.Second
 func fencedRunFirstRecovery(ctx *AgentContext, st *runState, relPath, content string) string {
 	// Raw model intent only. An inline write is the model doing something
 	// different, which is exactly what this is asking for.
-	if !isFencedSentinel(content) {
+	if !fencing.IsSentinel(content) {
 		return ""
 	}
 	key := ledgerKey(ctx, relPath)
@@ -322,7 +327,7 @@ func resolvedProposalHash(name string, args json.RawMessage) string {
 	if name != "write_file" {
 		return ""
 	}
-	var in WriteFileInput
+	var in wire.WriteFileInput
 	if json.Unmarshal(args, &in) != nil || in.Content == "" {
 		return ""
 	}
@@ -345,15 +350,15 @@ func survivingKnownGood(ctx *AgentContext, relPath string) (canon, diskHash stri
 	h := hashBytes(data)
 	ctx.LedgerMu.Lock()
 	d := ctx.Ledger[key]
-	var status ValidationStatus
-	var kind ValidationKind
+	var status wire.ValidationStatus
+	var kind wire.ValidationKind
 	var current string
 	if d != nil {
 		kind, status = d.CurrentValidation()
 		current = d.CurrentHash
 	}
 	ctx.LedgerMu.Unlock()
-	if current != h || status != ValidationPassed || kind != ValidationKindSyntax {
+	if current != h || status != wire.ValidationPassed || kind != wire.ValidationKindSyntax {
 		return "", ""
 	}
 	return key, h
@@ -381,13 +386,13 @@ func evictStaleGenerations(ctx *AgentContext, st *runState) {
 // one the checker produced for THESE bytes, carried on the result; no error
 // prose is parsed, no lens sample is read, and no historical verdict is reused.
 func noteRejectedProposal(ctx *AgentContext, st *runState, name string,
-	args json.RawMessage, result *ToolResult) (string, string, int) {
+	args json.RawMessage, result *wire.ToolResult) (string, string, int) {
 	if st == nil || result == nil || name != "write_file" {
 		return "", "", 0
 	}
-	if result.MutationStatus != MutationRefused ||
-		result.ValidationStatus != ValidationFailed ||
-		result.ValidationKind != ValidationKindSyntax ||
+	if result.MutationStatus != wire.MutationRefused ||
+		result.ValidationStatus != wire.ValidationFailed ||
+		result.ValidationKind != wire.ValidationKindSyntax ||
 		result.ValidationDetail == "" {
 		return "", "", 0
 	}
@@ -593,8 +598,8 @@ func brokenArtifactRecovery(ctx *AgentContext, st *runState, relPath string) str
 
 	ctx.LedgerMu.Lock()
 	d := ctx.Ledger[key]
-	var status ValidationStatus
-	var kind ValidationKind
+	var status wire.ValidationStatus
+	var kind wire.ValidationKind
 	var detail string
 	var sessionWritten, restorable bool
 	if d != nil {
@@ -611,7 +616,7 @@ func brokenArtifactRecovery(ctx *AgentContext, st *runState, relPath string) str
 	switch {
 	case !sessionWritten:
 		return ""
-	case status != ValidationFailed:
+	case status != wire.ValidationFailed:
 		// unknown, not_run, not_applicable, passed, and every verdict that
 		// describes bytes no longer on disk, all end here.
 		return ""
@@ -739,15 +744,15 @@ func currentValidationDetail(ctx *AgentContext, relPath string) string {
 	key := ledgerKey(ctx, relPath)
 	ctx.LedgerMu.Lock()
 	d := ctx.Ledger[key]
-	var kind ValidationKind
-	var status ValidationStatus
+	var kind wire.ValidationKind
+	var status wire.ValidationStatus
 	var detail string
 	if d != nil {
 		kind, status = d.CurrentValidation()
 		detail = d.ValidationDetail
 	}
 	ctx.LedgerMu.Unlock()
-	if status != ValidationFailed {
+	if status != wire.ValidationFailed {
 		return ""
 	}
 	if detail == "" {
@@ -904,16 +909,16 @@ func settleMutationDebt(ctx *AgentContext, st *runState) {
 // validationSettles reports whether a path's CURRENT validation is good enough
 // to call the work demonstrated: a pass, or a genuine not_applicable from a
 // producer that deliberately checked nothing because nothing applies.
-func validationSettles(d *DeliverableState) bool {
+func validationSettles(d *taskcontract.DeliverableState) bool {
 	if d == nil || d.Tombstoned || d.CurrentHash == "" {
 		return false
 	}
 	kind, status := d.CurrentValidation() // fails closed on a hash mismatch
 	switch status {
-	case ValidationPassed:
+	case wire.ValidationPassed:
 		return true
-	case ValidationNotApplicable:
-		return kind == ValidationKindNone
+	case wire.ValidationNotApplicable:
+		return kind == wire.ValidationKindNone
 	}
 	return false
 }
@@ -982,16 +987,16 @@ func sessionWroteWebFiles(ctx *AgentContext) bool {
 // run_command or run_background result: exit 0 and not killed, or a
 // background job still serving after its settle window (a crash at startup
 // exits non-zero before the window ends).
-func executionSucceeded(tool string, result *ToolResult) bool {
+func executionSucceeded(tool string, result *wire.ToolResult) bool {
 	if result == nil || !result.Success || len(result.Data) == 0 {
 		return false
 	}
 	switch tool {
 	case "run_command":
-		var out RunCommandOutput
+		var out wire.RunCommandOutput
 		return json.Unmarshal(result.Data, &out) == nil && out.ExitCode == 0 && !out.TimedOut
 	case "run_background":
-		var out RunBackgroundOutput
+		var out wire.RunBackgroundOutput
 		if json.Unmarshal(result.Data, &out) != nil {
 			return false
 		}
@@ -1014,7 +1019,7 @@ func settleDebtByExecution(ctx *AgentContext, st *runState, command string, succ
 	}
 	// Only a segment whose result the line reports can have come up clean:
 	// `python app.py | tail` exits 0 whatever app.py did.
-	honest := strings.Join(classifyCommandEvidence(command).Honest, " && ")
+	honest := strings.Join(shellcmd.ClassifyCommandEvidence(command).Honest, " && ")
 	for key, e := range st.mutationDebt {
 		if e.Kind != debtContent || !executionAttempt(honest, e.Rel) {
 			continue
@@ -1029,14 +1034,14 @@ func settleDebtByExecution(ctx *AgentContext, st *runState, command string, succ
 		// Running the file cannot see a defect in a script it embeds for the
 		// browser: the server starts and serves the broken <script> fine. A
 		// current embedded-script failure stands, and the debt with it.
-		if d.ValidationStatus == ValidationFailed && d.ValidatedHash == h &&
+		if d.ValidationStatus == wire.ValidationFailed && d.ValidatedHash == h &&
 			strings.HasPrefix(d.ValidationDetail, embeddedScriptErrPrefix) {
 			ctx.LedgerMu.Unlock()
 			continue
 		}
 		d.CurrentHash, d.CurrentSize = h, len(data)
 		d.Tombstoned, d.TombstoneReason = false, ""
-		d.ValidationKind, d.ValidationStatus = ValidationKindExecution, ValidationPassed
+		d.ValidationKind, d.ValidationStatus = wire.ValidationKindExecution, wire.ValidationPassed
 		d.ValidationDetail = "executed clean: " + truncateStr(command, 80)
 		d.ValidatedHash = h
 		ctx.LedgerMu.Unlock()

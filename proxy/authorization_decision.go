@@ -3,6 +3,10 @@ package main
 import (
 	"sort"
 	"strings"
+
+	"github.com/itigges22/atlas-proxy/internal/shadowcapture"
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // Whether a candidate WOULD be authorized to land, computed and not consulted.
@@ -140,13 +144,13 @@ type AuthorizationDecision struct {
 // explicitly is what stops the decision reaching for something else.
 type authorizationInput struct {
 	// Obligations are the task's own, derived from the validated request.
-	Obligations []taskObligation
+	Obligations []taskcontract.TaskObligation
 	// TargetPath is the canonical artifact the delivery would replace.
 	TargetPath string
 	// CandidateHash names the exact bytes proposed.
 	CandidateHash string
 	// Identity is what the evidence must bind to.
-	Identity V3EvidenceProvenance
+	Identity wire.V3EvidenceProvenance
 	// RouteEntry names the entry of the candidate-generation route this
 	// decision answers for. It is separate from Identity on purpose: a
 	// refusal reached before any candidate evidence exists has no invocation
@@ -158,7 +162,7 @@ type authorizationInput struct {
 	Evidence []proxyEvidence
 	// Envelope is the service's own record, consulted only for adapter
 	// support and legacy status.
-	Envelope *V3EvidenceEnvelope
+	Envelope *wire.V3EvidenceEnvelope
 	// BaselineWitnessCommand identifies the command whose pass established the
 	// behavioural baseline the candidate would replace, when there is one. It
 	// is "" for a syntax baseline, which has no command behind it, and for a
@@ -212,15 +216,15 @@ type authorizationInput struct {
 // Every record here has already been matched against the asked-for identity,
 // so it is current, about these exact candidate bytes, and about this
 // invocation. What is left to decide is strength and witness.
-func baselinePreservedBy(o taskObligation, witnessCommand string,
+func baselinePreservedBy(o taskcontract.TaskObligation, witnessCommand string,
 	authorizing []proxyEvidence) (bool, string) {
 	required := o.RequiredStrength
-	if strengthRank(required) < 0 {
+	if wire.StrengthRank(required) < 0 {
 		return false, "unclassified baseline strength"
 	}
 	for _, ev := range authorizing {
 		p := ev.Provenance
-		if strengthRank(p.ObservedStrength) < strengthRank(required) {
+		if wire.StrengthRank(p.ObservedStrength) < wire.StrengthRank(required) {
 			// Weaker evidence never preserves a stronger baseline.
 			continue
 		}
@@ -271,7 +275,7 @@ func decideAuthorization(ctx *AgentContext, in authorizationInput) Authorization
 		return d
 	}
 
-	prerequisites := authorizationPrerequisites(in.Obligations)
+	prerequisites := taskcontract.AuthorizationPrerequisites(in.Obligations)
 	// Settlement is owed whenever the task states one and the bytes are not
 	// yet confirmed. It never blocks authorization. Without a context there is
 	// nothing to confirm against, so it is owed by definition.
@@ -359,7 +363,7 @@ func endsBeforePrerequisites(d *AuthorizationDecision, in authorizationInput) bo
 	// A record produced before provenance existed carries no authority, and a
 	// service record whose envelope is unusable is not evidence about anything.
 	if in.Envelope != nil {
-		if availability, _ := in.Envelope.Validate(); availability != EvidenceAvailable {
+		if availability, _ := in.Envelope.Validate(); availability != wire.EvidenceAvailable {
 			d.Reason = ReasonLegacyRecord
 			return true
 		}
@@ -373,7 +377,7 @@ func endsBeforePrerequisites(d *AuthorizationDecision, in authorizationInput) bo
 	//
 	// A declared-and-empty output set arrives here with no targets at all, and
 	// takes this branch: it authorizes nothing, which is exactly what it says.
-	if !targetIsAuthorized(in.Obligations, in.TargetPath) {
+	if !taskcontract.TargetIsAuthorized(in.Obligations, in.TargetPath) {
 		d.Reason = ReasonTargetNotDeclared
 		return true
 	}
@@ -392,7 +396,7 @@ func noteSettlementRequired(ctx *AgentContext, d *AuthorizationDecision, in auth
 		settled, _ = settlementIsComplete(ctx, in.Obligations, in.CandidateHash)
 	}
 	if !settled {
-		d.SettlementRequired = len(postDeliverySettlement(in.Obligations)) > 0
+		d.SettlementRequired = len(taskcontract.PostDeliverySettlement(in.Obligations)) > 0
 	}
 }
 
@@ -400,21 +404,21 @@ func noteSettlementRequired(ctx *AgentContext, d *AuthorizationDecision, in auth
 // role, is of a kind nothing can satisfy, or asks for a strength with no rank.
 // It records the first such obligation in d as missing, for the reason
 // obligation_unknown.
-func endsOnUnclassifiedObligation(d *AuthorizationDecision, prerequisites []taskObligation) bool {
+func endsOnUnclassifiedObligation(d *AuthorizationDecision, prerequisites []taskcontract.TaskObligation) bool {
 	for _, o := range prerequisites {
-		if _, ok := obligationRole(o.Kind); !ok {
+		if _, ok := taskcontract.ObligationRole(o.Kind); !ok {
 			d.Reason = ReasonObligationUnknown
 			d.Missing = append(d.Missing, o.ID)
 			sort.Strings(d.Missing)
 			return true
 		}
-		if obligationUnsatisfiableKinds[o.Kind] {
+		if taskcontract.Unsatisfiable(o.Kind) {
 			d.Reason = ReasonObligationUnknown
 			d.Missing = append(d.Missing, o.ID)
 			sort.Strings(d.Missing)
 			return true
 		}
-		if strengthRank(o.RequiredStrength) < 0 {
+		if wire.StrengthRank(o.RequiredStrength) < 0 {
 			d.Reason = ReasonObligationUnknown
 			d.Missing = append(d.Missing, o.ID)
 			sort.Strings(d.Missing)
@@ -427,10 +431,10 @@ func endsOnUnclassifiedObligation(d *AuthorizationDecision, prerequisites []task
 // wantedCommandIdentities maps each prerequisite's id to the command identity
 // its evidence must name: the hash of the declared command's own text for a
 // declared-command obligation, and "" for every other kind.
-func wantedCommandIdentities(prerequisites []taskObligation) map[string]string {
+func wantedCommandIdentities(prerequisites []taskcontract.TaskObligation) map[string]string {
 	wantCommand := map[string]string{}
 	for _, o := range prerequisites {
-		if o.Kind == ObligationDeclaredCommand {
+		if o.Kind == taskcontract.ObligationDeclaredCommand {
 			wantCommand[o.ID] = contentSHA256(o.Subject)
 			continue
 		}
@@ -442,9 +446,9 @@ func wantedCommandIdentities(prerequisites []taskObligation) map[string]string {
 // markPreservedBaselines adds to satisfied each baseline obligation that the
 // authorizing evidence also shows to be preserved.
 func markPreservedBaselines(satisfied map[string]bool, in authorizationInput,
-	prerequisites []taskObligation, authorizing []proxyEvidence) {
+	prerequisites []taskcontract.TaskObligation, authorizing []proxyEvidence) {
 	for _, o := range prerequisites {
-		if o.Kind != ObligationBaselinePreserved || satisfied[o.ID] {
+		if o.Kind != taskcontract.ObligationBaselinePreserved || satisfied[o.ID] {
 			continue
 		}
 		if ok, _ := baselinePreservedBy(o, in.BaselineWitnessCommand, authorizing); ok {
@@ -455,7 +459,7 @@ func markPreservedBaselines(satisfied map[string]bool, in authorizationInput,
 
 // accountForPrerequisites puts each required prerequisite into d.Satisfied or
 // d.Missing, and sorts both lists.
-func accountForPrerequisites(d *AuthorizationDecision, prerequisites []taskObligation,
+func accountForPrerequisites(d *AuthorizationDecision, prerequisites []taskcontract.TaskObligation,
 	satisfied map[string]bool) {
 	for _, o := range prerequisites {
 		if !o.Required {
@@ -474,7 +478,7 @@ func accountForPrerequisites(d *AuthorizationDecision, prerequisites []taskOblig
 // explainMissingPrerequisites sets d.Reason for a decision with missing
 // prerequisites. Each rule below overrides the one before it.
 func explainMissingPrerequisites(d *AuthorizationDecision, in authorizationInput,
-	prerequisites []taskObligation, satisfied map[string]bool, firstRefusal AuthorizationReason) {
+	prerequisites []taskcontract.TaskObligation, satisfied map[string]bool, firstRefusal AuthorizationReason) {
 	// A prerequisite nothing spoke for is missing evidence; one something
 	// spoke for badly gets that something's own reason.
 	d.Reason = ReasonEvidenceMissing
@@ -500,7 +504,7 @@ func explainMissingPrerequisites(d *AuthorizationDecision, in authorizationInput
 	// A baseline obligation left unmet is its own fact, and the more
 	// useful one to report.
 	for _, o := range prerequisites {
-		if o.Kind == ObligationBaselinePreserved && !satisfied[o.ID] {
+		if o.Kind == taskcontract.ObligationBaselinePreserved && !satisfied[o.ID] {
 			d.Reason = ReasonBaselineNotPreserved
 			break
 		}
@@ -512,10 +516,10 @@ func explainMissingPrerequisites(d *AuthorizationDecision, in authorizationInput
 //
 // Ordered so the most specific mismatch wins: a record about a different
 // candidate is a candidate mismatch even though its workspace also differs.
-func evidenceRefusalFor(ev proxyEvidence, asked V3EvidenceProvenance,
+func evidenceRefusalFor(ev proxyEvidence, asked wire.V3EvidenceProvenance,
 	wantCommand string) AuthorizationReason {
 	p := ev.Provenance
-	if _, ok := provenanceCeiling[p.Source]; !ok {
+	if _, ok := wire.CeilingFor(p.Source); !ok {
 		return ReasonProvenanceUntrusted
 	}
 	if p.RequestID != asked.RequestID || p.InvocationID != asked.InvocationID {
@@ -539,14 +543,14 @@ func evidenceRefusalFor(ev proxyEvidence, asked V3EvidenceProvenance,
 		p.WorkspaceStateHash != asked.WorkspaceStateHash {
 		return ReasonWorkspaceStale
 	}
-	if ev.Outcome != ValidationPassed {
+	if ev.Outcome != wire.ValidationPassed {
 		return ReasonEvidenceMissing
 	}
 	if ok, _ := p.MayAuthorize(); !ok {
 		// Source and strength alone. Distinguish "this source may never close
 		// this" from "it could, but did not reach the floor".
-		ceiling := provenanceCeiling[p.Source]
-		if strengthRank(ceiling) < strengthRank(p.RequiredStrength) {
+		ceiling, _ := wire.CeilingFor(p.Source)
+		if wire.StrengthRank(ceiling) < wire.StrengthRank(p.RequiredStrength) {
 			return ReasonProvenanceUntrusted
 		}
 		return ReasonEvidenceTooWeak
@@ -561,8 +565,8 @@ func evidenceRefusalFor(ev proxyEvidence, asked V3EvidenceProvenance,
 // fact about this build: nothing consumes what this returns.
 func recordAuthorizationDecision(ctx *AgentContext, in authorizationInput,
 	d AuthorizationDecision) {
-	sink := activeShadowSink.Load()
-	if !sink.enabled() {
+	sink := shadowcapture.Active()
+	if !sink.Enabled() {
 		return
 	}
 	reason := d.Reason
@@ -571,7 +575,7 @@ func recordAuthorizationDecision(ctx *AgentContext, in authorizationInput,
 		// than as arbitrary prose.
 		reason = ReasonUnknown
 	}
-	sink.submit(map[string]interface{}{
+	sink.Submit(map[string]interface{}{
 		"schema_version":        shadowSchemaVersionAuthorization,
 		"record_kind":           "candidate_authorization_decision",
 		"request_id":            in.Identity.RequestID,

@@ -2,7 +2,7 @@
 //
 // Mirrors the schema defined in atlas/events.py so the same Python
 // consumer (atlas/events.py) can read events from both v3-service
-// and atlas-proxy. The envelope shape is documented in docs/PROTOCOL.md.
+// and atlas-proxy. The envelope shape is documented in docs/reference/API.md.
 //
 // Architecture: a global pub/sub broker. Producers (agent loop, tool
 // dispatch, etc.) call Emit() with an Envelope. Subscribers (SSE clients
@@ -14,62 +14,14 @@
 package main
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
-
-// Envelope is the wire-format event. JSON tags match the Python dataclass
-// in atlas/events.py exactly — any change here MUST also be made there.
-type Envelope struct {
-	EventID    string                 `json:"event_id"`
-	Timestamp  float64                `json:"timestamp"`
-	Type       string                 `json:"type"`
-	Stage      string                 `json:"stage"`
-	Payload    map[string]interface{} `json:"payload"`
-	DurationMS int64                  `json:"duration_ms,omitempty"`
-}
-
-// Legal Type values. Mirror atlas.cli.events.EVENT_TYPES.
-const (
-	EvtStageStart = "stage_start"
-	EvtStageEnd   = "stage_end"
-	EvtToolCall   = "tool_call"
-	EvtToolResult = "tool_result"
-	EvtMetric     = "metric"
-	EvtError      = "error"
-	EvtDone       = "done"
-)
-
-// NewEventID returns a short, log-readable, session-unique id. Same format
-// as the Python helper: "evt_" + 8 hex chars.
-func NewEventID() string {
-	var b [4]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		// fall back to time-based to never block — collisions are not a
-		// correctness concern (event_ids are display/log identifiers)
-		return fmt.Sprintf("evt_%08x", time.Now().UnixNano()&0xffffffff)
-	}
-	return "evt_" + hex.EncodeToString(b[:])
-}
-
-// NewEnvelope builds a well-formed envelope with sensible defaults.
-func NewEnvelope(typ, stage string, payload map[string]interface{}) Envelope {
-	if payload == nil {
-		payload = map[string]interface{}{}
-	}
-	return Envelope{
-		EventID:   NewEventID(),
-		Timestamp: float64(time.Now().UnixNano()) / 1e9,
-		Type:      typ,
-		Stage:     stage,
-		Payload:   payload,
-	}
-}
 
 // ---------------------------------------------------------------------------
 // Broker
@@ -79,7 +31,7 @@ const subscriberBuffer = 256 // events buffered per slow subscriber before drops
 
 type broker struct {
 	mu          sync.Mutex
-	subscribers map[chan Envelope]struct{}
+	subscribers map[chan wire.Envelope]struct{}
 	// draining is set once the process is shutting down. The TUI keeps
 	// /events open for the life of the session, so a shutdown that waited for
 	// subscribers to leave on their own would wait forever; closing their
@@ -89,18 +41,18 @@ type broker struct {
 }
 
 var defaultBroker = &broker{
-	subscribers: map[chan Envelope]struct{}{},
+	subscribers: map[chan wire.Envelope]struct{}{},
 }
 
 // subscribe returns a channel of envelopes, or nil once the broker is
 // draining. A nil channel tells handleEvents there is nothing to serve.
-func (b *broker) subscribe() chan Envelope {
+func (b *broker) subscribe() chan wire.Envelope {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.draining {
 		return nil
 	}
-	ch := make(chan Envelope, subscriberBuffer)
+	ch := make(chan wire.Envelope, subscriberBuffer)
 	b.subscribers[ch] = struct{}{}
 	return ch
 }
@@ -108,7 +60,7 @@ func (b *broker) subscribe() chan Envelope {
 // unsubscribe closes the channel only while it is still registered, so a
 // handler's deferred unsubscribe after a drain is a no-op rather than a second
 // close. Registration IS the ownership token for closing.
-func (b *broker) unsubscribe(ch chan Envelope) {
+func (b *broker) unsubscribe(ch chan wire.Envelope) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if _, registered := b.subscribers[ch]; !registered {
@@ -131,7 +83,7 @@ func (b *broker) drain() {
 	}
 }
 
-func (b *broker) emit(ev Envelope) {
+func (b *broker) emit(ev wire.Envelope) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for ch := range b.subscribers {
@@ -145,7 +97,7 @@ func (b *broker) emit(ev Envelope) {
 }
 
 // Emit publishes an envelope to all subscribers. Safe from any goroutine.
-func Emit(ev Envelope) {
+func Emit(ev wire.Envelope) {
 	defaultBroker.emit(ev)
 }
 

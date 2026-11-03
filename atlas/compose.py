@@ -22,10 +22,10 @@ from typing import Dict, Iterable, List, Mapping, Optional
 # (base file alone), so a developer's docker-compose.override.yml still
 # applies. These keys match scripts/atlas-bootstrap.sh's compose_files_args.
 _OVERLAY_BY_BACKEND = {
-    "metal": ["compose/docker-compose.macos.yml"],
-    "rocm": ["compose/docker-compose.rocm.yml"],
-    "vulkan": ["compose/docker-compose.vulkan.yml"],
-    "cpu": ["compose/docker-compose.vulkan.yml", "compose/docker-compose.cpu.yml"],
+    "metal": ["deploy/compose/docker-compose.macos.yml"],
+    "rocm": ["deploy/compose/docker-compose.rocm.yml"],
+    "vulkan": ["deploy/compose/docker-compose.vulkan.yml"],
+    "cpu": ["deploy/compose/docker-compose.vulkan.yml", "deploy/compose/docker-compose.cpu.yml"],
 }
 
 # Service URL resolution: explicit URL env var > port env var / `.env`

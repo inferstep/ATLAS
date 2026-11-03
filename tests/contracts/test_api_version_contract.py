@@ -33,7 +33,7 @@ def test_go_error_codes_match_canonical_set():
 
 def test_error_schema_enum_matches():
     schema = json.loads(
-        (REPO / "docs" / "schemas" / "error_envelope.schema.json").read_text())
+        (REPO / "docs" / "reference" / "schemas" / "error_envelope.schema.json").read_text())
     enum = schema["properties"]["error"]["enum"]
     assert enum == CANONICAL_CODES, (
         "error_envelope schema enum drifted from the canonical set")
@@ -53,7 +53,7 @@ def test_version_endpoint_registered():
 
 def test_sse_envelope_schema_present():
     schema = json.loads(
-        (REPO / "docs" / "schemas" / "sse_envelope.schema.json").read_text())
+        (REPO / "docs" / "reference" / "schemas" / "sse_envelope.schema.json").read_text())
     assert "type" in schema["required"]
     assert "data" in schema["required"]
 

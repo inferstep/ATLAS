@@ -12,7 +12,7 @@ A VS Code client for the [ATLAS](https://github.com/inferstep/ATLAS) agent proxy
 
 ## How it works
 
-The extension is a thin SSE client over the proxy HTTP API (see `docs/API.md`):
+The extension is a thin SSE client over the proxy HTTP API (see `docs/reference/API.md`):
 
 * `POST /v1/agent` — streams a turn (text tokens, tool calls/results, permission requests) as server-sent events
 * `task_contract` — every turn declares `work` or `question` from the composer's **Task** control, so the proxy gates a request on what the user chose rather than on its wording (the TUI's `/ask` makes the same declaration for one message). `expected_outputs` and `verification` stay absent: a chat box knows nothing structured about them, and the proxy grounds a `work` request in the model's own tool call instead.

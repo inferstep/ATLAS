@@ -265,12 +265,7 @@ class LLMAdapter:
 
     def _emit(self, stage: str, detail: str = "", **data):
         if self._progress:
-            try:
-                self._progress(stage, detail, **data)
-            except TypeError:
-                # Older two-arg callbacks don't accept **data — call back
-                # to the legacy signature so we stay compatible.
-                self._progress(stage, detail)
+            self._progress(stage, detail, **data)
 
     def __call__(self, prompt: str, temperature: float,
                  max_tokens: int, seed: Optional[int],
@@ -553,8 +548,7 @@ class LLMAdapter:
 
     @staticmethod
     def _chat_messages(prompt: str, thinking: bool) -> list:
-        """The ChatML prompt as chat messages. With thinking on, a user
-        message loses the legacy /nothink directive."""
+        """The ChatML prompt as chat messages."""
         # Convert the internal prompt carrier into structured messages before
         # llama-server applies the selected model's own template.
         messages = chatml_to_messages(prompt)
@@ -563,12 +557,6 @@ class LLMAdapter:
         else:
             print(f"  [LLM] Parsed {len(messages)} messages from ChatML"
                   f" (thinking={'on' if thinking else 'off'})", flush=True)
-            if thinking:
-                # Strip the legacy directive from old prompt templates when a
-                # caller explicitly enables reasoning.
-                for msg in messages:
-                    if msg["role"] == "user" and msg["content"].startswith("/nothink"):
-                        msg["content"] = msg["content"][len("/nothink"):].lstrip("\n")
         return messages
 
     @staticmethod
@@ -984,7 +972,7 @@ CRITERION_PARSES = "parses"
 # observes, each backed by an evaluator: python_compile requires only that the
 # artifact parses, which is what it measures. What a TASK owes is not declared
 # here. The proxy derives that from the validated request
-# (proxy/obligation_kinds.go), and none of it reaches this service.
+# (proxy/internal/taskcontract/obligation_kinds.go), and none of it reaches this service.
 
 SUPPORT_ALWAYS = "always"
 SUPPORT_NEVER = "never"
@@ -1043,14 +1031,6 @@ REGISTRY = {
 ALL_ADAPTERS = tuple(REGISTRY)
 SUPPORT_DECLARATION = {a: e["support"] for a, e in REGISTRY.items()}
 REQUIREMENT_DECLARATION = {a: list(e["requirements"]) for a, e in REGISTRY.items()}
-
-
-def evaluators_for(adapter):
-    return dict(REGISTRY.get(adapter, {}).get("evaluators", {}))
-
-
-def unmeasurable_requirements(adapter):
-    return list(REGISTRY.get(adapter, {}).get("unmeasurable", []))
 
 
 def check_registry(registry):

@@ -13,10 +13,13 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/shadowcapture"
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 func TestNewEventIDFormat(t *testing.T) {
-	id := NewEventID()
+	id := wire.NewEventID()
 	if !strings.HasPrefix(id, "evt_") {
 		t.Fatalf("event id missing 'evt_' prefix: %q", id)
 	}
@@ -28,7 +31,7 @@ func TestNewEventIDFormat(t *testing.T) {
 func TestNewEventIDsAreUnique(t *testing.T) {
 	seen := map[string]struct{}{}
 	for i := 0; i < 1000; i++ {
-		id := NewEventID()
+		id := wire.NewEventID()
 		if _, dup := seen[id]; dup {
 			t.Fatalf("duplicate event id at iteration %d: %q", i, id)
 		}
@@ -37,9 +40,9 @@ func TestNewEventIDsAreUnique(t *testing.T) {
 }
 
 func TestNewEnvelopeFieldsAreSet(t *testing.T) {
-	ev := NewEnvelope(EvtStageStart, "phase2", map[string]interface{}{"detail": "x"})
-	if ev.Type != EvtStageStart {
-		t.Fatalf("type = %q, want %q", ev.Type, EvtStageStart)
+	ev := wire.NewEnvelope(wire.EvtStageStart, "phase2", map[string]interface{}{"detail": "x"})
+	if ev.Type != wire.EvtStageStart {
+		t.Fatalf("type = %q, want %q", ev.Type, wire.EvtStageStart)
 	}
 	if ev.Stage != "phase2" {
 		t.Fatalf("stage = %q, want phase2", ev.Stage)
@@ -59,7 +62,7 @@ func TestEnvelopeJSONShapeMatchesPythonSchema(t *testing.T) {
 	// The Python consumer (atlas/cli/events.py) requires these fields
 	// in this exact spelling. Schema mismatch here breaks the consumer
 	// silently — pin the field names.
-	ev := NewEnvelope(EvtStageEnd, "phase2", map[string]interface{}{
+	ev := wire.NewEnvelope(wire.EvtStageEnd, "phase2", map[string]interface{}{
 		"success": true,
 	})
 	ev.DurationMS = 4523
@@ -86,7 +89,7 @@ func TestEnvelopeJSONShapeMatchesPythonSchema(t *testing.T) {
 func TestEnvelopeOmitsEmptyOptionalFields(t *testing.T) {
 	// When duration_ms isn't set, it should be omitted from the JSON
 	// (mirrors Python `to_dict()` behavior).
-	ev := NewEnvelope(EvtStageStart, "phase2", nil)
+	ev := wire.NewEnvelope(wire.EvtStageStart, "phase2", nil)
 	raw, _ := json.Marshal(ev)
 	var rt map[string]interface{}
 	_ = json.Unmarshal(raw, &rt)
@@ -100,21 +103,21 @@ func TestEnvelopeOmitsEmptyOptionalFields(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestBrokerFanOutToMultipleSubscribers(t *testing.T) {
-	b := &broker{subscribers: map[chan Envelope]struct{}{}}
-	subs := []chan Envelope{b.subscribe(), b.subscribe(), b.subscribe()}
+	b := &broker{subscribers: map[chan wire.Envelope]struct{}{}}
+	subs := []chan wire.Envelope{b.subscribe(), b.subscribe(), b.subscribe()}
 	defer func() {
 		for _, ch := range subs {
 			b.unsubscribe(ch)
 		}
 	}()
 
-	b.emit(NewEnvelope(EvtMetric, "lens", nil))
+	b.emit(wire.NewEnvelope(wire.EvtMetric, "lens", nil))
 
 	for i, ch := range subs {
 		select {
 		case ev := <-ch:
-			if ev.Type != EvtMetric || ev.Stage != "lens" {
-				t.Errorf("subscriber %d: got %q/%q, want %q/lens", i, ev.Type, ev.Stage, EvtMetric)
+			if ev.Type != wire.EvtMetric || ev.Stage != "lens" {
+				t.Errorf("subscriber %d: got %q/%q, want %q/lens", i, ev.Type, ev.Stage, wire.EvtMetric)
 			}
 		case <-time.After(time.Second):
 			t.Errorf("subscriber %d didn't receive event", i)
@@ -124,13 +127,13 @@ func TestBrokerFanOutToMultipleSubscribers(t *testing.T) {
 
 // No call here fails the test: a panic or a hang is the failure.
 func TestBrokerUnsubscribeStopsDelivery(t *testing.T) {
-	b := &broker{subscribers: map[chan Envelope]struct{}{}}
+	b := &broker{subscribers: map[chan wire.Envelope]struct{}{}}
 	ch := b.subscribe()
 	b.unsubscribe(ch)
 
 	// After unsubscribe, the channel is closed. Emitting must not
 	// panic by trying to send on a closed channel.
-	b.emit(NewEnvelope(EvtMetric, "x", nil))
+	b.emit(wire.NewEnvelope(wire.EvtMetric, "x", nil))
 
 	// And the channel must drain to closed (not block).
 	for range ch {
@@ -139,7 +142,7 @@ func TestBrokerUnsubscribeStopsDelivery(t *testing.T) {
 }
 
 func TestBrokerSlowConsumerDoesntBlockProducer(t *testing.T) {
-	b := &broker{subscribers: map[chan Envelope]struct{}{}}
+	b := &broker{subscribers: map[chan wire.Envelope]struct{}{}}
 	slow := b.subscribe() // never reads
 	defer b.unsubscribe(slow)
 
@@ -147,7 +150,7 @@ func TestBrokerSlowConsumerDoesntBlockProducer(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		for i := 0; i < subscriberBuffer*4; i++ {
-			b.emit(NewEnvelope(EvtMetric, "x", nil))
+			b.emit(wire.NewEnvelope(wire.EvtMetric, "x", nil))
 		}
 		close(done)
 	}()
@@ -175,14 +178,14 @@ func TestBrokerSlowConsumerDoesntBlockProducer(t *testing.T) {
 // No call here fails the test: the race detector (go test -race) is the
 // check. Without it, only a crash under concurrent load fails it.
 func TestBrokerConcurrentSubscribeUnsubscribeIsRaceFree(t *testing.T) {
-	b := &broker{subscribers: map[chan Envelope]struct{}{}}
+	b := &broker{subscribers: map[chan wire.Envelope]struct{}{}}
 	var wg sync.WaitGroup
 	for i := 0; i < 50; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			ch := b.subscribe()
-			b.emit(NewEnvelope(EvtMetric, "x", nil))
+			b.emit(wire.NewEnvelope(wire.EvtMetric, "x", nil))
 			b.unsubscribe(ch)
 		}()
 	}
@@ -262,7 +265,7 @@ func TestHandleEventsStreamsEmittedEnvelopeToConnectedClient(t *testing.T) {
 	go func() {
 		// Tiny delay so the handler's select loop is parked.
 		time.Sleep(50 * time.Millisecond)
-		Emit(NewEnvelope(EvtMetric, "lens", map[string]interface{}{
+		Emit(wire.NewEnvelope(wire.EvtMetric, "lens", map[string]interface{}{
 			"name": "gx_score", "value": 0.83,
 		}))
 	}()
@@ -288,11 +291,11 @@ func TestHandleEventsStreamsEmittedEnvelopeToConnectedClient(t *testing.T) {
 		if line == "" {
 			t.Fatal("stream closed before data: line arrived")
 		}
-		var ev Envelope
+		var ev wire.Envelope
 		if err := json.Unmarshal([]byte(line), &ev); err != nil {
 			t.Fatalf("data line not valid envelope JSON: %v\n%s", err, line)
 		}
-		if ev.Type != EvtMetric || ev.Stage != "lens" {
+		if ev.Type != wire.EvtMetric || ev.Stage != "lens" {
 			t.Errorf("got %+v", ev)
 		}
 		if ev.Payload["name"] != "gx_score" {
@@ -311,8 +314,8 @@ func TestHandleEventsStreamsEmittedEnvelopeToConnectedClient(t *testing.T) {
 // registered channel once, under the lock that owns the registry.
 
 func TestBrokerDrainClosesEverySubscriberOnce(t *testing.T) {
-	b := &broker{subscribers: map[chan Envelope]struct{}{}}
-	var chans []chan Envelope
+	b := &broker{subscribers: map[chan wire.Envelope]struct{}{}}
+	var chans []chan wire.Envelope
 	for i := 0; i < 4; i++ {
 		chans = append(chans, b.subscribe())
 	}
@@ -336,7 +339,7 @@ func TestBrokerDrainClosesEverySubscriberOnce(t *testing.T) {
 // No call here fails the test: the race detector (go test -race) and a
 // panic are the check.
 func TestBrokerDrainIsRaceSafe(t *testing.T) {
-	b := &broker{subscribers: map[chan Envelope]struct{}{}}
+	b := &broker{subscribers: map[chan wire.Envelope]struct{}{}}
 	var wg sync.WaitGroup
 	for i := 0; i < 16; i++ {
 		wg.Add(1)
@@ -346,7 +349,7 @@ func TestBrokerDrainIsRaceSafe(t *testing.T) {
 			if ch == nil {
 				return // refused after drain: correct
 			}
-			b.emit(Envelope{Type: "x"})
+			b.emit(wire.Envelope{Type: "x"})
 			b.unsubscribe(ch)
 		}()
 	}
@@ -354,14 +357,14 @@ func TestBrokerDrainIsRaceSafe(t *testing.T) {
 	go func() { defer wg.Done(); b.drain() }()
 	wg.Wait()
 	// Emitting after drain is a no-op, never a send on a closed channel.
-	b.emit(Envelope{Type: "after"})
+	b.emit(wire.Envelope{Type: "after"})
 }
 
 // A live handler returns promptly when the broker drains, and the event
 // schema is untouched.
 func TestHandleEventsReturnsOnDrain(t *testing.T) {
 	prev := defaultBroker
-	defaultBroker = &broker{subscribers: map[chan Envelope]struct{}{}}
+	defaultBroker = &broker{subscribers: map[chan wire.Envelope]struct{}{}}
 	defer func() { defaultBroker = prev }()
 
 	srv := httptest.NewServer(http.HandlerFunc(handleEvents))
@@ -428,9 +431,9 @@ func TestEventsStreamIsUnchangedByShadowCapture(t *testing.T) {
 
 		time.Sleep(50 * time.Millisecond) // the handler's select loop is parked
 		// The same envelopes the agent loop emits, in the same order.
-		Emit(NewEnvelope(EvtStageStart, "agent", map[string]interface{}{"tier": "T2:medium"}))
-		Emit(NewEnvelope(EvtToolCall, "tool", map[string]interface{}{"name": "write_file"}))
-		Emit(NewEnvelope(EvtMetric, "llm", map[string]interface{}{"name": "turn", "value": 1.0}))
+		Emit(wire.NewEnvelope(wire.EvtStageStart, "agent", map[string]interface{}{"tier": "T2:medium"}))
+		Emit(wire.NewEnvelope(wire.EvtToolCall, "tool", map[string]interface{}{"name": "write_file"}))
+		Emit(wire.NewEnvelope(wire.EvtMetric, "llm", map[string]interface{}{"name": "turn", "value": 1.0}))
 
 		var got []string
 		deadline := time.After(3 * time.Second)
@@ -459,20 +462,20 @@ func TestEventsStreamIsUnchangedByShadowCapture(t *testing.T) {
 	}
 
 	// Capture off.
-	activeShadowSink.Store(nil)
+	shadowcapture.SetActive(nil)
 	off := collect()
 
 	// Capture on: a live sink writing to a private file.
 	t.Setenv("ATLAS_DIAGNOSTIC_DIR", t.TempDir())
 	t.Setenv("ATLAS_SHADOW_CAPTURE", "events.jsonl")
-	sink, err := openShadowSink()
+	sink, err := openShadowCapture()
 	if err != nil {
 		t.Fatalf("sink: %v", err)
 	}
-	activeShadowSink.Store(sink)
+	shadowcapture.SetActive(sink)
 	defer func() {
-		sink.close(context.Background(), 5*time.Second)
-		activeShadowSink.Store(nil)
+		sink.Close(context.Background(), 5*time.Second)
+		shadowcapture.SetActive(nil)
 	}()
 	on := collect()
 

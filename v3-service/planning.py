@@ -156,7 +156,7 @@ def _parse_plan_json(raw: str) -> Optional[dict]:
 
 # What a plan's verify step has to do to earn the verification credit: run
 # the program or its tests, or fetch a page. The agent loop counts nothing
-# else as verification, and proxy/command_evidence.go is the authority on
+# else as verification, and proxy/internal/shellcmd/command_evidence.go is the authority on
 # that; this is only a heuristic for ranking plans. A build, a parse or a
 # linter shows the code is well formed, not that it works, so a step made of
 # nothing else earns no credit.
@@ -490,10 +490,7 @@ def generate_plan(
 
     def emit(stage: str, detail: str = "", **data):
         if progress_callback:
-            try:
-                progress_callback(stage, detail, **data)
-            except TypeError:
-                progress_callback(stage, detail)
+            progress_callback(stage, detail, **data)
 
     emit("plan_start", f"generating {n_candidates} candidate plans")
 

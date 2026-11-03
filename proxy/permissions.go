@@ -14,6 +14,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
+	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
 // ---------------------------------------------------------------------------
@@ -110,12 +113,12 @@ func shouldDenyToolCall(toolName string, args json.RawMessage) (bool, string) {
 		return false, ""
 	}
 	switch {
-	case tool.Effect == ToolEffectCommandUnobserved:
+	case tool.Effect == wire.ToolEffectCommandUnobserved:
 		if reason := denyCommandReason(ledgerArgPath(args, "command")); reason != "" {
 			return true, reason
 		}
 	case toolName == "move_file":
-		var input MoveFileInput
+		var input wire.MoveFileInput
 		if json.Unmarshal(args, &input) != nil {
 			return false, ""
 		}
@@ -127,7 +130,7 @@ func shouldDenyToolCall(toolName string, args json.RawMessage) (bool, string) {
 		if reason := denyWritePathReason(input.Destination); reason != "" {
 			return true, reason
 		}
-	case tool.Effect == ToolEffectDirectMutation && toolName != "delete_file":
+	case tool.Effect == wire.ToolEffectDirectMutation && toolName != "delete_file":
 		// delete_file has its own per-object approval.
 		if reason := denyWritePathReason(ledgerArgPath(args, "path")); reason != "" {
 			return true, reason
@@ -146,12 +149,12 @@ func describeToolCall(toolName string, args json.RawMessage) string {
 	// A command is shown whole. Approval is the only per-command control, and
 	// a prompt cut at 100 bytes hid the tail of a chain (`... && rm -rf src`).
 	case "run_command":
-		var input RunCommandInput
+		var input wire.RunCommandInput
 		if json.Unmarshal(args, &input) == nil {
 			return "Run command: " + input.Command
 		}
 	case "run_background":
-		var input RunBackgroundInput
+		var input wire.RunBackgroundInput
 		if json.Unmarshal(args, &input) == nil {
 			return "Run in the background: " + input.Command
 		}
@@ -160,12 +163,12 @@ func describeToolCall(toolName string, args json.RawMessage) string {
 			return "Stop background job " + id
 		}
 	case "write_file":
-		var input WriteFileInput
+		var input wire.WriteFileInput
 		if json.Unmarshal(args, &input) == nil {
 			return "Write file: " + input.Path + " (" + formatSize(len(input.Content)) + ")"
 		}
 	case "edit_file":
-		var input EditFileInput
+		var input wire.EditFileInput
 		if json.Unmarshal(args, &input) == nil {
 			return "Edit file: " + input.Path
 		}
@@ -266,7 +269,7 @@ func awaitPermission(ctx *AgentContext, toolName, callID string, args json.RawMe
 	pendingPermissions.Store(key, entry)
 	defer pendingPermissions.CompareAndDelete(key, entry)
 
-	req := PermissionRequest{
+	req := wire.PermissionRequest{
 		ToolName:   toolName,
 		Args:       args,
 		Message:    describeToolCall(toolName, args),
@@ -332,6 +335,10 @@ type notAllowedKey struct {
 // notAllowedReasons keeps, for a call that was not allowed and that no user
 // denied, the reason that the call reads next.
 var notAllowedReasons sync.Map
+
+// pinObjectFn is the one seam: tests substitute a failing pin to exercise the
+// fail-closed path on a platform where the real one succeeds.
+var pinObjectFn = workspacefs.PinObject
 
 // noteNotAllowed records why a call was not allowed when no user denied it:
 // the proxy refused before it asked, nobody could be asked, the request
@@ -524,12 +531,12 @@ type deleteTarget struct {
 	// what makes the identity a binding rather than two readings of numbers a
 	// filesystem may recycle. Kept internal -- descriptors, inode and device
 	// numbers never reach the event, the model, the logs, or the wire.
-	handle *objectHandle
+	handle *workspacefs.ObjectHandle
 }
 
 // release lets go of the held object. Safe on a zero target and safe to call
 // more than once; the handle itself is idempotent.
-func (d deleteTarget) release() { d.handle.release() }
+func (d deleteTarget) release() { d.handle.Release() }
 
 // withoutHandle is the target as a record: what was approved and removed,
 // with no reference left to hold.
@@ -553,7 +560,7 @@ func (d deleteTarget) withoutHandle() deleteTarget { d.handle = nil; return d }
 // retargeted, a directory that gained a child (it is no longer empty), a type
 // swapped under the same name.
 func (d deleteTarget) identityMatches(other deleteTarget) bool {
-	if other.info == nil || !d.handle.stillTheObjectAt(other.info) {
+	if other.info == nil || !d.handle.StillTheObjectAt(other.info) {
 		return false
 	}
 	return d.Canonical == other.Canonical && d.Kind == other.Kind &&
@@ -574,7 +581,7 @@ const deleteHashBufferBytes = 64 * 1024
 // rules for what is deletable. Nothing here opens mutation debt, touches the
 // ledger, tombstones anything, or writes to disk.
 func inspectDeleteTarget(ctx *AgentContext, args json.RawMessage) (deleteTarget, string) {
-	var input DeleteFileInput
+	var input wire.DeleteFileInput
 	if err := json.Unmarshal(args, &input); err != nil {
 		return deleteTarget{}, "delete_file: arguments are not usable"
 	}

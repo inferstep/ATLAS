@@ -1,7 +1,7 @@
 // A run's outcome, from the `done` event (#236).
 //
 // Both clients showed only the summary, so a stopped or failed run looked like
-// a finished one until its text was read. docs/API.md: a missing status reads
+// a finished one until its text was read. docs/reference/API.md: a missing status reads
 // as incomplete.
 //
 // Ported from extensions/vscode/src/session/doneOutcome.ts. The `cls` field is
@@ -12,7 +12,7 @@ package com.inferstep.atlas.session
 
 import com.inferstep.atlas.protocol.DonePayload
 
-/** The terminal statuses the proxy sends (proxy/types.go, TerminalStatus). */
+/** The terminal statuses the proxy sends (proxy/internal/wire/messages.go, TerminalStatus). */
 private val KNOWN_STATUSES = setOf("completed", "incomplete", "stopped", "timed_out", "failed")
 
 private const val MISSING_STATUS = "incomplete"
