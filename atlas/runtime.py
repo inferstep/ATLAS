@@ -102,7 +102,7 @@ def _find_proxy_binary(atlas_dir: str) -> Optional[str]:
     # Check common locations
     for candidate in [
         os.path.expanduser("~/.local/bin/atlas-proxy-v2"),
-        os.path.join(atlas_dir, "proxy", "atlas-proxy-v2") if atlas_dir else None,
+        os.path.join(atlas_dir, "services", "proxy", "atlas-proxy-v2") if atlas_dir else None,
     ]:
         if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
             return candidate
