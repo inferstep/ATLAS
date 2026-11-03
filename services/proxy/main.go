@@ -169,28 +169,31 @@ func handleModels(w http.ResponseWriter, r *http.Request) {
 			{"id": id, "object": "model", "owned_by": "atlas"},
 		},
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// healthPath is where a service of the stack, this proxy among them, answers
+// its health check.
+const healthPath = "/health"
+
+// serviceHealthy is whether the service at base answers its health check
+// with 200.
+func serviceHealthy(client *http.Client, base string) bool {
+	resp, err := client.Get(base + healthPath)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode == 200
 }
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
-	llmOK, lensOK, sandboxOK := false, false, false
-
-	if resp, err := healthClient.Get(inferenceURL + "/health"); err == nil {
-		resp.Body.Close()
-		llmOK = resp.StatusCode == 200
-	}
-	if resp, err := healthClient.Get(lensURL + "/health"); err == nil {
-		resp.Body.Close()
-		lensOK = resp.StatusCode == 200
-	}
+	llmOK := serviceHealthy(healthClient, inferenceURL)
+	lensOK := serviceHealthy(healthClient, lensURL)
 	// lens_ready is the gate /v1/agent applies: whether the lens can score
 	// (lens_required.go). /health stays informational.
 	lensCanScore, lensWhy := lensReady(lensURL)
-	if resp, err := healthClient.Get(sandboxURL + "/health"); err == nil {
-		resp.Body.Close()
-		sandboxOK = resp.StatusCode == 200
-	}
+	sandboxOK := serviceHealthy(healthClient, sandboxURL)
 
 	overall := llmOK && lensOK && sandboxOK && lensCanScore
 	overallStatus := "ok"
@@ -210,33 +213,20 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	if !lensCanScore {
 		status["lens_reason"] = lensWhy
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(status)
+	writeJSON(w, http.StatusOK, status)
 }
 
 func handleReady(w http.ResponseWriter, r *http.Request) {
-	llmOK, sandboxOK := false, false
-
-	if resp, err := healthClient.Get(inferenceURL + "/health"); err == nil {
-		resp.Body.Close()
-		llmOK = resp.StatusCode == 200
-	}
+	llmOK := serviceHealthy(healthClient, inferenceURL)
 	// The same gate /v1/agent applies, so a client that asks /ready first
 	// is not told "ready" for a request the proxy would refuse.
 	lensCanScore, lensWhy := lensReady(lensURL)
-	if resp, err := healthClient.Get(sandboxURL + "/health"); err == nil {
-		resp.Body.Close()
-		sandboxOK = resp.StatusCode == 200
-	}
+	sandboxOK := serviceHealthy(healthClient, sandboxURL)
 	// T2/T3 writes route through v3-service, so readiness includes it
 	// whenever a V3 URL is configured.
 	v3OK := true
 	if v3URL != "" {
-		v3OK = false
-		if resp, err := v3HealthClient.Get(v3URL + "/health"); err == nil {
-			resp.Body.Close()
-			v3OK = resp.StatusCode == 200
-		}
+		v3OK = serviceHealthy(v3HealthClient, v3URL)
 	}
 
 	ready := llmOK && lensCanScore && sandboxOK && v3OK
@@ -250,18 +240,18 @@ func handleReady(w http.ResponseWriter, r *http.Request) {
 	if !lensCanScore {
 		body["lens_reason"] = lensWhy
 	}
-	w.Header().Set("Content-Type", "application/json")
+	code := http.StatusOK
 	if !ready {
-		w.WriteHeader(http.StatusServiceUnavailable)
+		code = http.StatusServiceUnavailable
 	}
-	json.NewEncoder(w).Encode(body)
+	writeJSON(w, code, body)
 }
 
 func newProxyMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/models", handleModels)
 	mux.HandleFunc("/models", handleModels)
-	mux.HandleFunc("/health", handleHealth)
+	mux.HandleFunc(healthPath, handleHealth)
 	mux.HandleFunc("/ready", handleReady)
 	mux.HandleFunc("/v1/agent", handleAgent)           // tool-based agent endpoint
 	mux.HandleFunc("/events", handleEvents)            // typed SSE event stream
@@ -834,7 +824,7 @@ func readServiceToken(path string) (string, error) {
 // authOpenPaths never require the token: health probes are headerless
 // curl in compose/K8s, and /ready gates orchestration.
 func authOpenPath(path string) bool {
-	return path == "/health" || path == "/ready" || path == "/version"
+	return path == healthPath || path == "/ready" || path == "/version"
 }
 
 func bearerToken(r *http.Request) string {
@@ -984,19 +974,23 @@ type ErrorEnvelope struct {
 
 func writeError(w http.ResponseWriter, status int, code ErrorCode,
 	detail string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(ErrorEnvelope{
+	writeJSON(w, status, ErrorEnvelope{
 		Error:      string(code),
 		Detail:     detail,
 		APIVersion: APIVersion,
 	})
 }
 
-func handleVersion(w http.ResponseWriter, r *http.Request) {
+// writeJSON answers with v as JSON, with the given status.
+func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func handleVersion(w http.ResponseWriter, r *http.Request) {
 	total, _ := sessionBudget()
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"api_version":      APIVersion,
 		"protocol_version": ProtocolVersion,
 		"error_codes":      AllErrorCodes,
@@ -1043,8 +1037,7 @@ func handleWorkspace(w http.ResponseWriter, r *http.Request) {
 	if !filepath.IsAbs(hostPath) {
 		hostPath = ""
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"project_dir":   hostPath,
 		"working_dir":   containerPath,
 		"containerized": containerized,
