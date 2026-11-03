@@ -1,4 +1,4 @@
-"""A test gate passes only when a test ran.
+"""A test gate passes only when a test ran, and fails when it runs past its time limit.
 
 pytest exits 0 when every test was skipped, and `go test` exits 0 for a
 package with no test files and for a -run pattern that matches nothing. A
@@ -123,3 +123,14 @@ def test_a_gate_whose_tests_ran_gives_their_result(gates_module, tmp_path, test_
                                               "-p", "no:cacheprovider"), cwd=tmp_path)
     result = gates_module._run_gate(gate, force_required=False)
     assert (result.status, result.reason) == (status, reason)
+
+
+def test_a_gate_that_runs_past_its_time_limit_fails_with_its_output_so_far(gates_module):
+    gate = gates_module.Gate(name="slow", command=(
+        sys.executable, "-c", "import time; print('started', flush=True); time.sleep(30)"))
+
+    result = gates_module._run_gate(gate, force_required=False, timeout=1)
+
+    assert result.status == "failed"
+    assert result.reason == "stopped after 1 s"
+    assert result.output == "started"

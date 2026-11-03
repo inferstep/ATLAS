@@ -207,9 +207,12 @@ jobs:
         # processes at once, one for each CPU of the runner. Every test still
         # runs once, and the result file holds every test. The other subsets
         # take seconds and stay in one process.
+        # Each subset takes 4 minutes or less. One that runs for 15 is stopped
+        # and fails, with its output so far; a test that hangs has had its
+        # stack written out at 5 minutes (faulthandler_timeout in pyproject.toml).
         run: >-
           python scripts/ci/production-readiness.py --only python-tests --pytest-path "${{ matrix.subset }}"
-          --pytest-workers "${{ matrix.subset == 'tests/infrastructure' && 4 || 1 }}"
+          --pytest-workers "${{ matrix.subset == 'tests/infrastructure' && 4 || 1 }}" --gate-timeout 900
 
       - name: coverage total
         if: ${{ !cancelled() }}

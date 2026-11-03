@@ -500,7 +500,7 @@ def _ran_no_test(command: Sequence[str], output: str) -> str:
     return ""
 
 
-def _run_gate(gate: Gate, force_required: bool) -> Result:
+def _run_gate(gate: Gate, force_required: bool, timeout: Optional[int] = None) -> Result:
     required = gate.required or force_required
     if not gate.available():
         return Result(
@@ -516,15 +516,29 @@ def _run_gate(gate: Gate, force_required: bool) -> Result:
     if gate.env:
         env.update(gate.env)
     start = time.monotonic()
-    completed = subprocess.run(
-        gate.command,
-        cwd=gate.cwd,
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            gate.command,
+            cwd=gate.cwd,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as stopped:
+        # The output so far holds the stack that pytest writes for a test that
+        # runs past faulthandler_timeout (pyproject.toml), so it names the test.
+        return Result(
+            name=gate.name,
+            status="failed",
+            required=required,
+            duration_seconds=round(time.monotonic() - start, 3),
+            command=list(gate.command),
+            output=(stopped.output or b"").decode(errors="replace").rstrip(),
+            reason=f"stopped after {timeout} s",
+        )
     duration = time.monotonic() - start
     output = completed.stdout.rstrip()
     if gate.junit is not None:
@@ -594,6 +608,14 @@ def _parse_args() -> argparse.Namespace:
         metavar="N",
         help="run the tests of the gate python-tests in N processes at once (needs pytest-xdist); 1 is one process",
     )
+    parser.add_argument(
+        "--gate-timeout",
+        type=int,
+        default=None,
+        metavar="SECONDS",
+        help="stop a gate's command after SECONDS and fail the gate, with its output so far; "
+        "by default a gate runs until it ends",
+    )
     parser.add_argument("--json", action="store_true", help="emit JSON")
     parser.add_argument("--list", action="store_true", help="list gate names")
     return parser.parse_args()
@@ -613,7 +635,8 @@ def main() -> int:
         return 2
 
     selected = args.only or list(gates)
-    results = [_run_gate(gates[name], force_required=bool(args.only)) for name in selected]
+    results = [_run_gate(gates[name], force_required=bool(args.only), timeout=args.gate_timeout)
+               for name in selected]
     if args.json:
         print(json.dumps({"results": [asdict(result) for result in results]}, indent=2))
     else:
