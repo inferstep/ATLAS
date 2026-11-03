@@ -26,7 +26,7 @@ data class AtlasConnection(
         "AtlasConnection(url=$url, token=${if (token.isEmpty()) "<none>" else "<redacted>"})"
 
     companion object {
-        /** The documented default (docs/CONFIGURATION.md). */
+        /** The documented default (docs/guides/CONFIGURATION.md). */
         const val DEFAULT_URL = "http://127.0.0.1:8090"
 
         /** atlas-proxy endpoint, honoured by the TUI as its `--proxy` default. */

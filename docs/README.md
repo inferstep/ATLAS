@@ -14,28 +14,28 @@ Task-oriented index for everything under `docs/`. The
 
 ### Install ATLAS
 
-- [GETTING_STARTED.md](GETTING_STARTED.md) — the beginner path: reality-check
+- [GETTING_STARTED.md](guides/GETTING_STARTED.md) — the beginner path: reality-check
   your hardware, install, verify, and run a first task.
-- [SETUP.md](SETUP.md) — all install paths: one-shot bootstrap, Docker
+- [SETUP.md](guides/SETUP.md) — all install paths: one-shot bootstrap, Docker
   Compose, bare metal, K3s. Start at
-  [§ Pick your install path](SETUP.md#pick-your-install-path).
-- [SETUP_MACOS.md](SETUP_MACOS.md) — Apple Silicon (native Metal
+  [§ Pick your install path](guides/SETUP.md#pick-your-install-path).
+- [SETUP_MACOS.md](guides/SETUP_MACOS.md) — Apple Silicon (native Metal
   llama-server + Docker for the rest).
 - Sizing questions before you download anything:
-  [SETUP.md § Supported GPUs](SETUP.md#supported-gpus) and
-  [TROUBLESHOOTING.md § What fits on my GPU?](TROUBLESHOOTING.md#what-fits-on-my-gpu)
+  [SETUP.md § Supported GPUs](guides/SETUP.md#supported-gpus) and
+  [TROUBLESHOOTING.md § What fits on my GPU?](guides/TROUBLESHOOTING.md#what-fits-on-my-gpu)
 - What is and isn't supported, with evidence:
-  [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md)
+  [SUPPORT_MATRIX.md](guides/SUPPORT_MATRIX.md)
 
 ### Use ATLAS day to day
 
 - [CLI.md](reference/CLI.md) — the TUI and every `atlas` subcommand: panes,
   [slash commands](reference/CLI.md#slash-commands), permission modes,
   `atlas model` / `tier fit` / `onboard` / `bench` / `lens` / `asa`.
-- [CONFIGURATION.md](CONFIGURATION.md) — every environment variable and
+- [CONFIGURATION.md](guides/CONFIGURATION.md) — every environment variable and
   internal constant, per service; includes
-  [adding your own model](CONFIGURATION.md#adding-your-own-model-drop-in--unregistered).
-- [OPERATIONS.md](OPERATIONS.md) — health, logs, runbooks, upgrade,
+  [adding your own model](guides/CONFIGURATION.md#adding-your-own-model-drop-in--unregistered).
+- [OPERATIONS.md](guides/OPERATIONS.md) — health, logs, runbooks, upgrade,
   rollback, backup/restore.
 - [PUBLISHING.md](project/PUBLISHING.md) — share trained Lens / ASA artifacts
   (HuggingFace upload + registry PR).
@@ -57,9 +57,9 @@ Task-oriented index for everything under `docs/`. The
 
 ### Fix a problem
 
-1. [TROUBLESHOOTING.md § Quick Diagnostics](TROUBLESHOOTING.md#quick-diagnostics)
+1. [TROUBLESHOOTING.md § Quick Diagnostics](guides/TROUBLESHOOTING.md#quick-diagnostics)
    — find which service is unhappy in three commands.
-2. [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — issues organized by
+2. [TROUBLESHOOTING.md](guides/TROUBLESHOOTING.md) — issues organized by
    service (Docker/GPU, llama-server, proxy, lens, sandbox, benchmarks),
    with an exact-error index up top.
 3. `atlas doctor` for a one-shot health report, and
@@ -115,14 +115,14 @@ Task-oriented index for everything under `docs/`. The
 
 ## Shortcuts by situation
 
-**New to ATLAS.** [GETTING_STARTED.md](GETTING_STARTED.md), which walks the
-whole first hour; keep [TROUBLESHOOTING.md](TROUBLESHOOTING.md) open in a tab.
+**New to ATLAS.** [GETTING_STARTED.md](guides/GETTING_STARTED.md), which walks the
+whole first hour; keep [TROUBLESHOOTING.md](guides/TROUBLESHOOTING.md) open in a tab.
 
 **Know what you need.** Use the section index above, or
 the [repository map](#repository-map) if you're looking for code rather than docs.
 
 **Something's broken.**
-[TROUBLESHOOTING.md § Quick Diagnostics](TROUBLESHOOTING.md#quick-diagnostics)
+[TROUBLESHOOTING.md § Quick Diagnostics](guides/TROUBLESHOOTING.md#quick-diagnostics)
 → the per-service section for whichever health field is `false` →
 `atlas doctor` → open an issue with the output.
 
@@ -146,7 +146,7 @@ the [repository map](#repository-map) if you're looking for code rather than doc
   ([ARCHITECTURE.md](reference/ARCHITECTURE.md)).
 - **Geometric Lens, C(x) / G(x)** — energy-based candidate scoring over the
   model's own embeddings; per-model trained bundle
-  ([ARCHITECTURE.md](reference/ARCHITECTURE.md), [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md)).
+  ([ARCHITECTURE.md](reference/ARCHITECTURE.md), [SUPPORT_MATRIX.md](guides/SUPPORT_MATRIX.md)).
 - **ASA** — activation-steering control vector nudging tool selection;
   per-model, always on wherever a vector is installed ([CLI.md](reference/CLI.md), [PUBLISHING.md](project/PUBLISHING.md)).
 - **Sandbox** — isolated multi-language execution used for verification
@@ -162,18 +162,18 @@ the [repository map](#repository-map) if you're looking for code rather than doc
 In order, each building on the last:
 
 1. [../README.md](../README.md) — what and why
-2. [GETTING_STARTED.md](GETTING_STARTED.md) — the first hour
-3. [SETUP.md](SETUP.md) / [SETUP_MACOS.md](SETUP_MACOS.md) — install
+2. [GETTING_STARTED.md](guides/GETTING_STARTED.md) — the first hour
+3. [SETUP.md](guides/SETUP.md) / [SETUP_MACOS.md](guides/SETUP_MACOS.md) — install
 4. [CLI.md](reference/CLI.md) — the surface you actually touch
-5. [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — failure modes and diagnosis
-6. [CONFIGURATION.md](CONFIGURATION.md) — every knob, per service
+5. [TROUBLESHOOTING.md](guides/TROUBLESHOOTING.md) — failure modes and diagnosis
+6. [CONFIGURATION.md](guides/CONFIGURATION.md) — every knob, per service
 7. [ARCHITECTURE.md](reference/ARCHITECTURE.md) — how the pieces fit
 8. [ARCHITECTURE.md § Plan Mode](reference/ARCHITECTURE.md#plan-mode-per-turn-pre-flight) — pre-flight planning
 9. [API.md](reference/API.md) — the full HTTP surface
 10. [SOURCES.md](reference/SOURCES.md) — the research it stands on
 11. [adr/](adr/README.md) — decisions 0001 through 0011, in order (0007 retired)
-12. [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md) — claims and their evidence
-13. [OPERATIONS.md](OPERATIONS.md) — running it long-term
+12. [SUPPORT_MATRIX.md](guides/SUPPORT_MATRIX.md) — claims and their evidence
+13. [OPERATIONS.md](guides/OPERATIONS.md) — running it long-term
 14. [../.github/CONTRIBUTING.md](../.github/CONTRIBUTING.md) (its Development workflow),
     [RELEASE.md](RELEASE.md), [PUBLISHING.md](project/PUBLISHING.md),
     [CONTAINER_PACKAGING.md](project/CONTAINER_PACKAGING.md) — working on it
@@ -202,8 +202,8 @@ Where things live: what each top-level folder owns. For how the pieces work toge
 | `.github/` | CI workflows, `CODEOWNERS`, `dependabot.yml`, `allowed_signers` for signed release tags, issue templates, and the community files GitHub reads: the contributor guide (`CONTRIBUTING.md`), the governance page (`GOVERNANCE.md`), the code of conduct and the security policy (`SECURITY.md`) | — |
 | `templates/` | K3s manifest templates rendered from `atlas.conf` via envsubst | — |
 | `tests/` | The Python tests, by subject: `cli/`, `concurrency/`, `contracts/` (doc-link, version and config gates), `e2e/` (the acceptance suite CI runs), `infrastructure/`, `perf/`, `v3/`, `v3-service/`. Go tests sit beside their code (`*_test.go` in `proxy/` and `tui/`), the extensions' tests in `extensions/vscode/test/` and `extensions/jetbrains/src/test/`, and `geometric-lens/tests/` beside its service, which has its own lock file | — |
-| `docs/` | The pages, listed above by what you are trying to do. `reference/` holds the API, the CLI, the architecture, the candidate policy and the sources, with the API's machine-readable schemas in `reference/schemas/`; `project/` holds how the project is run and shipped, `adr/` the decision records, `lang/` the ja, ko and zh-CN copies, and `quality/` the checks on a pull request. `reports/` is data: the raw traces of the withdrawn V3.0 ablation result, kept so the withdrawal can be checked. `assets/` holds files the README and the TUI demo read | [adr/README.md](adr/README.md) |
-| `diagnostics/` | Where diagnostic captures are written at run time; git holds only a placeholder | [OPERATIONS.md](OPERATIONS.md) |
+| `docs/` | The pages, listed above by what you are trying to do. `guides/` holds installing, configuring, running and fixing ATLAS, and the support matrix; `reference/` holds the API, the CLI, the architecture, the candidate policy and the sources, with the API's machine-readable schemas in `reference/schemas/`; `project/` holds how the project is run and shipped, `adr/` the decision records, `lang/` the ja, ko and zh-CN copies, and `quality/` the checks on a pull request. `reports/` is data: the raw traces of the withdrawn V3.0 ablation result, kept so the withdrawal can be checked. `assets/` holds files the README and the TUI demo read | [adr/README.md](adr/README.md) |
+| `diagnostics/` | Where diagnostic captures are written at run time; git holds only a placeholder | [OPERATIONS.md](guides/OPERATIONS.md) |
 
 Root also holds the base Compose file `docker-compose.yml`, `atlas.conf.example` (K3s), `pyproject.toml`
 (the `atlas` CLI entry point), and the standard `.env.example`. Dependencies are declared in `pyproject.toml` (the `atlas`

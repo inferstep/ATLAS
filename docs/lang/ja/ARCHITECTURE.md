@@ -47,7 +47,7 @@ llama-server は GPU を使用する唯一のサービスです。それ以外�
 
 | バックエンド | ステータス (V3.1.x) | イメージ / ビルドパス | Compose オーバーライド | 検証済みカード |
 |---|---|---|---|---|
-| **CUDA** (NVIDIA) | サポート対象 (Supported)（V3.1.0 以降） | `inference/Dockerfile.v31` → `atlas-llama` | (デフォルト) | RTX 5060 Ti 16GB（標準構成）。公開イメージは Blackwell（compute capability 12.0/12.1）のみを対象にコンパイルされており、それより前の世代はローカル再ビルドが必要 — [SETUP.md](../../SETUP.md) を参照 |
+| **CUDA** (NVIDIA) | サポート対象 (Supported)（V3.1.0 以降） | `inference/Dockerfile.v31` → `atlas-llama` | (デフォルト) | RTX 5060 Ti 16GB（標準構成）。公開イメージは Blackwell（compute capability 12.0/12.1）のみを対象にコンパイルされており、それより前の世代はローカル再ビルドが必要 — [SETUP.md](../../guides/SETUP.md) を参照 |
 | **ROCm / HIP** (AMD) | コミュニティ検証済み (Community-tested)（V3.1.1 以降） | `inference/Dockerfile.rocm` → `atlas-llama-rocm`、ホスト上でビルド（`pull_policy: build`; GHCR イメージなし） | `compose/docker-compose.rocm.yml` | RX 7900 XTX（コミュニティによるスモークテスト、GH #26） |
 | **Metal** (Apple Silicon) | サポート対象 ([#32](https://github.com/inferstep/ATLAS/issues/32)) | ハイブリッド: ネイティブ llama-server (Metal) + 残りは Docker（macOS は GPU をコンテナにパススルーできないため） | `compose/docker-compose.macos.yml` | M シリーズ; 16 GB 以下では Q4_K_M、24 GB 以上のユニファイドメモリでは Q6_K |
 | **Vulkan**（クロスベンダーフォールバック） | プレビュー (Preview) | `inference/Dockerfile.vulkan` → `atlas-llama-vulkan` | `compose/docker-compose.vulkan.yml` | lavapipe の CPU 起動パス（スモークテスト済み）。実 GPU での検証はまだなし |
@@ -282,7 +282,7 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 
 #### ターミナル契約とセッション予算
 
-すべてのセッションは、1つのエミッタから発せられるちょうど1つのターミナルイベントで終わります。それはレガシーの `summary` を変更せず運び、加算的な `status` — `completed`、`incomplete`、`stopped`、`timed_out`、`failed` — と安定した機械可読な `reason` を伴います。クライアントは、不在の status を `incomplete` として読み、未認識の語はそのまま表示し、完了としては読みません（`tui/events.go` の `onDone`、VS Code と JetBrains の拡張機能の `doneOutcome`）。ブローカーの `done`/`stage_end` エンベロープは、`success: true` を主張する代わりに同じ結果を報告します。
+すべてのセッションは、1つのエミッタから発せられるちょうど1つのターミナルイベントで終わります。それはレガシーの `summary` を変更せず運び、加算的な `status` — `completed`、`incomplete`、`stopped`、`timed_out`、`failed` — と安定した機械可読な `reason` を伴います。クライアントは、不在の status を `incomplete` として読み、未認識の語はそのまま表示し、完了としては読みません（`tui/internal/app/events.go` の `onDone`、VS Code と JetBrains の拡張機能の `doneOutcome`）。ブローカーの `done`/`stage_end` エンベロープは、`success: true` を主張する代わりに同じ結果を報告します。
 
 `completed` 以外のすべてのステータスについて、サーバーはフィールドと同じくその文も所有します。モデル自身の説明が通されるのは、完了ゲートがそれを認可した場合のみです。サマリのない非完了ターミナルには、結果・ディスク上に何かが存在するか・それが有効と示されたかを名指しするサーバー作成のサマリが与えられ、非完了ステータスでエミッタに到達した完了の主張は、周囲を編集するのではなく全面的に差し替えられます。これによりフェーズ 2B が残したギャップが閉じられます: `summary` だけを読むクライアント — `status` が存在する前に書かれたすべてのクライアント — は今、両方を読むクライアントと同じ真実を読みます。
 
@@ -356,7 +356,7 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 - **破壊的なものは何も許可しない。** `question` モードはミューテーションを許可せず、ミューテーション債務、壊れた成果物、失敗した検証、バックグラウンドハザード、削除義務を消去もしません。モデルがそれでもミューテートする場合、同じ安全性と完了のルールがそれらのバイトを統治します。削除は依然として、それ自体のパスと識別子に束ねられた確認を必要とします。
 - **モデルには決して届かない。** タスクモードはどのプロンプトにも含まれず、モデル・V3・レンズの出力はそれを設定できません。内部的に不正なモードは、質問として読まれるのではなく、作業を要求する側へフェイルクローズします。
 
-シャドー診断記録（非公開、観測的、デフォルトでオフ — [OPERATIONS.md](../../OPERATIONS.md#private-diagnostics-task-contract-shadow-capture) を参照）は、**記録種別ごと**にバージョンを持ちます。1つにフィールドを追加しても、別のものが黙って再定義されないようにするためです:
+シャドー診断記録（非公開、観測的、デフォルトでオフ — [OPERATIONS.md](../../guides/OPERATIONS.md#private-diagnostics-task-contract-shadow-capture) を参照）は、**記録種別ごと**にバージョンを持ちます。1つにフィールドを追加しても、別のものが黙って再定義されないようにするためです:
 
 | 記録 | バージョン | 契約 |
 | --- | --- | --- |
@@ -462,7 +462,7 @@ API の契約は [API.md § POST /v3/plan](../../reference/API.md#post-v3plan) �
 
 ##### tui: レンダリング (Go)
 
-`tui/internal/pipelinestate/plan.go` は `PlanView`（モデル上の状態）を定義し、`tui/state.go` は `tui/events.go` のチャットディスパッチャーに接続された 3 つの `applyPlan*` ハンドラーを定義します:
+`tui/internal/pipelinestate/plan.go` は `PlanView`（モデル上の状態）を定義し、`tui/internal/app/state.go` は `tui/internal/app/events.go` のチャットディスパッチャーに接続された 3 つの `applyPlan*` ハンドラーを定義します:
 
 | イベント | ハンドラー | UI への効果 |
 |---|---|---|
@@ -512,7 +512,7 @@ API の契約は [API.md § POST /v3/plan](../../reference/API.md#post-v3plan) �
 | プロキシのブリッジ | `proxy/internal/v3client/client_test.go`。ステージのルーティングは `proxy/v3_bridge_test.go` | SSE の解析、結果が欠けたときのエラー、ステージのルーティング |
 | プロキシのフック | `proxy/agent_test.go` | 優先ファイルの取得、切り詰めのしきい値、フォールバックの走査、ティアと長さの判定 |
 | プロキシの遵守 | `proxy/gates_plan_test.go`。システムプロンプトは `proxy/gates_test.go` | 一致ロジック（ツール名 + パス末尾）、失敗したコールの除外、修正回数の上限、システムプロンプトのレンダリング |
-| TUI のレンダリング | `tui/internal/pipelinestate/plan_test.go`。ハンドラーは `tui/plan_test.go` | `PlanView` の状態遷移、修正時の plan_loaded による置き換え、プラン外での無言 |
+| TUI のレンダリング | `tui/internal/pipelinestate/plan_test.go`。ハンドラーは `tui/internal/app/plan_test.go` | `PlanView` の状態遷移、修正時の plan_loaded による置き換え、プラン外での無言 |
 
 ### 安全制限
 
@@ -825,7 +825,7 @@ graph LR
 
 `llama-server` と `sandbox` は独立して起動します。`geometric-lens` は `llama-server` が healthy になるのを待ちます; `v3-service` は `llama-server` と `geometric-lens` を待ちます; `atlas-proxy` は `llama-server`、`geometric-lens`、`v3-service`、`sandbox` を待ちます。同じ `inference/entrypoint-v3.1.sh` が Docker Compose、ベアメタル、K3s を駆動するため、コンテキストサイズ、KV キャッシュ量子化、flash attention、mlock は環境変数で制御され、挙動はこれらのモード間で同一です。macOS ハイブリッドパスは `scripts/install/atlas-llama-macos.sh` 経由でネイティブ llama-server を起動し、このスクリプトはエントリーポイントのフラグをミラーします。
 
-インストールとモード別の立ち上げ手順（NVIDIA / ROCm オーバーライド、ベアメタル、macOS ハイブリッド Metal、K3s マニフェスト）は [SETUP.md](./SETUP.md) に、macOS ネイティブパスは [SETUP_MACOS.md](../../SETUP_MACOS.md) にあります。
+インストールとモード別の立ち上げ手順（NVIDIA / ROCm オーバーライド、ベアメタル、macOS ハイブリッド Metal、K3s マニフェスト）は [SETUP.md](./SETUP.md) に、macOS ネイティブパスは [SETUP_MACOS.md](../../guides/SETUP_MACOS.md) にあります。
 
 ---
 

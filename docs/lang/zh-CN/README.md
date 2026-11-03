@@ -91,7 +91,7 @@
    - 评分前先做编译与检查
    - 同时运行自生成测试和已有测试套件
 
-6. **[llama-server](../../CONFIGURATION.md#6-llama-server)** - 在单块消费级 GPU 上的本地 LLM 推理。
+6. **[llama-server](../../guides/CONFIGURATION.md#6-llama-server)** - 在单块消费级 GPU 上的本地 LLM 推理。
    - GPU 加速的量化推理 (Q6_K / Q4_K_M) - NVIDIA CUDA、AMD ROCm、Apple Metal（macOS 混合方案）和 Vulkan；Intel SYCL 在路线图上
    - token 级的语法约束解码
    - 自嵌入，因此 lens 不需要第二个模型
@@ -127,18 +127,18 @@ bash atlas-bootstrap.sh
 
 | | |
 |---|---|
-| GPU | 显存 16GB 以上。NVIDIA（CUDA，支持 (Supported)）、AMD（ROCm，社区验证 (Community-tested)）或 Apple Silicon（Metal，macOS 混合方案，支持）；其余大多数 GPU 由 Vulkan（预览 (Preview)）覆盖。预构建的 CUDA 镜像面向 Blackwell（RTX 50xx）；更早的 NVIDIA GPU 需要做一次性的本地重建（参见 [SETUP.md § CUDA Compute Capability](../../SETUP.md#cuda-compute-capability-dockerfilev31)）。级别定义见 [SUPPORT_MATRIX.md](../../SUPPORT_MATRIX.md)；GPU 列表见 [SETUP.md § Supported GPUs](../../SETUP.md#supported-gpus)。想估算某个具体模型能否放进你的显卡，参见 [What fits on my GPU?](../../TROUBLESHOOTING.md#what-fits-on-my-gpu)。 |
+| GPU | 显存 16GB 以上。NVIDIA（CUDA，支持 (Supported)）、AMD（ROCm，社区验证 (Community-tested)）或 Apple Silicon（Metal，macOS 混合方案，支持）；其余大多数 GPU 由 Vulkan（预览 (Preview)）覆盖。预构建的 CUDA 镜像面向 Blackwell（RTX 50xx）；更早的 NVIDIA GPU 需要做一次性的本地重建（参见 [SETUP.md § CUDA Compute Capability](../../guides/SETUP.md#cuda-compute-capability-dockerfilev31)）。级别定义见 [SUPPORT_MATRIX.md](../../guides/SUPPORT_MATRIX.md)；GPU 列表见 [SETUP.md § Supported GPUs](../../guides/SETUP.md#supported-gpus)。想估算某个具体模型能否放进你的显卡，参见 [What fits on my GPU?](../../guides/TROUBLESHOOTING.md#what-fits-on-my-gpu)。 |
 | 运行时 | Docker（NVIDIA：+ nvidia-container-toolkit；AMD：单独的 Docker 即可） |
 | Python | 3.9 及以上 |
 | 磁盘 | 约 20GB CUDA / 约 22GB ROCm（模型权重 + 容器镜像） |
 
-Apple Silicon 通过原生 macOS 混合 Metal 方案运行（原生 llama-server 负责推理，其余组件用 Docker - 详见 **[SETUP_MACOS.md](../../SETUP_MACOS.md)**）；Intel Arc (SYCL) 在路线图上。完整的手动安装路径（Docker Compose、裸机、K3s）和全部 bootstrap 参数请参见 **[SETUP.md](../../SETUP.md)**。
+Apple Silicon 通过原生 macOS 混合 Metal 方案运行（原生 llama-server 负责推理，其余组件用 Docker - 详见 **[SETUP_MACOS.md](../../guides/SETUP_MACOS.md)**）；Intel Arc (SYCL) 在路线图上。完整的手动安装路径（Docker Compose、裸机、K3s）和全部 bootstrap 参数请参见 **[SETUP.md](../../guides/SETUP.md)**。
 
 ---
 
 ## ⚠️ 已知限制
 
-- **Linux Docker 栈，外加一条原生 macOS 路径。** NVIDIA（支持 (Supported)）、AMD ROCm（社区验证 (Community-tested)）和 Vulkan（预览 (Preview)）的 Docker 路径今天即已存在；Apple Silicon（支持）通过原生 macOS 混合 Metal 方案运行 ([#32](https://github.com/inferstep/ATLAS/issues/32))。Intel Arc / SYCL 为路线图 (Roadmap) 级别。级别定义见 [SUPPORT_MATRIX.md](../../SUPPORT_MATRIX.md)。
+- **Linux Docker 栈，外加一条原生 macOS 路径。** NVIDIA（支持 (Supported)）、AMD ROCm（社区验证 (Community-tested)）和 Vulkan（预览 (Preview)）的 Docker 路径今天即已存在；Apple Silicon（支持）通过原生 macOS 混合 Metal 方案运行 ([#32](https://github.com/inferstep/ATLAS/issues/32))。Intel Arc / SYCL 为路线图 (Roadmap) 级别。级别定义见 [SUPPORT_MATRIX.md](../../guides/SUPPORT_MATRIX.md)。
 - **ATLAS 目前没有基准测试结果。** V3.0 的 LiveCodeBench 数字已撤回（见 [CHANGELOG](../../../CHANGELOG.md#withdrawn-the-v30-livecodebench-result-746)），当前版本的能力与可靠性数字尚未测量。只有在留出任务上重新测量后才会公布数字；逐模型结果在 [#28](https://github.com/inferstep/ATLAS/issues/28) 中跟踪。
 - **Lens 的信号尚未得到证实。** 在参考模型上它能评分，但仍未校准，因此干预保持中立。在 3.1.6 上它没有给出可用信号，`dev` 上尚未测量 ([#281](https://github.com/inferstep/ATLAS/issues/281))。
 - **复杂功能添加可能不稳定。** 紧凑模型有时会在陌生代码库上花掉几轮 agent 回合去探索而不是写代码。

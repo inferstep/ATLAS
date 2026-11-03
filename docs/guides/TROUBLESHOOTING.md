@@ -536,7 +536,7 @@ atlas tier fit --write
 docker compose up -d llama-server --no-deps --force-recreate
 ```
 `atlas tier fit` reads the GGUF header and your GPU's VRAM and solves for the
-largest fully-on-GPU configuration (see [CLI.md § atlas tier fit](reference/CLI.md#atlas-tier-fit)).
+largest fully-on-GPU configuration (see [CLI.md § atlas tier fit](../reference/CLI.md#atlas-tier-fit)).
 ATLAS runs llama-server with `--fit off` so a config that doesn't fit fails
 loudly at startup instead of silently running partly on the CPU.
 
@@ -649,7 +649,7 @@ ps aux | grep llama-server | grep ctx-size
 
 **Cause:** You're hitting the wrong endpoint. The agent loop only runs on `POST /v1/agent`. `POST /v1/chat/completions` (and anything else under `/v1/`) is a transparent passthrough to llama-server — no tools, no V3, no streaming chat events.
 
-**Fix:** Point your client at `POST http://localhost:8090/v1/agent`. The Bubbletea TUI (`atlas` / `atlas tui`) does this automatically. If you're writing a third-party client, see [docs/reference/API.md](reference/API.md) for the `/v1/agent` SSE event protocol. There is no longer an `ATLAS_AGENT_LOOP` env-var toggle — the split is endpoint-based, not config-based.
+**Fix:** Point your client at `POST http://localhost:8090/v1/agent`. The Bubbletea TUI (`atlas` / `atlas tui`) does this automatically. If you're writing a third-party client, see [docs/reference/API.md](../reference/API.md) for the `/v1/agent` SSE event protocol. There is no longer an `ATLAS_AGENT_LOOP` env-var toggle — the split is endpoint-based, not config-based.
 
 ### V3 Pipeline Not Firing on Feature Files
 
@@ -807,7 +807,7 @@ A message is conversational only when it is under 12 characters (`hi`, `thanks`,
 
 **Symptom:** A request fails at once with HTTP 503 `dependency_unavailable`: "ATLAS needs the geometric lens for every request, and it ... Run `atlas doctor`." Or a run stops with `lens_unavailable`: "Stopped: ATLAS needs the geometric lens for every request, and it stopped answering (...)". Proxy `/ready` shows `"lens_ready": false` with a `lens_reason`; `atlas doctor` fails `status_dimensions` with `direct_agent: blocked`.
 
-**Impact:** No request runs until the lens can score. This is deliberate: the lens is required ([ADR 0011](adr/0011-the-lens-is-required.md)). A run that stopped says whether it changed files before it stopped.
+**Impact:** No request runs until the lens can score. This is deliberate: the lens is required ([ADR 0011](../adr/0011-the-lens-is-required.md)). A run that stopped says whether it changed files before it stopped.
 
 **Fix:** The message names the cause. Check the lens health and logs:
 ```bash
@@ -831,7 +831,7 @@ The proxy caches the lens answer for 5 seconds, so a fixed lens is accepted with
 
 **Impact:** Requests run. The lens scores raw C(x) energies and G(x) probabilities; the calibrated uses (normalized routing, veto and correction thresholds) stay off until the model's calibration files exist.
 
-**Fix:** `atlas lens build` calibrates the thresholds and writes `cx_normalization.json` and `gx_thresholds.json` into the bundle. See [CLI.md § atlas lens](reference/CLI.md#atlas-lens).
+**Fix:** `atlas lens build` calibrates the thresholds and writes `cx_normalization.json` and `gx_thresholds.json` into the bundle. See [CLI.md § atlas lens](../reference/CLI.md#atlas-lens).
 
 ### Scores Look Plausible but Are Wildly Off-Scale (embedding-convention drift)
 
@@ -891,7 +891,7 @@ curl -s http://localhost:8099/health | python3 -c "import sys,json; l=json.load(
 ```
 `embed_capacity_tokens` is the longest input the lens can score; `embed_capacity_source` is `declared` (from `ATLAS_UBATCH`) or `observed` (from a refusal, authoritative).
 
-**Fix:** Raising `ATLAS_UBATCH` raises the capacity, at a VRAM cost of roughly `ubatch × n_embd × 280` bytes for the compute buffer (about 4.4 GB at 4,096 on a 3,840-dim model): size it with `atlas tier fit`, recreate llama-server, and confirm it starts under `--fit off`. Lowering `ATLAS_MAX_TOKENS` bounds the writes the proxy asks the lens to score. Neither makes a split input scorable; scoring past the physical batch needs the calibration work described in [ADR 0010](adr/0010-lens-capacity-boundary-is-typed.md).
+**Fix:** Raising `ATLAS_UBATCH` raises the capacity, at a VRAM cost of roughly `ubatch × n_embd × 280` bytes for the compute buffer (about 4.4 GB at 4,096 on a 3,840-dim model): size it with `atlas tier fit`, recreate llama-server, and confirm it starts under `--fit off`. Lowering `ATLAS_MAX_TOKENS` bounds the writes the proxy asks the lens to score. Neither makes a split input scorable; scoring past the physical batch needs the calibration work described in [ADR 0010](../adr/0010-lens-capacity-boundary-is-typed.md).
 
 ---
 

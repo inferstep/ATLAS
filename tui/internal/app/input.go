@@ -3,7 +3,7 @@
 // and the textarea, which takes every key with no binding of its own. Update
 // in model.go hands each key and mouse message here.
 
-package main
+package app
 
 import (
 	"fmt"

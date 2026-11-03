@@ -8,7 +8,7 @@
 // plan_revise marks the plan as "being revised" and the next
 // plan_loaded supersedes it.
 
-package main
+package app
 
 import (
 	"encoding/json"

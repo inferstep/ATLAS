@@ -7,7 +7,7 @@ Roadmap items are tracked in GitHub and are not release claims.
 ## Status definitions
 
 Status terms follow the support-level taxonomy defined in
-[SUPPORT_MATRIX.md](SUPPORT_MATRIX.md) (Supported, Preview, Experimental,
+[SUPPORT_MATRIX.md](guides/SUPPORT_MATRIX.md) (Supported, Preview, Experimental,
 Community-tested, Research-only, Unsupported, Roadmap). One term used here
 marks *audience* rather than maturity and composes with a level:
 
@@ -242,7 +242,7 @@ the waiting deployment does the pipeline move `:latest` or a version tag.
 without approval. Each promotion leaves a timestamped deployment record.
 
 1. **Notes.** On `dev`, bump the "Applies to" line at the top of
-   [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md) and write the
+   [SUPPORT_MATRIX.md](guides/SUPPORT_MATRIX.md) and write the
    `CHANGELOG.md` entry.
 2. **Candidate.** Fast-forward `staging` to that `dev` commit with
    [the release step](#the-release-step): open a pull request from `dev`

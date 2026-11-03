@@ -160,7 +160,7 @@ def check_arch() -> CheckResult:
             "aarch64 — vulkan + cuda (sbsa/l4t) only, no rocm",
             "AMD ROCm has no arm64 release. Use ATLAS_BACKEND=vulkan for "
             "AMD GPUs on arm64. NVIDIA CUDA needs the sbsa (DGX Spark) or "
-            "l4t (Jetson) base image swap, see docs/SETUP.md#arm64.")
+            "l4t (Jetson) base image swap, see docs/guides/SETUP.md#arm64.")
     return CheckResult("arch", "warn",
         f"unsupported arch '{arch}'",
         "ATLAS officially supports x86_64 and aarch64. Other arches may "
@@ -371,7 +371,7 @@ def _check_metal_native(atlas_root: Optional[str] = None) -> CheckResult:
     if not os.path.isfile(binary):
         return CheckResult("metal-native", "fail",
             "native llama-server not found — run scripts/install/atlas-setup-macos.sh",
-            f"expected at {binary}. See docs/SETUP_MACOS.md.")
+            f"expected at {binary}. See docs/guides/SETUP_MACOS.md.")
 
     if not os.access(binary, os.X_OK):
         return CheckResult("metal-native", "fail",
@@ -702,7 +702,7 @@ def check_model_file(atlas_root: str) -> CheckResult:
             "Registry model? run `atlas model install <name>`. "
             "BYO model? place the .gguf in ATLAS_MODELS_DIR "
             f"({MODEL_DIR}) and set ATLAS_MODEL_FILE + ATLAS_MODEL_NAME in "
-            ".env — see docs/CONFIGURATION.md \"Adding your own model\", "
+            ".env — see docs/guides/CONFIGURATION.md \"Adding your own model\", "
             "or run `atlas model install --url <hf-url>` / `atlas onboard`.")
     size = os.path.getsize(path)
     if size < 100 * 1024 * 1024:  # < 100 MB
@@ -1141,7 +1141,7 @@ def check_inference_contract() -> CheckResult:
         + ". C(x)/G(x) scoring degrades to neutral and the V3 pipeline falls "
           "back to sandbox-only verification. The bundled image provides both; "
           "a bring-your-own server needs --embeddings --pooling mean and the "
-          "PC-202 build. See docs/SETUP.md 'Bringing your own llama-server'.")
+          "PC-202 build. See docs/guides/SETUP.md 'Bringing your own llama-server'.")
 
 
 def check_e2e_smoke() -> CheckResult:

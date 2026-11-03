@@ -126,7 +126,7 @@ data class HistoryMessage(
  * The content of a replayed assistant history entry.
  *
  * An assistant turn is re-wrapped in the `{"type":"text","content":…}`
- * envelope rather than replayed as bare prose (tui/model.go). The proxy keeps
+ * envelope rather than replayed as bare prose (tui/internal/app/model.go). The proxy keeps
  * one history format for both clients, so this is the client's half of that
  * convention, and the one place it is written.
  */

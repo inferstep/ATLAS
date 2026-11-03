@@ -32,7 +32,7 @@ candidate, and `staging` to `main` as a release. See
   issue, or send a pull request.
 - **Hardware reports.** Run ATLAS on your GPU and report what happened,
   with your `atlas doctor` output. AMD (ROCm), Apple Silicon (Metal) and
-  Vulkan reports help most; see [SUPPORT_MATRIX](../docs/SUPPORT_MATRIX.md).
+  Vulkan reports help most; see [SUPPORT_MATRIX](../docs/guides/SUPPORT_MATRIX.md).
 - **Trained artifacts** for a new model (see below).
 - **Questions** go to [Discussions Q&A](https://github.com/inferstep/ATLAS/discussions/categories/q-a).
 
@@ -71,7 +71,7 @@ pip install --no-deps -e .
 python scripts/ci/production-readiness.py
 ```
 
-**With a GPU.** Install the full stack with [SETUP.md](../docs/SETUP.md). Then
+**With a GPU.** Install the full stack with [SETUP.md](../docs/guides/SETUP.md). Then
 use the dev mode in [Development workflow](#development-workflow), which runs your
 working tree in the containers without a rebuild after every edit.
 
@@ -575,9 +575,9 @@ This is the fallback whenever dev mode is off or doesn't apply
 
 ### Cross-references
 
-- `docs/SETUP.md` — first-time install.
-- `docs/CONFIGURATION.md` — env vars used by each service.
-- `docs/TROUBLESHOOTING.md` — runtime symptoms and fixes.
+- `docs/guides/SETUP.md` — first-time install.
+- `docs/guides/CONFIGURATION.md` — env vars used by each service.
+- `docs/guides/TROUBLESHOOTING.md` — runtime symptoms and fixes.
 
 ## License
 

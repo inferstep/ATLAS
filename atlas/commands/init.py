@@ -243,7 +243,7 @@ def _step_probe(args: argparse.Namespace, color: bool
     # the sbsa/l4t base image swap.
     if probe.system_arch != "x86_64":
         _safe_print(f"    Architecture: {probe.system_arch} (see "
-                    f"docs/SETUP.md#arm64 for backend availability)")
+                    f"docs/guides/SETUP.md#arm64 for backend availability)")
     selected = _pick_gpu(probe, args, color)
     if selected is not None and probe.gpu_count > 1:
         _safe_print(f"    Selected: {selected.name} "
@@ -356,7 +356,7 @@ def _print_apple_silicon_setup(color: bool) -> None:
     _safe_print(f"  {BOLD if color else ''}Before you continue:{RESET if color else ''} "
                 f"run ./scripts/install/atlas-setup-macos.sh if you haven't. "
                 f"It installs the build tools and compiles llama.cpp "
-                f"with Metal. Full instructions in docs/SETUP_MACOS.md.")
+                f"with Metal. Full instructions in docs/guides/SETUP_MACOS.md.")
     _safe_print("")
     _safe_print("  Other options:")
     _safe_print("    --backend vulkan   Docker-only (no native build, "
@@ -678,7 +678,7 @@ def _append_backend_note(lines: List[str], backend_id: str) -> None:
         lines.append(
             "# Run ./scripts/install/atlas-setup-macos.sh first if you haven't already "
             "(installs brew deps + builds llama.cpp with Metal). See "
-            "docs/SETUP_MACOS.md.")
+            "docs/guides/SETUP_MACOS.md.")
         lines.append("")
 
 
@@ -989,7 +989,7 @@ def _parse_args(argv: Optional[List[str]]) -> argparse.Namespace:
              "`metal` is the macOS hybrid path (#32) — native llama-server "
              "+ Docker for the rest. Requires running "
              "./scripts/install/atlas-setup-macos.sh first. See "
-             "docs/SETUP_MACOS.md.")
+             "docs/guides/SETUP_MACOS.md.")
     parser.add_argument("--no-color", action="store_true")
     args = parser.parse_args(argv)
     return args
@@ -1026,7 +1026,7 @@ def _print_next_steps(backend_id: str, color: bool) -> None:
         _safe_print("  4. atlas doctor               # verify install health")
         _safe_print("  5. atlas                      # start using ATLAS")
         _safe_print("")
-        _safe_print("  See docs/SETUP_MACOS.md for the full walkthrough.")
+        _safe_print("  See docs/guides/SETUP_MACOS.md for the full walkthrough.")
     else:
         _safe_print("  1. atlas tier fit --write     # size the runtime for "
                     "this model + GPU (tier presets are VRAM-band defaults)")

@@ -46,7 +46,7 @@ llama-server is the only GPU-using service; every other ATLAS service runs on CP
 
 | Backend | Status (V3.1.x) | Image / build path | Compose override | Tested cards |
 |---|---|---|---|---|
-| **CUDA** (NVIDIA) | Supported (since V3.1.0) | `inference/Dockerfile.v31` → `atlas-llama` | (default) | RTX 5060 Ti 16GB (canonical). The published image is compiled for Blackwell (compute capability 12.0/12.1) only; earlier generations need a local rebuild — see [SETUP.md](../SETUP.md) |
+| **CUDA** (NVIDIA) | Supported (since V3.1.0) | `inference/Dockerfile.v31` → `atlas-llama` | (default) | RTX 5060 Ti 16GB (canonical). The published image is compiled for Blackwell (compute capability 12.0/12.1) only; earlier generations need a local rebuild — see [SETUP.md](../guides/SETUP.md) |
 | **ROCm / HIP** (AMD) | Community-tested (since V3.1.1) | `inference/Dockerfile.rocm` → `atlas-llama-rocm`, built on the host (`pull_policy: build`; no GHCR image) | `compose/docker-compose.rocm.yml` | RX 7900 XTX (community smoke-test, GH #26) |
 | **Metal** (Apple Silicon) | Supported ([#32](https://github.com/inferstep/ATLAS/issues/32)) | Hybrid: native llama-server (Metal) + Docker for the rest (macOS can't passthrough GPU to containers) | `compose/docker-compose.macos.yml` | M-series; Q4_K_M on ≤16 GB, Q6_K on ≥24 GB unified |
 | **Vulkan** (cross-vendor fallback) | Preview | `inference/Dockerfile.vulkan` → `atlas-llama-vulkan` | `compose/docker-compose.vulkan.yml` | lavapipe CPU boot path (smoke-tested); no real-GPU validation yet |
@@ -336,7 +336,7 @@ the legacy `summary` unchanged plus an additive `status` — `completed`,
 `incomplete`, `stopped`, `timed_out`, `failed` — and a stable machine-readable
 `reason`. The clients read an absent status as `incomplete` and show an
 unrecognised word as it came, never as completion (`onDone` in
-`tui/events.go`, `doneOutcome` in the VS Code and JetBrains extensions). The
+`tui/internal/app/events.go`, `doneOutcome` in the VS Code and JetBrains extensions). The
 broker's `done`/`stage_end` envelopes report the same outcome instead of
 asserting `success: true`.
 
@@ -516,7 +516,7 @@ A request may carry `task_contract.task_mode`, validated at the request boundary
   question.
 
 Shadow diagnostic records (private, observational, off by default — see
-[OPERATIONS.md](../OPERATIONS.md#private-diagnostics-task-contract-shadow-capture)) version **per
+[OPERATIONS.md](../guides/OPERATIONS.md#private-diagnostics-task-contract-shadow-capture)) version **per
 record kind**, because adding a field to one must not silently redefine another:
 
 | Record | Version | Contract |
@@ -632,7 +632,7 @@ The system prompt rendering happens in `buildSystemPrompt`. Plan steps are rende
 
 ##### tui: rendering (Go)
 
-`tui/internal/pipelinestate/plan.go` defines `PlanView` (state on the model), and `tui/state.go` holds the three `applyPlan*` handlers wired into the chat dispatcher in `tui/events.go`:
+`tui/internal/pipelinestate/plan.go` defines `PlanView` (state on the model), and `tui/internal/app/state.go` holds the three `applyPlan*` handlers wired into the chat dispatcher in `tui/internal/app/events.go`:
 
 | Event | Handler | UI effect |
 |---|---|---|
@@ -682,7 +682,7 @@ Both are paid up front before the agent's first tool call. The investment is rec
 | proxy bridge | `proxy/internal/v3client/client_test.go`; `proxy/v3_bridge_test.go` for stage routing | SSE parse, missing-result error, stage routing |
 | proxy hook | `proxy/agent_test.go` | priority-file pickup, truncation thresholds, fallback walk, tier/length gating |
 | proxy adherence | `proxy/gates_plan_test.go`; `proxy/gates_test.go` for the system prompt | match logic (tool name + path suffix), failed-call exclusion, revision cap, system-prompt rendering |
-| TUI rendering | `tui/internal/pipelinestate/plan_test.go`; `tui/plan_test.go` for the handlers | `PlanView` state transitions, plan_loaded replacement on revise, off-plan silence |
+| TUI rendering | `tui/internal/pipelinestate/plan_test.go`; `tui/internal/app/plan_test.go` for the handlers | `PlanView` state transitions, plan_loaded replacement on revise, off-plan silence |
 
 ### Safety Limits
 
@@ -1053,7 +1053,7 @@ graph LR
 
 `llama-server` and `sandbox` start independently. `geometric-lens` waits for `llama-server` to be healthy; `v3-service` waits for `llama-server` and `geometric-lens`; `atlas-proxy` waits for `llama-server`, `geometric-lens`, `v3-service`, and `sandbox`. The same `inference/entrypoint-v3.1.sh` drives Docker Compose, bare metal, and K3s, so context size, KV cache quantization, flash attention, and mlock are env-var-controlled and behavior is identical across those modes; the macOS hybrid path launches native llama-server via `scripts/install/atlas-llama-macos.sh`, which mirrors the entrypoint's flags.
 
-Install and per-mode bring-up steps (NVIDIA / ROCm overrides, bare metal, macOS hybrid Metal, K3s manifests) are in [SETUP.md](../SETUP.md); the macOS native path is in [SETUP_MACOS.md](../SETUP_MACOS.md).
+Install and per-mode bring-up steps (NVIDIA / ROCm overrides, bare metal, macOS hybrid Metal, K3s manifests) are in [SETUP.md](../guides/SETUP.md); the macOS native path is in [SETUP_MACOS.md](../guides/SETUP_MACOS.md).
 
 ---
 

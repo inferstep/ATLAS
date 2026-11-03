@@ -188,5 +188,5 @@ The CLI accepts any `--license` value — there's no runtime license gate. The g
 ## See also
 
 - [CLI.md — atlas lens / atlas asa command reference](../reference/CLI.md)
-- [CONFIGURATION.md — env vars including HF_TOKEN](../CONFIGURATION.md)
+- [CONFIGURATION.md — env vars including HF_TOKEN](../guides/CONFIGURATION.md)
 - [CONTRIBUTING.md — broader contribution guidelines](../../.github/CONTRIBUTING.md)

@@ -47,7 +47,7 @@ llama-server 是唯一使用 GPU 的服务；其余每个 ATLAS 服务都跑在 
 
 | 后端 | 状态 (V3.1.x) | 镜像 / 构建路径 | Compose override | 已测试显卡 |
 |---|---|---|---|---|
-| **CUDA** (NVIDIA) | 支持 (Supported)（自 V3.1.0 起） | `inference/Dockerfile.v31` → `atlas-llama` | （默认） | RTX 5060 Ti 16GB（基准）。发布的镜像只针对 Blackwell（计算能力 12.0/12.1）编译；更早的代次需要本地重建 —— 见 [SETUP.md](../../SETUP.md) |
+| **CUDA** (NVIDIA) | 支持 (Supported)（自 V3.1.0 起） | `inference/Dockerfile.v31` → `atlas-llama` | （默认） | RTX 5060 Ti 16GB（基准）。发布的镜像只针对 Blackwell（计算能力 12.0/12.1）编译；更早的代次需要本地重建 —— 见 [SETUP.md](../../guides/SETUP.md) |
 | **ROCm / HIP** (AMD) | 社区验证 (Community-tested)（自 V3.1.1 起） | `inference/Dockerfile.rocm` → `atlas-llama-rocm` | `compose/docker-compose.rocm.yml` | RX 7900 XTX（社区冒烟测试，GH #26） |
 | **Metal** (Apple Silicon) | 支持 ([#32](https://github.com/inferstep/ATLAS/issues/32)) | 混合方案：原生 llama-server (Metal) + 其余组件用 Docker（macOS 无法将 GPU 直通给容器） | `compose/docker-compose.macos.yml` | M 系列；≤16 GB 用 Q4_K_M，≥24 GB 统一内存用 Q6_K |
 | **Vulkan**（跨厂商回退） | 预览 (Preview) | `inference/Dockerfile.vulkan` → `atlas-llama-vulkan` | `compose/docker-compose.vulkan.yml` | lavapipe CPU 启动路径（已冒烟测试）；尚无真实 GPU 验证 |
@@ -252,7 +252,7 @@ run-first 门本身引用一条指令，`runFirstInstruction`：运行该扩展�
 
 #### 终端契约与会话预算
 
-每个会话恰好以一个终端事件结束，来自一个发射器。它携带原样的遗留 `summary` 加一个增量的 `status`——`completed`、`incomplete`、`stopped`、`timed_out`、`failed`——以及一个稳定的机器可读 `reason`。客户端把缺失的 status 读作 `incomplete`，无法识别的词按原样显示，绝不读作完成（`tui/events.go` 的 `onDone`，VS Code 与 JetBrains 扩展的 `doneOutcome`）。broker 的 `done`/`stage_end` 信封报告同一结果，而不是断言 `success: true`。
+每个会话恰好以一个终端事件结束，来自一个发射器。它携带原样的遗留 `summary` 加一个增量的 `status`——`completed`、`incomplete`、`stopped`、`timed_out`、`failed`——以及一个稳定的机器可读 `reason`。客户端把缺失的 status 读作 `incomplete`，无法识别的词按原样显示，绝不读作完成（`tui/internal/app/events.go` 的 `onDone`，VS Code 与 JetBrains 扩展的 `doneOutcome`）。broker 的 `done`/`stage_end` 信封报告同一结果，而不是断言 `success: true`。
 
 对除 `completed` 之外的任何状态，句子与字段都归服务器所有。模型自己的陈述只在完成门授权之处被放行；一个没有 summary 的非完成终端会得到一句服务器撰写的陈述，点名结果、磁盘上是否有东西、它是否被证明有效；而在非完成状态上抵达发射器的完成主张会被整个替换，而非围绕其编辑。这关闭了 Phase 2B 留下的缺口：一个只读 `summary` 的客户端——`status` 存在之前的所有客户端——现在读到与同时读两者者相同的真相。
 
@@ -354,7 +354,7 @@ tier 上限为 0（无上限）；由循环内部的检测器栈决定何时中�
 - **不授权任何破坏性操作。** `question` 模式既不允许变更，也不抹除变更债、损坏的交付物、失败的校验、后台危害或删除义务；若模型仍然变更，同样的安全与完成规则管辖那些字节。删除仍需要其自身那绑定路径与身份的确认。
 - **从不到达模型。** 任务模式不出现在任何提示中，任何模型、V3 或 lens 输出都无法设置它。一个内部畸形的模式在失败时闭合到要求工作一侧，而不是被读作问题。
 
-影子诊断记录（私有、仅观测、默认关闭 —— 见 [OPERATIONS.md](../../OPERATIONS.md#private-diagnostics-task-contract-shadow-capture)）**按记录种类**版本化，因为给其中一种加字段不得静默重定义另一种：
+影子诊断记录（私有、仅观测、默认关闭 —— 见 [OPERATIONS.md](../../guides/OPERATIONS.md#private-diagnostics-task-contract-shadow-capture)）**按记录种类**版本化，因为给其中一种加字段不得静默重定义另一种：
 
 | 记录 | 版本 | 契约 |
 | --- | --- | --- |
@@ -438,7 +438,7 @@ API 契约见 [API.md § POST /v3/plan](../../reference/API.md#post-v3plan)。
 
 ##### tui：渲染（Go）
 
-`tui/internal/pipelinestate/plan.go` 定义了 `PlanView`（模型上的状态），`tui/state.go` 定义了接入 `tui/events.go` 聊天分发器的三个 `applyPlan*` 处理程序：
+`tui/internal/pipelinestate/plan.go` 定义了 `PlanView`（模型上的状态），`tui/internal/app/state.go` 定义了接入 `tui/internal/app/events.go` 聊天分发器的三个 `applyPlan*` 处理程序：
 
 | 事件 | 处理程序 | UI 效果 |
 |---|---|---|
@@ -488,7 +488,7 @@ API 契约见 [API.md § POST /v3/plan](../../reference/API.md#post-v3plan)。
 | 代理桥接 | `proxy/internal/v3client/client_test.go`；阶段路由见 `proxy/v3_bridge_test.go` | SSE 解析、缺少结果时的错误、阶段路由 |
 | 代理钩子 | `proxy/agent_test.go` | 优先文件选取、截断阈值、回退遍历、层级与长度判断 |
 | 代理遵循 | `proxy/gates_plan_test.go`；系统提示见 `proxy/gates_test.go` | 匹配逻辑（工具名 + 路径后缀）、排除失败的调用、修订上限、系统提示渲染 |
-| TUI 渲染 | `tui/internal/pipelinestate/plan_test.go`；处理程序见 `tui/plan_test.go` | `PlanView` 状态转换、修订时由 plan_loaded 替换、偏离计划时静默 |
+| TUI 渲染 | `tui/internal/pipelinestate/plan_test.go`；处理程序见 `tui/internal/app/plan_test.go` | `PlanView` 状态转换、修订时由 plan_loaded 替换、偏离计划时静默 |
 
 ### 安全限制
 
@@ -783,7 +783,7 @@ graph LR
 
 `llama-server` 和 `sandbox` 独立启动。`geometric-lens` 等待 `llama-server` 变为健康；`v3-service` 等待 `llama-server` 和 `geometric-lens`；`atlas-proxy` 等待 `llama-server`、`geometric-lens`、`v3-service` 和 `sandbox`。同一个 `inference/entrypoint-v3.1.sh` 驱动 Docker Compose、裸机和 K3s，因此上下文大小、KV 缓存量化、flash attention 和 mlock 都由环境变量控制，行为在这些模式之间完全一致；macOS 混合路径通过 `scripts/install/atlas-llama-macos.sh` 启动原生 llama-server，该脚本复刻了入口点的各项标志。
 
-安装及各模式的拉起步骤（NVIDIA / ROCm override、裸机、macOS 混合 Metal、K3s 清单）见 [SETUP.md](../../SETUP.md)；macOS 原生路径见 [SETUP_MACOS.md](../../SETUP_MACOS.md)。
+安装及各模式的拉起步骤（NVIDIA / ROCm override、裸机、macOS 混合 Metal、K3s 清单）见 [SETUP.md](../../guides/SETUP.md)；macOS 原生路径见 [SETUP_MACOS.md](../../guides/SETUP_MACOS.md)。
 
 ---
 

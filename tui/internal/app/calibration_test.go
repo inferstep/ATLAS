@@ -1,6 +1,6 @@
 // Tests for the calibration badge renderer (PC-059).
 
-package main
+package app
 
 import (
 	"encoding/json"

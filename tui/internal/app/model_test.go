@@ -2,7 +2,7 @@
 // messages and assert on the resulting state. Skips teatest's harness
 // because direct Update calls give the same coverage with less plumbing.
 
-package main
+package app
 
 import (
 	"encoding/json"

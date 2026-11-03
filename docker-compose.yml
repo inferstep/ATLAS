@@ -517,7 +517,7 @@ services:
       # a positive int to cap every tier. Useful for "fix the entire app"
       # prompts that legitimately need more turns.
       - ATLAS_MAX_TURNS=${ATLAS_MAX_TURNS:-}
-      # Documented tuning knobs (docs/CONFIGURATION.md). Empty passthrough =
+      # Documented tuning knobs (docs/guides/CONFIGURATION.md). Empty passthrough =
       # the in-code default applies; setting the key in .env reaches the
       # container without a compose edit.
       # V3 bridge call timeout in seconds (0 disables the cap).
@@ -544,7 +544,7 @@ services:
       # Internal-auth token (read-only; absent dir => auth disabled).
       - ${ATLAS_SECRETS_DIR:-./secrets}:/run/atlas-secrets:ro
       # Private diagnostic captures (ATLAS_SHADOW_CAPTURE, default OFF — see
-      # docs/OPERATIONS.md). Its own host dir, deliberately not the V3
+      # docs/guides/OPERATIONS.md). Its own host dir, deliberately not the V3
       # telemetry volume: that is service telemetry, and a diagnostic
       # acquisition must be separable from it.
       # Bind-mounted rather than a named volume so the directory carries the

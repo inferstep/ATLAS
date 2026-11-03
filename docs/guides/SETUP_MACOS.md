@@ -101,7 +101,7 @@ The wizard detects Apple Silicon and writes a `.env` for the hybrid Metal path. 
 
   Before you continue: run ./scripts/install/atlas-setup-macos.sh if you haven't.
   It installs the build tools and compiles llama.cpp with Metal. Full
-  instructions in docs/SETUP_MACOS.md.
+  instructions in docs/guides/SETUP_MACOS.md.
 
   Other options:
     --backend vulkan   Docker-only (no native build, slower)
@@ -279,7 +279,7 @@ Either path puts the `atlas` binary in `~/.local/bin/` with its dependencies iso
 
 ### Setup script fails at `hidden-states patch does not apply`
 
-Upstream llama.cpp has drifted past the pinned SHA. See [docs/TROUBLESHOOTING.md § Rebuilding llama.cpp](TROUBLESHOOTING.md#rebuilding-llamacpp-new-model-architecture-or-patch-drift) for the bump runbook.
+Upstream llama.cpp has drifted past the pinned SHA. See [docs/guides/TROUBLESHOOTING.md § Rebuilding llama.cpp](TROUBLESHOOTING.md#rebuilding-llamacpp-new-model-architecture-or-patch-drift) for the bump runbook.
 
 ### I want to skip the native build entirely (use only Docker)
 

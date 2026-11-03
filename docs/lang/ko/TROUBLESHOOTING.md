@@ -1,7 +1,7 @@
-<!-- source: docs/TROUBLESHOOTING.md synced-through: 175f5a2e58eff2ed27b1fcb332122503a772ab43 -->
-> **[English](../../TROUBLESHOOTING.md)** | **[简体中文](../zh-CN/TROUBLESHOOTING.md)** | **[日本語](../ja/TROUBLESHOOTING.md)** | **한국어**
+<!-- source: docs/guides/TROUBLESHOOTING.md synced-through: 175f5a2e58eff2ed27b1fcb332122503a772ab43 -->
+> **[English](../../guides/TROUBLESHOOTING.md)** | **[简体中文](../zh-CN/TROUBLESHOOTING.md)** | **[日本語](../ja/TROUBLESHOOTING.md)** | **한국어**
 
-> ℹ️ 영어 원본([TROUBLESHOOTING.md](../../TROUBLESHOOTING.md))의 번역본입니다. 원본과 차이가 있을 경우 영어 원본이 우선합니다.
+> ℹ️ 영어 원본([TROUBLESHOOTING.md](../../guides/TROUBLESHOOTING.md))의 번역본입니다. 원본과 차이가 있을 경우 영어 원본이 우선합니다.
 
 
 # ATLAS 문제 해결 가이드
@@ -26,7 +26,7 @@ docker compose logs --tail 50
 |---|---|
 | NVIDIA CUDA | `nvidia-smi` |
 | AMD ROCm | `rocm-smi`를 실행하고 `/dev/kfd`가 존재하는지 확인합니다. |
-| Apple Silicon / Metal | `atlas doctor`를 실행합니다. 네이티브 서버가 수신 대기 중이 아니면 [SETUP_MACOS.md](../../SETUP_MACOS.md#troubleshooting)의 설명대로 `./scripts/install/atlas-llama-macos.sh`를 시작하고 포그라운드 런처 출력을 확인합니다. |
+| Apple Silicon / Metal | `atlas doctor`를 실행합니다. 네이티브 서버가 수신 대기 중이 아니면 [SETUP_MACOS.md](../../guides/SETUP_MACOS.md#troubleshooting)의 설명대로 `./scripts/install/atlas-llama-macos.sh`를 시작하고 포그라운드 런처 출력을 확인합니다. |
 | Vulkan | `/dev/dri`가 존재하는지 확인한 다음 `docker compose -f docker-compose.yml -f compose/docker-compose.vulkan.yml exec llama-server vulkaninfo --summary`를 실행합니다. |
 | CPU 전용 | `compose/docker-compose.vulkan.yml`과 `compose/docker-compose.cpu.yml` 오버레이가 활성화되어 있는지 확인합니다. GPU가 없다는 이유만으로 `atlas doctor`가 실패하지 않고 경고 후 정상 종료해야 합니다. |
 
@@ -379,7 +379,7 @@ fatal: fetch-pack: invalid index-pack output
 
 구형 SHA에 고정하기보다 패치를 다시 생성하는 편을 택하세요 — 뒤로 고정하면 업스트림 수정을 놓칩니다.
 
-재빌드로 모델이 로드된 뒤에도 Geometric Lens는 새 모델을 위한 재학습이 필요합니다 — [CONFIGURATION.md § Adding your own model](../../CONFIGURATION.md#adding-your-own-model-drop-in--unregistered)을 참고하세요.
+재빌드로 모델이 로드된 뒤에도 Geometric Lens는 새 모델을 위한 재학습이 필요합니다 — [CONFIGURATION.md § Adding your own model](../../guides/CONFIGURATION.md#adding-your-own-model-drop-in--unregistered)을 참고하세요.
 
 ### 프록시가 워크스페이스에 쓰지 못함 (`.atlas.tmp: permission denied`)
 
@@ -443,7 +443,7 @@ lsof -i :8080
 ATLAS_LLAMA_PORT=8081    # Different port for llama-server
 ```
 
-모든 포트는 `.env`로 설정할 수 있습니다. [CONFIGURATION.md](../../CONFIGURATION.md)를 참고하세요.
+모든 포트는 `.env`로 설정할 수 있습니다. [CONFIGURATION.md](../../guides/CONFIGURATION.md)를 참고하세요.
 
 ---
 
@@ -827,7 +827,7 @@ curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerpri
      -d '{"content":"def add(a, b): return a + b"}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; import itertools; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
    ```
    풀링된 `norm`은 수백 단위여야 합니다(제공되는 Gemma 아티팩트 기준 약 100-150). `norm`이 정확히 `1.0`이면 `embd_normalize: -1`에도 불구하고 서버가 벡터를 정규화한 것이며, 이 경우 C(x)는 모든 입력에 대해 약 0.8이라는 평탄한 값을 반환합니다. 정상처럼 보이지만 아무것도 구분하지 못하는 점수입니다. `cx_normalization.json`의 `pass_energy_mean`과 비교하세요: 서빙되는 에너지는 한 값에 머무르지 않고 그 대역에 걸쳐 분포해야 합니다.
-2. `ATLAS_EMBED_POOLING=none`(기본값. [CONFIGURATION.md](../../CONFIGURATION.md) 참고)을 설정하고, 엔트리포인트가 플래그를 고정하도록 llama-server 컨테이너를 재생성하세요. `--pooling`은 llama.cpp에서 서버 전역 설정이며, 전체 텍스트 경로와 per-step 경로를 모두 지원하는 값은 `none`뿐입니다. 풀링과 스케일은 클라이언트 측에서 처리됩니다.
+2. `ATLAS_EMBED_POOLING=none`(기본값. [CONFIGURATION.md](../../guides/CONFIGURATION.md) 참고)을 설정하고, 엔트리포인트가 플래그를 고정하도록 llama-server 컨테이너를 재생성하세요. `--pooling`은 llama.cpp에서 서버 전역 설정이며, 전체 텍스트 경로와 per-step 경로를 모두 지원하는 값은 `none`뿐입니다. 풀링과 스케일은 클라이언트 측에서 처리됩니다.
 3. 서버가 올바른 규약으로 응답하면 부팅 자체 테스트가 통과하고 `/ready`가 200을 반환합니다. 재빌드(`atlas lens build`)는 `embedding_contract`를 `model_identity.json`에 새깁니다. 다만 드리프트 지문은 쓰지 않습니다: `geometric_lens.drift.write_fingerprint`가 존재하지만 아직 이를 호출하는 명령이 없으므로, 지문 검사는 `drift_fingerprint.json`을 직접 만들어 둔 경우에만 동작합니다.
 
 ### 임베딩 추출 실패
@@ -962,5 +962,5 @@ T2 파일에 대해서는 정상입니다. V3 파이프라인은 여러 번의 L
 여기에 없는 문제라면:
 1. 서비스 로그 확인: `docker compose logs <service-name>`
 2. 프록시 헬스 엔드포인트 확인: `curl http://localhost:8090/health`
-3. 모든 환경 변수는 [CONFIGURATION.md](../../CONFIGURATION.md) 참고
+3. 모든 환경 변수는 [CONFIGURATION.md](../../guides/CONFIGURATION.md) 참고
 4. [GitHub](https://github.com/inferstep/ATLAS/issues)에 이슈 등록
