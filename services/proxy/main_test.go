@@ -2989,8 +2989,9 @@ func TestWorkContractStripsAConfidentClaimWithNoAction(t *testing.T) {
 		t.Errorf("terminal %q, want incomplete/action_demanded_unmet", term)
 	}
 	var summary string
+	found := false
 	for _, line := range strings.Split(ev, "\n") {
-		if !strings.Contains(line, `"done"`) {
+		if !strings.HasPrefix(line, "done|") { // the recorder writes "<type>|<json>"
 			continue
 		}
 		var m map[string]string
@@ -2998,8 +2999,12 @@ func TestWorkContractStripsAConfidentClaimWithNoAction(t *testing.T) {
 			json.Unmarshal([]byte(line[i+1:]), &m)
 		}
 		if s, ok := m["summary"]; ok {
-			summary = s
+			summary, found = s, true
 		}
+	}
+	// A flag, not an empty summary: a stripped claim can leave the summary empty.
+	if !found {
+		t.Fatal("no done summary was read from the stream, so the claim check reads nothing")
 	}
 	if strings.Contains(summary, "fully implemented and tested") {
 		t.Errorf("the unsupported claim survived into the terminal summary: %q", summary)
