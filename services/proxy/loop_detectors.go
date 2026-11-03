@@ -653,24 +653,32 @@ func missingFileSteer(ctx *AgentContext, output string) string {
 			continue
 		}
 		seen[cand] = true
-		base := filepath.Base(cand)
-		dir := filepath.Dir(cand) // "." when cand is a bare filename
-		entries, err := readWorkspaceDir(ctx, dir)
-		if err != nil {
-			continue
-		}
-		for _, e := range entries {
-			name := e.Name()
-			if name != base && strings.EqualFold(name, base) {
-				actual := name
-				if dir != "." && dir != "" {
-					actual = filepath.Join(dir, name)
-				}
-				return fmt.Sprintf("[system note]: There is no file `%s`, but `%s` exists — the name differs only in case. Re-run the command with the exact name `%s`. Do not re-run it unchanged.", cand, actual, actual)
-			}
+		if actual, ok := caseVariant(ctx, cand); ok {
+			return fmt.Sprintf("[system note]: There is no file `%s`, but `%s` exists — the name differs only in case. Re-run the command with the exact name `%s`. Do not re-run it unchanged.", cand, actual, actual)
 		}
 	}
 	return ""
+}
+
+// caseVariant is the workspace file whose name differs from cand only in case,
+// in cand's folder, when there is one.
+func caseVariant(ctx *AgentContext, cand string) (string, bool) {
+	base := filepath.Base(cand)
+	dir := filepath.Dir(cand) // "." when cand is a bare filename
+	entries, err := readWorkspaceDir(ctx, dir)
+	if err != nil {
+		return "", false
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if name != base && strings.EqualFold(name, base) {
+			if dir != "." && dir != "" {
+				return filepath.Join(dir, name), true
+			}
+			return name, true
+		}
+	}
+	return "", false
 }
 
 // tracebackExclusion is the grammar-level counterpart to runBlockAfterTraceback.
