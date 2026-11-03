@@ -1,6 +1,6 @@
 // A run's outcome, from the done event (#236). Both clients showed only the
 // summary, so a stopped or failed run looked like a finished one until its
-// text was read. docs/API.md: a missing status reads as incomplete.
+// text was read. docs/reference/API.md: a missing status reads as incomplete.
 
 import type { DoneEventData } from '../client/types';
 

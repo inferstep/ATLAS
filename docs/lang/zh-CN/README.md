@@ -64,29 +64,29 @@
 
 ## 🧱 ATLAS 的功能
 
-1. **[atlas-tui](../../CLI.md)** - 基于 Bubbletea 的原生终端 UI，是官方聊天客户端。在任意项目目录中输入 `atlas` 即可启动。
-   - [实时 Pipeline 视图](../../CLI.md#panes) - 在侧边窗格中观看 V3 各阶段的实时流
-   - [斜杠命令](../../CLI.md#slash-commands) - `/add`、`/diff`、`/commit`、`/run` 操作本地文件上下文与 shell
-   - [输入模式](../../CLI.md#input-modes) - 聊天、`!bash`、`/slash` 三种模式带提示下拉
+1. **[atlas-tui](../../reference/CLI.md)** - 基于 Bubbletea 的原生终端 UI，是官方聊天客户端。在任意项目目录中输入 `atlas` 即可启动。
+   - [实时 Pipeline 视图](../../reference/CLI.md#panes) - 在侧边窗格中观看 V3 各阶段的实时流
+   - [斜杠命令](../../reference/CLI.md#slash-commands) - `/add`、`/diff`、`/commit`、`/run` 操作本地文件上下文与 shell
+   - [输入模式](../../reference/CLI.md#input-modes) - 聊天、`!bash`、`/slash` 三种模式带提示下拉
 
-2. **[atlas-proxy](../../ARCHITECTURE.md#3-atlas-proxy-outer-layer)** - 基于 Go 的 agent 循环，负责编排整个系统。
-   - [工具调用路由](../../ARCHITECTURE.md#tools) - 按复杂度层级分类文件操作
-   - [语法强制执行](../../ARCHITECTURE.md#grammar-enforcement) - GBNF 模式强力引导输出符合预期 JSON 结构，并由代理恢复格式错误或截断的输出
-   - [BiasBusters](../../ARCHITECTURE.md#tool-selection-bias-mitigations) - 四道组合的缓解措施（描述、语法禁用、系统提示、ASA 操控），把模型推向用 `structural_edit` 做结构性代码编辑
-   - [安全限制](../../ARCHITECTURE.md#safety-limits) - 轮次上限、token 预算、超时
+2. **[atlas-proxy](../../reference/ARCHITECTURE.md#3-atlas-proxy-outer-layer)** - 基于 Go 的 agent 循环，负责编排整个系统。
+   - [工具调用路由](../../reference/ARCHITECTURE.md#tools) - 按复杂度层级分类文件操作
+   - [语法强制执行](../../reference/ARCHITECTURE.md#grammar-enforcement) - GBNF 模式强力引导输出符合预期 JSON 结构，并由代理恢复格式错误或截断的输出
+   - [BiasBusters](../../reference/ARCHITECTURE.md#tool-selection-bias-mitigations) - 四道组合的缓解措施（描述、语法禁用、系统提示、ASA 操控），把模型推向用 `structural_edit` 做结构性代码编辑
+   - [安全限制](../../reference/ARCHITECTURE.md#safety-limits) - 轮次上限、token 预算、超时
 
-3. **[V3 Pipeline](../../ARCHITECTURE.md#4-v3-pipeline-inner-layer)** - 多阶段代码生成；把单个提示词转化为经过验证的候选。
-   - [PlanSearch](../../ARCHITECTURE.md#pipeline-flow) - 约束驱动的结构化规划
-   - [DivSampling](../../ARCHITECTURE.md#pipeline-flow) - 跨温度和策略的多样化候选生成
-   - [预算层级](../../ARCHITECTURE.md#pipeline-flow) - 分配器为每个任务选择计算层级；层级决定生成多少候选，以及每个候选的提示和 token 预算
-   - [PR-CoT Repair](../../ARCHITECTURE.md#pipeline-flow) - 根据沙箱的错误输出修复失败的候选
-   - [Refinement Loops](../../ARCHITECTURE.md#pipeline-flow) - 沙箱验证与修正，然后重复
+3. **[V3 Pipeline](../../reference/ARCHITECTURE.md#4-v3-pipeline-inner-layer)** - 多阶段代码生成；把单个提示词转化为经过验证的候选。
+   - [PlanSearch](../../reference/ARCHITECTURE.md#pipeline-flow) - 约束驱动的结构化规划
+   - [DivSampling](../../reference/ARCHITECTURE.md#pipeline-flow) - 跨温度和策略的多样化候选生成
+   - [预算层级](../../reference/ARCHITECTURE.md#pipeline-flow) - 分配器为每个任务选择计算层级；层级决定生成多少候选，以及每个候选的提示和 token 预算
+   - [PR-CoT Repair](../../reference/ARCHITECTURE.md#pipeline-flow) - 根据沙箱的错误输出修复失败的候选
+   - [Refinement Loops](../../reference/ARCHITECTURE.md#pipeline-flow) - 沙箱验证与修正，然后重复
 
-4. **[Geometric Lens](../../ARCHITECTURE.md#5-geometric-lens)** - 基于模型自身嵌入的能量打分，无需外部预言机。（[什么是 "Geometric Lens"？](../../ARCHITECTURE.md#why-geometric-lens)）
-   - [C(x) Cost Field](../../ARCHITECTURE.md#scoring-models) - 模型隐藏维度→512→128→1 的 MLP，用于评估候选质量
-   - [G(x) Quality Prediction](../../ARCHITECTURE.md#scoring-models) - 其评分有助于决定生成多少候选的 XGBoost 集成；候选选择本身取最低的 C(x)
+4. **[Geometric Lens](../../reference/ARCHITECTURE.md#5-geometric-lens)** - 基于模型自身嵌入的能量打分，无需外部预言机。（[什么是 "Geometric Lens"？](../../reference/ARCHITECTURE.md#why-geometric-lens)）
+   - [C(x) Cost Field](../../reference/ARCHITECTURE.md#scoring-models) - 模型隐藏维度→512→128→1 的 MLP，用于评估候选质量
+   - [G(x) Quality Prediction](../../reference/ARCHITECTURE.md#scoring-models) - 其评分有助于决定生成多少候选的 XGBoost 集成；候选选择本身取最低的 C(x)
 
-5. **[Sandbox](../../ARCHITECTURE.md#6-sandbox)** - 用于构建验证的隔离执行环境。
+5. **[Sandbox](../../reference/ARCHITECTURE.md#6-sandbox)** - 用于构建验证的隔离执行环境。
    - 多语言执行：Python、Rust、Go、C、Shell 等。Rust、Go、C 可在项目中作为命令运行；V3 检查其语法，沙箱的 `/execute` 只能编译，暂时无法运行 ([#163](https://github.com/inferstep/ATLAS/issues/163))
    - 评分前先做编译与检查
    - 同时运行自生成测试和已有测试套件
@@ -96,7 +96,7 @@
    - token 级的语法约束解码
    - 自嵌入，因此 lens 不需要第二个模型
 
-完整文档（安装、架构、配置、故障排查，以及[每个组件背后的研究依据](../../SOURCES.md)）位于 [docs/](../../) 目录中。
+完整文档（安装、架构、配置、故障排查，以及[每个组件背后的研究依据](../../reference/SOURCES.md)）位于 [docs/](../../) 目录中。
 
 ---
 

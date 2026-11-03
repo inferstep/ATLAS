@@ -29,8 +29,8 @@ Task-oriented index for everything under `docs/`. The
 
 ### Use ATLAS day to day
 
-- [CLI.md](CLI.md) — the TUI and every `atlas` subcommand: panes,
-  [slash commands](CLI.md#slash-commands), permission modes,
+- [CLI.md](reference/CLI.md) — the TUI and every `atlas` subcommand: panes,
+  [slash commands](reference/CLI.md#slash-commands), permission modes,
   `atlas model` / `tier fit` / `onboard` / `bench` / `lens` / `asa`.
 - [CONFIGURATION.md](CONFIGURATION.md) — every environment variable and
   internal constant, per service; includes
@@ -42,18 +42,18 @@ Task-oriented index for everything under `docs/`. The
 
 ### Integrate with ATLAS
 
-- [API.md](API.md) — HTTP reference for all five services (proxy,
+- [API.md](reference/API.md) — HTTP reference for all five services (proxy,
   v3-service, geometric-lens, sandbox, llama-server), and the typed SSE
   event envelope shared by proxy, v3-service, and clients.
-- [CANDIDATE_POLICY.md](CANDIDATE_POLICY.md) — the one delivery rule for
+- [CANDIDATE_POLICY.md](reference/CANDIDATE_POLICY.md) — the one delivery rule for
   V3 candidates: what can honestly be decided without an oracle. Also typed
   obligations, evidence provenance, the evidence wire between v3-service and
   the proxy, candidate staging, and the observe-only authorization and
   feasibility decisions.
-- [schemas/](schemas/) — machine-readable contracts:
-  [proxy_openapi.yaml](schemas/proxy_openapi.yaml),
-  [error_envelope.schema.json](schemas/error_envelope.schema.json),
-  [sse_envelope.schema.json](schemas/sse_envelope.schema.json).
+- [schemas/](reference/schemas/) — machine-readable contracts:
+  [proxy_openapi.yaml](reference/schemas/proxy_openapi.yaml),
+  [error_envelope.schema.json](reference/schemas/error_envelope.schema.json),
+  [sse_envelope.schema.json](reference/schemas/sse_envelope.schema.json).
 
 ### Fix a problem
 
@@ -64,16 +64,16 @@ Task-oriented index for everything under `docs/`. The
    with an exact-error index up top.
 3. `atlas doctor` for a one-shot health report, and
    `atlas diagnostics collect` for a shareable, redacted support bundle
-   (both documented in [CLI.md](CLI.md)).
+   (both documented in [CLI.md](reference/CLI.md)).
 4. Still stuck? [Open an issue](https://github.com/inferstep/ATLAS/issues)
    — paste the doctor output.
 
 ### Understand how it works
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) — the two-layer design: outer agent
+- [ARCHITECTURE.md](reference/ARCHITECTURE.md) — the two-layer design: outer agent
   loop, inner V3 pipeline, Geometric Lens, sandbox.
-- [ARCHITECTURE.md § Plan Mode](ARCHITECTURE.md#plan-mode-per-turn-pre-flight) — per-turn pre-flight planning.
-- [SOURCES.md](SOURCES.md) — the research papers behind each component.
+- [ARCHITECTURE.md § Plan Mode](reference/ARCHITECTURE.md#plan-mode-per-turn-pre-flight) — per-turn pre-flight planning.
+- [SOURCES.md](reference/SOURCES.md) — the research papers behind each component.
 - [reports/ablation/README.md](reports/ablation/README.md) — the raw
   per-task traces behind the V3.0 ablation study (LiveCodeBench, 599 tasks),
   whose result is withdrawn.
@@ -135,25 +135,25 @@ the [repository map](#repository-map) if you're looking for code rather than doc
 
 - **Direct agent / outer loop** — the Go proxy's tool-calling loop. A model
   needs a lens bundle first, which `atlas lens build` makes
-  ([ARCHITECTURE.md](ARCHITECTURE.md), [ADR 0011](adr/0011-the-lens-is-required.md)).
+  ([ARCHITECTURE.md](reference/ARCHITECTURE.md), [ADR 0011](adr/0011-the-lens-is-required.md)).
 - **V3 pipeline / inner layer** — multi-candidate generation, scoring,
   sandbox verification, and repair for non-trivial files
-  ([ARCHITECTURE.md](ARCHITECTURE.md)).
+  ([ARCHITECTURE.md](reference/ARCHITECTURE.md)).
 - **Tiers (T0–T3)** — two separate classifications. The per-file tier gates
   V3: T1 writes directly, T2/T3 use the pipeline. The per-message tier only
   distinguishes T0 (conversational: 12-turn cap, no plan) from everything
   else, since the turn cap and plan gate are all it feeds
-  ([ARCHITECTURE.md](ARCHITECTURE.md)).
+  ([ARCHITECTURE.md](reference/ARCHITECTURE.md)).
 - **Geometric Lens, C(x) / G(x)** — energy-based candidate scoring over the
   model's own embeddings; per-model trained bundle
-  ([ARCHITECTURE.md](ARCHITECTURE.md), [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md)).
+  ([ARCHITECTURE.md](reference/ARCHITECTURE.md), [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md)).
 - **ASA** — activation-steering control vector nudging tool selection;
-  per-model, always on wherever a vector is installed ([CLI.md](CLI.md), [PUBLISHING.md](project/PUBLISHING.md)).
+  per-model, always on wherever a vector is installed ([CLI.md](reference/CLI.md), [PUBLISHING.md](project/PUBLISHING.md)).
 - **Sandbox** — isolated multi-language execution used for verification
-  ([ARCHITECTURE.md](ARCHITECTURE.md), [API.md](API.md)).
+  ([ARCHITECTURE.md](reference/ARCHITECTURE.md), [API.md](reference/API.md)).
 - **GBNF grammar enforcement** — token-level constrained decoding that strongly
   steers tool calls toward the expected JSON schema, with proxy-side recovery
-  for malformed or truncated output ([ARCHITECTURE.md](ARCHITECTURE.md)).
+  for malformed or truncated output ([ARCHITECTURE.md](reference/ARCHITECTURE.md)).
 
 ---
 
@@ -164,13 +164,13 @@ In order, each building on the last:
 1. [../README.md](../README.md) — what and why
 2. [GETTING_STARTED.md](GETTING_STARTED.md) — the first hour
 3. [SETUP.md](SETUP.md) / [SETUP_MACOS.md](SETUP_MACOS.md) — install
-4. [CLI.md](CLI.md) — the surface you actually touch
+4. [CLI.md](reference/CLI.md) — the surface you actually touch
 5. [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — failure modes and diagnosis
 6. [CONFIGURATION.md](CONFIGURATION.md) — every knob, per service
-7. [ARCHITECTURE.md](ARCHITECTURE.md) — how the pieces fit
-8. [ARCHITECTURE.md § Plan Mode](ARCHITECTURE.md#plan-mode-per-turn-pre-flight) — pre-flight planning
-9. [API.md](API.md) — the full HTTP surface
-10. [SOURCES.md](SOURCES.md) — the research it stands on
+7. [ARCHITECTURE.md](reference/ARCHITECTURE.md) — how the pieces fit
+8. [ARCHITECTURE.md § Plan Mode](reference/ARCHITECTURE.md#plan-mode-per-turn-pre-flight) — pre-flight planning
+9. [API.md](reference/API.md) — the full HTTP surface
+10. [SOURCES.md](reference/SOURCES.md) — the research it stands on
 11. [adr/](adr/README.md) — decisions 0001 through 0011, in order (0007 retired)
 12. [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md) — claims and their evidence
 13. [OPERATIONS.md](OPERATIONS.md) — running it long-term
@@ -184,7 +184,7 @@ In order, each building on the last:
 ## Repository map
 
 Where things live: what each top-level folder owns. For how the pieces work together see
-[ARCHITECTURE.md](ARCHITECTURE.md); for the full API surface see [API.md](API.md).
+[ARCHITECTURE.md](reference/ARCHITECTURE.md); for the full API surface see [API.md](reference/API.md).
 
 | Directory | Owns | More |
 |---|---|---|
@@ -202,7 +202,7 @@ Where things live: what each top-level folder owns. For how the pieces work toge
 | `.github/` | CI workflows, `CODEOWNERS`, `dependabot.yml`, `allowed_signers` for signed release tags, issue templates, and the community files GitHub reads: the contributor guide (`CONTRIBUTING.md`), the governance page (`GOVERNANCE.md`), the code of conduct and the security policy (`SECURITY.md`) | — |
 | `templates/` | K3s manifest templates rendered from `atlas.conf` via envsubst | — |
 | `tests/` | The Python tests, by subject: `cli/`, `concurrency/`, `contracts/` (doc-link, version and config gates), `e2e/` (the acceptance suite CI runs), `infrastructure/`, `perf/`, `v3/`, `v3-service/`. Go tests sit beside their code (`*_test.go` in `proxy/` and `tui/`), the extensions' tests in `extensions/vscode/test/` and `extensions/jetbrains/src/test/`, and `geometric-lens/tests/` beside its service, which has its own lock file | — |
-| `docs/` | The pages, listed above by what you are trying to do. `project/` holds how the project is run and shipped, `adr/` the decision records, `lang/` the ja, ko and zh-CN copies, `quality/` the checks on a pull request, and `schemas/` the API's machine-readable schemas. `reports/` is data: the raw traces of the withdrawn V3.0 ablation result, kept so the withdrawal can be checked. `assets/` holds files the README and the TUI demo read | [adr/README.md](adr/README.md) |
+| `docs/` | The pages, listed above by what you are trying to do. `reference/` holds the API, the CLI, the architecture, the candidate policy and the sources, with the API's machine-readable schemas in `reference/schemas/`; `project/` holds how the project is run and shipped, `adr/` the decision records, `lang/` the ja, ko and zh-CN copies, and `quality/` the checks on a pull request. `reports/` is data: the raw traces of the withdrawn V3.0 ablation result, kept so the withdrawal can be checked. `assets/` holds files the README and the TUI demo read | [adr/README.md](adr/README.md) |
 | `diagnostics/` | Where diagnostic captures are written at run time; git holds only a placeholder | [OPERATIONS.md](OPERATIONS.md) |
 
 Root also holds the base Compose file `docker-compose.yml`, `atlas.conf.example` (K3s), `pyproject.toml`

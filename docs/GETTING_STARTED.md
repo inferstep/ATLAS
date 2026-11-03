@@ -84,7 +84,7 @@ proceed on failures — the error index in
 Run `atlas` in any project directory. You get a chat pane, a files pane, and
 a live pipeline pane that shows what the agent is doing while it works —
 stages, tool calls, and verification results stream in real time. The layout
-and every keybinding are in [CLI.md](CLI.md#panes).
+and every keybinding are in [CLI.md](reference/CLI.md#panes).
 
 ## Your first task
 
@@ -105,7 +105,7 @@ What you'll see:
   deletions) in the default mode — `y` allows once, `a` allows for the
   session, `n` denies. Each deletion is asked about on its own; `a` never
   covers later ones. Modes are documented in
-  [CLI.md § Permission modes](CLI.md#permission-modes).
+  [CLI.md § Permission modes](reference/CLI.md#permission-modes).
 
 Afterwards: review with `/diff` (or `git diff`), run your tests, and commit
 if happy. `/undo` soft-resets the last commit, whoever made it; `Ctrl+C`
@@ -114,11 +114,11 @@ cancels a turn mid-flight.
 ## Bring your own model
 
 Running a model that isn't in the registry? `atlas onboard` walks the
-bring-your-own-GGUF flow ([CLI.md](CLI.md)).
+bring-your-own-GGUF flow ([CLI.md](reference/CLI.md)).
 
 ## Where to go next
 
-- [CLI.md](CLI.md) — everything the TUI and `atlas` subcommands can do
+- [CLI.md](reference/CLI.md) — everything the TUI and `atlas` subcommands can do
 - [OPERATIONS.md](OPERATIONS.md) — day-2: upgrades, backups, runbooks
-- [ARCHITECTURE.md](ARCHITECTURE.md) — how the pieces fit together
+- [ARCHITECTURE.md](reference/ARCHITECTURE.md) — how the pieces fit together
 - [docs/README.md](README.md) — the full documentation index

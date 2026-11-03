@@ -7,7 +7,7 @@ failure answered with the model's own content.
 
 ## Context
 V3 and the lens have no off switch, and steering is always on wherever a
-vector is installed for the served model (`docs/CANDIDATE_POLICY.md`;
+vector is installed for the served model (`docs/reference/CANDIDATE_POLICY.md`;
 `SUPPORT_MATRIX.md`, § Feature paths; [CHANGELOG](../../CHANGELOG.md),
 "Removed: `GEOMETRIC_LENS_ENABLED`"). A lens that cannot score and
 answers with neutral numbers looks healthy while it adds nothing: V3

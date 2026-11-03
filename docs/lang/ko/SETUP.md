@@ -710,7 +710,7 @@ atlas tier --json       # machine output (for scripts)
 atlas tier --raw        # just the probe (no classification)
 ```
 
-등급 표는 VRAM 구간별 출발점을 제공합니다. **`atlas tier fit`**은 실제로 실행하는 *특정* 모델에 맞게 이를 다듬습니다 — GGUF의 KV 기하 구조와 GPU의 VRAM을 읽어 완전히 GPU 안에 머무는 최대 컨텍스트를 계산합니다(`atlas tier fit --write`는 결과를 `.env`에 적용). `ATLAS_MODEL_FILE`이나 GPU를 바꿀 때마다 실행하세요. [CLI.md § atlas tier fit](../../CLI.md#atlas-tier-fit)과, 다운로드 전 사이징 안내는 [TROUBLESHOOTING.md § 내 GPU에는 무엇이 들어가는가?](TROUBLESHOOTING.md#내-gpu에는-무엇이-들어가는가)를 참고하세요.
+등급 표는 VRAM 구간별 출발점을 제공합니다. **`atlas tier fit`**은 실제로 실행하는 *특정* 모델에 맞게 이를 다듬습니다 — GGUF의 KV 기하 구조와 GPU의 VRAM을 읽어 완전히 GPU 안에 머무는 최대 컨텍스트를 계산합니다(`atlas tier fit --write`는 결과를 `.env`에 적용). `ATLAS_MODEL_FILE`이나 GPU를 바꿀 때마다 실행하세요. [CLI.md § atlas tier fit](../../reference/CLI.md#atlas-tier-fit)과, 다운로드 전 사이징 안내는 [TROUBLESHOOTING.md § 내 GPU에는 무엇이 들어가는가?](TROUBLESHOOTING.md#내-gpu에는-무엇이-들어가는가)를 참고하세요.
 
 medium 등급이 ATLAS 개발 타깃입니다 — `atlas-bootstrap.sh`는 그 모델+컨텍스트 설정을 기본값으로 합니다. 다른 등급에서는 부트스트랩 완료 후 **`atlas init`**(첫 실행 마법사)을 실행하세요. `atlas tier`로 하드웨어를 탐침하고, 레지스트리에서 알맞은 모델을 골라 SHA 검증과 함께 다운로드하고, `.env`를 다시 씁니다. 하드웨어나 레지스트리 기본 모델이 바뀔 때마다 `atlas init --reconfigure`로 다시 실행하세요. 마법사 실행 후에는 `atlas tier fit --write`가 마법사의 등급 수준 기본값을 선택된 모델에 맞게 조입니다.
 
@@ -823,7 +823,7 @@ atlas bench --run-id mymodel_lens --tasks 200    # 후보 생성 및 셀프 라�
 atlas lens build --force --from-results benchmark/results/mymodel_lens/v3_lcb/per_task
 ```
 
-`atlas lens build`는 렌즈의 두 절반을 모두 학습시키고 임계값을 보정한 뒤, 활성화된 번들에 `provenance.json` 매니페스트를 기록합니다. [CLI.md § atlas lens](../../CLI.md#atlas-lens)를 참조하세요.
+`atlas lens build`는 렌즈의 두 절반을 모두 학습시키고 임계값을 보정한 뒤, 활성화된 번들에 `provenance.json` 매니페스트를 기록합니다. [CLI.md § atlas lens](../../reference/CLI.md#atlas-lens)를 참조하세요.
 
 ### 자체 llama-server 반입하기
 
@@ -869,7 +869,7 @@ mkdir -p secrets     # or set ATLAS_SECRETS_DIR
 
 ### 자체 모델 반입하기
 
-기본이 아닌 GGUF로 바꾸려면 [CONFIGURATION.md § Adding your own model](../../CONFIGURATION.md#adding-your-own-model-drop-in--unregistered)과 [CLI.md § atlas lens](../../CLI.md#atlas-lens)를 참고하세요.
+기본이 아닌 GGUF로 바꾸려면 [CONFIGURATION.md § Adding your own model](../../CONFIGURATION.md#adding-your-own-model-drop-in--unregistered)과 [CLI.md § atlas lens](../../reference/CLI.md#atlas-lens)를 참고하세요.
 
 ---
 
@@ -904,7 +904,7 @@ mkdir -p secrets     # or set ATLAS_SECRETS_DIR
 
 ## 다음 단계
 
-- [CLI.md](../../CLI.md) — 실행 후 ATLAS 사용 방법
+- [CLI.md](../../reference/CLI.md) — 실행 후 ATLAS 사용 방법
 - [CONFIGURATION.md](../../CONFIGURATION.md) — 모든 환경 변수 및 튜닝 옵션
 - [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — 일반적인 문제 및 해결 방법
 - [ARCHITECTURE.md](ARCHITECTURE.md) — 시스템 내부 동작 원리

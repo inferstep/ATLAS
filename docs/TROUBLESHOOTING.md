@@ -536,7 +536,7 @@ atlas tier fit --write
 docker compose up -d llama-server --no-deps --force-recreate
 ```
 `atlas tier fit` reads the GGUF header and your GPU's VRAM and solves for the
-largest fully-on-GPU configuration (see [CLI.md § atlas tier fit](CLI.md#atlas-tier-fit)).
+largest fully-on-GPU configuration (see [CLI.md § atlas tier fit](reference/CLI.md#atlas-tier-fit)).
 ATLAS runs llama-server with `--fit off` so a config that doesn't fit fails
 loudly at startup instead of silently running partly on the CPU.
 
@@ -649,7 +649,7 @@ ps aux | grep llama-server | grep ctx-size
 
 **Cause:** You're hitting the wrong endpoint. The agent loop only runs on `POST /v1/agent`. `POST /v1/chat/completions` (and anything else under `/v1/`) is a transparent passthrough to llama-server — no tools, no V3, no streaming chat events.
 
-**Fix:** Point your client at `POST http://localhost:8090/v1/agent`. The Bubbletea TUI (`atlas` / `atlas tui`) does this automatically. If you're writing a third-party client, see [docs/API.md](API.md) for the `/v1/agent` SSE event protocol. There is no longer an `ATLAS_AGENT_LOOP` env-var toggle — the split is endpoint-based, not config-based.
+**Fix:** Point your client at `POST http://localhost:8090/v1/agent`. The Bubbletea TUI (`atlas` / `atlas tui`) does this automatically. If you're writing a third-party client, see [docs/reference/API.md](reference/API.md) for the `/v1/agent` SSE event protocol. There is no longer an `ATLAS_AGENT_LOOP` env-var toggle — the split is endpoint-based, not config-based.
 
 ### V3 Pipeline Not Firing on Feature Files
 
@@ -831,7 +831,7 @@ The proxy caches the lens answer for 5 seconds, so a fixed lens is accepted with
 
 **Impact:** Requests run. The lens scores raw C(x) energies and G(x) probabilities; the calibrated uses (normalized routing, veto and correction thresholds) stay off until the model's calibration files exist.
 
-**Fix:** `atlas lens build` calibrates the thresholds and writes `cx_normalization.json` and `gx_thresholds.json` into the bundle. See [CLI.md § atlas lens](CLI.md#atlas-lens).
+**Fix:** `atlas lens build` calibrates the thresholds and writes `cx_normalization.json` and `gx_thresholds.json` into the bundle. See [CLI.md § atlas lens](reference/CLI.md#atlas-lens).
 
 ### Scores Look Plausible but Are Wildly Off-Scale (embedding-convention drift)
 

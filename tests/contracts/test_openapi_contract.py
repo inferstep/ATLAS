@@ -16,7 +16,7 @@ from tests.contracts import go_source
 yaml = pytest.importorskip("yaml")
 
 REPO = Path(__file__).resolve().parents[2]
-SPEC = REPO / "docs" / "schemas" / "proxy_openapi.yaml"
+SPEC = REPO / "docs" / "reference" / "schemas" / "proxy_openapi.yaml"
 MAIN = REPO / "proxy" / "main.go"
 
 
@@ -58,9 +58,9 @@ def test_error_response_references_envelope_schema():
     assert "error_envelope.schema.json" in text
 
 
-# --- OpenAPI ↔ docs/API.md prose parity -----------------------------------
+# --- OpenAPI ↔ docs/reference/API.md prose parity -----------------------------------
 
-API_MD = REPO / "docs" / "API.md"
+API_MD = REPO / "docs" / "reference" / "API.md"
 HEADING_PATH_RE = re.compile(r"^###\s+(?:GET|POST|PUT|PATCH|DELETE)\s+(/\S+)(.*)$")
 
 
@@ -70,7 +70,7 @@ def _proxy_section() -> str:
     lines = API_MD.read_text().splitlines()
     start = next((i for i, l in enumerate(lines)
                   if l.startswith("## ") and "atlas-proxy" in l.lower()), None)
-    assert start is not None, "docs/API.md has no '## ... atlas-proxy ...' section"
+    assert start is not None, "docs/reference/API.md has no '## ... atlas-proxy ...' section"
     end = next((i for i in range(start + 1, len(lines))
                 if lines[i].startswith("## ")), len(lines))
     return "\n".join(lines[start:end])
@@ -83,7 +83,7 @@ def test_every_spec_path_is_documented_in_api_md():
     missing = {p for p in _documented_paths()
                if p not in headed and f"`{p}`" not in section}
     assert not missing, (
-        f"OpenAPI paths absent from docs/API.md atlas-proxy section "
+        f"OpenAPI paths absent from docs/reference/API.md atlas-proxy section "
         f"(need a '### METHOD {sorted(missing)[0]}' heading or `path` "
         f"mention): {sorted(missing)}")
 
@@ -99,5 +99,5 @@ def test_every_api_md_proxy_heading_is_in_spec():
         if m.group(1) not in _documented_paths():
             phantoms.append(line.strip())
     assert not phantoms, (
-        f"docs/API.md atlas-proxy section documents endpoints missing "
+        f"docs/reference/API.md atlas-proxy section documents endpoints missing "
         f"from the OpenAPI spec: {phantoms}")

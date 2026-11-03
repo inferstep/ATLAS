@@ -69,7 +69,7 @@ ATLAS implements techniques from published research (clean-room, from
 the papers): PlanSearch, budget forcing, activation steering,
 speculative-decode-era patches, and others — the full citation list
 with arXiv links is
-`docs/SOURCES.md`. No third-party research *code* is vendored.
+`docs/reference/SOURCES.md`. No third-party research *code* is vendored.
 
 ## Benchmarks
 

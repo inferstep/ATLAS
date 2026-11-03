@@ -1,5 +1,5 @@
 // User-facing rendering of proxy failures. Switches on the stable error
-// envelope `code` (docs/API.md "Versioning and error codes" — closed set),
+// envelope `code` (docs/reference/API.md "Versioning and error codes" — closed set),
 // never on the human `detail`, which may change between proxy versions.
 //
 // Deliberately vscode-free so it runs under plain vitest; the caller

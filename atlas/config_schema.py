@@ -169,7 +169,7 @@ SCHEMA: Dict[str, Field] = {
     "ATLAS_RPG_PLANNING": Field("bool",
         deprecated="removed; RPG planning was cut — see issue #148"),
     "ATLAS_CANDIDATE_POLICY": Field("str",
-        deprecated="removed; one delivery rule, not selectable — see docs/CANDIDATE_POLICY.md"),
+        deprecated="removed; one delivery rule, not selectable — see docs/reference/CANDIDATE_POLICY.md"),
     "ATLAS_CALL_GRAPH": Field("bool",
         deprecated="removed; the call graph always runs, for Python files"),
     "ATLAS_ALLOW_PICKLE_GX": Field("bool",

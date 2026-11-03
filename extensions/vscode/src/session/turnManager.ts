@@ -1,6 +1,6 @@
 // Turn/session state for the chat: session_id minting, rolling history,
 // session-approved tools, and cancellation. Conventions mirror the TUI
-// reference client (tui/internal/proxyclient/chat.go) — see the plan and docs/API.md.
+// reference client (tui/internal/proxyclient/chat.go) — see the plan and docs/reference/API.md.
 //
 // Deliberately vscode-free so it is unit-testable under plain vitest.
 
@@ -56,7 +56,7 @@ export class TurnManager {
 	 * and goes on the wire as `task_contract.task_mode`. Every turn declares
 	 * one: without a contract the proxy falls back to guessing from the
 	 * message and produces no V3 candidate, because nothing grounds a target
-	 * (docs/API.md, "Building a non-TUI client"). */
+	 * (docs/reference/API.md, "Building a non-TUI client"). */
 	async *runTurn(
 		client: TurnClient,
 		message: string,

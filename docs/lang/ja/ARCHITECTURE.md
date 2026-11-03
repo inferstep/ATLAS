@@ -1,5 +1,5 @@
-<!-- source: docs/ARCHITECTURE.md synced-through: 466a1142e05780965df4e27c30fd389eb9fa701c -->
-> **[English](../../ARCHITECTURE.md)** | **[简体中文](../zh-CN/ARCHITECTURE.md)** | **日本語** | **[한국어](../ko/ARCHITECTURE.md)**
+<!-- source: docs/reference/ARCHITECTURE.md synced-through: 466a1142e05780965df4e27c30fd389eb9fa701c -->
+> **[English](../../reference/ARCHITECTURE.md)** | **[简体中文](../zh-CN/ARCHITECTURE.md)** | **日本語** | **[한국어](../ko/ARCHITECTURE.md)**
 
 # ATLAS アーキテクチャ
 
@@ -39,7 +39,7 @@ graph LR
 
 チャットフロントエンドは **atlas-tui**（Bubbletea）です。ネイティブ Go 製のターミナル UI で、`/v1/agent`（ターンごとのチャット SSE）と `/events`（パイプラインペイン向けのグローバルな型付きエンベロープフィード）を消費します。`atlas`（対話モードのデフォルト）または `atlas tui`（明示指定）で起動します。パイプラインペインは V3 ステージをライブ表示し、チャットペインはアシスタントの Markdown を glamour でレンダリングします。スラッシュコマンド `/add /diff /commit /run` などがローカルファイルのコンテキストとシェルアウトを処理します。モードを意識した入力（チャット / `!bash` / `/slash`）にヒントドロップダウンが付きます。
 
-ツールコール + V3 パイプラインを使いたいサードパーティクライアントは `/v1/agent` を直接対象にしてください。`/v1/chat/completions` は llama-server へのパススルーです（§3 を参照）。この契約は [API.md](../../API.md) に記載されています。
+ツールコール + V3 パイプラインを使いたいサードパーティクライアントは `/v1/agent` を直接対象にしてください。`/v1/chat/completions` は llama-server へのパススルーです（§3 を参照）。この契約は [API.md](../../reference/API.md) に記載されています。
 
 ### 1.1 対応アクセラレータ
 
@@ -55,7 +55,7 @@ llama-server は GPU を使用する唯一のサービスです。それ以外�
 
 **バックエンドの選択は実行時ではなくインストール時に行われます。** `atlas init` は `tier.detect_gpu()`（`atlas/commands/tier.py` を参照）を実行し、検出されたすべてのベンダーの中から VRAM が最大の GPU を選び（`ATLAS_GPU_VENDOR` / `ATLAS_GPU_INDEX` でオーバーライド可能）、`.env` に `ATLAS_BACKEND={cuda|rocm|metal|vulkan}` を書き込みます。パッケージ済みのネイティブバックエンドが存在する場合、検出はそれに解決されます: NVIDIA には CUDA、x86_64 上の AMD には ROCm、macOS にはハイブリッド Metal パス。ホスト向けのネイティブバックエンドがパッケージされていない場合（Intel Arc、arm64 上の AMD、未認識のベンダー）、ウィザードは Vulkan ユニバーサルフォールバックを提案します（デフォルトは yes）: 1 つのイメージで AMD、Intel、Adreno、MoltenVK、lavapipe CPU ラスタライザをカバーし、性能はチューニング済みのネイティブバックエンドよりおおよそ 20〜40% 低くなります。起動しない `.env` を書き込む代わりに拒否するのは、使えるものが何も存在しない場合だけです。各バックエンドにはそれぞれ事前ビルド済みのイメージがあります。ユーザーがすべてのバックエンドのライブラリを同梱した肥大化したイメージを実行することはありません。
 
-**持ち込みモデルの対応面 (V3.1.1)。** `atlas lens check` は、稼働中の llama-server に対する安価な事前チェックで、ロード済みモデルが Lens 互換かどうかを報告します。`atlas lens build --samples <path>` は `geometric-lens/geometric_lens/training.py` をラップし、モデルのネイティブ埋め込み次元で新しい C(x)（`cost_field.pt`）**と** G(x)（XGBoost）のアーティファクトをトレーニングします。この2つを組み合わせることで、ユーザーは Lens コードをフォークすることなくデフォルト以外の GGUF を差し込めます — C(x) コンストラクタは任意の `input_dim` を受け付けるため、モデルごとに変わるのはトレーニング済み重みだけです。ユーザー向けのフローは [CLI.md § atlas lens](../../CLI.md#atlas-lens) を参照してください。`atlas lens publish`（または統合コマンドの `atlas publish`）がアーティファクトを HuggingFace にアップロードし、そのハッシュを固定するレジストリ PR を開きます。
+**持ち込みモデルの対応面 (V3.1.1)。** `atlas lens check` は、稼働中の llama-server に対する安価な事前チェックで、ロード済みモデルが Lens 互換かどうかを報告します。`atlas lens build --samples <path>` は `geometric-lens/geometric_lens/training.py` をラップし、モデルのネイティブ埋め込み次元で新しい C(x)（`cost_field.pt`）**と** G(x)（XGBoost）のアーティファクトをトレーニングします。この2つを組み合わせることで、ユーザーは Lens コードをフォークすることなくデフォルト以外の GGUF を差し込めます — C(x) コンストラクタは任意の `input_dim` を受け付けるため、モデルごとに変わるのはトレーニング済み重みだけです。ユーザー向けのフローは [CLI.md § atlas lens](../../reference/CLI.md#atlas-lens) を参照してください。`atlas lens publish`（または統合コマンドの `atlas publish`）がアーティファクトを HuggingFace にアップロードし、そのハッシュを固定するレジストリ PR を開きます。
 
 **ベンダー非依存な要素**（すべてのバックエンドで動作）: 文法制約付き JSON、セルフ埋め込み（`/embedding`）、レイヤーごとの隠れ状態、ASA 制御ベクトル（バックエンドを問わず llama.cpp の `control_vector_load` でロードされる）、KV キャッシュ量子化、外側のエージェントループ全体、V3 パイプライン、Geometric Lens、サンドボックス。
 
@@ -84,7 +84,7 @@ K3s デプロイパス（`scripts/install.sh`、`templates/` 内のマニフェ�
 
 ## 3. atlas-proxy（外側のレイヤー）
 
-プロキシはチャットフロントエンドのエントリーポイントです。`/v1/agent`（型付きイベントストリーム — TUI が使うもの）でユーザーメッセージを受け取り、llama-server を呼び出し、ツールコールをパースし、それらを実行し、イベントをストリームバックする内部エージェントループを実行します。`/v1/chat/completions` エンドポイントは llama-server への透過パススルーです。SDK 互換性のために残してあり、エージェントループは実行しません。イベントタイプの完全なカタログは [API.md](../../API.md) を参照してください。
+プロキシはチャットフロントエンドのエントリーポイントです。`/v1/agent`（型付きイベントストリーム — TUI が使うもの）でユーザーメッセージを受け取り、llama-server を呼び出し、ツールコールをパースし、それらを実行し、イベントをストリームバックする内部エージェントループを実行します。`/v1/chat/completions` エンドポイントは llama-server への透過パススルーです。SDK 互換性のために残してあり、エージェントループは実行しません。イベントタイプの完全なカタログは [API.md](../../reference/API.md) を参照してください。
 
 `proxy/` とそのサブフォルダーの非テスト Go ファイルすべてと、それぞれの担当領域:
 
@@ -226,7 +226,7 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 
 ### ツール
 
-`proxy/tools.go` に 16 個のツールが登録されています。各ツールの内容、制限、読み取り専用かどうかは [API.md § Tools available to the agent loop](../../API.md#tools-available-to-the-agent-loop) をご覧ください。
+`proxy/tools.go` に 16 個のツールが登録されています。各ツールの内容、制限、読み取り専用かどうかは [API.md § Tools available to the agent loop](../../reference/API.md#tools-available-to-the-agent-loop) をご覧ください。
 
 ### 成果物台帳（観測的）
 
@@ -316,7 +316,7 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 3. **ステップごとのツールリストフィルタ**（同じトリガー）。一時的な `[system note]` のユーザーメッセージが注入され、このステップでは structural_edit が唯一の構造的編集ツールであることをモデルに思い出させる。
 4. **ASA ステアリングベクトル**（`geometric-lens/asa_calibration/`）。活性化ステアリングが残差ストリームの分布を上流でシフトさせ、いかなる拒否が発火する前の初回の判断でも structural_edit が優先される。`inference/entrypoint-v3.1.sh` が `/models/ast_edit_steering.gguf` から自動ロードするのは、その `.model` サイドカーが選択中のモデルと一致する場合のみ — `geometric-lens/asa_calibration/README.md` のワークフローで互換性のあるビルドを行えば、以降は常時オン。パス/スケール/レイヤー範囲は `ATLAS_CONTROL_VECTOR*` 環境変数でオーバーライドする。
 
-   **モデル別の結合。** 各 ASA ベクトルは特定モデルの残差ストリーム幾何に対してトレーニングされます。モデルをまたぐフォールバックに安全なものはありません。`atlas asa check` は `.model` サイドカーを検証し、ロード済みの埋め込み次元をプローブし、GGUF のレイヤーメタデータをパースして、`compat` / `needs-build` / `incompatible` を報告します。`atlas asa build` はロード済みモデルから抽出レイヤーを導出し、ベクトルとマーカーを書き込み、lens コンテナ内で実行されます。`atlas asa publish` はアップロード前に、マーカーの欠落や不一致を拒否します。[CLI.md § atlas asa](../../CLI.md#atlas-asa) を参照。
+   **モデル別の結合。** 各 ASA ベクトルは特定モデルの残差ストリーム幾何に対してトレーニングされます。モデルをまたぐフォールバックに安全なものはありません。`atlas asa check` は `.model` サイドカーを検証し、ロード済みの埋め込み次元をプローブし、GGUF のレイヤーメタデータをパースして、`compat` / `needs-build` / `incompatible` を報告します。`atlas asa build` はロード済みモデルから抽出レイヤーを導出し、ベクトルとマーカーを書き込み、lens コンテナ内で実行されます。`atlas asa publish` はアップロード前に、マーカーの欠落や不一致を拒否します。[CLI.md § atlas asa](../../reference/CLI.md#atlas-asa) を参照。
 
 ### ファイルごとのティア分類
 
@@ -366,7 +366,7 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 
 `comparison` は引き続き契約対レガシーを記述し、`influences_live_decision` は、観測者とそのシンクがポリシーに影響を与えられるかを記述し続け、false のままです。スキーマ変更とは、閉じたフィールド集合とその読み取り側を持つ新しいバージョンのことです — 既存バージョンの再定義でも、未知のフィールドを黙って無視するパーサでもありません。
 
-クライアント: TUI は通常メッセージに `work` を、ワンショットの `/ask <message>` に `question` を送ります。VS Code 拡張と JetBrains プラグインはユーザーが選んだ Work/Question モードを送り、既定は `work` です。e2e と信頼性ハーネスは `work` を送ります。すべての自前クライアントが宣言するため、契約のないリクエストは外部の呼び出し元のものであり、V3 候補を得られません（[CANDIDATE_POLICY.md](../../CANDIDATE_POLICY.md)）。`expected_outputs` と `verification` は運ばれ検証されますが、**まだ移行されていません** — 成果物と検証の義務は依然として古い方法で導出されます。
+クライアント: TUI は通常メッセージに `work` を、ワンショットの `/ask <message>` に `question` を送ります。VS Code 拡張と JetBrains プラグインはユーザーが選んだ Work/Question モードを送り、既定は `work` です。e2e と信頼性ハーネスは `work` を送ります。すべての自前クライアントが宣言するため、契約のないリクエストは外部の呼び出し元のものであり、V3 候補を得られません（[CANDIDATE_POLICY.md](../../reference/CANDIDATE_POLICY.md)）。`expected_outputs` と `verification` は運ばれ検証されますが、**まだ移行されていません** — 成果物と検証の義務は依然として古い方法で導出されます。
 
 証拠ゲートが存在するのは、上の行動なき done ゲートの免除 — 質問は会話であるため決してゲートされない — が、回答パスに完了チェックを1つも残さなかったためです。3つのモジュールにまたがる診断的な質問で計測しました: 12セッションにわたり、モデルは `list_directory` を実行し、ちょうど1つのファイルをアウトラインし、応答しました。本体を1度も読まずに。結果は、検査したものではなく当てたファイル名を追跡しました（`scoring.py` は 11/11 で誤り、`planning.py` は 1/1 で正解。プロンプトに "scored" という語が含まれていたためです）。ある応答は、一度も見ていないファイルの「134-142行」を引用しました。
 
@@ -445,7 +445,7 @@ flowchart TD
 5. 最高スコアのプランを選びます。同点の場合はステップ数の少ないプランを優先します（冗長さを避けるため）。勝者の検証ステップがサーバーを起動するだけなら、その `verify_step` の印を外します。ステップ自体はプランに残り、ループ自身の検証ゲートに委ねます。
 6. すべての候補の解析に失敗した場合は、1 ステップのフォールバック（`{action: "investigate the request and act"}`）を返すため、プランナーの失敗でエージェントループが止まることはありません。
 
-API の契約は [API.md § POST /v3/plan](../../API.md#post-v3plan) に記載されています。
+API の契約は [API.md § POST /v3/plan](../../reference/API.md#post-v3plan) に記載されています。
 
 ##### proxy: ブリッジ、フック、ゲート (Go)
 

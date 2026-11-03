@@ -1,5 +1,5 @@
 // Request/response and SSE event shapes for the atlas-proxy public client
-// API. Mirrors docs/API.md and the Go structs in proxy/internal/wire/ /
+// API. Mirrors docs/reference/API.md and the Go structs in proxy/internal/wire/ /
 // tui/internal/proxyclient/chat.go — field tags there are the source of truth.
 
 /** One prior-turn message replayed to the proxy on each /v1/agent call.
@@ -9,7 +9,7 @@ export interface HistoryMessage {
 	content: string;
 }
 
-/** Permission mode for a turn (docs/API.md POST /v1/agent `mode`). */
+/** Permission mode for a turn (docs/reference/API.md POST /v1/agent `mode`). */
 export type PermissionMode = 'default' | 'accept-edits' | 'yolo';
 
 /** What the client declares about a request: whether the workspace should
@@ -26,7 +26,7 @@ export type TaskMode = 'work' | 'question';
  * which files must exist or which command must run, and guessing from their
  * prose is exactly what the contract replaces. A caller that genuinely knows
  * can fill them in; the proxy grounds a `work` request in the model's own
- * tool call instead (docs/API.md). */
+ * tool call instead (docs/reference/API.md). */
 export interface TaskContract {
 	/** Required when the object is sent. An unknown mode, or a `question`
 	 * that declares obligations, is refused with HTTP 400. */
@@ -72,7 +72,7 @@ export interface ChatEvent {
 	data: unknown;
 }
 
-// --- Payloads for the events the extension renders (docs/API.md table). ---
+// --- Payloads for the events the extension renders (docs/reference/API.md table). ---
 
 export interface TextEventData {
 	content: string;
@@ -146,7 +146,7 @@ export interface DoneEventData {
 	/** Empty for a text-shaped turn. */
 	summary: string;
 	/** completed, incomplete, stopped, timed_out or failed. An older proxy
-	 * omits it; read that as incomplete (docs/API.md). */
+	 * omits it; read that as incomplete (docs/reference/API.md). */
 	status?: string;
 	/** Why the run ended with that status, for example repair_unfinished. */
 	reason?: string;
@@ -281,7 +281,7 @@ export interface WorkspaceResponse {
 
 /** GET /v1/calibration/status — lens + ASA compat verdict for the loaded
  * model. Called once at activation and on manual refresh only: every call
- * re-probes the lens service (~50–200 ms, docs/API.md). */
+ * re-probes the lens service (~50–200 ms, docs/reference/API.md). */
 export interface CalibrationStatusResponse {
 	lens: {
 		verdict: 'supported' | 'no-artifacts' | 'incomplete-artifacts' | 'uncalibrated' | 'dim-mismatch' | 'unreachable' | string;
@@ -295,7 +295,7 @@ export interface CalibrationStatusResponse {
 	dimensions?: { name: string; status: string; detail: string }[];
 }
 
-/** Closed error-code set from docs/API.md. Switch on `error`, never on
+/** Closed error-code set from docs/reference/API.md. Switch on `error`, never on
  * `detail` — the human message may change between versions. */
 export type ErrorCode =
 	| 'unauthorized'

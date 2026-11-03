@@ -2,7 +2,7 @@
 
 This guide walks you through contributing trained **Geometric Lens** (`cost_field.pt`) or **ASA control vectors** (`*.gguf`) back to ATLAS so other users running the same base model get them automatically.
 
-It's the long-form walkthrough for the artifact-contribution flow introduced in [CONTRIBUTING.md](../../.github/CONTRIBUTING.md#contributing-trained-artifacts-lens--asa). CLI flag reference lives in [CLI.md](../CLI.md). If you just want flag syntax, that's the right place — read this one first if you've never published before.
+It's the long-form walkthrough for the artifact-contribution flow introduced in [CONTRIBUTING.md](../../.github/CONTRIBUTING.md#contributing-trained-artifacts-lens--asa). CLI flag reference lives in [CLI.md](../reference/CLI.md). If you just want flag syntax, that's the right place — read this one first if you've never published before.
 
 ---
 
@@ -75,7 +75,7 @@ This opens a **single registry PR** whose entry carries
 
 Assumes you've run `atlas lens build --samples your-data.json` and have the
 C(x), G(x), model identity, and per-model calibration files in the artifact
-directory. If not, see the `atlas lens build` section in [CLI.md](../CLI.md).
+directory. If not, see the `atlas lens build` section in [CLI.md](../reference/CLI.md).
 
 ```bash
 # Preview the PR body without uploading anything
@@ -115,7 +115,7 @@ uploaded file.
 ## Publishing an ASA control vector
 
 Same shape, different artifact. Assumes you've trained a vector with `atlas asa
-build` (see [CLI.md](../CLI.md) for the training walkthrough).
+build` (see [CLI.md](../reference/CLI.md) for the training walkthrough).
 
 ```bash
 atlas asa publish <model-name> \
@@ -187,6 +187,6 @@ The CLI accepts any `--license` value — there's no runtime license gate. The g
 
 ## See also
 
-- [CLI.md — atlas lens / atlas asa command reference](../CLI.md)
+- [CLI.md — atlas lens / atlas asa command reference](../reference/CLI.md)
 - [CONFIGURATION.md — env vars including HF_TOKEN](../CONFIGURATION.md)
 - [CONTRIBUTING.md — broader contribution guidelines](../../.github/CONTRIBUTING.md)

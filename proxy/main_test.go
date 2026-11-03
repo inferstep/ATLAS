@@ -403,7 +403,7 @@ func TestRequireServiceToken(t *testing.T) {
 
 	t.Run("workspace stays closed", func(t *testing.T) {
 		// /workspace discloses a host filesystem path, so it is deliberately
-		// NOT in authOpenPath's exemption list (docs/API.md).
+		// NOT in authOpenPath's exemption list (docs/reference/API.md).
 		defer withToken(t, "atlas-st-testfixture")()
 		h := requireServiceToken(inner)
 		rec := httptest.NewRecorder()

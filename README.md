@@ -67,30 +67,30 @@
 
 ## 🧱 What ATLAS Does
 
-1. **[atlas-tui](docs/CLI.md)** - native Bubbletea terminal UI; the canonical chat client. Type `atlas` in any project directory to launch it.
-   - [Live pipeline view](docs/CLI.md#panes) - watch V3 stages stream in a side pane
-   - [Slash commands](docs/CLI.md#slash-commands) - `/add`, `/diff`, `/commit`, `/run` for local file context and shell-out
-   - [Input modes](docs/CLI.md#input-modes) - chat, `!bash`, and `/slash` with a hint dropdown
+1. **[atlas-tui](docs/reference/CLI.md)** - native Bubbletea terminal UI; the canonical chat client. Type `atlas` in any project directory to launch it.
+   - [Live pipeline view](docs/reference/CLI.md#panes) - watch V3 stages stream in a side pane
+   - [Slash commands](docs/reference/CLI.md#slash-commands) - `/add`, `/diff`, `/commit`, `/run` for local file context and shell-out
+   - [Input modes](docs/reference/CLI.md#input-modes) - chat, `!bash`, and `/slash` with a hint dropdown
 
-2. **[atlas-proxy](docs/ARCHITECTURE.md#3-atlas-proxy-outer-layer)** - Go agent loop that orchestrates the system.
-   - [Tool-call routing](docs/ARCHITECTURE.md#tools) - classifies file operations by complexity tier
-   - [Grammar enforcement](docs/ARCHITECTURE.md#grammar-enforcement) - GBNF schemas strongly steer output toward the expected JSON shapes, with proxy-side recovery for malformed or truncated output
-   - [BiasBusters](docs/ARCHITECTURE.md#tool-selection-bias-mitigations) - four composed mitigations (descriptions, grammar bans, system notes, ASA steering) that push the model toward `structural_edit` for structural code edits
-   - [Safety limits](docs/ARCHITECTURE.md#safety-limits) - turn caps, token budgets, timeouts
+2. **[atlas-proxy](docs/reference/ARCHITECTURE.md#3-atlas-proxy-outer-layer)** - Go agent loop that orchestrates the system.
+   - [Tool-call routing](docs/reference/ARCHITECTURE.md#tools) - classifies file operations by complexity tier
+   - [Grammar enforcement](docs/reference/ARCHITECTURE.md#grammar-enforcement) - GBNF schemas strongly steer output toward the expected JSON shapes, with proxy-side recovery for malformed or truncated output
+   - [BiasBusters](docs/reference/ARCHITECTURE.md#tool-selection-bias-mitigations) - four composed mitigations (descriptions, grammar bans, system notes, ASA steering) that push the model toward `structural_edit` for structural code edits
+   - [Safety limits](docs/reference/ARCHITECTURE.md#safety-limits) - turn caps, token budgets, timeouts
 
-3. **[V3 Pipeline](docs/ARCHITECTURE.md#4-v3-pipeline-inner-layer)** - multi-phase code generation; turns a single prompt into a verified candidate.
-   - [PlanSearch](docs/ARCHITECTURE.md#pipeline-flow) - constraint-driven structured planning
-   - [DivSampling](docs/ARCHITECTURE.md#pipeline-flow) - diverse candidates across temperature and strategy
-   - [Budget tiers](docs/ARCHITECTURE.md#pipeline-flow) - the allocator picks a compute tier per task; the tier sets how many candidates are generated, and the prompt and token budget for each
-   - [PR-CoT Repair](docs/ARCHITECTURE.md#pipeline-flow) - repairs failing candidates from the sandbox's error output
-   - [Refinement Loops](docs/ARCHITECTURE.md#pipeline-flow) - sandbox verify and correct, then repeat
+3. **[V3 Pipeline](docs/reference/ARCHITECTURE.md#4-v3-pipeline-inner-layer)** - multi-phase code generation; turns a single prompt into a verified candidate.
+   - [PlanSearch](docs/reference/ARCHITECTURE.md#pipeline-flow) - constraint-driven structured planning
+   - [DivSampling](docs/reference/ARCHITECTURE.md#pipeline-flow) - diverse candidates across temperature and strategy
+   - [Budget tiers](docs/reference/ARCHITECTURE.md#pipeline-flow) - the allocator picks a compute tier per task; the tier sets how many candidates are generated, and the prompt and token budget for each
+   - [PR-CoT Repair](docs/reference/ARCHITECTURE.md#pipeline-flow) - repairs failing candidates from the sandbox's error output
+   - [Refinement Loops](docs/reference/ARCHITECTURE.md#pipeline-flow) - sandbox verify and correct, then repeat
 
-4. **[Geometric Lens](docs/ARCHITECTURE.md#5-geometric-lens)** - energy-based scoring over the model's own embeddings, no external oracle. ([What is a "Geometric Lens"?](docs/ARCHITECTURE.md#why-geometric-lens))
-   - [C(x) Cost Field](docs/ARCHITECTURE.md#scoring-models) - model-hidden-dim→512→128→1 MLP that scores candidate quality
-   - [G(x) Quality Prediction](docs/ARCHITECTURE.md#scoring-models) - XGBoost ensemble whose score helps set how many candidates are generated; selection itself takes the lowest C(x)
-   - [Per-step scoring](docs/API.md#geometric-lens-port-8099) - per-token C(x)/G(x) scoring of writes; per-model thresholds drive interventions only when the model's bundle is calibrated
+4. **[Geometric Lens](docs/reference/ARCHITECTURE.md#5-geometric-lens)** - energy-based scoring over the model's own embeddings, no external oracle. ([What is a "Geometric Lens"?](docs/reference/ARCHITECTURE.md#why-geometric-lens))
+   - [C(x) Cost Field](docs/reference/ARCHITECTURE.md#scoring-models) - model-hidden-dim→512→128→1 MLP that scores candidate quality
+   - [G(x) Quality Prediction](docs/reference/ARCHITECTURE.md#scoring-models) - XGBoost ensemble whose score helps set how many candidates are generated; selection itself takes the lowest C(x)
+   - [Per-step scoring](docs/reference/API.md#geometric-lens-port-8099) - per-token C(x)/G(x) scoring of writes; per-model thresholds drive interventions only when the model's bundle is calibrated
 
-5. **[Sandbox](docs/ARCHITECTURE.md#6-sandbox)** - isolated execution for build verification.
+5. **[Sandbox](docs/reference/ARCHITECTURE.md#6-sandbox)** - isolated execution for build verification.
    - Multi-language execution: Python, Rust, Go, C, Shell, others. Rust, Go and C run as commands in the project; V3 checks their syntax, and the sandbox's `/execute` route compiles them but cannot run them yet ([#163](https://github.com/inferstep/ATLAS/issues/163))
    - Compilation and linting before scoring
    - Runs both generated and existing test suites
@@ -100,7 +100,7 @@
    - Grammar-constrained decoding at the token level
    - Self-embeddings, so the lens doesn't need a second model
 
-Full documentation (setup, architecture, configuration, troubleshooting, and the [research behind each component](docs/SOURCES.md)) lives in the [docs/](docs/) directory.
+Full documentation (setup, architecture, configuration, troubleshooting, and the [research behind each component](docs/reference/SOURCES.md)) lives in the [docs/](docs/) directory.
 
 ---
 

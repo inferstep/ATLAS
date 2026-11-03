@@ -80,7 +80,7 @@ describe('TurnManager', () => {
 		expect(request.history).toEqual([]);
 		expect(request.session_allowed_tools).toBeUndefined();
 		// Every owned sender declares a task mode; absence is reserved for
-		// external and legacy callers (docs/API.md, "Building a non-TUI
+		// external and legacy callers (docs/reference/API.md, "Building a non-TUI
 		// client"). Without one the proxy gets no V3 candidate at all.
 		// Strict: no obligations the user never stated. A chat box knows
 		// nothing structured about paths or commands.

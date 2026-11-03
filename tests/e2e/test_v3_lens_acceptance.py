@@ -334,7 +334,7 @@ def _agent_body(workspace, **overrides):
 
 # The request contract these tests send: work, with the output declared as a
 # canonical workspace-relative path, nothing read from the prose. One rule
-# decides what lands (docs/CANDIDATE_POLICY.md); nothing in the contract
+# decides what lands (docs/reference/CANDIDATE_POLICY.md); nothing in the contract
 # selects another.
 DECLARED_OUTPUT_CONTRACT = {
     "task_mode": "work",
