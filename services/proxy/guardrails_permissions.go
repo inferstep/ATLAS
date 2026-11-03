@@ -431,15 +431,17 @@ func permCallID(turn int) string {
 // build/test commands is a decision the operator makes explicitly.
 //
 //   untrusted     — no command execution at all (run_command refused).
-//   trusted       — commands run in the isolated sandbox container
-//                   (the default; host execution is downgraded to sandbox).
+//   trusted       — in container setups, commands run in the isolated
+//                   sandbox container (the default; host execution is
+//                   downgraded to sandbox; on bare metal, services run as
+//                   local processes without a container boundary).
 //   fully-trusted — advanced: host execution (ATLAS_VERIFY_IN=host) is
 //                   honored, dropping the container backstop.
 //
 // Set via ATLAS_TRUST_MODE. The default is "trusted": commands run, but
-// only in the sandbox. This keeps the out-of-box behavior safe (isolated
-// execution) while making "run nothing" and "run on the host" both
-// explicit, deliberate choices.
+// only in the sandbox (in container setups). This keeps the out-of-box
+// behavior safe (isolated execution) while making "run nothing" and "run
+// on the host" both explicit, deliberate choices.
 
 type trustMode string
 

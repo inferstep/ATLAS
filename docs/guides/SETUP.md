@@ -540,6 +540,8 @@ that it will remove, with its path.
 
 Run all services as local processes without containers. Useful for development or systems where Docker isn't available.
 
+Unlike container-based setups (Methods 0, 1, and 3), this method has no container boundary: the sandbox service is a local process, so shell commands execute directly on your machine as your local user. Pre-execution safeguards still stand—the command safety rule (blocking catastrophic commands) and interactive permission prompts—but container protections do not: there is no read-only root filesystem, writes are not restricted to the project folder, and container resource limits are absent. See the [security page](../../.github/SECURITY.md) for the full threat model and sandbox boundary details.
+
 ### Additional Prerequisites
 
 | Requirement | Details |
