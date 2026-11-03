@@ -830,31 +830,8 @@ func assetLintFindingsFor(workingDir string, files []lintFile) (advisory, contra
 			findings = append(findings, orphanedFlatFindings(f, allOther, htmlCount)...)
 		}
 
-		// Referenced-but-missing templates: render_template('x') in .py,
-		// {% extends/include %} in templates. The snake fix session
-		// shipped an errorhandler rendering templates/404.html that did
-		// not exist — every 404 became a 500.
 		ext := strings.ToLower(filepath.Ext(f.rel))
-		tmplRefs := templateReferences(f, ext)
-		for _, name := range tmplRefs {
-			if strings.Contains(name, "{{") {
-				continue
-			}
-			rel := filepath.FromSlash(name)
-			// A name escaping templates/ is dangling by definition (Jinja
-			// loaders refuse traversal) — report it WITHOUT the Stat probe,
-			// which stays contained to workingDir.
-			dangling := !filepath.IsLocal(rel)
-			if !dangling {
-				_, err := os.Stat(filepath.Join(workingDir, "templates", rel))
-				dangling = err != nil
-			}
-			if dangling {
-				findings = append(findings, fmt.Sprintf(
-					"%s references template %q, but templates/%s does not exist.",
-					f.rel, name, name))
-			}
-		}
+		findings = append(findings, missingTemplateFindings(workingDir, f, ext)...)
 
 		// Route-contract check: fetch()/form-action URLs must correspond
 		// to a declared Flask route. Mini-bench t01 generated a JS
@@ -866,63 +843,104 @@ func assetLintFindingsFor(workingDir string, files []lintFile) (advisory, contra
 	}
 
 	// Dangling local references: src/href/url_for pointing at files that
-	// don't exist in the workspace.
+	// don't exist in the workspace. A file reports each target once.
 	seenDangling := map[string]bool{}
 	for _, f := range files {
-		for _, m := range reSrcHref.FindAllStringSubmatch(f.content, -1) {
-			target := m[1]
-			if strings.Contains(target, "://") || strings.HasPrefix(target, "//") ||
-				strings.HasPrefix(target, "#") || strings.HasPrefix(target, "data:") ||
-				strings.HasPrefix(target, "mailto:") || strings.Contains(target, "{{") ||
-				strings.Contains(target, "{%") {
-				continue
-			}
-			target = strings.SplitN(target, "?", 2)[0]
-			target = strings.SplitN(target, "#", 2)[0]
-			if target == "" || target == "/" {
-				continue
-			}
-			rel := filepath.FromSlash(strings.TrimPrefix(target, "/"))
-			// A target escaping the workspace can't be served from it —
-			// report as dangling without the Stat probe (contained to
-			// workingDir).
-			dangling := !filepath.IsLocal(rel)
-			if !dangling {
-				_, err := os.Stat(filepath.Join(workingDir, rel))
-				dangling = err != nil
-			}
-			if dangling {
-				key := f.rel + "→" + target
-				if !seenDangling[key] {
-					seenDangling[key] = true
-					findings = append(findings, fmt.Sprintf(
-						"%s references %q, which does not exist in the workspace.", f.rel, target))
-				}
-			}
-		}
-		for _, m := range reURLFor.FindAllStringSubmatch(f.content, -1) {
-			rel := filepath.FromSlash(m[1])
-			// A filename escaping static/ 404s at runtime (Flask refuses
-			// traversal) — report as dangling without the Stat probe.
-			dangling := !filepath.IsLocal(rel)
-			if !dangling {
-				_, err := os.Stat(filepath.Join(workingDir, filepath.Join("static", rel)))
-				dangling = err != nil
-			}
-			if dangling {
-				key := f.rel + "→" + m[1]
-				if !seenDangling[key] {
-					seenDangling[key] = true
-					findings = append(findings, fmt.Sprintf(
-						"%s references url_for('static', filename=%q), but static/%s does not exist.",
-						f.rel, m[1], m[1]))
-				}
-			}
-		}
+		findings = append(findings, danglingHrefFindings(workingDir, f, seenDangling)...)
+		findings = append(findings, danglingStaticFindings(workingDir, f, seenDangling)...)
 	}
 
 	sort.Strings(findings)
 	return findings, contract
+}
+
+// missingTemplateFindings reports the templates a file refers to that do not
+// exist: render_template('x') in .py, {% extends/include %} in templates. The
+// snake fix session shipped an errorhandler rendering templates/404.html that
+// did not exist — every 404 became a 500.
+func missingTemplateFindings(workingDir string, f lintFile, ext string) []string {
+	var out []string
+	for _, name := range templateReferences(f, ext) {
+		if strings.Contains(name, "{{") {
+			continue
+		}
+		// A name escaping templates/ is dangling by definition (Jinja loaders
+		// refuse traversal).
+		if missingUnder(filepath.Join(workingDir, "templates"), filepath.FromSlash(name)) {
+			out = append(out, fmt.Sprintf(
+				"%s references template %q, but templates/%s does not exist.",
+				f.rel, name, name))
+		}
+	}
+	return out
+}
+
+// danglingHrefFindings reports the local src/href targets of a file that do
+// not exist in the workspace. seen holds the targets already reported.
+func danglingHrefFindings(workingDir string, f lintFile, seen map[string]bool) []string {
+	var out []string
+	for _, m := range reSrcHref.FindAllStringSubmatch(f.content, -1) {
+		target := m[1]
+		if notALocalFile(target) {
+			continue
+		}
+		target = strings.SplitN(target, "?", 2)[0]
+		target = strings.SplitN(target, "#", 2)[0]
+		if target == "" || target == "/" {
+			continue
+		}
+		// A target escaping the workspace can't be served from it.
+		if missingUnder(workingDir, filepath.FromSlash(strings.TrimPrefix(target, "/"))) {
+			key := f.rel + "→" + target
+			if !seen[key] {
+				seen[key] = true
+				out = append(out, fmt.Sprintf(
+					"%s references %q, which does not exist in the workspace.", f.rel, target))
+			}
+		}
+	}
+	return out
+}
+
+// danglingStaticFindings reports the url_for('static', filename=...) files of
+// a file that do not exist under static/. seen holds the targets already
+// reported.
+func danglingStaticFindings(workingDir string, f lintFile, seen map[string]bool) []string {
+	var out []string
+	for _, m := range reURLFor.FindAllStringSubmatch(f.content, -1) {
+		// A filename escaping static/ 404s at runtime (Flask refuses traversal).
+		if missingUnder(filepath.Join(workingDir, "static"), filepath.FromSlash(m[1])) {
+			key := f.rel + "→" + m[1]
+			if !seen[key] {
+				seen[key] = true
+				out = append(out, fmt.Sprintf(
+					"%s references url_for('static', filename=%q), but static/%s does not exist.",
+					f.rel, m[1], m[1]))
+			}
+		}
+	}
+	return out
+}
+
+// notALocalFile reports a src/href target that names no file of the
+// workspace: a URL, an anchor, inline data, a mail link or a template
+// expression.
+func notALocalFile(target string) bool {
+	return strings.Contains(target, "://") || strings.HasPrefix(target, "//") ||
+		strings.HasPrefix(target, "#") || strings.HasPrefix(target, "data:") ||
+		strings.HasPrefix(target, "mailto:") || strings.Contains(target, "{{") ||
+		strings.Contains(target, "{%")
+}
+
+// missingUnder reports whether rel names no file under root. A rel that
+// escapes root is missing without a look at the disk, so the probe stays
+// contained.
+func missingUnder(root, rel string) bool {
+	if !filepath.IsLocal(rel) {
+		return true
+	}
+	_, err := os.Stat(filepath.Join(root, rel))
+	return err != nil
 }
 
 // v3RewroteBeyondTheEdit reports whether a V3 candidate changed text the

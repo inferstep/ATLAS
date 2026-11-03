@@ -70,6 +70,15 @@ func TestAssetLintFindings(t *testing.T) {
 				`app.py references url_for('static', filename="also-missing.css"), but static/also-missing.css does not exist.`,
 				`templates/index.html references "/static/missing.js", which does not exist in the workspace.`,
 			}},
+		{"a page that names the same missing file twice reports it once",
+			map[string]string{
+				"templates/index.html": "<html><script src=\"/static/missing.js\"></script>" +
+					"<script src=\"/static/missing.js\"></script></html>",
+				"app.py": "render_template('index.html')\n",
+			},
+			[]string{
+				`templates/index.html references "/static/missing.js", which does not exist in the workspace.`,
+			}},
 		{"a flat layout: a script and a stylesheet no page loads",
 			map[string]string{
 				"index.html": "<html><script>function calculate(){}</script></html>",
