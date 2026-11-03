@@ -27,6 +27,8 @@ change one thing without reading everything else.
   the same 15. A function already over is on the baseline with its score: it
   may fall but not rise. When your change lowers one, run
   `python scripts/ci/code_health.py --update` and commit the baseline.
+  Without Go and its two tools the check skips Go on your machine and names
+  the install; CI always measures it.
 - **The proxy's main package gains no file.** Its file count is pinned on the
   baseline (`proxy_main`), so a new subject goes into its own package under
   `services/proxy/internal/`. Its line count is printed on every run as a trend. If

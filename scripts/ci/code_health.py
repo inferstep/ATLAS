@@ -64,9 +64,10 @@ SKIP_DIRS = {"tests", "test", "node_modules", ".venv", "__pycache__", "vendor"}
 MAIN_PACKAGE = "services/proxy"
 GO_FUNC = re.compile(r"^func (?:\(\w+ \*?(\w+)(?:\[[^\]]*\])?\) )?(\w+)")
 
-# The versions golangci-lint v2.14.0 bundles, so this check and the lint judge alike.
-GOCOGNIT = "github.com/uudashr/gocognit/cmd/gocognit@v1.2.1"
-GOCYCLO = "github.com/fzipp/gocyclo/cmd/gocyclo@v0.6.0"
+# (command, module, version): the versions golangci-lint v2.14.0 bundles, so this check and
+# the lint judge alike. CI installs both in a step of its own, so the check fetches nothing.
+GOCOGNIT = ("gocognit", "github.com/uudashr/gocognit", "v1.2.1")
+GOCYCLO = ("gocyclo", "github.com/fzipp/gocyclo", "v0.6.0")
 # Both print one line for each function over the limit: "<score> <package> <function> <file>:<line>:<column>".
 GO_SCORE = re.compile(r"^(\d+) \S+ (\S+) (.+):\d+:\d+$")
 # A method as both print it, "(*server).handle", named the way go_functions names it: "server.handle".
@@ -197,36 +198,76 @@ def python_cognitive(paths: list) -> dict:
     return scores
 
 
-def go_scores(tool: str, paths: list) -> dict:
-    """{path:function: score} for each Go function over COMPLEXITY_MAX, as tool measures it."""
+def install_command(tool: tuple) -> str:
+    name, module, version = tool
+    return f"go install {module}/cmd/{name}@{version}"
+
+
+def installed_go_tool(tool: tuple):
+    """The path of tool's binary where `go install` puts it, when it is there at its pinned version."""
+    name, module, version = tool
+    folders = subprocess.run(["go", "env", "GOBIN", "GOPATH"], capture_output=True, text=True,
+                             check=False).stdout.split("\n")
+    folder = folders[0] or os.path.join(folders[1].split(os.pathsep)[0], "bin")
+    path = os.path.join(folder, name)
+    if not os.path.isfile(path):
+        return None
+    built = subprocess.run(["go", "version", "-m", path], capture_output=True, text=True, check=False).stdout
+    return path if f"\tmod\t{module}\t{version}\t" in built else None
+
+
+def missing_go_tools() -> list:
+    """What this machine lacks to measure Go's complexity, each with how to install it."""
     if shutil.which("go") is None:
-        raise CannotMeasure(f"go is not on the PATH: install Go (https://go.dev/dl/); this check runs {tool} "
-                            "through `go run`")
-    run = subprocess.run(["go", "run", tool, "-over", str(COMPLEXITY_MAX), *paths],
+        return ["Go is not on the PATH: install Go (https://go.dev/dl/), then run "
+                + " and ".join(f"`{install_command(tool)}`" for tool in (GOCOGNIT, GOCYCLO))]
+    return [f"{tool[0]} {tool[2]} is not installed: run `{install_command(tool)}`"
+            for tool in (GOCOGNIT, GOCYCLO) if installed_go_tool(tool) is None]
+
+
+def go_scores(tool: tuple, paths: list) -> dict:
+    """{path:function: score} for each Go function over COMPLEXITY_MAX, as tool measures it."""
+    binary = installed_go_tool(tool)
+    if binary is None:
+        raise CannotMeasure(f"{tool[0]} {tool[2]} is not installed: run `{install_command(tool)}`")
+    run = subprocess.run([binary, "-over", str(COMPLEXITY_MAX), *paths],
                          cwd=ROOT, capture_output=True, text=True, check=False)
-    # The tool exits 1 when it lists a function, and `go run` then adds "exit status 1",
-    # so the exit code says nothing. Any other line on stderr is a failure to measure.
-    errors = [line for line in run.stderr.splitlines()
-              if line != "exit status 1" and not line.startswith("go: downloading ")]
-    if errors:
-        raise CannotMeasure(f"{tool} did not run: " + " | ".join(errors[:5]))
+    # The tool exits 1 when it lists a function, so the exit code says nothing.
+    # A line on stderr is a failure to measure.
+    if run.stderr.strip():
+        raise CannotMeasure(f"{tool[0]} did not run: " + " | ".join(run.stderr.splitlines()[:5]))
     scores = {}
     seen_in: dict = {}
     for line in run.stdout.splitlines():
         m = GO_SCORE.match(line)
         if not m:
-            raise CannotMeasure(f"{tool} printed a line this check cannot read: {line!r}")
+            raise CannotMeasure(f"{tool[0]} printed a line this check cannot read: {line!r}")
         score, name, path = int(m.group(1)), GO_RECEIVER.sub(r"\1.", m.group(2)), m.group(3)
         scores[function_key(path, name, seen_in.setdefault(path, {}))] = score
     return scores
 
 
-def measure_complexity() -> dict:
-    """{"cognitive": {path:function: score}, "cyclomatic": {...}} for each function over COMPLEXITY_MAX."""
+def measure_complexity(base: dict, update: bool) -> dict:
+    """{"cognitive": {path:function: score}, "cyclomatic": {...}} for each function over COMPLEXITY_MAX.
+
+    On a machine without Go or its two tools, a check skips Go, says so, and takes the
+    listed Go functions as they stand. In CI (GITHUB_ACTIONS), or to write the baseline,
+    a missing tool is a failure instead.
+    """
     python = [p for p in source_files() if p.endswith(".py")]
+    scores = {"cognitive": python_cognitive(python), "cyclomatic": {}}
+    missing = missing_go_tools()
+    if missing and (update or os.environ.get("GITHUB_ACTIONS") == "true"):
+        raise CannotMeasure("; ".join(missing))
+    if missing:
+        print(f"skip Go's complexity on this machine ({'; '.join(missing)}); CI measures it")
+        for measure, listed in scores.items():
+            listed.update({key: n for key, n in base.get(measure, {}).items() if key.split(":")[0].endswith(".go")})
+        return scores
     go = [p for p in source_files(go_tests=True) if p.endswith(".go") and p not in NOT_MEASURED]
-    return {"cognitive": {**python_cognitive(python), **go_scores(GOCOGNIT, go)},
-            "cyclomatic": go_scores(GOCYCLO, go)}
+    scores["cognitive"].update(go_scores(GOCOGNIT, go))
+    scores["cyclomatic"].update(go_scores(GOCYCLO, go))
+    return scores
 
 
 def main_package_size() -> dict:
@@ -321,8 +362,9 @@ def main() -> int:
     a = ap.parse_args()
     funcs, files, totals = measure()
     main_size = main_package_size()
+    base = load_baseline()
     try:
-        scores = measure_complexity()
+        scores = measure_complexity(base, a.update)
     except CannotMeasure as e:
         print(f"FAIL {e}")
         return 1
@@ -350,7 +392,6 @@ def main() -> int:
               f"cyclomatic complexity {COMPLEXITY_MAX}")
         return 0
 
-    base = load_baseline()
     problems = check(funcs, files, base) + complexity_problems(scores, base) + main_package_problems(main_size, base)
     measured = (("functions", funcs), ("files", files), ("proxy_main", main_size),
                 ("cognitive", scores["cognitive"]), ("cyclomatic", scores["cyclomatic"]))

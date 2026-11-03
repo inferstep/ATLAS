@@ -58,7 +58,7 @@ def test_a_folder_over_the_soft_limit_counts_files_and_sub_folders():
 
 def test_a_crowded_folder_is_a_note_and_never_a_failure(monkeypatch, capsys):
     monkeypatch.setattr(ch, "tracked_paths", lambda: [f"crowded/file{i}" for i in range(26)])
-    monkeypatch.setattr(ch, "measure_complexity", lambda: {"cognitive": {}, "cyclomatic": {}})
+    monkeypatch.setattr(ch, "measure_complexity", lambda base, update: {"cognitive": {}, "cyclomatic": {}})
     monkeypatch.setattr(sys, "argv", ["code_health.py"])
     assert ch.main() == 0
     assert "crowded (26)" in capsys.readouterr().out
@@ -142,9 +142,9 @@ def test_the_copied_cognitive_measure_counts_like_sonar(src, sonar):
 def test_a_go_tool_line_names_the_function_as_the_size_check_does(monkeypatch):
     printed = ("42 app (*tuiModel).appendChatEvent clients/tui/internal/app/events.go:26:1\n"
                "17 app formatV3StageEvent clients/tui/internal/app/events.go:997:1\n")
-    monkeypatch.setattr(ch.shutil, "which", lambda name: "/usr/local/go/bin/go")
+    monkeypatch.setattr(ch, "installed_go_tool", lambda tool: "/home/runner/go/bin/gocyclo")
     monkeypatch.setattr(ch.subprocess, "run",
-                        lambda *args, **kwargs: subprocess.CompletedProcess(args, 1, printed, "exit status 1\n"))
+                        lambda *args, **kwargs: subprocess.CompletedProcess(args, 1, printed, ""))
     assert ch.go_scores(ch.GOCYCLO, ["clients/tui/internal/app/events.go"]) == {
         "clients/tui/internal/app/events.go:tuiModel.appendChatEvent": 42,
         "clients/tui/internal/app/events.go:formatV3StageEvent": 17,
@@ -152,18 +152,49 @@ def test_a_go_tool_line_names_the_function_as_the_size_check_does(monkeypatch):
 
 
 def test_a_go_tool_that_did_not_run_fails_rather_than_listing_nothing(monkeypatch):
-    monkeypatch.setattr(ch.shutil, "which", lambda name: "/usr/local/go/bin/go")
+    monkeypatch.setattr(ch, "installed_go_tool", lambda tool: "/home/runner/go/bin/gocognit")
     monkeypatch.setattr(ch.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(
-        args, 1, "", "go: github.com/uudashr/gocognit@v1.2.1: dial tcp: lookup proxy.golang.org: no such host\n"))
+        args, 1, "", "gocognit: open services/proxy/main.go: no such file or directory\n"))
     with pytest.raises(ch.CannotMeasure, match="did not run"):
         ch.go_scores(ch.GOCOGNIT, ["services/proxy/main.go"])
 
 
-def test_a_run_without_go_fails_and_names_the_install(monkeypatch, capsys):
+def test_in_ci_a_machine_without_go_fails_and_names_the_install(monkeypatch, capsys):
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setattr(ch.shutil, "which", lambda name: None)
     monkeypatch.setattr(sys, "argv", ["code_health.py"])
     assert ch.main() == 1
-    assert "install Go (https://go.dev/dl/)" in capsys.readouterr().out
+    assert "FAIL Go is not on the PATH: install Go (https://go.dev/dl/)" in capsys.readouterr().out
+
+
+def test_a_local_run_without_go_skips_go_says_so_and_still_checks_python(monkeypatch, capsys):
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setattr(ch.shutil, "which", lambda name: None)
+    monkeypatch.setattr(ch, "python_cognitive", lambda paths: {"scripts/new.py:tangled": 16})
+    monkeypatch.setattr(sys, "argv", ["code_health.py"])
+    assert ch.main() == 1
+    out = capsys.readouterr().out
+    assert "skip Go's complexity on this machine (Go is not on the PATH" in out
+    fails = [line for line in out.splitlines() if line.startswith("FAIL")]
+    assert fails == ["FAIL new function over cognitive complexity 15: scripts/new.py:tangled (16)"]
+
+
+def test_writing_the_baseline_without_go_fails_and_leaves_the_file(monkeypatch, tmp_path):
+    baseline = tmp_path / "code-health-baseline.json"
+    baseline.write_text("{}\n")
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setattr(ch, "BASELINE", str(baseline))
+    monkeypatch.setattr(ch.shutil, "which", lambda name: None)
+    monkeypatch.setattr(sys, "argv", ["code_health.py", "--update"])
+    assert ch.main() == 1
+    assert baseline.read_text() == "{}\n"
+
+
+def test_ci_installs_the_go_tools_at_the_versions_the_check_pins():
+    with open(os.path.join(ROOT, ".github", "workflows", "test.yml"), encoding="utf-8") as fh:
+        workflow = fh.read()
+    for tool in (ch.GOCOGNIT, ch.GOCYCLO):
+        assert ch.install_command(tool) in workflow
 
 
 def test_go_tests_are_measured_for_complexity_and_the_two_held_files_are_not(monkeypatch):
@@ -174,8 +205,9 @@ def test_go_tests_are_measured_for_complexity_and_the_two_held_files_are_not(mon
         return {}
 
     monkeypatch.setattr(ch, "go_scores", record)
+    monkeypatch.setattr(ch, "missing_go_tools", lambda: [])
     monkeypatch.setattr(ch, "python_cognitive", lambda paths: {})
-    ch.measure_complexity()
+    ch.measure_complexity({}, update=False)
     assert "services/proxy/main_test.go" in measured
     assert "services/proxy/tool_args.go" not in measured
     assert "services/proxy/tool_args_test.go" not in measured

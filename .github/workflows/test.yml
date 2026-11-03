@@ -359,16 +359,29 @@ jobs:
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
-          # The check runs gocognit and gocyclo with `go run`, at the versions
-          # golangci-lint bundles. The Go of the other jobs.
+          # The Go of the other jobs.
           go-version: '1.26.10'
           cache: false
+
+      - name: install gocognit and gocyclo
+        # At the versions scripts/ci/code_health.py pins (a test holds the two
+        # the same). A fetch from the module proxy can fail once, so it is
+        # tried three times, 15 s apart, and the check below fetches nothing.
+        run: |
+          for attempt in 1 2 3; do
+            go install github.com/uudashr/gocognit/cmd/gocognit@v1.2.1 &&
+              go install github.com/fzipp/gocyclo/cmd/gocyclo@v0.6.0 && exit 0
+            echo "attempt $attempt failed"
+            sleep 15
+          done
+          exit 1
 
       - name: function and file size, and function complexity, against the baseline
         # docs/project/CODE_STYLE.md: no new function over 100 lines or over
         # complexity 15, no new file over 1,500 lines, and nothing on
-        # .github/code-health-baseline.json grows. The runner's python3 is
-        # enough: the Python measure is a copy in scripts/ci/cognitive_complexity/.
+        # .github/code-health-baseline.json grows. In CI a missing Go tool
+        # fails it. The runner's python3 is enough: the Python measure is a
+        # copy in scripts/ci/cognitive_complexity/.
         run: python3 scripts/ci/code_health.py
 
   e2e-acceptance:
