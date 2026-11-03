@@ -15,11 +15,13 @@ import pytest
 
 from atlas.events import (
     EVENT_TYPES,
+    TERMINAL_STATUSES,
     LegacyEventError,
     SchemaError,
     make_event,
     new_event_id,
     parse_envelope,
+    terminal_status,
 )
 from tests.atlas.event_harness import iter_events, iter_sse_lines
 
@@ -164,3 +166,35 @@ def test_known_pipeline_sequence_round_trips_via_sse():
     received = [parse_envelope(line) for line in iter_sse_lines(stream)]
 
     assert received == sequence
+
+
+# --- terminal status: the consumer half of the proxy's outcome contract -----
+#
+# `summary` is prose, so every consumer that needed to know whether a run
+# finished was matching English. `status` is the contract; the one rule that
+# matters is that anything unnameable reads as incomplete, never completed.
+
+def test_terminal_status_reads_the_classified_outcomes():
+    for s in TERMINAL_STATUSES:
+        assert terminal_status({"status": s}) == s
+
+
+@pytest.mark.parametrize("payload", [
+    pytest.param(None, id="no payload"),
+    pytest.param("not a dict", id="text payload"),
+    pytest.param({}, id="no status"),
+    pytest.param({"status": None}, id="null status"),
+    pytest.param({"status": ""}, id="empty status"),
+    pytest.param({"status": "COMPLETED"}, id="wrong case"),
+    pytest.param({"status": "success"}, id="unknown word success"),
+    pytest.param({"status": "ok"}, id="unknown word ok"),
+    pytest.param({"status": 1}, id="number status"),
+    pytest.param({"status": ["completed"]}, id="list status"),
+    pytest.param({"summary": "Made your change — it's on disk."}, id="prose summary only"),
+    # A proxy that predates `status`: its done event still parses (see the
+    # pipeline round trip above), but it must never read as completed.
+    pytest.param({"success": True, "total_duration_ms": 1200, "summary": "all done"},
+                 id="done payload from before status"),
+])
+def test_absent_or_malformed_status_fails_closed(payload):
+    assert terminal_status(payload) == "incomplete"
