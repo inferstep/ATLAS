@@ -477,7 +477,7 @@ func TestExistingBehavioralBaselineWithSyntaxOnlyEvidence(t *testing.T) {
 	w := newAuthWorld(t, declaredPy, "solve.py", authPy, true)
 	w.ctx.VerificationEvidence = append(w.ctx.VerificationEvidence, taskcontract.VerificationRecord{
 		Command: "python3 solve.py",
-		Covered: map[string]string{w.path: w.hash}, Turn: 1,
+		Covered: map[string]string{w.path: w.hash},
 	})
 	if got := taskcontract.AuthorizationFloor(requestObligations(w.ctx)); got != "behavioral" {
 		t.Fatalf("floor %q, want behavioral", got)
@@ -503,7 +503,7 @@ func TestExistingBehavioralBaselineReEstablishedByItsOwnCommand(t *testing.T) {
 		"solve.py", authPy, true)
 	w.ctx.VerificationEvidence = append(w.ctx.VerificationEvidence, taskcontract.VerificationRecord{
 		Command: "python3 solve.py",
-		Covered: map[string]string{w.path: w.hash}, Turn: 1,
+		Covered: map[string]string{w.path: w.hash},
 	})
 	ev, evID := w.mustObserve(t)
 	// The client declared the command that established the baseline, and
@@ -516,7 +516,7 @@ func TestExistingBehavioralBaselineWithADifferentCommandPassing(t *testing.T) {
 	w := stagedWorld(t, "ruff check .")
 	w.ctx.VerificationEvidence = append(w.ctx.VerificationEvidence, taskcontract.VerificationRecord{
 		Command: "python3 solve.py",
-		Covered: map[string]string{w.path: w.hash}, Turn: 1,
+		Covered: map[string]string{w.path: w.hash},
 	})
 	ev, evID := w.mustObserve(t)
 	// A different command exiting zero is behavioural evidence about

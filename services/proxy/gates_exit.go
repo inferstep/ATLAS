@@ -548,7 +548,6 @@ func recordVerificationEvidence(ctx *AgentContext, turn int, command string, ev 
 		Command:             command,
 		Redirect:            stdinRedirectSource(command),
 		Covered:             coverageForGreenCommand(ctx, strings.Join(segs, " && ")),
-		Turn:                turn,
 		Kind:                ev.Kind.String(),
 		Failed:              failed,
 		WorkspaceGeneration: generation,

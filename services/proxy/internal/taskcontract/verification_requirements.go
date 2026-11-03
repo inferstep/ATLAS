@@ -30,7 +30,6 @@ type VerificationRecord struct {
 	Command  string            // the run_command line
 	Redirect string            // stdin redirect source ("" = ran standalone)
 	Covered  map[string]string // session-written path -> sha256 when it ran
-	Turn     int
 
 	// Kind is what the run demonstrates (shellcmd.CommandEvidenceKind.String):
 	// "execution" or "probe" show the program working; "static" (a parse,

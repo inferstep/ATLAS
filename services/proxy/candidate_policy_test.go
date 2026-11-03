@@ -272,7 +272,7 @@ func TestCandidateWeakerThanBaselineIsRejected(t *testing.T) {
 	}
 	w.ctx.VerificationEvidence = append(w.ctx.VerificationEvidence, taskcontract.VerificationRecord{
 		Command: "pytest -q",
-		Covered: map[string]string{w.path: contentSHA256(routeBaseline)}, Turn: 1,
+		Covered: map[string]string{w.path: contentSHA256(routeBaseline)},
 	})
 	// That record must yield a behavioural baseline obligation. Without it
 	// there is nothing for the candidate to be weaker than.

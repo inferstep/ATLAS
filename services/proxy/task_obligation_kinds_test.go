@@ -223,7 +223,7 @@ func TestReplacingAValidatedBaselineOwesAtLeastWhatItAlreadyHas(t *testing.T) {
 
 	// A green run covering exactly these bytes raises it to behavioral.
 	ctx.VerificationEvidence = append(ctx.VerificationEvidence, taskcontract.VerificationRecord{
-		Command: "python3 solve.py", Covered: map[string]string{resolved: disk}, Turn: 1,
+		Command: "python3 solve.py", Covered: map[string]string{resolved: disk},
 	})
 	obs = obligationsFor(t, ctx)
 	base, ok = hasKindFor(obs, taskcontract.ObligationBaselinePreserved, resolved)
@@ -490,7 +490,7 @@ func TestASyntaxOnlyReplacementCannotDisplaceABehavioralBaseline(t *testing.T) {
 	resolved := resolveAgentPath(ctx, "solve.py")
 	disk := fileSHA256(ctx, resolved)
 	ctx.VerificationEvidence = append(ctx.VerificationEvidence, taskcontract.VerificationRecord{
-		Command: "python3 solve.py", Covered: map[string]string{resolved: disk}, Turn: 1,
+		Command: "python3 solve.py", Covered: map[string]string{resolved: disk},
 	})
 	ctx.TaskContract = mustContract(t, ctx.WorkingDir,
 		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`)

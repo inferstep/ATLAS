@@ -142,7 +142,7 @@ func TestFeasibilityOfAPreservedBaseline(t *testing.T) {
 		resolved := resolveAgentPath(ctx, "solve.py")
 		ctx.VerificationEvidence = append(ctx.VerificationEvidence, taskcontract.VerificationRecord{
 			Command: "python3 solve.py",
-			Covered: map[string]string{resolved: fileSHA256(ctx, resolved)}, Turn: 1,
+			Covered: map[string]string{resolved: fileSHA256(ctx, resolved)},
 		})
 		ctx.TaskContract = mustContract(t, ctx.WorkingDir,
 			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`)
@@ -168,7 +168,7 @@ func TestFeasibilityOfAPreservedBaseline(t *testing.T) {
 		disk := fileSHA256(ctx, resolved)
 		ctx.VerificationEvidence = append(ctx.VerificationEvidence, taskcontract.VerificationRecord{
 			Command: "python3 solve.py",
-			Covered: map[string]string{resolved: disk}, Turn: 1,
+			Covered: map[string]string{resolved: disk},
 		})
 		ctx.TaskContract = mustContract(t, ctx.WorkingDir,
 			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`)
