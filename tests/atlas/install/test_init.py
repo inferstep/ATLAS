@@ -243,6 +243,51 @@ def test_loose_secrets_dir_without_yes_reports_setup_incomplete(atlas_root, caps
     assert not (secrets_dir / "api-keys.json").exists()
 
 
+def test_a_secrets_dir_that_cannot_be_set_to_0700_is_refused_with_its_owner_and_the_fix(
+        atlas_root, monkeypatch, capsys):
+    """A secrets/ folder another user owns, as Docker makes one it bind-mounts: the chmod to 0700 fails. The
+    wizard refuses with the folder, its owner and the fix, writes no key, and reports the setup incomplete."""
+    import pwd
+    secrets_dir = atlas_root / "secrets"
+    secrets_dir.mkdir()
+    secrets_dir.chmod(0o755)
+    real_chmod = os.chmod
+
+    def chmod(path, mode, *args, **kwargs):
+        if os.fspath(path) == str(secrets_dir):
+            raise PermissionError(1, "Operation not permitted", os.fspath(path))
+        return real_chmod(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(os, "chmod", chmod)
+    rc = init.main(["--yes", "--skip-download", "--no-color"])
+
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert f"{secrets_dir} belongs to {pwd.getpwuid(os.getuid()).pw_name} (uid {os.getuid()}), with mode 0o755" in out
+    assert f"Fix: sudo chown -R {os.getuid()}:{os.getgid()} {secrets_dir}" in out
+    assert "Setup incomplete" in out
+    assert not (secrets_dir / "api-keys.json").exists()
+    assert not (secrets_dir / "service-token").exists()
+
+
+def test_a_0700_secrets_dir_on_a_filesystem_that_refuses_chmod_is_written(atlas_root, monkeypatch):
+    secrets_dir = atlas_root / "secrets"
+    secrets_dir.mkdir()
+    secrets_dir.chmod(0o700)
+    real_chmod = os.chmod
+
+    def chmod(path, mode, *args, **kwargs):
+        if os.fspath(path) == str(secrets_dir):
+            raise PermissionError(1, "Operation not permitted", os.fspath(path))
+        return real_chmod(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(os, "chmod", chmod)
+    rc = init.main(["--yes", "--skip-download", "--no-color"])
+
+    assert rc == 0
+    assert (secrets_dir / "api-keys.json").exists()
+
+
 # ---------------------------------------------------------------------------
 # Prompts
 # ---------------------------------------------------------------------------
