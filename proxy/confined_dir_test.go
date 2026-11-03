@@ -140,6 +140,32 @@ func TestPythonDetectionStaysInsideTheWorkspace(t *testing.T) {
 	})
 }
 
+// The workspace's path is "proj[1]". A glob built from it, "proj[1]/*.py",
+// matches "proj1/main.py": a file in another folder.
+func TestProjectDetectionLooksOnlyInTheWorkspace(t *testing.T) {
+	for _, tc := range []struct{ name, file, language string }{
+		{"a python file in another folder", "main.py", "python"},
+		{"a shell script in another folder", "run.sh", "shell"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			parent := t.TempDir()
+			workspace := filepath.Join(parent, "proj[1]")
+			if err := os.Mkdir(workspace, 0o755); err != nil {
+				t.Fatalf("make the workspace: %v", err)
+			}
+			writeInWorkspace(t, filepath.Join(parent, "proj1"), tc.file, "placeholder\n")
+			if info := detectProjectInfo(workspace); info != nil {
+				t.Errorf("detectProjectInfo = %+v, want nil: the only %s is in another folder", info, tc.file)
+			}
+
+			writeInWorkspace(t, workspace, tc.file, "placeholder\n")
+			if info := detectProjectInfo(workspace); info == nil || info.Language != tc.language {
+				t.Errorf("detectProjectInfo = %+v, want a %s project from the workspace's own %s", info, tc.language, tc.file)
+			}
+		})
+	}
+}
+
 func TestAssetLintStaysInsideTheWorkspace(t *testing.T) {
 	workspace := t.TempDir()
 	linkOutOfWorkspace(t, workspace, "templates/linked.html", outsideMarker)
