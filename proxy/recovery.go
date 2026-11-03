@@ -280,7 +280,7 @@ func clearSteerState(ctx *AgentContext, st *runState, name string, args json.Raw
 // version is intact.
 //
 // Two hashes, two purposes, deliberately not shared. The retry fingerprint
-// from the identity change is a NORMALISED sha1 -- trailing whitespace is
+// from the identity change is a NORMALISED sha256 -- trailing whitespace is
 // dropped -- which is right for "is this the same call" and wrong for "is this
 // diagnostic about these bytes". Evidence uses sha256 of the exact resolved
 // proposal, and a diagnostic is stored with its hash or not at all.

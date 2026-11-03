@@ -38,7 +38,7 @@
 package main
 
 import (
-	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -207,7 +207,7 @@ func writeFileContentFingerprint(args json.RawMessage) string {
 	for i, ln := range lines {
 		lines[i] = strings.TrimRight(ln, " \t\r")
 	}
-	h := sha1.Sum([]byte(strings.Join(lines, "\n")))
+	h := sha256.Sum256([]byte(strings.Join(lines, "\n")))
 	return hex.EncodeToString(h[:])
 }
 
@@ -291,7 +291,7 @@ func toolCallSignature(toolName string, args json.RawMessage) string {
 	// the failure cap with the model never told the selector was the problem.
 	if toolName == "structural_edit" {
 		if p, sel := structuralEditTarget(args); p != "" && sel != "" {
-			h := sha1.Sum([]byte(toolName + "|path:" + signaturePath(p) + "|sel:" + sel))
+			h := sha256.Sum256([]byte(toolName + "|path:" + signaturePath(p) + "|sel:" + sel))
 			return hex.EncodeToString(h[:])
 		}
 	}
@@ -301,7 +301,7 @@ func toolCallSignature(toolName string, args json.RawMessage) string {
 			if fp := writeFileContentFingerprint(args); fp != "" {
 				key += "|c:" + fp
 			}
-			h := sha1.Sum([]byte(key))
+			h := sha256.Sum256([]byte(key))
 			return hex.EncodeToString(h[:])
 		}
 	}
@@ -312,7 +312,7 @@ func toolCallSignature(toolName string, args json.RawMessage) string {
 			canonical = b
 		}
 	}
-	h := sha1.Sum([]byte(toolName + "|" + string(canonical)))
+	h := sha256.Sum256([]byte(toolName + "|" + string(canonical)))
 	return hex.EncodeToString(h[:])
 }
 
@@ -911,8 +911,8 @@ func retryIdentity(toolName string, args json.RawMessage) string {
 	if toolName == "structural_edit" {
 		var in wire.StructuralEditInput
 		if json.Unmarshal(args, &in) == nil && in.Path != "" && in.Selector != "" {
-			body := sha1.Sum([]byte(in.Content))
-			h := sha1.Sum([]byte(toolName + "|path:" + signaturePath(in.Path) + "|sel:" + in.Selector +
+			body := sha256.Sum256([]byte(in.Content))
+			h := sha256.Sum256([]byte(toolName + "|path:" + signaturePath(in.Path) + "|sel:" + in.Selector +
 				"|c:" + hex.EncodeToString(body[:])))
 			return hex.EncodeToString(h[:])
 		}
