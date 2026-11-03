@@ -1212,10 +1212,9 @@ func makeTargetKind(args []string) CommandEvidenceKind {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
-		case a == "-C" || a == "-f" || a == "--file" || a == "--directory" || a == "-I" || a == "-o" || a == "-W":
-			i++
-			continue
-		case (a == "-j" || a == "-l") && i+1 < len(args) && strings.Trim(args[i+1], "0123456789") == "":
+		case a == "-C" || a == "-f" || a == "--file" || a == "--directory" || a == "-I" || a == "-o" || a == "-W",
+			(a == "-j" || a == "-l") && i+1 < len(args) && strings.Trim(args[i+1], "0123456789") == "":
+			// An option and its value: -j and -l take one only when the next word is a number.
 			i++
 			continue
 		case strings.HasPrefix(a, "-") || strings.Contains(a, "="):
