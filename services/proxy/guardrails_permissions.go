@@ -62,36 +62,7 @@ func denyReadPathReason(path string) string {
 	if path == "" || os.Getenv("ATLAS_ALLOW_CREDENTIAL_READS") == "1" {
 		return ""
 	}
-	clean := filepath.Clean(path)
-	base := filepath.Base(clean)
-	parent := filepath.Base(filepath.Dir(clean))
-	blocked := ""
-	switch {
-	case base == ".env" || (strings.HasPrefix(base, ".env.") && base != ".env.example"):
-		blocked = base
-	case base == ".netrc" || base == "_netrc":
-		blocked = base
-	case base == ".npmrc" || base == ".pypirc":
-		blocked = base
-	case strings.HasSuffix(base, ".pem") || strings.HasSuffix(base, ".key"):
-		blocked = base
-	case base == "id_rsa" || base == "id_ecdsa" || base == "id_ed25519" || base == "id_dsa":
-		blocked = base
-	case parent == ".ssh" && !strings.HasSuffix(base, ".pub"):
-		blocked = ".ssh/" + base
-	case parent == ".aws" && (base == "credentials" || base == "config"):
-		blocked = ".aws/" + base
-	case parent == ".kube" && base == "config":
-		blocked = ".kube/" + base
-	case parent == ".docker" && base == "config.json":
-		blocked = ".docker/" + base
-	case base == "service-token" && parent == "secrets":
-		blocked = "secrets/" + base
-	case base == "api-keys.json" && parent == "secrets":
-		blocked = "secrets/" + base
-	case strings.Contains(base, "credentials"):
-		blocked = base
-	}
+	blocked := credentialFileName(filepath.Clean(path))
 	if blocked == "" {
 		return ""
 	}
@@ -99,6 +70,40 @@ func denyReadPathReason(path string) string {
 		"context (credential file). If this file is intentionally "+
 		"non-sensitive, set ATLAS_ALLOW_CREDENTIAL_READS=1 on the proxy "+
 		"and retry.", blocked)
+}
+
+// credentialFileName is the name a read refusal reports when clean is a
+// credential store, or "" when it is not.
+func credentialFileName(clean string) string {
+	base := filepath.Base(clean)
+	parent := filepath.Base(filepath.Dir(clean))
+	switch {
+	case base == ".env" || (strings.HasPrefix(base, ".env.") && base != ".env.example"):
+		return base
+	case base == ".netrc" || base == "_netrc":
+		return base
+	case base == ".npmrc" || base == ".pypirc":
+		return base
+	case strings.HasSuffix(base, ".pem") || strings.HasSuffix(base, ".key"):
+		return base
+	case base == "id_rsa" || base == "id_ecdsa" || base == "id_ed25519" || base == "id_dsa":
+		return base
+	case parent == ".ssh" && !strings.HasSuffix(base, ".pub"):
+		return ".ssh/" + base
+	case parent == ".aws" && (base == "credentials" || base == "config"):
+		return ".aws/" + base
+	case parent == ".kube" && base == "config":
+		return ".kube/" + base
+	case parent == ".docker" && base == "config.json":
+		return ".docker/" + base
+	case base == "service-token" && parent == "secrets":
+		return "secrets/" + base
+	case base == "api-keys.json" && parent == "secrets":
+		return "secrets/" + base
+	case strings.Contains(base, "credentials"):
+		return base
+	}
+	return ""
 }
 
 // shouldDenyToolCall checks if a tool call is blocked by the built-in safety
@@ -118,18 +123,7 @@ func shouldDenyToolCall(toolName string, args json.RawMessage) (bool, string) {
 			return true, reason
 		}
 	case toolName == "move_file":
-		var input wire.MoveFileInput
-		if json.Unmarshal(args, &input) != nil {
-			return false, ""
-		}
-		// Moving a credential file would let it be read under another name.
-		if denyReadPathReason(input.Source) != "" || denyWritePathReason(input.Source) != "" {
-			return true, "blocked by safety rule: moving a credential file (" +
-				filepath.Base(filepath.Clean(input.Source)) + ")"
-		}
-		if reason := denyWritePathReason(input.Destination); reason != "" {
-			return true, reason
-		}
+		return denyMoveFile(args)
 	case tool.Effect == wire.ToolEffectDirectMutation && toolName != "delete_file":
 		// delete_file has its own per-object approval.
 		if reason := denyWritePathReason(ledgerArgPath(args, "path")); reason != "" {
@@ -139,6 +133,24 @@ func shouldDenyToolCall(toolName string, args json.RawMessage) (bool, string) {
 		if reason := denyReadPathReason(ledgerArgPath(args, "path")); reason != "" {
 			return true, reason
 		}
+	}
+	return false, ""
+}
+
+// denyMoveFile applies the safety rules to a move_file call: neither its
+// source nor its destination may be a credential file.
+func denyMoveFile(args json.RawMessage) (bool, string) {
+	var input wire.MoveFileInput
+	if json.Unmarshal(args, &input) != nil {
+		return false, ""
+	}
+	// Moving a credential file would let it be read under another name.
+	if denyReadPathReason(input.Source) != "" || denyWritePathReason(input.Source) != "" {
+		return true, "blocked by safety rule: moving a credential file (" +
+			filepath.Base(filepath.Clean(input.Source)) + ")"
+	}
+	if reason := denyWritePathReason(input.Destination); reason != "" {
+		return true, reason
 	}
 	return false, ""
 }
