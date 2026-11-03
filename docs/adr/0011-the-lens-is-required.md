@@ -64,8 +64,9 @@ and `lensUnavailableSummary` in `services/proxy/lens_required.go`).
 (`v3-service/scoring.py`). The pipeline stages re-raise it; they do not
 log it as a stage failure (`v3-service/pipeline.py`). The service sends
 a result with `lens_unavailable` and no code (`_handle_generate` in
-`v3-service/main.py`). The proxy bridge turns that into a typed error
-(`callV3GenerateStreaming` in `services/proxy/tool_write_v3.go`), and the write and
+`v3-service/main.py`). The proxy's V3 client turns that into a typed error
+(`LensUnavailableError`, returned by `GenerateStreaming` in
+`services/proxy/internal/v3client/client.go`), and the write and
 edit routes do not apply the model's bytes as a fallback
 (`writeFileWithV3` in `services/proxy/tool_write_v3.go`, `deliverEditCandidate` in
 `services/proxy/delivery_edit_route.go`). The run ends as above.
