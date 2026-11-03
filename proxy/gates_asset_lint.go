@@ -294,27 +294,32 @@ func routeContractMessage(findings []string) string {
 	return sb.String()
 }
 
-// assetLintNote runs the lint and formats findings the model has not
-// seen yet as one [system note] body ("" when quiet). Dedup state lives
-// in ctx.AssetLintSeen so a persistent orphan is mentioned once, not
-// after every subsequent write.
-func assetLintNote(ctx *AgentContext) string {
-	files, ok := assetLintFiles(ctx.WorkingDir)
+// assetLintNotes remembers the findings the model was already told, so a
+// persistent orphan is mentioned once, not after every subsequent write. Its
+// zero value is ready to use.
+type assetLintNotes struct {
+	seen map[string]bool
+}
+
+// note runs the lint over workingDir and formats the findings the model has
+// not seen yet as one [system note] body ("" when quiet).
+func (n *assetLintNotes) note(workingDir string) string {
+	files, ok := assetLintFiles(workingDir)
 	if !ok {
 		return ""
 	}
-	advisory, contract := assetLintFindingsFor(ctx.WorkingDir, files)
+	advisory, contract := assetLintFindingsFor(workingDir, files)
 	if len(advisory)+len(contract) == 0 {
 		return ""
 	}
-	if ctx.AssetLintSeen == nil {
-		ctx.AssetLintSeen = make(map[string]bool)
+	if n.seen == nil {
+		n.seen = make(map[string]bool)
 	}
 	fresh := func(in []string) []string {
 		var out []string
 		for _, f := range in {
-			if !ctx.AssetLintSeen[f] {
-				ctx.AssetLintSeen[f] = true
+			if !n.seen[f] {
+				n.seen[f] = true
 				out = append(out, f)
 			}
 		}

@@ -416,9 +416,9 @@ type checkRecords struct {
 	// to, and those are exactly what makes a staged execution worth trusting.
 	StagedCommands []stagedCommandFulfillment
 
-	// AssetLintSeen dedupes asset-graph lint findings (gates.go) so
-	// a persistent orphan is mentioned once, not after every write.
-	AssetLintSeen map[string]bool
+	// AssetLint remembers the asset-graph lint findings (gates_asset_lint.go)
+	// the model was already told, so a persistent orphan is mentioned once.
+	AssetLint assetLintNotes
 }
 
 // deliverableLedger holds the ledger and its lock.
