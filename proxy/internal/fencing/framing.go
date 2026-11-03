@@ -1,4 +1,4 @@
-package main
+package fencing
 
 import (
 	"fmt"
@@ -26,12 +26,12 @@ import (
 // line, comments, indentation, prose, or length. A completed emission of
 // something that looks unfinished is a file; an unterminated emission of
 // something that looks finished is not.
-type fenceFraming int
+type Framing int
 
 const (
 	// fenceFramingComplete: opening and closing fences both present. The
 	// body between them is the file.
-	fenceFramingComplete fenceFraming = iota
+	fenceFramingComplete Framing = iota
 	// fenceFramingUnterminated: fence markers are present but do not close a
 	// block. The emission was cut, or never framed what followed.
 	fenceFramingUnterminated
@@ -45,7 +45,7 @@ const (
 	fenceFramingAmbiguous
 )
 
-func (f fenceFraming) String() string {
+func (f Framing) String() string {
 	switch f {
 	case fenceFramingComplete:
 		return "complete"
@@ -58,14 +58,14 @@ func (f fenceFraming) String() string {
 	}
 }
 
-// classifyFencedPayload is the ONE framing decision. The inline path and the
+// ClassifyPayload is the ONE framing decision. The inline path and the
 // sub-call path both route through it, so the two cannot drift into
 // disagreeing about what counts as a finished emission.
 //
 // A body is returned only for fenceFramingComplete. Every other outcome
 // returns "" so that no caller can accidentally use bytes whose framing did
 // not prove they are whole.
-func classifyFencedPayload(payload string) (fenceFraming, string) {
+func ClassifyPayload(payload string) (Framing, string) {
 	return parseFencedReply(payload)
 }
 
@@ -98,11 +98,11 @@ var (
 // A line inside the block that would itself close it is the one case where the
 // file cannot be told apart from a second block. That is refused as ambiguous,
 // with a retry path (wrap the file in four backticks), never guessed.
-func parseFencedReply(reply string) (fenceFraming, string) {
+func parseFencedReply(reply string) (Framing, string) {
 	lines := strings.Split(reply, "\n")
 	open, width := -1, 0
 	for i, l := range lines {
-		if run := fenceOpeningRun(l); run != "" {
+		if run := OpeningRun(l); run != "" {
 			open, width = i, len(run)
 			break
 		}
@@ -115,7 +115,7 @@ func parseFencedReply(reply string) (fenceFraming, string) {
 	}
 	closeAt := -1
 	for i := len(lines) - 1; i > open; i-- {
-		if closesFence(lines[i], width) {
+		if Closes(lines[i], width) {
 			closeAt = i
 			break
 		}
@@ -124,7 +124,7 @@ func parseFencedReply(reply string) (fenceFraming, string) {
 		return fenceFramingUnterminated, ""
 	}
 	for i := open + 1; i < closeAt; i++ {
-		if closesFence(lines[i], width) {
+		if Closes(lines[i], width) {
 			return fenceFramingAmbiguous, ""
 		}
 	}
@@ -135,34 +135,34 @@ func parseFencedReply(reply string) (fenceFraming, string) {
 	return fenceFramingComplete, body + "\n"
 }
 
-// fenceOpeningRun is the run of backticks that opens a fenced block on line, or
+// OpeningRun is the run of backticks that opens a fenced block on line, or
 // "" when line opens none.
-func fenceOpeningRun(line string) string {
+func OpeningRun(line string) string {
 	if m := fenceOpenRe.FindStringSubmatch(line); m != nil {
 		return m[1]
 	}
 	return ""
 }
 
-// closesFence reports whether line closes a block opened with width backticks:
+// Closes reports whether line closes a block opened with width backticks:
 // a closing fence at least as long as the opening one.
-func closesFence(line string, width int) bool {
+func Closes(line string, width int) bool {
 	m := fenceCloseRe.FindStringSubmatch(line)
 	return m != nil && len(m[1]) >= width
 }
 
-// extractFencedContent returns the file body of a fenced reply, or "" unless
+// ExtractContent returns the file body of a fenced reply, or "" unless
 // the framing proved a single complete block.
-func extractFencedContent(reply string) string {
+func ExtractContent(reply string) string {
 	if framing, body := parseFencedReply(reply); framing == fenceFramingComplete {
 		return body
 	}
 	return ""
 }
 
-// fencedRetryNote is what the sub-call is told after a reply that did not
+// RetryNote is what the sub-call is told after a reply that did not
 // yield a file, naming the actual framing problem.
-func fencedRetryNote(framing fenceFraming, tag string) string {
+func RetryNote(framing Framing, tag string) string {
 	if framing == fenceFramingAmbiguous {
 		return fmt.Sprintf("[system note]: That reply had more than one fence closing the block, so "+
 			"which lines are the file is ambiguous. Reply with exactly ONE fenced block containing the "+
@@ -173,26 +173,26 @@ func fencedRetryNote(framing fenceFraming, tag string) string {
 		"containing the complete file, nothing else.", tag)
 }
 
-// resolveInlineFencedBody decides whether the bytes the model inlined after
+// ResolveInlineBody decides whether the bytes the model inlined after
 // the "@fenced" sentinel may be used as the file.
 //
 // ok is true only when framing proved the emission finished. Otherwise the
 // caller falls back to the sub-call -- the channel built to carry a file
 // body -- and why names the framing truthfully for the log.
-func resolveInlineFencedBody(inline string) (body string, ok bool, why fenceFraming) {
-	framing, resolved := classifyFencedPayload(inline)
+func ResolveInlineBody(inline string) (body string, ok bool, why Framing) {
+	framing, resolved := ClassifyPayload(inline)
 	if framing == fenceFramingComplete {
 		return resolved, true, framing
 	}
 	return "", false, framing
 }
 
-// isFencedSentinel reports whether write_file content is the "@fenced"
+// IsSentinel reports whether write_file content is the "@fenced"
 // sentinel: exactly "@fenced", or "@fenced" followed by a line break that
 // introduces an inline fenced body. Content that merely begins with those
 // characters is file content -- measured: `@fenced_route("/x")`, the first line
 // of a Python module, opened a fenced sub-call and the file was never written.
-func isFencedSentinel(content string) bool {
+func IsSentinel(content string) bool {
 	t := strings.TrimSpace(content)
 	if !strings.HasPrefix(t, "@fenced") {
 		return false
@@ -201,17 +201,17 @@ func isFencedSentinel(content string) bool {
 	return rest == "" || strings.HasPrefix(rest, "\n") || strings.HasPrefix(rest, "\r\n")
 }
 
-// fenceGrammarRoot is how every grammar fenceBlockGrammar builds begins, so
+// fenceGrammarRoot is how every grammar BlockGrammar builds begins, so
 // the stream reader can tell a fenced sub-call from an ordinary turn by its
-// grammar (isFenceBlockGrammar).
+// grammar (IsBlockGrammar).
 const fenceGrammarRoot = "root ::= \"````"
 
-// isFenceBlockGrammar reports whether grammar is one fenceBlockGrammar built.
-func isFenceBlockGrammar(grammar string) bool {
+// IsBlockGrammar reports whether grammar is one BlockGrammar built.
+func IsBlockGrammar(grammar string) bool {
 	return strings.HasPrefix(grammar, fenceGrammarRoot)
 }
 
-// fenceBlockGrammar restricts a reply to exactly what the sub-call asks for:
+// BlockGrammar restricts a reply to exactly what the sub-call asks for:
 // an opening fence with the requested tag, any number of lines that cannot
 // close the fence early, and the closing fence. It is a GBNF grammar, the
 // same llama-server interface the main loop already uses, and says nothing
@@ -224,7 +224,7 @@ func isFenceBlockGrammar(grammar string) bool {
 // the truncated file was written (audit P-safety/INTEGRITY#5). Body lines may
 // now start with up to three backticks; parseFencedReply matches the closer
 // by width, so they stay inside the file. A file that itself has a column-0
-// ```` line is sent without the grammar (fencedGrammarFits).
+// ```` line is sent without the grammar (GrammarFits).
 //
 // For a code file the block may also end on a line of exactly three
 // backticks, the way the model closes a block. Ending there is allowed, never
@@ -234,7 +234,7 @@ func isFenceBlockGrammar(grammar string) bool {
 // watchdog cut it: in the smoke run on 4403ae8 (2026-09-28), 14 of 29 fenced
 // writes waited that way, median 53 s. Markdown and untyped files keep the
 // four-backtick closer, because a column-0 ``` line can be their content.
-func fenceBlockGrammar(tag string) string {
+func BlockGrammar(tag string) string {
 	safe := make([]rune, 0, len(tag))
 	for _, r := range tag {
 		if r == '-' || r == '+' || r == '#' || r == '.' ||
@@ -243,7 +243,7 @@ func fenceBlockGrammar(tag string) string {
 		}
 	}
 	closer := "\"````\""
-	if fenceShortCloserAllowed(string(safe)) {
+	if ShortCloserAllowed(string(safe)) {
 		closer = "( \"````\" | \"```\" \"\\n\"? )"
 	}
 	return fmt.Sprintf(fenceGrammarRoot+"%s\\n\" line* %s\n"+
@@ -252,23 +252,23 @@ func fenceBlockGrammar(tag string) string {
 		string(safe), closer)
 }
 
-// fenceShortCloserAllowed reports whether a fenced block for this language tag
+// ShortCloserAllowed reports whether a fenced block for this language tag
 // may end on three backticks: a known code tag. Markdown and the bare fence
 // (an untyped file) may hold a column-0 ``` line as content.
-func fenceShortCloserAllowed(tag string) bool {
+func ShortCloserAllowed(tag string) bool {
 	return tag != "" && tag != "markdown"
 }
 
-// closeShortFence makes the three-backtick closer the grammar accepted into
+// CloseShort makes the three-backtick closer the grammar accepted into
 // the four-backtick one parseFencedReply matches the opener with. It changes
 // only a reply whose opener is four backticks, that has no line closing it,
 // and whose last non-blank line is exactly three backticks; any other reply
 // comes back as it was. Interior ``` lines stay in the body.
-func closeShortFence(reply string) string {
+func CloseShort(reply string) string {
 	lines := strings.Split(reply, "\n")
 	open, width := -1, 0
 	for i, l := range lines {
-		if run := fenceOpeningRun(l); run != "" {
+		if run := OpeningRun(l); run != "" {
 			open, width = i, len(run)
 			break
 		}
@@ -281,7 +281,7 @@ func closeShortFence(reply string) string {
 		last--
 	}
 	for i := open + 1; i <= last; i++ {
-		if closesFence(lines[i], width) {
+		if Closes(lines[i], width) {
 			return reply
 		}
 	}
@@ -292,10 +292,10 @@ func closeShortFence(reply string) string {
 	return strings.Join(lines, "\n")
 }
 
-// fencedGrammarFits reports whether a file's current text can be carried
+// GrammarFits reports whether a file's current text can be carried
 // inside the four-backtick fence: none of its lines starts with four
 // backticks at column 0, which the grammar reserves for the closer.
-func fencedGrammarFits(current string) bool {
+func GrammarFits(current string) bool {
 	for _, line := range strings.Split(current, "\n") {
 		if strings.HasPrefix(line, "````") {
 			return false

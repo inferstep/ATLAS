@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/itigges22/atlas-proxy/internal/fencing"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -220,9 +221,9 @@ func fetchFencedContent(ctx *AgentContext, rawCall, path string) (string, error)
 		// content far more often than free text, with fewer empty replies, in
 		// less time. A later attempt drops the grammar, so a server that
 		// refuses it still gets a free-text request.
-		grammar := fenceBlockGrammar(tag)
+		grammar := fencing.BlockGrammar(tag)
 		current, _ := os.ReadFile(resolveAgentPath(ctx, path)) // absent: a new file
-		if attempt > 0 || !fencedGrammarFits(string(current)) {
+		if attempt > 0 || !fencing.GrammarFits(string(current)) {
 			grammar = rawEmissionSentinel
 		}
 		answer := fetch.ask(grammar, attempt, attemptStart)

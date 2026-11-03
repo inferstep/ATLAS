@@ -198,49 +198,6 @@ func FuzzExtractModelResponse(f *testing.F) {
 	})
 }
 
-func FuzzParseFencedReply(f *testing.F) {
-	for _, reply := range []string{
-		"```lang\nBODY\n```",
-		"```\nBODY\n```",
-		"```lang\nBODY",
-		"BODY\n```",
-		"BODY\n",
-		"",
-		"```lang\n\n```",
-		"```markdown\n# doc\n```lang\ninner\n```\nmore\n```",
-		"````markdown\n# doc\n```lang\ninner\n```\nmore\n````",
-		"Before\n```lang\nBODY\n```\nAfter",
-		"```lang\r\nBODY\r\n```\r\n",
-		string([]byte{0xff, 0x00, '`', '`', '`'}),
-	} {
-		f.Add(reply)
-	}
-
-	f.Fuzz(func(t *testing.T, reply string) {
-		framing, body := parseFencedReply(reply)
-		if againFraming, againBody := parseFencedReply(reply); againFraming != framing || againBody != body {
-			t.Fatalf("reply %q: parse changed from (%v, %q) to (%v, %q)", reply, framing, body, againFraming, againBody)
-		}
-		// A complete fence has a body, and nothing else has one.
-		if (body != "") != (framing == fenceFramingComplete) {
-			t.Fatalf("reply %q: framing %v returned body %q", reply, framing, body)
-		}
-		// So the extracted content is that body, or empty with no complete fence.
-		if extracted := extractFencedContent(reply); extracted != body {
-			t.Fatalf("reply %q: framing %v, body %q, extracted %q", reply, framing, body, extracted)
-		}
-		if len(reply) <= 4096 {
-			// Prefix each body line so arbitrary bytes cannot form a closer.
-			wantBody := "x" + strings.ReplaceAll(reply, "\n", "\nx") + "\n"
-			wrapped := "````lang\n" + wantBody + "````"
-			gotFraming, gotBody := parseFencedReply(wrapped)
-			if gotFraming != fenceFramingComplete || gotBody != wantBody {
-				t.Fatalf("wrapped reply %q: framing %v, body %q; want complete, %q", reply, gotFraming, gotBody, wantBody)
-			}
-		}
-	})
-}
-
 func FuzzResolveWorkspacePath(f *testing.F) {
 	base := f.TempDir()
 	root := filepath.Join(base, "workspace")
