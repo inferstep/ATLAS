@@ -440,7 +440,7 @@ func TestEveryRequestToTheProxyCarriesTheServiceToken(t *testing.T) {
 }
 
 // The client sends no candidate_policy in either task mode: there is one
-// delivery rule, in the proxy (delivery_rule_test.go in the main package).
+// delivery rule, in the proxy (commands_delivery_rule_test.go in the app package).
 func TestTheTUISendsNoCandidatePolicy(t *testing.T) {
 	for _, mode := range []TaskMode{TaskModeWork, TaskModeQuestion} {
 		tc := contractOf(t, captureContract(t, mode, "Make solve fast."))
