@@ -370,9 +370,13 @@ func (loop *agentLoop) replaceFencedSentinel(turn int, parsed *wire.ModelRespons
 	return turnContinues
 }
 
-// refuseFencedFetch answers a fenced fetch that failed, with the reason that
-// is true for it, and counts the refusal unless the run itself stopped. The
-// turn ends; three failures in a row on one file end the run.
+// refuseFencedFetch answers a write_file whose fenced content could not be
+// fetched, with the reason that is true for it: the session stopped, too
+// little time was left to fetch and check it, the fenced channel is off for
+// the session, or no fenced block followed. Unless the session itself stopped,
+// the refusal counts as a failed call, and the shared failure limits can end
+// the run: twelve failures in all, or three in a row on one file. Otherwise
+// the turn ends.
 func (loop *agentLoop) refuseFencedFetch(turn int, parsed wire.ModelResponse, intentArgs json.RawMessage, wfInput wire.WriteFileInput, ferr error, stallsBefore int) turnOutcome {
 	ctx, st := loop.ctx, loop.st
 	log.Printf("[agent] fenced-content fetch failed for %s: %v", wfInput.Path, ferr)
@@ -410,9 +414,9 @@ func (loop *agentLoop) refuseFencedFetch(turn int, parsed wire.ModelResponse, in
 	st.bounceToolCall(ctx, "write_file", fencedBounce)
 	// A refusal here is a failed call like any other, and it has
 	// to reach every mechanism that counts one. Otherwise a model
-	// can re-send this call for its whole budget while the
-	// allowance correctly refuses each generation and nothing
-	// bounds the TURNS.
+	// can re-send this call for its whole budget: the fenced
+	// allowance lets two fetches of a file fail, then refuses each
+	// further one before it starts, and nothing bounds the TURNS.
 	//
 	// A run that ended because the client left, or because the
 	// work deadline fired, is not a model repeating itself, and
@@ -770,18 +774,17 @@ func (loop *agentLoop) refuseRepeatedProposal(parsed wire.ModelResponse, intentA
 // answerBrokenArtifact answers a no-op edit over a file already shown to be
 // broken, before the re-send ban can.
 //
-// The no-op edit over an artifact already shown to be broken.
-// This has to come BEFORE the identical-resend ban, which would
-// otherwise intercept the recurrence and end the run with the
-// broken file still on disk -- the retained shape exactly.
+// It has to come BEFORE the identical-resend ban, which would otherwise
+// intercept the recurrence and end the run with the broken file still on
+// disk: the very case this answers.
 func (loop *agentLoop) answerBrokenArtifact(parsed wire.ModelResponse, intentArgs json.RawMessage) turnOutcome {
 	ctx, st := loop.ctx, loop.st
 	if relPath := noopEditIntent(parsed.Name, intentArgs); relPath != "" {
 		if msg := brokenArtifactRecovery(ctx, st, relPath); msg != "" {
 			st.bounceToolCall(ctx, parsed.Name, msg)
 			// Counted once, here. The call never reaches the tool, so
-			// no post-execution accounting runs for it, and the ban
-			// below is skipped by the continue.
+			// no post-execution accounting runs for it, and the turn
+			// ends before the re-send ban is checked.
 			if loop.accountRefusedCall(parsed.Name, intentArgs, msg,
 				workspaceRefusalPath(ctx, parsed.Name, parsed.Args)) {
 				return runEnds

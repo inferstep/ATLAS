@@ -346,12 +346,13 @@ func TestTheSessionWriteMapIsUnchangedForItsOtherReaders(t *testing.T) {
 	// The loop itself moved into coverageForGreenCommand so a green run can
 	// also cover the files its entry point imports. What must not move is
 	// where the candidate set comes from: the ledger-backed owner, in exactly
-	// one place. loop.go delegates and builds no path list of its own.
+	// one place. The loop's files delegate (gates_exit.go calls it once) and
+	// build no path list of their own.
 	if n := strings.Count(agent, "coverageForGreenCommand(ctx, strings.Join(segs, \" && \"))"); n != 1 {
-		t.Errorf("loop.go calls the coverage builder %d times, want 1", n)
+		t.Errorf("the loop's files call the coverage builder %d times, want 1", n)
 	}
 	if strings.Contains(agent, "changedPathsForCoverage(") {
-		t.Error("loop.go builds its own coverage path list again")
+		t.Error("the loop's files build their own coverage path list again")
 	}
 	guard, err := os.ReadFile("guardrails.go")
 	if err != nil {

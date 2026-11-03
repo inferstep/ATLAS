@@ -231,7 +231,7 @@ Measured 2026-10-06 on commit `a413df4`, unless a row says otherwise.
 | Coverage on Codecov | 67.91% of lines, all flags together (30,948 of 45,567). `go-proxy` 83.07%, `go-tui` 47.13%, `python` 59.78%, `typescript` 50.3% |
 | Workflow lint, on commit `e46a72a` | zizmor: none, with one written exception in `star-chart.yml`. actionlint: none (#377) |
 | Python lint markers, on commit `f603072` | 65 findings carry a `# noqa`: C901 37, S110 25, S112 3 (#435) |
-| Size baseline | 88 functions over 100 lines (longest: `runAgentLoop`, 2,112); 11 files over 1,500 lines (longest: `services/proxy/loop.go`, 9,929) |
+| Size baseline, on commit `415b51e` | 4 functions over 100 lines (longest: `runAgentLoop`, 151); 2 files over 1,500 lines (longest: `services/v3-service/pipeline.py`, 2,700) |
 | Extension size rules, on commit `f65e01b` | 2 files listed: `src/ui/chatView.ts` for `dispatch` (188 lines, 33 decision points) and `src/session/editPreview.ts` for `predictEdit` (17 decision points). No other function is over a limit; the next longest has 94 lines |
 | Go lint, all code, with the repository's settings | proxy 220 (gocognit 121, errcheck 52, forbidigo 23, nilerr 22, gofmt 2); tui 48 (gocognit 21, errcheck 16, forbidigo 9, nilerr 2) |
 | SonarQube Cloud, 2026-10-06 on commit `be88079` | 72,603 lines of code in 277 files, test code not counted. As the tool reports them, not as confirmed defects: 133 security findings, 7 bugs, 1,384 code smells. Duplication 0.9%. Cognitive complexity 19,913. The gate passes (#347) |

@@ -267,10 +267,10 @@ func clearSteerState(ctx *AgentContext, st *runState, name string, args json.Raw
 
 // --- Replacements refused while the known-good bytes survive -----------------
 //
-// Retained twice in Stage 1: a valid artifact was already on disk, every later
-// replacement was refused for a syntax failure before any byte moved, and the
-// model kept sending replacements until a breaker ended the run. Disk was
-// never damaged and the task was never finished.
+// The case: a valid artifact is on disk, every later replacement is refused
+// for a syntax failure before any byte moves, and the model keeps sending
+// replacements until a breaker ends the run. Disk is never damaged, and the
+// task is never finished.
 //
 // This is not the broken-artifact case, where the file on disk is itself
 // broken and nothing valid was ever kept, and it is not restoration, because
@@ -517,12 +517,11 @@ func rejectedProposalRecovery(ctx *AgentContext, st *runState, relPath, canon, s
 
 // --- The no-op edit over a demonstrably broken artifact ----------------------
 //
-// Retained twice in Stage 1, and identical both times: write_file lands a file
-// that does not parse and says so, verification reports the concrete failure,
-// edit_file demands a read, the model reads, and then it sends an edit whose
-// old_str and new_str are the same string -- over and over, until repetition
-// protection ends the run with the broken file on disk and no valid version to
-// fall back to.
+// The case: write_file lands a file that does not parse and says so,
+// verification reports the concrete failure, edit_file demands a read, the
+// model reads, and then it sends an edit whose old_str and new_str are the
+// same string -- over and over, until repetition protection ends the run with
+// the broken file on disk and no valid version to fall back to.
 //
 // The class is already bounded, and a bound is not an outcome. The model is
 // copying a span it cannot reproduce with a change applied; edit_file already
@@ -542,10 +541,10 @@ const c3RecoveryRepeat = 2
 // noopEditIntent returns the path of an edit_file call whose old_str and
 // new_str are identical, and "" for anything else.
 //
-// Deliberately only the explicit form, which is the one the retained evidence
-// shows. edit_file also refuses edits that are merely INEFFECTIVE -- a
-// replacement that leaves the file byte-identical -- and that is a different
-// failure with different evidence, so it stays where it is.
+// Deliberately only the explicit form, the one the case above is made of.
+// edit_file also refuses edits that are merely INEFFECTIVE -- a replacement
+// that leaves the file byte-identical -- and that is a different failure with
+// different evidence, so it stays where it is.
 func noopEditIntent(name string, args json.RawMessage) string {
 	if name != "edit_file" {
 		return ""
