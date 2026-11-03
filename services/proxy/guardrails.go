@@ -337,19 +337,33 @@ func coverageForGreenCommand(ctx *AgentContext, command string) map[string]strin
 	// a bare `pytest` could never meet its contract: nothing named the module
 	// or its tests.
 	if ctx != nil {
-		for _, p := range shellcmd.RunnerEntries(command, ctx.WorkingDir, candidates) {
-			if _, already := covered[p]; already {
-				continue
-			}
-			if h := fileSHA256(ctx, p); h != "" {
-				covered[p] = h
-				entries = append(entries, p)
-			}
+		entries = append(entries, coverRunnerEntries(ctx, command, candidates, covered)...)
+	}
+	coverReferencedFiles(ctx, candidates, covered, entries)
+	return covered
+}
+
+// coverRunnerEntries covers the candidate files a test runner finds on its
+// own, and returns the ones it newly covered.
+func coverRunnerEntries(ctx *AgentContext, command string, candidates []string, covered map[string]string) []string {
+	var added []string
+	for _, p := range shellcmd.RunnerEntries(command, ctx.WorkingDir, candidates) {
+		if _, already := covered[p]; already {
+			continue
+		}
+		if h := fileSHA256(ctx, p); h != "" {
+			covered[p] = h
+			added = append(added, p)
 		}
 	}
-	// Breadth-first, bounded by the candidate set: each file is admitted at
-	// most once, so an import cycle terminates and nothing outside the set of
-	// files this session already tracks can be pulled in.
+	return added
+}
+
+// coverReferencedFiles follows the entry points into the candidate files their
+// source references. Breadth-first, bounded by the candidate set: each file is
+// admitted at most once, so an import cycle terminates and nothing outside the
+// set of files this session already tracks can be pulled in.
+func coverReferencedFiles(ctx *AgentContext, candidates []string, covered map[string]string, entries []string) {
 	for i := 0; i < len(entries); i++ {
 		src, err := os.ReadFile(entries[i])
 		if err != nil {
@@ -368,7 +382,6 @@ func coverageForGreenCommand(ctx *AgentContext, command string) map[string]strin
 			}
 		}
 	}
-	return covered
 }
 
 // sourceReferencesPath reports whether running src would load q: it names the
