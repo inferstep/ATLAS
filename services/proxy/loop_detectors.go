@@ -279,6 +279,12 @@ func signaturePath(p string) string {
 	return filepath.Clean(p)
 }
 
+// pathSignatureKey is the start of a call's signature key: the tool and the
+// path it acts on.
+func pathSignatureKey(toolName, path string) string {
+	return toolName + "|path:" + signaturePath(path)
+}
+
 func toolCallSignature(toolName string, args json.RawMessage) string {
 	// structural_edit is keyed on (path, selector) and deliberately ignores
 	// `content`. When a selector cannot carry the change the model is
@@ -291,13 +297,13 @@ func toolCallSignature(toolName string, args json.RawMessage) string {
 	// the failure cap with the model never told the selector was the problem.
 	if toolName == "structural_edit" {
 		if p, sel := structuralEditTarget(args); p != "" && sel != "" {
-			h := sha256.Sum256([]byte(toolName + "|path:" + signaturePath(p) + "|sel:" + sel))
+			h := sha256.Sum256([]byte(pathSignatureKey(toolName, p) + "|sel:" + sel))
 			return hex.EncodeToString(h[:])
 		}
 	}
 	if toolName == "write_file" {
 		if p := writeFilePath(args); p != "" {
-			key := toolName + "|path:" + signaturePath(p)
+			key := pathSignatureKey(toolName, p)
 			if fp := writeFileContentFingerprint(args); fp != "" {
 				key += "|c:" + fp
 			}
@@ -912,7 +918,7 @@ func retryIdentity(toolName string, args json.RawMessage) string {
 		var in wire.StructuralEditInput
 		if json.Unmarshal(args, &in) == nil && in.Path != "" && in.Selector != "" {
 			body := sha256.Sum256([]byte(in.Content))
-			h := sha256.Sum256([]byte(toolName + "|path:" + signaturePath(in.Path) + "|sel:" + in.Selector +
+			h := sha256.Sum256([]byte(pathSignatureKey(toolName, in.Path) + "|sel:" + in.Selector +
 				"|c:" + hex.EncodeToString(body[:])))
 			return hex.EncodeToString(h[:])
 		}

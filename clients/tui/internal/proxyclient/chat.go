@@ -29,6 +29,15 @@ import (
 	"github.com/itigges22/atlas-tui/internal/debuglog"
 )
 
+// The proxy's HTTP API: a request body is JSON, the chat and event streams are
+// server-sent events, and a stream ends with a [DONE] data line.
+const (
+	headerContentType = "Content-Type"
+	jsonType          = "application/json"
+	eventStreamType   = "text/event-stream"
+	streamDone        = "[DONE]"
+)
+
 // ChatEvent mirrors the SSEEvent shape in services/proxy/internal/wire/messages.go.
 // Different from Envelope — this is the older, simpler chat protocol.
 type ChatEvent struct {
@@ -94,8 +103,8 @@ func newRawChatRequest(ctx context.Context, proxyURL, modelID, message string) (
 	if err != nil {
 		return nil, fmt.Errorf("build raw request: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set(headerContentType, jsonType)
+	req.Header.Set("Accept", eventStreamType)
 	SetProxyAuth(req)
 	return req, nil
 }
@@ -174,7 +183,7 @@ func relayRawChatStream(resp *http.Response, started time.Time, content, reasoni
 			continue
 		}
 		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if payload == "[DONE]" {
+		if payload == streamDone {
 			break
 		}
 		var chunk struct {
@@ -259,7 +268,7 @@ func PostPermissionDecision(proxyURL, sessionID, toolCallID, decision, scope str
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(headerContentType, jsonType)
 	SetProxyAuth(req)
 	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
 	if err != nil {
@@ -286,7 +295,7 @@ func CancelTurn(proxyURL, sessionID string) error {
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(headerContentType, jsonType)
 	SetProxyAuth(req)
 	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Do(req)
@@ -390,8 +399,8 @@ func SendChat(ctx context.Context, proxyURL, message string, opts ChatOptions,
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set(headerContentType, jsonType)
+	req.Header.Set("Accept", eventStreamType)
 	SetProxyAuth(req)
 
 	// No overall timeout — agent turns can run minutes for long
@@ -449,7 +458,7 @@ func parseChatSSE(ctx context.Context, r io.Reader, out chan<- ChatEvent) error 
 		if data == "" {
 			continue
 		}
-		if data == "[DONE]" {
+		if data == streamDone {
 			return nil
 		}
 		var ev ChatEvent
@@ -635,7 +644,7 @@ func streamEvents(ctx context.Context, eventsURL string, out chan<- Envelope) er
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Accept", eventStreamType)
 	SetProxyAuth(req)
 
 	client := &http.Client{
@@ -681,7 +690,7 @@ func parseSSE(ctx context.Context, r io.Reader, out chan<- Envelope) error {
 			continue // includes named `event:` lines — /events never emits them
 		}
 		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "" || data == "[DONE]" {
+		if data == "" || data == streamDone {
 			continue
 		}
 
