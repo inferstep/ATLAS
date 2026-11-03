@@ -101,10 +101,10 @@ func seedFile(t *testing.T, dir, name, body string) {
 	}
 }
 
-// withinCap fails the case when fn has not returned in cap. fn runs on its own
+// withinCap fails the case when fn has not returned within limit. fn runs on its own
 // goroutine so that a reader which waits fails this case instead of holding
 // the whole file until the test timeout.
-func withinCap(t *testing.T, cap time.Duration, what string, fn func()) {
+func withinCap(t *testing.T, limit time.Duration, what string, fn func()) {
 	t.Helper()
 	done := make(chan struct{})
 	go func() {
@@ -113,8 +113,8 @@ func withinCap(t *testing.T, cap time.Duration, what string, fn func()) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(cap):
-		t.Fatalf("%s did not return in %v — it is waiting", what, cap)
+	case <-time.After(limit):
+		t.Fatalf("%s did not return in %v — it is waiting", what, limit)
 	}
 }
 
