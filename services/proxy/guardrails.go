@@ -158,30 +158,44 @@ func commandNamesPath(command, path string) bool {
 		class = strings.TrimSuffix(base, ".java")
 	}
 	for _, segment := range splitShellSegments(command) {
-		fields := strings.Fields(segment)
-		javaRun := false
-		for i, tok := range fields {
-			tok = strings.Trim(tok, "\"'()`{};")
-			if tok == "" {
-				continue
-			}
-			if tok == path || tok == base || strings.HasSuffix(tok, "/"+base) {
-				return true
-			}
-			if strings.ContainsAny(tok, "*?[") && globNamesPath(tok, path) {
-				return true
-			}
-			if i == 0 || (!javaRun && filepath.Base(tok) == "java") {
-				javaRun = filepath.Base(tok) == "java"
-				continue
-			}
-			if javaRun && class != "" && !strings.HasPrefix(tok, "-") &&
-				(tok == class || strings.HasSuffix(tok, "."+class)) {
-				return true
-			}
+		if segmentNamesPath(segment, path, base, class) {
+			return true
 		}
 	}
 	return false
+}
+
+// segmentNamesPath reports whether one shell segment names the file: as a
+// token, through a glob, or, after `java`, by its class.
+func segmentNamesPath(segment, path, base, class string) bool {
+	javaRun := false
+	for i, tok := range strings.Fields(segment) {
+		tok = strings.Trim(tok, "\"'()`{};")
+		if tok == "" {
+			continue
+		}
+		if tokenNamesFile(tok, path, base) {
+			return true
+		}
+		if i == 0 || (!javaRun && filepath.Base(tok) == "java") {
+			javaRun = filepath.Base(tok) == "java"
+			continue
+		}
+		if javaRun && class != "" && !strings.HasPrefix(tok, "-") &&
+			(tok == class || strings.HasSuffix(tok, "."+class)) {
+			return true
+		}
+	}
+	return false
+}
+
+// tokenNamesFile reports whether one command-line token names the file: the
+// path, its basename, */basename, or a glob that would expand to it.
+func tokenNamesFile(tok, path, base string) bool {
+	if tok == path || tok == base || strings.HasSuffix(tok, "/"+base) {
+		return true
+	}
+	return strings.ContainsAny(tok, "*?[") && globNamesPath(tok, path)
 }
 
 // globNamesPath reports whether a shell glob from a command line would expand
