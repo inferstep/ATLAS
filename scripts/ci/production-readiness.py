@@ -35,7 +35,7 @@ PYTHON_TARGETS = (
 # tests/e2e skips cleanly when the proxy binary isn't built;
 # tests/infrastructure's integration-marked tests are excluded by the
 # repo-wide `-m 'not integration'` addopts.
-PYTEST_PATHS = ("tests/v3", "tests/v3-service", "tests/cli",
+PYTEST_PATHS = ("tests/v3-service", "tests/atlas",
                 "tests/infrastructure", "tests/concurrency", "tests/perf",
                 "tests/contracts", "tests/e2e")
 # geometric-lens/tests runs as its own gate (python-tests-lens), matching

@@ -65,7 +65,7 @@ llama-server は GPU を使用する唯一のサービスです。それ以外�
 - **マルチ GPU + テンソル並列。** V1 はすべてのバックエンドでシングル GPU のみをサポートします。マルチ GPU は GH #34 で、特定のベンダーに紐づいてはいません。
 - **Apple ユニファイドメモリ。** macOS は GPU とシステムメモリを共有します。「VRAM」の計算は実際には「合計 16 GB から OS + アプリを引いたもの」です。§7 を参照してください。
 
-K3s デプロイパス（`scripts/install.sh`、`deploy/k3s/` 内のマニフェスト）は V3.1.1 時点では CUDA 専用です — ROCm の K8s レシピは V3.2 のインフラ項目に延期されています（`/dev/kfd` + `/dev/dri` の hostPath マウントと `render`/`video` グループ所属が必要で、これは `deploy/compose/docker-compose.rocm.yml` のクラスターレベル相当です）。
+K3s デプロイパス（`scripts/install/install.sh`、`deploy/k3s/` 内のマニフェスト）は V3.1.1 時点では CUDA 専用です — ROCm の K8s レシピは V3.2 のインフラ項目に延期されています（`/dev/kfd` + `/dev/dri` の hostPath マウントと `render`/`video` グループ所属が必要で、これは `deploy/compose/docker-compose.rocm.yml` のクラスターレベル相当です）。
 
 ---
 
@@ -97,7 +97,7 @@ K3s デプロイパス（`scripts/install.sh`、`deploy/k3s/` 内のマニフェ
 | `agent.go` | `runAgentLoop`、フェンス取得、ツールチェーン検出 |
 | `gates_exit.go` | 終了ゲートと、それらが読む実行状態 |
 | `loop_turn.go`, `loop_checks.go`, `loop_results.go` | ループの 1 ターン: モデル呼び出しと応答、ツール実行前のチェック、結果とスタックループのブレーカー。`loop_turn.go` は読み取り専用コールの反復の後、リクエストが要求するものに応じて実行に行動か応答を促す |
-| `plan_generation.go`, `task_intake.go` | リクエストにプランが必要かの判定とプランナーに渡すサンプル、リクエストが宣言するタスクコントラクト |
+| `plan_generation.go`, `task_intake.go` | リクエストにプランが必要かの判定とプランナーを呼び出す処理、リクエストが宣言するタスクコントラクト |
 | `run_end.go`, `recovery.go` | 実行の終わり方（ターミナル、時間予算、サマリー）、行き詰まったモデルに示す内容と未完了の作業 |
 | `fenced_channel.go` | ファイル本体を取得するサブコールとその予算 |
 | `tools.go`, `tool_*.go` | 16 個のツール定義 + 実行系、ティア分類、ツールコール文法 |
@@ -113,6 +113,7 @@ K3s デプロイパス（`scripts/install.sh`、`deploy/k3s/` 内のマニフェ
 | `internal/assetlint/lint.go`, `internal/assetlint/findings.go` | アセットグラフのリント：どのルートも描画しないテンプレート、どのページも読み込まないスクリプトやスタイルシート、存在しないファイルへの参照、どのルートも受けないフォームや `fetch()` の宛先 |
 | `internal/shadowcapture/sink.go` | 非公開のシャドーキャプチャ。リクエストが宣言した内容と ATLAS がその文から読み取った内容を比べるレコードを、1 つのゴルーチンがファイルに書き、どの判断もそれを読まない。`ATLAS_SHADOW_CAPTURE` がファイルを指定しない限りオフ |
 | `internal/memoryenvelope/envelope.go` | 宣言されたデプロイのメモリ予算をオペレーター申告のホスト容量と照合し、未強制の予算超過を報告する |
+| `internal/projectcontext/sample.go` | V3 リクエストに載せるプロジェクトのファイル：プランナー向けの優先ファイルのサンプル、改訂プランのコンテキストにパス順で上限まで加える読み取り済みファイル、リクエストごとのバイト数への切り詰め |
 | `internal/workspacefs/object_handle_linux.go` | 削除承認の間、Linux のファイルシステムオブジェクトを開いたまま保持し、承認されたオブジェクトが除去前に差し替えられないようにする |
 | `internal/workspacefs/object_handle_other.go` | 非 Linux プラットフォームでは、ファイルシステムオブジェクトを安全にピン留めして検証できないため、削除承認を拒否する |
 | `mutation_scope.go` | モデルのツールコールから正確なファイル・編集スコープを導出し、候補が要求対象以外を変更できないようにする |
@@ -407,7 +408,7 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 flowchart TD
     User["User msg"] --> Tier{T0?}
     Tier -->|Yes| Skip["Skip planning"] --> Loop["Agent loop"]
-    Tier -->|No| Sample["samplePlanContext\n(read priority files)"]
+    Tier -->|No| Sample["projectcontext.Sample\n(read priority files)"]
     Sample --> Plan["POST /v3/plan\n(3 candidates × different T)"]
     Plan --> Score["Heuristic score\n(verify? steps in [2,6]? rationale?)"]
     Score --> Best["Pick winner"]
@@ -456,7 +457,7 @@ API の契約は [API.md § POST /v3/plan](../../reference/API.md#post-v3plan) �
 | `proxy/internal/v3client/client.go` | `PlanStreaming(reqCtx, v3URL, requestID, req, onProgress)` — SSE ストリームを開き、進捗イベントをコールバックに転送し、`event: result` フレームから最終的な `Plan` を返します。`reqCtx` がエージェントのリクエストコンテキストを結び付けるので、`/cancel` は実行中のプランを中止します。V3 パイプライン実行用の `GenerateStreaming` と同じ形です。 |
 | `proxy/internal/wire/` | `V3PlanRequest`（`v3.go`）、`Plan` と `PlanStep`（`messages.go`）の型。 |
 | `proxy/types.go` | `AgentContext` に `Plan`、`PlanStepsSatisfied[]`、`PlanOffStreak`、`PlanRevisions` が加わります。 |
-| `proxy/plan_generation.go` | `samplePlanContext()` はプランナーのために優先ファイル（app.py、templates/index.html、package.json など）をたどります。`shouldGeneratePlan()` はティア、メッセージ長、読み取り専用のリクエストかどうかで判定します。`generatePlan()` はブリッジを実行し、トークンごとのノイズを捨て、全ステップのリストを付けて `plan_loaded` を発行します。 |
+| `proxy/plan_generation.go`, `proxy/internal/projectcontext/sample.go` | `projectcontext.Sample()` はプランナーのために優先ファイル（app.py、templates/index.html、package.json など）をたどります。`shouldGeneratePlan()` はティア、メッセージ長、読み取り専用のリクエストかどうかで判定します。`generatePlan()` はブリッジを実行し、トークンごとのノイズを捨て、全ステップのリストを付けて `plan_loaded` を発行します。 |
 | `proxy/gates_plan.go` | `matchPlanStep()`（ツール名とパス末尾の緩い一致）、`recordPlanAdherence()`（ツールコールごとの集計。どのステップにも一致しない偵察コール — `read_file`/`list_directory`/`find_file`/`search_files` — は中立で、`off_streak` を延ばしません）、`revisePlan()`（`FilesRead` を追加コンテキストとして引き継いで再生成）。 |
 
 システムプロンプトのレンダリングは `buildSystemPrompt` で行われます。プランのステップは番号付きリストとしてレンダリングされ、`✓` マーカーは検証ステップにのみ付きます。検証ステップは、検証ゲートが `done` に対して守る「修正の証拠」のステップとして明示されます。（ステップごとの ☐/✓/⚐ グリフは TUI のレンダリングのものです。下記を参照してください。）

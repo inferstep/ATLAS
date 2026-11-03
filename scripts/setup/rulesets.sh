@@ -78,7 +78,7 @@ ADMIN_ROLE_ID=5  # the built-in repository "admin" role
 
 # Required on dev, staging and main.
 CHECKS=(
-    "go test (proxy)" "go test (tui)" "pytest (tests/v3)" "pytest (tests/cli)"
+    "go test (proxy)" "go test (tui)"
     "shellcheck" "docker compose config" "yamllint (workflows)"
     "bootstrap on ubuntu-22.04" "bootstrap on ubuntu-24.04" "bootstrap on debian-12"
     "bootstrap on rockylinux-9" "ruff (python lint)" "codeql (python)" "codeql (go)"
@@ -95,6 +95,13 @@ DEV_ONLY_CHECKS=(
     "golangci-lint (proxy)" "golangci-lint (tui)" "hadolint (dockerfiles)" "actionlint (workflows)"
     "zizmor (workflows)" "codeql (javascript-typescript)" "perf budget gate" "pytest (tests/concurrency)"
     "pytest (tests/perf)" "sandbox tests (containerized)" "proxy and TUI tests (no model)" "codeql (java-kotlin)"
+    "pytest (tests/atlas)"
+)
+# Required on staging and main only: the names their test jobs report until a
+# release brings them the renamed folders of dev. At the release these go, and
+# "pytest (tests/atlas)" moves from DEV_ONLY_CHECKS into CHECKS.
+RELEASE_ONLY_CHECKS=(
+    "pytest (tests/v3)" "pytest (tests/cli)"
 )
 
 checks_json() {  # the given check names, each pinned to GitHub Actions
@@ -174,7 +181,7 @@ EOF
  "bypass_actors":[]}
 EOF
     checks_ruleset "Release branches: required checks" "$PROMOTED_BRANCHES" true \
-        "${CHECKS[@]}" > "$OUT/5-release-branches-checks.json"
+        "${CHECKS[@]}" "${RELEASE_ONLY_CHECKS[@]}" > "$OUT/5-release-branches-checks.json"
     cat > "$OUT/6-release-branches-review.json" <<EOF
 {"name":"Release branches: review","target":"branch","enforcement":"active",
  "conditions":{"ref_name":{"include":[$PROMOTED_BRANCHES],"exclude":[]}},

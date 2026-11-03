@@ -15,6 +15,7 @@ import (
 	"log"
 	"strings"
 
+	"github.com/itigges22/atlas-proxy/internal/projectcontext"
 	"github.com/itigges22/atlas-proxy/internal/shellcmd"
 	"github.com/itigges22/atlas-proxy/internal/v3client"
 	"github.com/itigges22/atlas-proxy/internal/wire"
@@ -387,8 +388,8 @@ func revisePlan(ctx *AgentContext, originalUserMessage string, reason string) {
 	// Carry forward what the agent has read so far — it's the most
 	// concrete signal of "what the agent knows now" beyond the
 	// original priority-files sample.
-	pctx := samplePlanContext(ctx.WorkingDir, 6, 2000)
-	addFilesReadToPlanContext(pctx, ctx.SnapshotFilesRead(), ctx.WorkingDir, 8)
+	pctx := projectcontext.Sample(ctx.WorkingDir, 6, 2000)
+	projectcontext.AddFilesRead(pctx, ctx.SnapshotFilesRead(), ctx.WorkingDir, 8)
 
 	req := wire.V3PlanRequest{
 		UserMessage:    noted,

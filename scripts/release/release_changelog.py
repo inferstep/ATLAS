@@ -68,7 +68,7 @@ import sys
 from pathlib import Path
 from typing import NamedTuple
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 HEADING = "What users will notice"
 NOTHING = "Nothing."
 UNRELEASED = "## [Unreleased]"
@@ -292,7 +292,7 @@ def must_add_up(found: list, places: dict) -> None:
     placed = sorted(commit.hash for rows in places.values() for commit, _ in rows)
     if placed != sorted(commit.hash for commit in found):
         raise Unusable(f"the places do not add up: {len(found)} commit(s) were read, and {len(placed)} stand in a place. "
-                       "That is a fault of scripts/release_changelog.py and not of the commits; no section was made")
+                       "That is a fault of scripts/release/release_changelog.py and not of the commits; no section was made")
 
 
 def entries_as_text(places: dict) -> str:

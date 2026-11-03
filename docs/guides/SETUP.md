@@ -664,7 +664,7 @@ cp atlas.conf.example atlas.conf
 # Edit atlas.conf: model paths, context size, NodePorts
 
 # 2. Run the installer (requires root)
-sudo scripts/install.sh
+sudo scripts/install/install.sh
 ```
 
 The installer will:

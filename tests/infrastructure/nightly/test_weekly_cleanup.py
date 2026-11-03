@@ -382,7 +382,7 @@ def test_the_tests_of_a_module_run_with_the_flags_of_the_go_test_jobs(made, monk
     gates = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, spec.name, gates)  # the dataclasses resolve their annotations through it
     spec.loader.exec_module(gates)
-    command = gates._gates(("tests/cli",))["go-proxy-test"].command
+    command = gates._gates(("tests/atlas",))["go-proxy-test"].command
     assert list(command) == cleanup.GO_TEST, "the Go test gate runs other flags"
     assert "-race" in cleanup.GO_TEST
     assert "-count=1" in cleanup.GO_TEST

@@ -64,7 +64,7 @@ llama-server is the only GPU-using service; every other ATLAS service runs on CP
 - **Multi-GPU + tensor parallelism.** V1 supports single-GPU only on every backend; multi-GPU is GH #34, not bound to a specific vendor.
 - **Apple unified memory.** macOS shares GPU+system memory; "VRAM" math is actually "16 GB total minus OS + apps." See §7.
 
-The K3s deployment path (`scripts/install.sh`, manifests in `deploy/k3s/`) is CUDA-only as of V3.1.1 — ROCm K8s recipe is deferred to the V3.2 infra list (needs `/dev/kfd` + `/dev/dri` hostPath mounts and `render`/`video` group membership, the cluster-level equivalents of `deploy/compose/docker-compose.rocm.yml`).
+The K3s deployment path (`scripts/install/install.sh`, manifests in `deploy/k3s/`) is CUDA-only as of V3.1.1 — ROCm K8s recipe is deferred to the V3.2 infra list (needs `/dev/kfd` + `/dev/dri` hostPath mounts and `render`/`video` group membership, the cluster-level equivalents of `deploy/compose/docker-compose.rocm.yml`).
 
 ---
 
@@ -94,7 +94,7 @@ Every non-test Go file of `proxy/`, sub-folders included, with its area of owner
 | `llm_call.go`, `model_reply.go` | One call to llama-server, and reading what the model sent back. `model_reply.go` decodes a JSON escape in model text, a UTF-16 surrogate pair as one character; `\b` and `\f` stay letters, so no backspace or form feed reaches a terminal |
 | `system_prompt.go`, `task_tier.go` | The system prompt and context budget; the tier a message earns |
 | `agent_handler.go` | The `/v1/agent` and `/cancel` endpoints |
-| `plan_generation.go`, `task_intake.go` | Whether a request earns a plan and what the planner is shown, including the files a run has read, added to a revised plan's context in sorted order of their paths, up to a limit; the task contract a request declares |
+| `plan_generation.go`, `task_intake.go` | Whether a request earns a plan and the call that asks the planner for one; the task contract a request declares |
 | `run_end.go`, `recovery.go` | How a run ends: its terminal, time budget and summary; what a stuck model is shown and the work a run still owes |
 | `fenced_channel.go` | The sub-call that fetches a file body, and what it may spend |
 | `gates_exit.go` | The exit gates and the run state they read |
@@ -112,6 +112,7 @@ Every non-test Go file of `proxy/`, sub-folders included, with its area of owner
 | `internal/assetlint/lint.go`, `internal/assetlint/findings.go` | The asset-graph lint: a template no route renders, a script or stylesheet no page loads, a reference to a file that is not there, and a form or `fetch()` target no route serves |
 | `internal/shadowcapture/sink.go` | The private shadow capture: records comparing what a request declared with what ATLAS read from its text, written to a file by one goroutine and read by no decision. Off unless `ATLAS_SHADOW_CAPTURE` names a file |
 | `internal/memoryenvelope/envelope.go` | Validates declared deployment memory budgets against the operator-stated host capacity and reports unenforced budget overruns |
+| `internal/projectcontext/sample.go` | What a V3 request is shown of the project: the planner's sample of priority files, the files a run has read, added to a revised plan's context in sorted order of their paths, up to a limit, and each file cut to the bytes a request carries |
 | `internal/workspacefs/object_handle_linux.go` | Holds Linux filesystem objects open during deletion approval so the approved object cannot be replaced before removal |
 | `internal/workspacefs/object_handle_other.go` | Refuses deletion approval on non-Linux platforms because a filesystem object cannot be safely pinned and verified |
 | `mutation_scope.go` | Derives the exact file and edit scope from model tool calls so candidates cannot modify anything outside the requested target |
@@ -577,7 +578,7 @@ Designed to address two failure modes:
 flowchart TD
     User["User msg"] --> Tier{T0?}
     Tier -->|Yes| Skip["Skip planning"] --> Loop["Agent loop"]
-    Tier -->|No| Sample["samplePlanContext\n(read priority files)"]
+    Tier -->|No| Sample["projectcontext.Sample\n(read priority files)"]
     Sample --> Plan["POST /v3/plan\n(3 candidates × different T)"]
     Plan --> Score["Heuristic score\n(verify? steps in [2,6]? rationale?)"]
     Score --> Best["Pick winner"]
@@ -626,7 +627,7 @@ API contract documented in [API.md § POST /v3/plan](API.md#post-v3plan).
 | `proxy/internal/v3client/client.go` | `PlanStreaming(reqCtx, v3URL, requestID, req, onProgress)` — opens the SSE stream, forwards progress events to the callback, returns the final `Plan` from the `event: result` frame. `reqCtx` binds the agent's request context so `/cancel` aborts an in-flight plan. Mirrors `GenerateStreaming` for V3-pipeline runs. |
 | `proxy/internal/wire/` | `V3PlanRequest` (in `v3.go`), `Plan` and `PlanStep` (in `messages.go`) types. |
 | `proxy/types.go` | `AgentContext` gains `Plan`, `PlanStepsSatisfied[]`, `PlanOffStreak`, `PlanRevisions`. |
-| `proxy/plan_generation.go` | `samplePlanContext()` walks priority files (app.py, templates/index.html, package.json, …) for the planner. `shouldGeneratePlan()` gates on tier, message length and read-only requests. `generatePlan()` runs the bridge, drops per-token noise, emits `plan_loaded` with the full step list. |
+| `proxy/plan_generation.go`, `proxy/internal/projectcontext/sample.go` | `projectcontext.Sample()` walks priority files (app.py, templates/index.html, package.json, …) for the planner. `shouldGeneratePlan()` gates on tier, message length and read-only requests. `generatePlan()` runs the bridge, drops per-token noise, emits `plan_loaded` with the full step list. |
 | `proxy/gates_plan.go` | `matchPlanStep()` (loose tool-name + path-suffix match), `recordPlanAdherence()` (per-tool-call accounting; a recon call — `read_file`/`list_directory`/`find_file`/`search_files` — that matches no step is neutral: it never extends `off_streak`), `revisePlan()` (regenerate with `FilesRead` carried forward as extra context). |
 
 The system prompt rendering happens in `buildSystemPrompt`. Plan steps are rendered as a numbered list with a `✓` marker on the verify step only, and the verify step is called out as the "evidence-of-fix" step that the verification gate guards against `done`. (The ☐/✓/⚐ per-step glyphs belong to the TUI rendering — see below.)

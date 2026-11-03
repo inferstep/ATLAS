@@ -1111,3 +1111,15 @@ def test_a_required_check_that_is_bound_to_no_source_fails_the_check_of_the_cana
     assert "FAIL required check `pr title` is bound to no source" in printed
     assert "canary: 1 thing(s) are not as the list says" in printed
     assert "pr title" not in outside_code(page)
+
+
+# A test planted outside the folder its pytest check runs is never collected:
+# canary.py makes a missing folder without a word, and the check stays green on
+# the canary.
+def test_each_pytest_plant_is_written_into_the_folder_its_check_runs(manifest):
+    for plant in manifest["plants"]:
+        for check in plant.get("red", []):
+            folder = re.fullmatch(r"pytest \((.+)\)", check)
+            if folder and plant["action"] == "write":
+                assert plant["path"].startswith(folder.group(1) + "/"), f"{check}: its plant is written to {plant['path']}"
+                assert (ROOT / folder.group(1)).is_dir(), f"{check}: the folder {folder.group(1)} is not in this checkout"

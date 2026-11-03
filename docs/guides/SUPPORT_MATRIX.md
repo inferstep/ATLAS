@@ -184,7 +184,7 @@ fails fast at llama-server startup (fit is off).
 | `curl \| bash` bootstrap (`scripts/atlas-bootstrap.sh`) | Supported (CI-tested on 4 distros, idempotent, sudo/non-root paths) |
 | Manual compose (`cp .env.example .env` + `atlas init`) | Supported |
 | `pip install -e .` CLI from checkout | Supported (the only packaged distribution today; no PyPI release) |
-| K3s `scripts/install.sh` | Preview; see the network note in SETUP.md, Method 3 |
+| K3s `scripts/install/install.sh` | Preview; see the network note in SETUP.md, Method 3 |
 
 ## Version compatibility policy
 

@@ -12,7 +12,7 @@ API endpoints for each ATLAS service. All services communicate over HTTP/JSON. S
 > | sandbox | host `30820` → container `8020` | fixed `8020` (clients take `ATLAS_SANDBOX_URL`) | `ATLAS_SANDBOX_NODEPORT` (default 30820) |
 > | llama-server | `8080` | `ATLAS_LLAMA_PORT` (default 8080) | `ATLAS_LLAMA_NODEPORT` (default 32735) |
 >
-> The K3s manifests are rendered from `deploy/k3s/*.yaml.tmpl` into `$K8S_DIR/manifests/` by `scripts/install.sh` at install time. See [SETUP.md Method 3](../guides/SETUP.md) for the full K3s deployment.
+> The K3s manifests are rendered from `deploy/k3s/*.yaml.tmpl` into `$K8S_DIR/manifests/` by `scripts/install/install.sh` at install time. See [SETUP.md Method 3](../guides/SETUP.md) for the full K3s deployment.
 
 ---
 
@@ -240,7 +240,7 @@ curl -N -H "Authorization: Bearer $(cat secrets/service-token)" http://localhost
 
 Use `/events` when you want a global observability feed (a TUI pipeline pane, a metrics scraper, a debug log viewer). Use `/v1/agent` when you want to drive a specific user turn.
 
-ATLAS services emit a typed JSON event stream over Server-Sent Events (SSE). atlas-proxy (Go) is the live envelope producer. The Go TUI consumes the stream via its own implementation of this contract (`tui/internal/proxyclient/chat.go`); `atlas/events.py` is the canonical Python spec implementation (envelope types, `make_event`, `parse_envelope`), used by the test suite via the consumer harness in `tests/cli/event_harness.py`.
+ATLAS services emit a typed JSON event stream over Server-Sent Events (SSE). atlas-proxy (Go) is the live envelope producer. The Go TUI consumes the stream via its own implementation of this contract (`tui/internal/proxyclient/chat.go`); `atlas/events.py` is the canonical Python spec implementation (envelope types, `make_event`, `parse_envelope`), used by the test suite via the consumer harness in `tests/atlas/event_harness.py`.
 
 #### Transport
 
@@ -253,7 +253,7 @@ data: {"event_id":"evt_aabb1122",...}
 
 ```
 
-(Two newlines terminate the frame.) The Python test helper `iter_sse_lines` (`tests/cli/event_harness.py`) handles the framing.
+(Two newlines terminate the frame.) The Python test helper `iter_sse_lines` (`tests/atlas/event_harness.py`) handles the framing.
 
 ##### SSE control frames (server → client only)
 
@@ -440,7 +440,7 @@ The payload also carries the run's outcome, from the same fields as the SSE term
 
 v3-service's endpoints emit the legacy `{stage, detail}` shape (with an optional `data` key when structured data rides along). Envelope consumers subscribe to atlas-proxy's `GET /events` instead — the proxy's v3 bridge translates the `{stage, detail}` frames it receives from v3-service into envelopes.
 
-Consumers reading a mixed stream must filter the non-envelope frames — the Python test helper `iter_events()` (`tests/cli/event_harness.py`) does this automatically: `{stage, detail}` frames (with or without `data`) raise `LegacyEventError` and are skipped, and `result:`/`done:` control frames are skipped as stream control rather than parsed as envelopes.
+Consumers reading a mixed stream must filter the non-envelope frames — the Python test helper `iter_events()` (`tests/atlas/event_harness.py`) does this automatically: `{stage, detail}` frames (with or without `data`) raise `LegacyEventError` and are skipped, and `result:`/`done:` control frames are skipped as stream control rather than parsed as envelopes.
 
 #### Python implementation: `atlas/events.py`
 
@@ -453,7 +453,7 @@ ev = parse_envelope(blob)      # one frame → Event
 print(ev.type, ev.stage, ev.payload)
 ```
 
-The streaming consumer helpers (`iter_sse_lines`, `iter_events`) live in the test harness, `tests/cli/event_harness.py` — they are tooling for the suite, not part of the shipped package.
+The streaming consumer helpers (`iter_sse_lines`, `iter_events`) live in the test harness, `tests/atlas/event_harness.py` — they are tooling for the suite, not part of the shipped package.
 
 #### Stage names from v3-service
 
@@ -468,7 +468,7 @@ This describes **v1** of the protocol. Future schema changes:
 
 #### Test contract
 
-The schema is pinned by `tests/cli/test_events.py` (Python consumer) and `proxy/events_test.go` (Go producer). Any change to the wire format MUST update both, in lockstep. Producer/consumer drift (proxy emissions ↔ TUI handlers, envelope-type parity across implementations) is pinned by `tests/contracts/api/test_event_contract.py`.
+The schema is pinned by `tests/atlas/test_events.py` (Python consumer) and `proxy/events_test.go` (Go producer). Any change to the wire format MUST update both, in lockstep. Producer/consumer drift (proxy emissions ↔ TUI handlers, envelope-type parity across implementations) is pinned by `tests/contracts/api/test_event_contract.py`.
 
 ---
 

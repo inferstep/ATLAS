@@ -39,8 +39,8 @@ GATES_BY_PATH = (
 SLOW_GATES_BY_PATH = ((lambda p: p.startswith(PROXY), ("go-proxy-test",)),)
 # The pytest suites that cover a source folder. Slow suites run with --full.
 SUITES_BY_PATH = (
-    ("atlas/", ("tests/cli", "tests/contracts")),
-    ("v3-service/", ("tests/v3-service", "tests/v3")),
+    ("atlas/", ("tests/atlas", "tests/contracts")),
+    ("v3-service/", ("tests/v3-service",)),
     ("sandbox/", (INFRASTRUCTURE_SUITE,)),
     ("scripts/", (INFRASTRUCTURE_SUITE,)),
     (PROXY, ("tests/replay", "tests/e2e")),
