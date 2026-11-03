@@ -367,11 +367,11 @@ logic.
 must stay as zizmor names it, write `# zizmor: ignore[<rule>]` on its line with
 the reason beside it, and say so in the pull request.
 
-**Kotlin** (the JetBrains plugin, `extensions/jetbrains/`). `ktlint` is the
-gate, and `extensions/jetbrains/.editorconfig` is the single source of the
+**Kotlin** (the JetBrains plugin, `clients/extensions/jetbrains/`). `ktlint` is the
+gate, and `clients/extensions/jetbrains/.editorconfig` is the single source of the
 rules it applies — no baseline and no rule configuration in the Gradle
 build. Lines up to 100 characters. Run `./gradlew ktlintCheck` from
-`extensions/jetbrains/`, or `ktlintFormat` to apply the same rules. Kotlin
+`clients/extensions/jetbrains/`, or `ktlintFormat` to apply the same rules. Kotlin
 is not covered by `scripts/ci/code_health.py`.
 
 **YAML and Kubernetes.** 2-space indentation, resource limits on every

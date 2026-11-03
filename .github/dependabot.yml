@@ -67,7 +67,7 @@ updates:
       go:
         patterns: ["*"]
 
-  # The JetBrains plugin is its own Gradle build under extensions/jetbrains.
+  # The JetBrains plugin is its own Gradle build under clients/extensions/jetbrains.
   # The IntelliJ Platform Gradle Plugin and the IntelliJ Platform version are
   # pinned in the build and stay hand-managed: bumping the platform is a
   # compatibility decision (sinceBuild, Kotlin API level), not a routine
@@ -97,7 +97,7 @@ updates:
   # the build file. Dependabot does not read the platform version
   # (`intellijIdea("...")`), so that one needs no rule.
   - package-ecosystem: gradle
-    directory: /extensions/jetbrains
+    directory: /clients/extensions/jetbrains
     target-branch: dev
     schedule:
       interval: weekly

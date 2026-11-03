@@ -3,13 +3,13 @@
 | Name | GitHub | Role | Subsystems |
 |---|---|---|---|
 | Johnathon Isaac Tigges | [@itigges22](https://github.com/itigges22) | Lead maintainer, release authority, security contact | All (proxy, TUI, CLI, v3-service, lens, sandbox, inference, CI/release) |
-| Anuj Kumar Sah | [@Anuj-72](https://github.com/Anuj-72) | Triager; first reviewer on client pull requests and the go-to for client issues | IDE clients (`extensions/vscode`, `extensions/jetbrains`) |
+| Anuj Kumar Sah | [@Anuj-72](https://github.com/Anuj-72) | Triager; first reviewer on client pull requests and the go-to for client issues | IDE clients (`clients/extensions/vscode`, `clients/extensions/jetbrains`) |
 
 Roles, what each can and can't do, and how people move between them are
 in the [trust ladder](../../.github/GOVERNANCE.md#trust-ladder).
 
-**Client code ownership.** `extensions/vscode/` and
-`extensions/jetbrains/` join [CODEOWNERS](../../.github/CODEOWNERS) with the
+**Client code ownership.** `clients/extensions/vscode/` and
+`clients/extensions/jetbrains/` join [CODEOWNERS](../../.github/CODEOWNERS) with the
 Reviewer rung, because GitHub only treats an account with write access as
 a code owner. Until then @Anuj-72 triages the client issues and reviews
 client pull requests without an approval that counts towards `staging` or

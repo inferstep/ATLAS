@@ -1,6 +1,6 @@
 name: jetbrains-plugin
 
-# Code-level checks for the JetBrains plugin (extensions/jetbrains/) —
+# Code-level checks for the JetBrains plugin (clients/extensions/jetbrains/) —
 # ktlint, the tool-window tests, plugin project configuration, and a
 # distributable build. Kept out of test.yml's Go/Python matrix, like
 # vscode-extension.yml: the plugin is its own Gradle ecosystem and only
@@ -10,12 +10,12 @@ on:
   push:
     branches: [main, dev]
     paths:
-      - 'extensions/jetbrains/**'
+      - 'clients/extensions/jetbrains/**'
       - '.github/workflows/jetbrains-plugin.yml'
   pull_request:
     branches: [main, dev]
     paths:
-      - 'extensions/jetbrains/**'
+      - 'clients/extensions/jetbrains/**'
       - '.github/workflows/jetbrains-plugin.yml'
 
 concurrency:
@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-24.04
     defaults:
       run:
-        working-directory: extensions/jetbrains
+        working-directory: clients/extensions/jetbrains
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -80,7 +80,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: jetbrains-plugin
-          path: extensions/jetbrains/build/distributions/*.zip
+          path: clients/extensions/jetbrains/build/distributions/*.zip
           if-no-files-found: error
           retention-days: 14
 
@@ -99,7 +99,7 @@ jobs:
         product: [idea, pycharm, webstorm, goland]
     defaults:
       run:
-        working-directory: extensions/jetbrains
+        working-directory: clients/extensions/jetbrains
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -119,6 +119,6 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: plugin-verifier-${{ matrix.product }}
-          path: extensions/jetbrains/build/reports/pluginVerifier/**
+          path: clients/extensions/jetbrains/build/reports/pluginVerifier/**
           if-no-files-found: warn
           retention-days: 14

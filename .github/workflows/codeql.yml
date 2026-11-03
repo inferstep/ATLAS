@@ -126,7 +126,7 @@ jobs:
       # is a separate process that --no-daemon does not cover.
       - name: build kotlin (forced, in-process)
         if: matrix.language == 'java-kotlin'
-        working-directory: extensions/jetbrains
+        working-directory: clients/extensions/jetbrains
         run: |
           set -euo pipefail
           # Gradle first downloads its plugins and the plugin's dependencies,
@@ -148,7 +148,7 @@ jobs:
       # not fail the step under `set -e`.
       - name: assert the kotlin compile ran
         if: matrix.language == 'java-kotlin'
-        working-directory: extensions/jetbrains
+        working-directory: clients/extensions/jetbrains
         run: |
           set -euo pipefail
           if grep -Eq '^> Task :compile(Test)?Kotlin (UP-TO-DATE|FROM-CACHE|NO-SOURCE|SKIPPED)$' kotlin-compile.log; then
