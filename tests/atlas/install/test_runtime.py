@@ -115,6 +115,18 @@ def test_compose_proxy_rebuild_uses_checkout_source_and_overlay(monkeypatch, tmp
     assert kwargs["env"]["ATLAS_PROJECT_DIR"] == str(tmp_path / "project")
 
 
+def test_a_proxy_built_by_hand_in_the_checkout_is_found(monkeypatch, tmp_path):
+    """`go build -o atlas-proxy-v2` in services/proxy/ leaves the binary there."""
+    monkeypatch.setattr(runtime.shutil, "which", lambda name: None)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    binary = tmp_path / "services" / "proxy" / "atlas-proxy-v2"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("")
+    binary.chmod(0o755)
+
+    assert runtime._find_proxy_binary(str(tmp_path)) == str(binary)
+
+
 def test_a_stale_installed_proxy_is_rebuilt_not_launched(monkeypatch):
     """A binary older than the checkout's proxy source would run old code
     after an update."""
