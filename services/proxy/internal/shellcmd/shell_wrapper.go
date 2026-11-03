@@ -373,22 +373,30 @@ func shellCommandOperand(words []string) (int, bool) {
 		if len(option) < 2 || (option[0] != '-' && option[0] != '+') {
 			break
 		}
-		if option == "--rcfile" || option == "--init-file" {
-			j += 2
-			continue
+		width, selectsCommand := shellOptionWidth(option)
+		if selectsCommand {
+			commandString = true
 		}
-		if !strings.HasPrefix(option, "--") {
-			if option[0] == '-' && strings.Contains(option[1:], "c") {
-				commandString = true
-			}
-			if strings.ContainsAny(option[1:], "oO") {
-				j += 2
-				continue
-			}
-		}
-		j++
+		j += width
 	}
 	return j, commandString
+}
+
+// shellOptionWidth is how many words a shell option takes: two for --rcfile,
+// --init-file and an option with o or O, which names a setting next; else one.
+// It also says whether the option selects -c.
+func shellOptionWidth(option string) (int, bool) {
+	if option == "--rcfile" || option == "--init-file" {
+		return 2, false
+	}
+	if strings.HasPrefix(option, "--") {
+		return 1, false
+	}
+	selectsCommand := option[0] == '-' && strings.Contains(option[1:], "c")
+	if strings.ContainsAny(option[1:], "oO") {
+		return 2, selectsCommand
+	}
+	return 1, selectsCommand
 }
 
 func extractEvalCommand(words []string) string {
