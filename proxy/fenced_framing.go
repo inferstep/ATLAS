@@ -102,8 +102,8 @@ func parseFencedReply(reply string) (fenceFraming, string) {
 	lines := strings.Split(reply, "\n")
 	open, width := -1, 0
 	for i, l := range lines {
-		if m := fenceOpenRe.FindStringSubmatch(l); m != nil {
-			open, width = i, len(m[1])
+		if run := fenceOpeningRun(l); run != "" {
+			open, width = i, len(run)
 			break
 		}
 	}
@@ -115,7 +115,7 @@ func parseFencedReply(reply string) (fenceFraming, string) {
 	}
 	closeAt := -1
 	for i := len(lines) - 1; i > open; i-- {
-		if m := fenceCloseRe.FindStringSubmatch(lines[i]); m != nil && len(m[1]) >= width {
+		if closesFence(lines[i], width) {
 			closeAt = i
 			break
 		}
@@ -124,7 +124,7 @@ func parseFencedReply(reply string) (fenceFraming, string) {
 		return fenceFramingUnterminated, ""
 	}
 	for i := open + 1; i < closeAt; i++ {
-		if m := fenceCloseRe.FindStringSubmatch(lines[i]); m != nil && len(m[1]) >= width {
+		if closesFence(lines[i], width) {
 			return fenceFramingAmbiguous, ""
 		}
 	}
@@ -133,6 +133,22 @@ func parseFencedReply(reply string) (fenceFraming, string) {
 		return fenceFramingUnterminated, ""
 	}
 	return fenceFramingComplete, body + "\n"
+}
+
+// fenceOpeningRun is the run of backticks that opens a fenced block on line, or
+// "" when line opens none.
+func fenceOpeningRun(line string) string {
+	if m := fenceOpenRe.FindStringSubmatch(line); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
+// closesFence reports whether line closes a block opened with width backticks:
+// a closing fence at least as long as the opening one.
+func closesFence(line string, width int) bool {
+	m := fenceCloseRe.FindStringSubmatch(line)
+	return m != nil && len(m[1]) >= width
 }
 
 // extractFencedContent returns the file body of a fenced reply, or "" unless
@@ -252,8 +268,8 @@ func closeShortFence(reply string) string {
 	lines := strings.Split(reply, "\n")
 	open, width := -1, 0
 	for i, l := range lines {
-		if m := fenceOpenRe.FindStringSubmatch(l); m != nil {
-			open, width = i, len(m[1])
+		if run := fenceOpeningRun(l); run != "" {
+			open, width = i, len(run)
 			break
 		}
 	}
@@ -265,7 +281,7 @@ func closeShortFence(reply string) string {
 		last--
 	}
 	for i := open + 1; i <= last; i++ {
-		if m := fenceCloseRe.FindStringSubmatch(lines[i]); m != nil && len(m[1]) >= width {
+		if closesFence(lines[i], width) {
 			return reply
 		}
 	}
