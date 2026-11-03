@@ -731,33 +731,7 @@ func unshownSymbolCitations(ctx *AgentContext, text string) []unshownSymbol {
 			continue
 		}
 		seen[name] = true
-		var gap *unshownSymbol
-		shown := false
-		for _, p := range paths {
-			src, ok := sources[p]
-			if !ok {
-				data, err := os.ReadFile(p)
-				if err != nil {
-					continue
-				}
-				src = string(data)
-				sources[p] = src
-			}
-			for _, line := range definitionLines(src, name) {
-				if ctx.LineWasShown(p, line) {
-					shown = true
-					break
-				}
-				if gap == nil {
-					gap = &unshownSymbol{Name: name, File: workspaceName(ctx, p), Line: line,
-						Spans: ctx.ShownSpans(p)}
-				}
-			}
-			if shown {
-				break
-			}
-		}
-		if gap != nil && !shown {
+		if gap := unshownDefinition(ctx, paths, sources, name); gap != nil {
 			out = append(out, *gap)
 			if len(out) == maxCitedPaths {
 				break
@@ -765,6 +739,43 @@ func unshownSymbolCitations(ctx *AgentContext, text string) []unshownSymbol {
 		}
 	}
 	return out
+}
+
+// unshownDefinition is the first place name is defined at a line no read
+// showed, or nil when a read showed one of its definitions anywhere, or when
+// none of the files defines it.
+func unshownDefinition(ctx *AgentContext, paths []string, sources map[string]string, name string) *unshownSymbol {
+	var gap *unshownSymbol
+	for _, p := range paths {
+		src, ok := cachedSource(sources, p)
+		if !ok {
+			continue
+		}
+		for _, line := range definitionLines(src, name) {
+			if ctx.LineWasShown(p, line) {
+				return nil
+			}
+			if gap == nil {
+				gap = &unshownSymbol{Name: name, File: workspaceName(ctx, p), Line: line,
+					Spans: ctx.ShownSpans(p)}
+			}
+		}
+	}
+	return gap
+}
+
+// cachedSource is the text of file p, read once and kept in sources. A file
+// that cannot be read is not kept, and is tried again on the next call.
+func cachedSource(sources map[string]string, p string) (string, bool) {
+	if src, ok := sources[p]; ok {
+		return src, true
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return "", false
+	}
+	sources[p] = string(data)
+	return sources[p], true
 }
 
 // anyReadInPart reports whether a read of one of paths showed only part of
