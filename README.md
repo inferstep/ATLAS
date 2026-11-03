@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/herodemo.gif" alt="ATLAS TUI in action"/><br/>
+  <img src="docs/assets/herodemo.gif" alt="ATLAS TUI in action"/><br/>
   <sub><i>The ATLAS TUI live, 10× sped up, running the V3 pipeline on a file creation.</i></sub>
 </p>
 
