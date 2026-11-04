@@ -112,6 +112,8 @@ func TestCredentialFileNameNamesEachCredentialStore(t *testing.T) {
 		"config/aws_credentials.js": "aws_credentials.js",
 		"app/config":                "",
 		"docs/service-token.md":     "",
+		"app/service-token":         "",
+		"app/api-keys.json":         "",
 	} {
 		if got := credentialFileName(path); got != want {
 			t.Errorf("credentialFileName(%q) = %q, want %q", path, got, want)
