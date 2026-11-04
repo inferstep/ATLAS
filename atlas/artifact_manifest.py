@@ -70,54 +70,70 @@ def verify_manifest(bundle_dir: str, principal: Optional[str] = None
                     ) -> Tuple[bool, List[str]]:
     """Verify the manifest signature (if present) and that every file's
     on-disk hash matches the manifest. Returns (ok, problems)."""
-    import json
-    problems: List[str] = []
     manifest_path = os.path.join(bundle_dir, MANIFEST)
     sig_path = os.path.join(bundle_dir, SIGNATURE)
     if not os.path.isfile(manifest_path):
         return False, [f"no {MANIFEST}"]
 
     # 1. Signature (when present — a bundle may be hash-only Preview).
-    if os.path.isfile(sig_path):
-        candidates = [principal] if principal else \
-            _signature_principals(sig_path)
-        if not candidates:
-            problems.append("cannot determine signer principal to verify "
-                            "(no matching entry in allowed_signers)")
-        else:
-            def _verifies(who: str) -> bool:
-                try:
-                    with open(manifest_path, "rb") as mf:
-                        subprocess.run(
-                            ["ssh-keygen", "-Y", "verify", "-f",
-                             _allowed_signers(), "-I", who, "-n", NAMESPACE,
-                             "-s", sig_path],
-                            stdin=mf, check=True,
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL)
-                    return True
-                except (subprocess.SubprocessError, OSError):
-                    return False
-
-            if not any(_verifies(who) for who in candidates):
-                problems.append("manifest signature did not verify against "
-                                "allowed_signers")
-    else:
-        problems.append("unsigned (no signature; Preview-level trust only)")
+    problems: List[str] = _signature_problems(manifest_path, sig_path, principal)
 
     # 2. File hashes vs manifest — catches tampering even if signed.
+    hash_problems = _hash_problems(bundle_dir, manifest_path)
+    if hash_problems is None:
+        return False, problems + ["manifest unreadable"]
+    problems += hash_problems
+
+    # Signed + all hashes good = fully verified.
+    ok = not [p for p in problems if "Preview-level" not in p]
+    return ok, problems
+
+
+def _signature_problems(manifest_path: str, sig_path: str,
+                        principal: Optional[str]) -> List[str]:
+    """What keeps the manifest's signature from verifying: nothing, or one problem."""
+    if not os.path.isfile(sig_path):
+        return ["unsigned (no signature; Preview-level trust only)"]
+    candidates = [principal] if principal else \
+        _signature_principals(sig_path)
+    if not candidates:
+        return ["cannot determine signer principal to verify "
+                "(no matching entry in allowed_signers)"]
+    if not any(_signature_verifies(manifest_path, sig_path, who) for who in candidates):
+        return ["manifest signature did not verify against "
+                "allowed_signers"]
+    return []
+
+
+def _signature_verifies(manifest_path: str, sig_path: str, who: str) -> bool:
+    try:
+        with open(manifest_path, "rb") as mf:
+            subprocess.run(
+                ["ssh-keygen", "-Y", "verify", "-f",
+                 _allowed_signers(), "-I", who, "-n", NAMESPACE,
+                 "-s", sig_path],
+                stdin=mf, check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL)
+        return True
+    except (subprocess.SubprocessError, OSError):
+        return False
+
+
+def _hash_problems(bundle_dir: str, manifest_path: str) -> Optional[List[str]]:
+    """Each listed file that is missing on disk or whose hash differs; None
+    when the manifest cannot be read."""
+    import json
     try:
         with open(manifest_path) as fh:
             manifest = json.load(fh)
     except (OSError, ValueError):
-        return False, problems + ["manifest unreadable"]
+        return None
+    problems: List[str] = []
     for name, expected in manifest.get("artifact_sha256", {}).items():
         actual = _sha256(os.path.join(bundle_dir, name))
         if actual is None:
             problems.append(f"{name}: listed in manifest but missing on disk")
         elif actual != expected:
             problems.append(f"{name}: hash mismatch (tampered or stale)")
-
-    # Signed + all hashes good = fully verified.
-    ok = not [p for p in problems if "Preview-level" not in p]
-    return ok, problems
+    return problems
