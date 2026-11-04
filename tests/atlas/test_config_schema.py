@@ -146,7 +146,10 @@ def test_float_fields_validate_range_and_type():
     pytest.param("ATLAS_KEEP_LLAMA_WARM", "TRUE", [], id="a-boolean-in-capitals"),
     pytest.param("ATLAS_PROXY_PORT", "65535", [], id="the-highest-port"),
     pytest.param("ATLAS_PROXY_PORT", "0", ["ATLAS_PROXY_PORT=0: below minimum 1"], id="port-0"),
+    pytest.param("ATLAS_CTX_SIZE", "512", [], id="an-integer-at-its-minimum"),
     pytest.param("ATLAS_CTX_SIZE", "511", ["ATLAS_CTX_SIZE=511: below minimum 512"], id="an-integer-below-its-minimum"),
+    pytest.param("ATLAS_REPEAT_PENALTY", "0.5", [], id="a-number-at-its-minimum"),
+    pytest.param("ATLAS_REPEAT_PENALTY", "2", [], id="a-number-at-its-maximum"),
     pytest.param("ATLAS_REPEAT_PENALTY", "2.5", ["ATLAS_REPEAT_PENALTY=2.5: above maximum 2"],
                  id="a-number-above-its-maximum"),
 ])
