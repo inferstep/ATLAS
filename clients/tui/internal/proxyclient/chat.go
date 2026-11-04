@@ -433,6 +433,20 @@ func SendChat(ctx context.Context, proxyURL, message string, opts ChatOptions,
 	return parseChatSSE(ctx, resp.Body, out)
 }
 
+// sseData is the data of one SSE line, and whether it is a data: line with
+// data. A blank line is a frame boundary and a line starting with ':' is a
+// comment; other lines, such as named `event:` lines, are not data either.
+func sseData(line string) (string, bool) {
+	if line == "" || strings.HasPrefix(line, ":") {
+		return "", false
+	}
+	if !strings.HasPrefix(line, "data:") {
+		return "", false
+	}
+	data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+	return data, data != ""
+}
+
 // parseChatSSE reads the chat-protocol SSE stream. Returns nil when it
 // sees `data: [DONE]` (clean end-of-turn) or io.EOF.
 func parseChatSSE(ctx context.Context, r io.Reader, out chan<- ChatEvent) error {
@@ -447,15 +461,8 @@ func parseChatSSE(ctx context.Context, r io.Reader, out chan<- ChatEvent) error 
 			return ctx.Err()
 		default:
 		}
-		line := scanner.Text()
-		if line == "" || strings.HasPrefix(line, ":") {
-			continue
-		}
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "" {
+		data, ok := sseData(scanner.Text())
+		if !ok {
 			continue
 		}
 		if data == streamDone {
@@ -698,15 +705,8 @@ func parseSSE(ctx context.Context, r io.Reader, out chan<- Envelope) error {
 		default:
 		}
 
-		line := scanner.Text()
-		if line == "" || strings.HasPrefix(line, ":") {
-			continue // blank line = frame boundary; `:` = SSE comment
-		}
-		if !strings.HasPrefix(line, "data:") {
-			continue // includes named `event:` lines — /events never emits them
-		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "" || data == streamDone {
+		data, ok := sseData(scanner.Text())
+		if !ok || data == streamDone {
 			continue
 		}
 

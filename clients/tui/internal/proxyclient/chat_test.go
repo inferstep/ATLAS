@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -200,6 +201,62 @@ func TestParseChatSSESkipsCommentsAndDONE(t *testing.T) {
 	}
 	if len(out) != 2 {
 		t.Errorf("got %d events, want 2 (comments are skipped, nothing after [DONE] is read)", len(out))
+	}
+}
+
+// A frame that is not JSON or has no type, and a line that is not a data: line
+// even when it holds JSON, are passed over and the turn goes on; a frame larger
+// than the scanner's default buffer still arrives.
+func TestParseChatSSEPassesOverWhatIsNotAChatEvent(t *testing.T) {
+	big := strings.Repeat("x", 100*1024)
+	stream := strings.Join([]string{
+		"data: not json",
+		`{"type":"raw","data":{}}`,
+		`data: {"type":"","data":{}}`,
+		`data: {"type":"text","data":{"content":"` + big + `"}}`,
+		`data: {"type":"done","data":{}}`,
+	}, "\n")
+	out := make(chan ChatEvent, 4)
+	if err := parseChatSSE(context.Background(), strings.NewReader(stream), out); err != nil {
+		t.Fatalf("parseChatSSE: %v", err)
+	}
+	close(out)
+	var types []string
+	for ev := range out {
+		types = append(types, ev.Type)
+	}
+	if !slices.Equal(types, []string{"text", "done"}) {
+		t.Errorf("event types = %q, want [text done]", types)
+	}
+}
+
+// The event stream keeps only whole envelopes: comments, other lines (also one
+// that holds JSON), frames that are not JSON, [DONE], and frames without a type or an id are passed
+// over, and a frame larger than the scanner's default buffer still arrives.
+func TestParseSSEKeepsOnlyWholeEnvelopes(t *testing.T) {
+	big := strings.Repeat("x", 100*1024)
+	stream := strings.Join([]string{
+		": connected",
+		"event: stage",
+		`{"type":"stage_start","event_id":"raw"}`,
+		"data: not json",
+		`data: {"type":"","event_id":"e0"}`,
+		`data: {"type":"stage_start"}`,
+		`data:  {"type":"stage_start","event_id":"e1"} `,
+		"data: [DONE]",
+		`data: {"type":"stage_end","event_id":"e2","stage":"` + big + `"}`,
+	}, "\n")
+	out := make(chan Envelope, 8)
+	if err := parseSSE(context.Background(), strings.NewReader(stream), out); err != nil {
+		t.Fatalf("parseSSE: %v", err)
+	}
+	close(out)
+	var ids []string
+	for ev := range out {
+		ids = append(ids, ev.EventID)
+	}
+	if !slices.Equal(ids, []string{"e1", "e2"}) {
+		t.Errorf("event ids = %q, want [e1 e2]", ids)
 	}
 }
 
