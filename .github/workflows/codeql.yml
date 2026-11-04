@@ -85,6 +85,17 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+          # Keeps Gradle's downloads (the wrapper, the plugins, the libraries)
+          # from run to run, so a run downloads only what changed and a
+          # download that breaks off on the Gradle or Maven sites fails fewer
+          # legs. It is not Gradle's build cache: the build below still turns
+          # that off, so CodeQL sees the compile. The key is the plugin's build
+          # files, its lockfile among them.
+          cache: gradle
+          cache-dependency-path: |
+            clients/extensions/jetbrains/*.gradle.kts
+            clients/extensions/jetbrains/gradle.lockfile
+            clients/extensions/jetbrains/gradle/wrapper/gradle-wrapper.properties
 
       - name: init codeql (java-kotlin)
         if: matrix.language == 'java-kotlin'
