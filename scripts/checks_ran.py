@@ -223,11 +223,24 @@ def job_findings(path: str, workflow: dict, reported: list[dict],
             absent.append((jobs[job_id] or {}).get("name") or job_id)
         failed = failed_above(job_id, jobs, records)
         for name in [record["name"] for record in mine if record.get("conclusion") == "skipped"]:
-            if failed and (name not in required or any(root in required for root in failed)):
+            if behind_failure(name, failed, required):
                 behind[name] = failed
             else:
                 skipped.append(name)
         cancelled += [record["name"] for record in mine if record.get("conclusion") == "cancelled"]
+    return run_findings(path, absent, skipped, cancelled), by_condition, behind
+
+
+def behind_failure(name: str, failed: list[str], required: tuple | list) -> bool:
+    """A skipped job that only repeats the failure of a job it `needs`: a note.
+
+    A required check skipped behind failed jobs none of which is required
+    stays a finding, as the rules would let the change merge without it."""
+    return bool(failed) and (name not in required or any(root in required for root in failed))
+
+
+def run_findings(path: str, absent: list[str], skipped: list[str], cancelled: list[str]) -> list[Finding]:
+    """One finding each for the jobs with no condition that reported nothing, were skipped, or were cancelled."""
     rule = "A job with no `if:` condition must run on every change."
     findings = []
     if absent:
@@ -242,7 +255,7 @@ def job_findings(path: str, workflow: dict, reported: list[dict],
     if cancelled:
         findings.append(Finding(path, f"{len(cancelled)} job(s) in {path} were cancelled: {quoted(cancelled)}. {rule} "
                                       "Fix: run the workflow again, then run this check again."))
-    return findings, by_condition, behind
+    return findings
 
 
 def required_findings(required: list[str], reported: list[dict], branch: str, explained: tuple | list = ()) -> list[Finding]:
