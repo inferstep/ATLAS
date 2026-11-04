@@ -35,6 +35,13 @@ class TestResolveImports:
         pytest.param("mod", "pkg", ["app.py", "pkg/mod.py", "pkg/__init__.py"], "pkg/mod.py",
                      id="name-is-a-submodule"),
         pytest.param("os", "os", ["app.py"], None, id="external-module-unresolved"),
+        # The exact module wins over a longer path with the same ending.
+        pytest.param("thing", "pkg.util", ["app.py", "pkg/util.py", "vendor/pkg/util.py"], "pkg/util.py",
+                     id="exact-module-beats-a-suffix"),
+        # `import mod` with one `*/mod` in the batch: that file.
+        pytest.param("x", "mod", ["app.py", "a/mod.py"], "a/mod.py", id="one-suffix-match-resolves"),
+        # `from ..pkg.util import thing`: the leading dots are dropped.
+        pytest.param("thing", "..pkg.util", ["app.py", "pkg/util.py"], "pkg/util.py", id="relative-dots-dropped"),
         # Two candidates for `mod`: left unresolved.
         pytest.param("x", "mod", ["app.py", "a/mod.py", "b/mod.py"], None,
                      id="ambiguous-suffix-unresolved"),
@@ -43,6 +50,11 @@ class TestResolveImports:
         g = CodeGraph(imports=[ImportsFact("app.py", name, source)])
         resolve_imports(g, files)
         assert g.imports[0].resolved == expected
+
+    def test_an_import_it_cannot_resolve_keeps_what_it_held(self):
+        g = CodeGraph(imports=[ImportsFact("app.py", "os", "os", resolved="vendored/os.py")])
+        resolve_imports(g, ["app.py"])
+        assert g.imports[0].resolved == "vendored/os.py"
 
 
 class TestCache:
