@@ -92,6 +92,78 @@ def test_ensure_proxy_repairs_reachable_stale_proxy(monkeypatch, tmp_path):
     assert aligned == [str(tmp_path)]
 
 
+def test_a_proxy_the_compose_stack_owns_is_waited_for_then_repaired_and_aligned(monkeypatch, tmp_path):
+    waits, repaired, aligned = [], [], []
+    monkeypatch.setattr(runtime, "_find_atlas_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(runtime, "_check_url", lambda *args, **kwargs: False)
+    monkeypatch.setattr(runtime, "_docker_compose_owns_proxy", lambda atlas_dir: True)
+    monkeypatch.setattr(runtime, "_wait_for_proxy", lambda timeout: waits.append(timeout) or True)
+    monkeypatch.setattr(runtime, "_repair_proxy_capability",
+                        lambda root, capability: repaired.append((root, capability)) or True)
+    monkeypatch.setattr(runtime, "_align_workspace", lambda root: aligned.append(root))
+
+    assert runtime.ensure_proxy(runtime.DEMO_RAW_CAPABILITY) is True
+    assert waits == [60]
+    assert repaired == [(str(tmp_path), runtime.DEMO_RAW_CAPABILITY)]
+    assert aligned == [str(tmp_path)]
+
+
+def test_a_compose_stack_that_never_answers_is_not_replaced_by_a_local_proxy(monkeypatch, tmp_path, capsys):
+    root = _metal_root(tmp_path)  # its start command needs the macOS overlay
+    chosen = []
+    monkeypatch.setattr(runtime, "_find_atlas_dir", lambda: root)
+    monkeypatch.setattr(runtime, "_check_url", lambda *args, **kwargs: False)
+    monkeypatch.setattr(runtime, "_docker_compose_owns_proxy", lambda atlas_dir: True)
+    monkeypatch.setattr(runtime, "_wait_for_proxy", lambda timeout: False)
+    monkeypatch.setattr(runtime, "_select_proxy_binary", lambda atlas_dir: chosen.append(atlas_dir))
+
+    assert runtime.ensure_proxy() is False
+    assert chosen == []
+    assert runtime.compose_config.format_command(root, ["up", "-d"]) in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("proxy_bin, launched, capability, supports, ready", [
+    pytest.param("/opt/atlas/atlas-proxy-v2", True, runtime.DEMO_RAW_CAPABILITY, True, True,
+                 id="started-with-the-capability"),
+    pytest.param("/opt/atlas/atlas-proxy-v2", True, runtime.DEMO_RAW_CAPABILITY, False, False,
+                 id="started-without-the-capability"),
+    pytest.param("/opt/atlas/atlas-proxy-v2", False, runtime.DEMO_RAW_CAPABILITY, True, False, id="did-not-start"),
+    pytest.param(None, True, runtime.DEMO_RAW_CAPABILITY, True, False, id="no-proxy-binary"),
+    pytest.param("/opt/atlas/atlas-proxy-v2", True, None, False, True, id="started-and-no-capability-asked"),
+])
+def test_a_local_proxy_is_ready_only_when_it_started_with_the_capability(
+        monkeypatch, tmp_path, proxy_bin, launched, capability, supports, ready):
+    monkeypatch.setattr(runtime, "_find_atlas_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(runtime, "_check_url", lambda *args, **kwargs: False)
+    monkeypatch.setattr(runtime, "_docker_compose_owns_proxy", lambda atlas_dir: False)
+    monkeypatch.setattr(runtime, "_select_proxy_binary", lambda atlas_dir: proxy_bin)
+    monkeypatch.setattr(runtime, "_launch_local_proxy", lambda binary: launched)
+    monkeypatch.setattr(runtime, "_proxy_supports_capability", lambda asked: supports)
+
+    assert runtime.ensure_proxy(capability) is ready
+
+
+# A proxy that answers, already running or once the compose stack is up, is
+# ready only when the capability asked for is there after the repair. With no
+# capability asked, none is repaired.
+@pytest.mark.parametrize("compose_owns, capability, repair_works, ready", [
+    pytest.param(False, runtime.DEMO_RAW_CAPABILITY, False, False, id="running-and-its-repair-fails"),
+    pytest.param(False, None, False, True, id="running-and-no-capability-asked"),
+    pytest.param(True, runtime.DEMO_RAW_CAPABILITY, False, False, id="compose-and-its-repair-fails"),
+    pytest.param(True, None, False, True, id="compose-and-no-capability-asked"),
+])
+def test_a_proxy_that_answers_is_ready_only_with_the_capability_asked_for(
+        monkeypatch, tmp_path, compose_owns, capability, repair_works, ready):
+    monkeypatch.setattr(runtime, "_find_atlas_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(runtime, "_check_url", lambda *args, **kwargs: not compose_owns)
+    monkeypatch.setattr(runtime, "_docker_compose_owns_proxy", lambda atlas_dir: compose_owns)
+    monkeypatch.setattr(runtime, "_wait_for_proxy", lambda timeout: True)
+    monkeypatch.setattr(runtime, "_repair_proxy_capability", lambda root, asked: repair_works)
+    monkeypatch.setattr(runtime, "_align_workspace", lambda root: None)
+
+    assert runtime.ensure_proxy(capability) is ready
+
+
 def test_compose_proxy_rebuild_uses_checkout_source_and_overlay(monkeypatch, tmp_path):
     root = _metal_root(tmp_path)
     calls = []
