@@ -148,13 +148,7 @@ def _pick_gpu(probe: "tier.Probe", args: argparse.Namespace,
     """
     if not probe.gpus:
         return None
-    override_vendor = os.environ.get("ATLAS_GPU_VENDOR") or None
-    override_index_str = os.environ.get("ATLAS_GPU_INDEX")
-    try:
-        override_index = int(override_index_str) if override_index_str else None
-    except ValueError:
-        override_index = None
-
+    override_vendor, override_index = _gpu_override()
     auto = tier.primary_gpu(probe.gpus, override_vendor=override_vendor,
                             override_index=override_index)
     if len(probe.gpus) == 1 or not _is_interactive(args):
@@ -180,6 +174,19 @@ def _pick_gpu(probe: "tier.Probe", args: argparse.Namespace,
     if 1 <= pos <= len(probe.gpus):
         return probe.gpus[pos - 1]
     return auto
+
+
+def _gpu_override() -> Tuple[Optional[str], Optional[int]]:
+    """The vendor ATLAS_GPU_VENDOR names and the index ATLAS_GPU_INDEX
+    names, each None when unset; an index that is not a number counts as
+    unset."""
+    override_vendor = os.environ.get("ATLAS_GPU_VENDOR") or None
+    override_index_str = os.environ.get("ATLAS_GPU_INDEX")
+    try:
+        override_index = int(override_index_str) if override_index_str else None
+    except ValueError:
+        override_index = None
+    return override_vendor, override_index
 
 
 # ---------------------------------------------------------------------------
