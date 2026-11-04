@@ -37,15 +37,26 @@ export function summarizeToolResult(tool: string, data: unknown): string | undef
 	const inner = asRecord(d.data) ?? d;
 
 	if (Array.isArray(inner.entries)) {
-		const entries = inner.entries as DirEntry[];
-		return entries.length === 0
-			? 'empty directory'
-			: `${entries.length} entries: ${names(entries, 12)}`;
+		return summarizeEntries(inner.entries as DirEntry[]);
 	}
 	if (Array.isArray(inner.matches)) {
-		const n = (inner.matches as unknown[]).length;
-		return n === 0 ? 'no matches' : `${n} match${n === 1 ? '' : 'es'}`;
+		return summarizeMatches((inner.matches as unknown[]).length);
 	}
+	return summarizeText(inner);
+}
+
+function summarizeEntries(entries: DirEntry[]): string {
+	return entries.length === 0
+		? 'empty directory'
+		: `${entries.length} entries: ${names(entries, 12)}`;
+}
+
+function summarizeMatches(n: number): string {
+	return n === 0 ? 'no matches' : `${n} match${n === 1 ? '' : 'es'}`;
+}
+
+/** The first text field that is not empty: itself when it is one line, else its line count. */
+function summarizeText(inner: Record<string, unknown>): string | undefined {
 	for (const key of ['summary', 'stdout', 'content', 'message'] as const) {
 		const v = inner[key];
 		if (typeof v === 'string' && v.trim() !== '') {
