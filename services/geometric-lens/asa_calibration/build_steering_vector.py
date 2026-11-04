@@ -129,6 +129,60 @@ def write_gguf_control_vector(out_path: Path, layer: int, vector: np.ndarray,
     writer.close()
 
 
+def _load_pairs(path: Path, limit: int) -> list[dict]:
+    """The prompts in the pairs file, two lines per contrast pair; with a
+    `limit` above 0, only the first `limit` pairs."""
+    pairs = []
+    with path.open() as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                pairs.append(json.loads(line))
+    if limit > 0:
+        pairs = pairs[: limit * 2]  # *2 because each scenario is 2 lines
+    return pairs
+
+
+def _mean_residuals(pairs: list[dict], layer: int) -> tuple[list[np.ndarray], list[np.ndarray]] | None:
+    """Each prompt's mean residual at `layer`, as (structural_edit means,
+    edit_file means). None, after saying why, when an extraction fails or a
+    label is neither."""
+    pos_means: list[np.ndarray] = []
+    neg_means: list[np.ndarray] = []
+
+    started = time.monotonic()
+    for i, pair in enumerate(pairs):
+        prompt = render_prompt(pair)
+        try:
+            mean_vec = extract_mean_residual(prompt, layer)
+        except Exception as exc:
+            print(f"[{i}] extraction failed: {exc}", file=sys.stderr)
+            return None
+        if pair["label"] == "structural_edit":
+            pos_means.append(mean_vec)
+        elif pair["label"] == "edit_file":
+            neg_means.append(mean_vec)
+        else:
+            print(f"[{i}] unknown label {pair['label']!r}", file=sys.stderr)
+            return None
+        _print_progress(i + 1, len(pairs), len(pos_means), len(neg_means), started)
+    return pos_means, neg_means
+
+
+def _print_progress(done: int, total: int, n_pos: int, n_neg: int, started: float) -> None:
+    """One line every 50 prompts and after the last one."""
+    if done % 50 == 0 or done == total:
+        elapsed = time.monotonic() - started
+        rate = done / elapsed if elapsed > 0 else 0
+        eta = (total - done) / rate if rate > 0 else 0
+        print(
+            f"  [{done:>4}/{total}] "
+            f"pos={n_pos} neg={n_neg} "
+            f"elapsed={elapsed:.1f}s rate={rate:.2f}/s eta={eta:.0f}s",
+            flush=True,
+        )
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--pairs", required=True, type=Path,
@@ -148,46 +202,13 @@ def main() -> int:
                          "metadata (0 = use --layer + 1)")
     args = ap.parse_args()
 
-    pairs = []
-    with args.pairs.open() as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                pairs.append(json.loads(line))
-    if args.limit > 0:
-        pairs = pairs[: args.limit * 2]  # *2 because each scenario is 2 lines
+    pairs = _load_pairs(args.pairs, args.limit)
     print(f"loaded {len(pairs)} prompts ({len(pairs) // 2} contrast pairs)")
 
-    pos_means: list[np.ndarray] = []
-    neg_means: list[np.ndarray] = []
-
-    started = time.monotonic()
-    for i, pair in enumerate(pairs):
-        prompt = render_prompt(pair)
-        try:
-            mean_vec = extract_mean_residual(prompt, args.layer)
-        except Exception as exc:
-            print(f"[{i}] extraction failed: {exc}", file=sys.stderr)
-            return 2
-        if pair["label"] == "structural_edit":
-            pos_means.append(mean_vec)
-        elif pair["label"] == "edit_file":
-            neg_means.append(mean_vec)
-        else:
-            print(f"[{i}] unknown label {pair['label']!r}", file=sys.stderr)
-            return 2
-
-        if (i + 1) % 50 == 0 or (i + 1) == len(pairs):
-            elapsed = time.monotonic() - started
-            rate = (i + 1) / elapsed if elapsed > 0 else 0
-            eta = (len(pairs) - (i + 1)) / rate if rate > 0 else 0
-            print(
-                f"  [{i+1:>4}/{len(pairs)}] "
-                f"pos={len(pos_means)} neg={len(neg_means)} "
-                f"elapsed={elapsed:.1f}s rate={rate:.2f}/s eta={eta:.0f}s",
-                flush=True,
-            )
-
+    means = _mean_residuals(pairs, args.layer)
+    if means is None:
+        return 2
+    pos_means, neg_means = means
     if not pos_means or not neg_means:
         print(
             f"need both structural_edit and edit_file pairs; got pos={len(pos_means)} neg={len(neg_means)}",
