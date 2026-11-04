@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -298,7 +299,8 @@ func TestTombstonedPathsAreSilentAndNeverResurrected(t *testing.T) {
 // a current version shown broken by the same kind of check. Each row changes
 // one thing from that state and names the refusal it gets.
 func TestCheckpointRestorableNamesEachReasonNotToRestore(t *testing.T) {
-	good := []byte("print(1)\n")
+	// A checkpoint exactly at the size limit is still kept; one byte more is not.
+	good := bytes.Repeat([]byte("#"), maxCheckpointFileBytes)
 	large := make([]byte, maxCheckpointFileBytes+1)
 	restorable := func() *taskcontract.DeliverableState {
 		return &taskcontract.DeliverableState{
