@@ -1237,41 +1237,58 @@ def _emit(results: List[CheckResult], args: argparse.Namespace, color: bool,
     n_skip = sum(1 for r in results if r.status == "skip")
 
     if args.json:
-        out = {
+        _print_json({
             "summary": {"pass": n_pass, "warn": n_warn,
                         "fail": n_fail, "skip": n_skip},
             "checks": [asdict(r) for r in results],
-        }
-        # ensure_ascii=False keeps unicode in detail fields readable; if
-        # stdout truly can't encode it, write bytes directly with
-        # backslash-escape so we don't crash on the way out.
-        body = json.dumps(out, indent=2, ensure_ascii=not UNICODE_OK)
-        try:
-            print(body)
-        except UnicodeEncodeError:
-            sys.stdout.buffer.write(body.encode("ascii", errors="backslashreplace"))
-            sys.stdout.buffer.write(b"\n")
+        })
         return 1 if n_fail else 0
 
     if not already_printed:
         for r in results:
             _print_result(r, args.verbose, color)
     _safe_print()
+    _safe_print("  " + _summary_line(n_pass, n_warn, n_fail, n_skip, color))
+    _safe_print("  " + _verdict(n_warn, n_fail, color))
+    return 1 if n_fail else 0
+
+
+def _print_json(out: dict) -> None:
+    """Print doctor's JSON report."""
+    # ensure_ascii=False keeps unicode in detail fields readable; if
+    # stdout truly can't encode it, write bytes directly with
+    # backslash-escape so we don't crash on the way out.
+    body = json.dumps(out, indent=2, ensure_ascii=not UNICODE_OK)
+    try:
+        print(body)
+    except UnicodeEncodeError:
+        sys.stdout.buffer.write(body.encode("ascii", errors="backslashreplace"))
+        sys.stdout.buffer.write(b"\n")
+
+
+def _summary_line(n_pass: int, n_warn: int, n_fail: int, n_skip: int,
+                  color: bool) -> str:
+    """doctor's count line: what passed, then any warnings, failures and
+    skips."""
+    yell, red, reset = (YELL, RED, RESET) if color else ("", "", "")
     parts = [f"{n_pass} passed"]
     if n_warn:
-        parts.append(f"{YELL if color else ''}{n_warn} warnings{RESET if color else ''}")
+        parts.append(f"{yell}{n_warn} warnings{reset}")
     if n_fail:
-        parts.append(f"{RED if color else ''}{n_fail} failed{RESET if color else ''}")
+        parts.append(f"{red}{n_fail} failed{reset}")
     if n_skip:
         parts.append(f"{n_skip} skipped")
-    _safe_print("  " + ", ".join(parts))
+    return ", ".join(parts)
+
+
+def _verdict(n_warn: int, n_fail: int, color: bool) -> str:
+    """doctor's last line: healthy, functional with warnings, or failures."""
+    green, yell, red, reset = (GREEN, YELL, RED, RESET) if color else ("", "", "", "")
     if n_fail == 0 and n_warn == 0:
-        _safe_print(f"  {GREEN if color else ''}ATLAS install is healthy.{RESET if color else ''}")
-    elif n_fail == 0:
-        _safe_print(f"  {YELL if color else ''}ATLAS install is functional with warnings.{RESET if color else ''}")
-    else:
-        _safe_print(f"  {RED if color else ''}ATLAS install has failures {DASH} re-run with -v for detail.{RESET if color else ''}")
-    return 1 if n_fail else 0
+        return f"{green}ATLAS install is healthy.{reset}"
+    if n_fail == 0:
+        return f"{yell}ATLAS install is functional with warnings.{reset}"
+    return f"{red}ATLAS install has failures {DASH} re-run with -v for detail.{reset}"
 
 
 def _check_host_runtime(_add, atlas_root: str) -> None:
