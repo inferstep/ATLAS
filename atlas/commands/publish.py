@@ -284,6 +284,23 @@ def _report_pr_not_opened(body: str, color: bool) -> int:
     return 0
 
 
+def _delegated_args(args: argparse.Namespace, repo: Optional[str]) -> List[str]:
+    """The arguments of `atlas lens publish` or `atlas asa publish` when one
+    component is published alone: the model, that component's repo, the
+    license and the flags given."""
+    sub = ["publish"]
+    if args.model:
+        sub.append(args.model)
+    if repo:
+        sub += ["--repo", repo]
+    if args.license:
+        sub += ["--license", args.license]
+    for flag in ("dry_run", "skip_pr", "no_color"):
+        if getattr(args, flag):
+            sub.append("--" + flag.replace("_", "-"))
+    return sub
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         prog="atlas publish",
@@ -314,29 +331,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                     "(omit both to publish both).")
         return 2
     if args.lens_only:
-        sub = ["publish"]
-        if args.model:
-            sub.append(args.model)
-        if args.lens_repo:
-            sub += ["--repo", args.lens_repo]
-        if args.license:
-            sub += ["--license", args.license]
-        for flag in ("dry_run", "skip_pr", "no_color"):
-            if getattr(args, flag):
-                sub.append("--" + flag.replace("_", "-"))
-        return lens_module.main(sub)
+        return lens_module.main(_delegated_args(args, args.lens_repo))
     if args.asa_only:
-        sub = ["publish"]
-        if args.model:
-            sub.append(args.model)
-        if args.asa_repo:
-            sub += ["--repo", args.asa_repo]
-        if args.license:
-            sub += ["--license", args.license]
-        for flag in ("dry_run", "skip_pr", "no_color"):
-            if getattr(args, flag):
-                sub.append("--" + flag.replace("_", "-"))
-        return asa_module.main(sub)
+        return asa_module.main(_delegated_args(args, args.asa_repo))
 
     if not args.dry_run and (not args.lens_repo or not args.asa_repo):
         _safe_print("  Both --lens-repo and --asa-repo are required for a "
