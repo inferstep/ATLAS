@@ -157,6 +157,39 @@ def test_parse_constraint_sets_takes_the_family_from_the_implies_line():
     ]
 
 
+def test_each_line_of_a_constraint_set_is_read_by_its_label():
+    # Labels in any case; a line without one is a constraint as it is; a set
+    # with no lines is dropped.
+    response = ("constraint set 1:\n"
+                "- CONSTRAINT: Run in O(n)\n"
+                "- eliminates: Nested loops\n"
+                "- IMPLIES: A hash map\n"
+                "- Keep memory small\n"
+                "CONSTRAINT SET 2:\n"
+                "\n"
+                "CONSTRAINT SET 3:\n"
+                "- Constraint: Return early\n")
+
+    sets = parse_constraint_sets(response, 3)
+
+    assert [constraint_set.constraints for constraint_set in sets] == [
+        ["Run in O(n)", "Eliminates: Nested loops", "Implies: A hash map", "Keep memory small"],
+        ["Return early"],
+    ]
+    assert [constraint_set.algorithmic_family for constraint_set in sets] == ["A hash map", ""]
+
+
+def test_numbered_blocks_are_read_when_there_are_no_constraint_set_headers():
+    response = "Two ways:\n1) Sort first\n   then use two pointers\n2) Use a hash map\n3) Brute force"
+
+    sets = parse_constraint_sets(response, 2)
+
+    assert [constraint_set.constraints for constraint_set in sets] == [
+        ["Sort first", "then use two pointers"],
+        ["Use a hash map"],
+    ]
+
+
 def test_parse_plan_reads_approach_steps_and_edge_cases():
     constraint_set = ConstraintSet(constraints=["Use hash map"])
     plan = parse_plan(SAMPLE_PLAN_RESPONSE, constraint_set)
