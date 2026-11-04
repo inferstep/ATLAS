@@ -144,26 +144,34 @@ def _snapshot_digests(atlas_root: str) -> Dict[str, str]:
                                       timeout=60)
     except (subprocess.SubprocessError, OSError):
         return {}
-    import json
     digests: Dict[str, str] = {}
     for line in out.splitlines():
         line = line.strip()
         if not line:
             continue
-        try:
-            rec = json.loads(line)
-        except ValueError:
+        digests.update(_line_digests(line))
+    return digests
+
+
+def _line_digests(line: str) -> Dict[str, str]:
+    """The digest per service on one line of `docker compose images --format
+    json`; empty when the line is not JSON."""
+    import json
+    try:
+        rec = json.loads(line)
+    except ValueError:
+        return {}
+    # `docker compose images --format json` may emit JSONL objects or
+    # a single array; only per-image dicts carry the fields we want.
+    records = rec if isinstance(rec, list) else [rec]
+    digests: Dict[str, str] = {}
+    for r in records:
+        if not isinstance(r, dict):
             continue
-        # `docker compose images --format json` may emit JSONL objects or
-        # a single array; only per-image dicts carry the fields we want.
-        records = rec if isinstance(rec, list) else [rec]
-        for r in records:
-            if not isinstance(r, dict):
-                continue
-            svc = r.get("Service") or r.get("Repository") or ""
-            dig = r.get("ID") or r.get("Digest") or ""
-            if svc and dig:
-                digests[svc] = dig
+        svc = r.get("Service") or r.get("Repository") or ""
+        dig = r.get("ID") or r.get("Digest") or ""
+        if svc and dig:
+            digests[svc] = dig
     return digests
 
 
@@ -249,6 +257,22 @@ def _stamp() -> str:
     return time.strftime("%Y%m%d-%H%M%S", time.localtime())
 
 
+def _print_plan(atlas_root: str, previous: str, target: str) -> None:
+    """The dry run's plan: the current tag and digests, the target and the steps."""
+    digests = _snapshot_digests(atlas_root)
+    print(f"upgrade plan: {previous} → {target}")
+    if digests:
+        print("  current image digests:")
+        for svc, dig in sorted(digests.items()):
+            print(f"    {svc}: {dig}")
+    else:
+        print("  (no running images to diff against)")
+    print("  target digests resolve on `docker compose pull` at apply.")
+    print("  steps: verify signatures → record restore point → pull → "
+          "up → readiness → smoke → finalize (auto-restore on failure).")
+    print("  (dry run — nothing changed)")
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="atlas upgrade",
@@ -277,18 +301,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     previous = eng.read_env_tag(atlas_root)
 
     if args.dry_run:
-        digests = _snapshot_digests(atlas_root)
-        print(f"upgrade plan: {previous} → {args.to}")
-        if digests:
-            print("  current image digests:")
-            for svc, dig in sorted(digests.items()):
-                print(f"    {svc}: {dig}")
-        else:
-            print("  (no running images to diff against)")
-        print("  target digests resolve on `docker compose pull` at apply.")
-        print("  steps: verify signatures → record restore point → pull → "
-              "up → readiness → smoke → finalize (auto-restore on failure).")
-        print("  (dry run — nothing changed)")
+        _print_plan(atlas_root, previous, args.to)
         return 0
 
     same_tag = previous == args.to
@@ -317,16 +330,21 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"\natlas upgrade: {e}", file=sys.stderr)
         return 1
 
+    _print_outcome(result)
+    return 0
+
+
+def _print_outcome(result: dict) -> None:
+    """What the finished upgrade did: nothing, a refresh of the same tag, or a new release."""
     if result["status"] == "noop":
         print(result["detail"])
-        return 0
+        return
     if result["status"] == "refreshed":
         # No rollback hint: a same-tag refresh replaces the cached
         # images, so `atlas rollback` can only come back up on the
         # refreshed build, not the pre-refresh one.
         print(f"\nRefreshed {result['target_tag']}. For reversible "
               "upgrades, pin release tags (--to vX.Y.Z).")
-        return 0
+        return
     print(f"\nUpgraded to {result['target_tag']}. "
           f"Roll back with: atlas rollback")
-    return 0
