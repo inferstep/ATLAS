@@ -76,38 +76,55 @@ export function fileOpVerdict(
 ): Verdict {
 	switch (kind) {
 		case 'write':
-			if (!post.exists) {
-				return 'mismatch';
-			}
-			if (!pre.exists) {
-				return 'match'; // file appeared where the proxy said it wrote
-			}
-			return mtimeVerdict(pre, post);
+			return writeVerdict(pre, post);
 		case 'edit':
-			if (!pre.exists) {
-				// The proxy edited a file this workspace never had — suspicious,
-				// but read_file would have had to see it, so this is more likely
-				// an absolute/odd path than a wrong mount. Don't warn on it.
-				return 'inconclusive';
-			}
-			if (!post.exists) {
-				return 'mismatch';
-			}
-			return mtimeVerdict(pre, post);
+			return editVerdict(pre, post);
 		case 'delete':
-			if (!pre.exists) {
-				return 'inconclusive'; // absent before and (presumably) after
-			}
-			return post.exists ? 'mismatch' : 'match';
+			return deleteVerdict(pre, post);
 		case 'move':
-			if (!pre.exists || preDest === undefined || postDest === undefined) {
-				return 'inconclusive';
-			}
-			if (postDest.exists && !post.exists) {
-				return 'match';
-			}
-			return post.exists && !postDest.exists ? 'mismatch' : 'inconclusive';
+			return moveVerdict(pre, post, preDest, postDest);
 	}
+}
+
+function writeVerdict(pre: PathStat, post: PathStat): Verdict {
+	if (!post.exists) {
+		return 'mismatch';
+	}
+	if (!pre.exists) {
+		return 'match'; // file appeared where the proxy said it wrote
+	}
+	return mtimeVerdict(pre, post);
+}
+
+function editVerdict(pre: PathStat, post: PathStat): Verdict {
+	if (!pre.exists) {
+		// The proxy edited a file this workspace never had — suspicious,
+		// but read_file would have had to see it, so this is more likely
+		// an absolute/odd path than a wrong mount. Don't warn on it.
+		return 'inconclusive';
+	}
+	if (!post.exists) {
+		return 'mismatch';
+	}
+	return mtimeVerdict(pre, post);
+}
+
+function deleteVerdict(pre: PathStat, post: PathStat): Verdict {
+	if (!pre.exists) {
+		return 'inconclusive'; // absent before and (presumably) after
+	}
+	return post.exists ? 'mismatch' : 'match';
+}
+
+/** The source's stats, then the destination's. */
+function moveVerdict(pre: PathStat, post: PathStat, preDest?: PathStat, postDest?: PathStat): Verdict {
+	if (!pre.exists || preDest === undefined || postDest === undefined) {
+		return 'inconclusive';
+	}
+	if (postDest.exists && !post.exists) {
+		return 'match';
+	}
+	return post.exists && !postDest.exists ? 'mismatch' : 'inconclusive';
 }
 
 /** mtime comparison for overwrite/edit kinds. Equal mtimes are
