@@ -142,6 +142,58 @@ def _arch_error_excerpt(logs: str) -> Optional[str]:
     return None
 
 
+def _compose_args(atlas_root: str, env: Dict[str, str], args: List[str]) -> List[str]:
+    return compose_config.command(atlas_root, args, values=env)
+
+
+def _metal_answer(url: str, model_file: str, healthy: bool) -> Tuple[bool, str]:
+    """Why a native Metal llama-server is not serving this model: onboarding
+    never starts the CUDA container on a Metal host."""
+    if healthy:
+        loaded = _loaded_model_name(url)
+        return False, (
+            "native Metal llama-server is healthy but serves {!r}, not "
+            "{!r}. Stop it and relaunch scripts/install/atlas-llama-macos.sh "
+            "after checking .env.".format(loaded or "an unknown model",
+                                            model_file)
+        )
+    return False, (
+        "native Metal llama-server is not reachable at {}. Start it in "
+        "another terminal with ./scripts/install/atlas-llama-macos.sh; onboarding "
+        "will not start the CUDA container on a Metal host.".format(url)
+    )
+
+
+def _start_llama_server(atlas_root: str, env: Dict[str, str], url: str, model_file: str,
+                        healthy: bool) -> Optional[Tuple[bool, str]]:
+    """Start llama-server (recreate it when it serves another model) and wait
+    for this model. The answer once it serves it or its logs show a load
+    error; None when it does neither in time."""
+    if healthy:
+        _safe_print(f"  {DASH} llama-server is up but serving a different "
+                    f"model — recreating to load this one…")
+        _run(_compose_args(atlas_root, env, ["up", "-d", "--force-recreate",
+                                             "llama-server", "--no-deps"]),
+             timeout=120, cwd=atlas_root)
+    else:
+        _safe_print(f"  {DASH} starting llama-server (inference only)…")
+        _run(_compose_args(atlas_root, env, ["up", "-d", "llama-server", "--no-deps"]),
+             timeout=120, cwd=atlas_root)
+    # Poll for up to ~2.5 min while the model loads onto the GPU.
+    for _ in range(30):
+        time.sleep(5)
+        healthy, serving = _serving_this(url, model_file)
+        if serving:
+            return True, ""
+        rc, logs, _ = _run(_compose_args(
+            atlas_root, env, ["logs", "--tail=200", "llama-server"]),
+            timeout=20, cwd=atlas_root)
+        excerpt = _arch_error_excerpt(logs)
+        if excerpt:
+            return False, excerpt
+    return None
+
+
 def _arch_supported(atlas_root: str, env: Dict[str, str], model_file: str,
                     start: bool, color: bool) -> Tuple[bool, str]:
     """Returns (serving_this_model, log_excerpt). Confirms llama-server is
@@ -156,50 +208,16 @@ def _arch_supported(atlas_root: str, env: Dict[str, str], model_file: str,
 
     backend = compose_config.resolve_backend(atlas_root, values=env)
     if backend == "metal":
-        if healthy:
-            loaded = _loaded_model_name(url)
-            return False, (
-                "native Metal llama-server is healthy but serves {!r}, not "
-                "{!r}. Stop it and relaunch scripts/install/atlas-llama-macos.sh "
-                "after checking .env.".format(loaded or "an unknown model",
-                                                model_file)
-            )
-        return False, (
-            "native Metal llama-server is not reachable at {}. Start it in "
-            "another terminal with ./scripts/install/atlas-llama-macos.sh; onboarding "
-            "will not start the CUDA container on a Metal host.".format(url)
-        )
-
-    def compose_args(args: List[str]) -> List[str]:
-        return compose_config.command(atlas_root, args, values=env)
+        return _metal_answer(url, model_file, healthy)
 
     if start:
-        if healthy:
-            _safe_print(f"  {DASH} llama-server is up but serving a different "
-                        f"model — recreating to load this one…")
-            _run(compose_args(["up", "-d", "--force-recreate",
-                               "llama-server", "--no-deps"]),
-                 timeout=120, cwd=atlas_root)
-        else:
-            _safe_print(f"  {DASH} starting llama-server (inference only)…")
-            _run(compose_args(["up", "-d", "llama-server", "--no-deps"]),
-                 timeout=120, cwd=atlas_root)
-        # Poll for up to ~2.5 min while the model loads onto the GPU.
-        for _ in range(30):
-            time.sleep(5)
-            healthy, serving = _serving_this(url, model_file)
-            if serving:
-                return True, ""
-            rc, logs, _ = _run(compose_args(
-                ["logs", "--tail=200", "llama-server"]),
-                timeout=20, cwd=atlas_root)
-            excerpt = _arch_error_excerpt(logs)
-            if excerpt:
-                return False, excerpt
+        started = _start_llama_server(atlas_root, env, url, model_file, healthy)
+        if started is not None:
+            return started
 
     # Not serving this model and either not starting or timed out — inspect logs.
-    rc, logs, _ = _run(compose_args(
-        ["logs", "--tail=200", "llama-server"]),
+    rc, logs, _ = _run(_compose_args(
+        atlas_root, env, ["logs", "--tail=200", "llama-server"]),
         timeout=20, cwd=atlas_root)
     excerpt = _arch_error_excerpt(logs)
     if excerpt:
