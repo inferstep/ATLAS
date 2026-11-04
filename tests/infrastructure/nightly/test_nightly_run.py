@@ -73,7 +73,8 @@ call = " ".join(args)
 with open(home + "/calls.log", "a") as log:
     log.write(json.dumps({{"tool": {name!r}, "args": args, "environment": dict(os.environ),
                           "env": {{k: v for k, v in os.environ.items() if k.endswith("_URL") or k in ("ATLAS_SERVICE_TOKEN_FILE", "ATLAS_MODEL_NAME")}}}}) + "\n")
-calls = [json.loads(line) for line in open(home + "/calls.log")]
+# A stand-in may be writing its line at this moment: a line without its newline is not read yet.
+calls = [json.loads(line) for line in open(home + "/calls.log").read().split("\n")[:-1]]
 
 
 def this_time(rounds, same):
@@ -318,12 +319,13 @@ class Night:
 
     def calls(self):
         log = self.root / "calls.log"
-        return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+        # A stand-in may be writing its line at this moment: a line without its newline is not read yet.
+        return [json.loads(line) for line in log.read_text().split("\n")[:-1]] if log.exists() else []
 
     def asked(self):
         """Each address that the run asked, with the method, in order."""
         log = self.root / "asked.log"
-        return [tuple(json.loads(line)) for line in log.read_text().splitlines()] if log.exists() else []
+        return [tuple(json.loads(line)) for line in log.read_text().split("\n")[:-1]] if log.exists() else []
 
     def github_at(self, port):
         """From now on GitHub's address is the stand-in at this port."""
