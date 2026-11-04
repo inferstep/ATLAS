@@ -154,21 +154,33 @@ def _watch_parent_for(handler, label):
                 break
             if not r:
                 continue
-            try:
-                if sock.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) == b"":
-                    closed = scope.cancel()
-                    _service_log(f"[{label}] parent disconnected; cancelled "
-                                 f"{closed} in-flight generation(s)")
-                    return
-            except BlockingIOError:
-                continue
-            except (OSError, ValueError):
+            parent = _peek_parent(sock)
+            if parent == "hung up":
+                closed = scope.cancel()
+                _service_log(f"[{label}] parent disconnected; cancelled "
+                             f"{closed} in-flight generation(s)")
+                return
+            if parent == "broken":
                 scope.cancel()
                 return
 
     t = threading.Thread(target=_watch, daemon=True)
     t.start()
     return scope, stop_watch, t
+
+
+def _peek_parent(sock) -> str:
+    """What the parent's socket says, without taking a byte from it: "hung
+    up", "broken", or "open" when request bytes wait or the peek would
+    block."""
+    try:
+        if sock.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) == b"":
+            return "hung up"
+    except BlockingIOError:
+        return "open"
+    except (OSError, ValueError):
+        return "broken"
+    return "open"
 
 
 def _release_scope(scope, stop_watch, watcher, label):
