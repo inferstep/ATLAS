@@ -194,14 +194,16 @@ def test_the_cli_finds_the_checkout_it_runs_from(monkeypatch, tmp_path):
 class FakeOs:
     """The os calls the stale-proxy reaper makes, answered from a fixed table
     of processes. kill() only records a signal, so nothing real is stopped; a
-    pid in `stubborn` outlives SIGTERM, and one in `refused` belongs to
-    another user."""
+    pid in `stubborn` outlives SIGTERM, one in `refused` belongs to another
+    user, one in `gone` has exited since the scan, and one in
+    `exits_before_sigkill` exits during the grace."""
     path = os.path
 
-    def __init__(self, exes, own_pid, stubborn=(), refused=()):
+    def __init__(self, exes, own_pid, stubborn=(), refused=(), gone=(), exits_before_sigkill=()):
         self.exes, self.own_pid = exes, own_pid
         self.stubborn, self.refused = set(stubborn), set(refused)
-        self.gone, self.signals = set(), []
+        self.gone, self.exits_before_sigkill = set(gone), set(exits_before_sigkill)
+        self.signals = []
 
     def listdir(self, path):
         return ["self", "cpuinfo", *(str(pid) for pid in self.exes)]
@@ -219,6 +221,8 @@ class FakeOs:
         if pid in self.refused:
             raise PermissionError(pid)
         if pid in self.gone:
+            raise ProcessLookupError(pid)
+        if sig == signal.SIGKILL and pid in self.exits_before_sigkill:
             raise ProcessLookupError(pid)
         if sig == 0:
             return
@@ -254,11 +258,12 @@ def test_a_stale_proxy_found_by_name_or_by_port_is_stopped(monkeypatch, capsys):
     monkeypatch.setattr(runtime, "os", fake)
     monkeypatch.setattr(runtime, "time", FakeClock())
     monkeypatch.setattr(runtime.subprocess, "run",
-                        lambda cmd, **kwargs: asked.append(cmd) or SimpleNamespace(stdout=listening))
+                        lambda cmd, **kwargs: asked.append((cmd, kwargs)) or SimpleNamespace(stdout=listening))
 
     runtime._kill_stale_proxy()
 
-    assert asked == [["ss", "-tlnpH", f"sport = :{runtime.PROXY_PORT}"]]
+    assert asked == [(["ss", "-tlnpH", f"sport = :{runtime.PROXY_PORT}"],
+                      {"capture_output": True, "text": True, "timeout": 3})]
     assert fake.signals == [(100, signal.SIGTERM), (200, signal.SIGTERM), (200, signal.SIGKILL)]
     assert runtime.time.now == pytest.approx(2.0, abs=0.11)  # SIGKILL only after the 2 s grace
     assert capsys.readouterr().out.splitlines() == [
@@ -279,6 +284,20 @@ def test_a_proxy_that_stops_at_sigterm_is_not_waited_for(monkeypatch):
 
     assert fake.signals == [(100, signal.SIGTERM)]
     assert runtime.time.now == 0.0
+
+
+def test_a_proxy_that_exits_on_its_own_before_a_signal_is_passed_over(monkeypatch):
+    fake = FakeOs(own_pid=999, gone={600}, stubborn={700}, exits_before_sigkill={700}, exes={
+        600: "/usr/local/bin/atlas-proxy-v2",  # exits before SIGTERM
+        700: "/usr/local/bin/atlas-proxy-v2",  # exits before SIGKILL
+    })
+    monkeypatch.setattr(runtime, "os", fake)
+    monkeypatch.setattr(runtime, "time", FakeClock())
+    monkeypatch.setattr(runtime.subprocess, "run", lambda cmd, **kwargs: SimpleNamespace(stdout=""))
+
+    runtime._kill_stale_proxy()
+
+    assert fake.signals == [(700, signal.SIGTERM)]
 
 
 def test_without_proc_or_ss_the_reaper_stops_nothing(monkeypatch):
