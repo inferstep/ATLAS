@@ -184,50 +184,26 @@ func observeDeliveredCandidateSyntax(ctx *AgentContext, entry routeEntry, path, 
 // fact about the candidate.
 func observeCandidateVerification(ctx *AgentContext, path, code string,
 	id candidateEvidenceIdentity, scope mutationScope) ([]proxyEvidence, map[string]AuthorizationReason, bool) {
-	if ctx == nil || ctx.TaskContract == nil {
-		return nil, nil, false
-	}
-	if strings.TrimSpace(id.InvocationID) == "" ||
-		strings.TrimSpace(id.CandidateInstanceID) == "" {
+	if !candidateIdentified(ctx, id) {
 		return nil, nil, false
 	}
 	obs := requestObligations(ctx)
-	if len(obs) == 0 {
+	resolved, declared, ok := groundedDeclaredCommands(ctx, obs, path, scope)
+	if !ok {
 		return nil, nil, false
 	}
-	resolved := resolveAgentPath(ctx, path)
-	if !verificationTargetGrounded(ctx, obs, resolved, scope) {
-		return nil, nil, false
-	}
-
-	// The declared commands, from the proxy's own derivation of the validated
-	// request. This list is the authority; nothing downstream may add to it.
-	declared := requiredDeclaredCommands(obs)
-	if len(declared) == 0 {
-		return nil, nil, false
-	}
-
 	req := stagingRequestFor(ctx, resolved, code, id, declared)
 	if ok, _ := req.validate(); !ok {
 		// A declared set the staging budget cannot hold whole. Nothing runs:
 		// a partial set is not a smaller obligation.
 		return nil, unmetForAll(declared, ReasonEvidenceTimedOut), false
 	}
-
-	result, ok := stageCandidate(ctx, req)
-	if !ok {
-		return nil, unmetForAll(declared, ReasonProducerUnavailable), false
-	}
-	if valid, _ := result.validateAgainst(req); !valid {
-		// The result contradicted the request it answers. Refusing here is
-		// what makes a malformed or forged result worth nothing.
-		return nil, unmetForAll(declared, ReasonEvidenceExecutionFailed), false
+	result, staged := stageCandidate(ctx, req)
+	if refused := stagingRefusal(declared, req, result, staged); refused != nil {
+		return nil, refused, false
 	}
 
-	byID := map[string]taskcontract.TaskObligation{}
-	for _, o := range declared {
-		byID[o.ID] = o
-	}
+	byID := obligationsByID(declared)
 	var out []proxyEvidence
 	// Whether any staged run changed what it was measuring. The unmet reason
 	// cannot say: a non-zero exit and a mutation are the same reason there,
@@ -255,15 +231,83 @@ func observeCandidateVerification(ctx *AgentContext, path, code string,
 			Obligation: o, Result: r, Identity: result.Identity,
 		})
 		if !ok {
-			if _, already := unmet[o.ID]; !already {
-				unmet[o.ID] = ReasonEvidenceMissing
-			}
+			markEvidenceMissing(unmet, o.ID)
 			continue
 		}
 		recordEvidenceObservation(ctx, ev)
 		out = append(out, ev)
 	}
 	return out, unmet, mutated
+}
+
+// candidateIdentified reports whether there is a task contract and the
+// candidate carries both its invocation and its instance identity: without
+// them no evidence can be tied to it.
+func candidateIdentified(ctx *AgentContext, id candidateEvidenceIdentity) bool {
+	if ctx == nil || ctx.TaskContract == nil {
+		return false
+	}
+	if strings.TrimSpace(id.InvocationID) == "" ||
+		strings.TrimSpace(id.CandidateInstanceID) == "" {
+		return false
+	}
+	return true
+}
+
+// groundedDeclaredCommands returns the resolved target and the commands the
+// request declared for it, or false when there is nothing to stage: no
+// obligations, a target that is not grounded, or no declared command.
+func groundedDeclaredCommands(ctx *AgentContext, obs []taskcontract.TaskObligation, path string,
+	scope mutationScope) (string, []taskcontract.TaskObligation, bool) {
+	if len(obs) == 0 {
+		return "", nil, false
+	}
+	resolved := resolveAgentPath(ctx, path)
+	if !verificationTargetGrounded(ctx, obs, resolved, scope) {
+		return "", nil, false
+	}
+
+	// The declared commands, from the proxy's own derivation of the validated
+	// request. This list is the authority; nothing downstream may add to it.
+	declared := requiredDeclaredCommands(obs)
+	if len(declared) == 0 {
+		return "", nil, false
+	}
+	return resolved, declared, true
+}
+
+// stagingRefusal is why nothing staged may count, for every declared command:
+// the staging did not answer, or its result contradicted the request it
+// answers. Nil when the result may be read.
+func stagingRefusal(declared []taskcontract.TaskObligation, req stagingRequest, result stagingResult,
+	staged bool) map[string]AuthorizationReason {
+	if !staged {
+		return unmetForAll(declared, ReasonProducerUnavailable)
+	}
+	if valid, _ := result.validateAgainst(req); !valid {
+		// The result contradicted the request it answers. Refusing here is
+		// what makes a malformed or forged result worth nothing.
+		return unmetForAll(declared, ReasonEvidenceExecutionFailed)
+	}
+	return nil
+}
+
+// obligationsByID indexes the declared obligations by their id, so a staged
+// result is matched against the request's own obligations only.
+func obligationsByID(declared []taskcontract.TaskObligation) map[string]taskcontract.TaskObligation {
+	byID := map[string]taskcontract.TaskObligation{}
+	for _, o := range declared {
+		byID[o.ID] = o
+	}
+	return byID
+}
+
+// markEvidenceMissing marks a command whose run produced no evidence as
+// missing evidence, unless its run already said why it went unmet.
+func markEvidenceMissing(unmet map[string]AuthorizationReason, id string) {
+	if _, already := unmet[id]; !already {
+		unmet[id] = ReasonEvidenceMissing
+	}
 }
 
 // verificationTargetGrounded reports whether the target is grounded the way a
