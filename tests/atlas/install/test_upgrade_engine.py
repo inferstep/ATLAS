@@ -348,6 +348,8 @@ def test_unprefixed_semver_is_immutable():
     pytest.param('{"Service": "proxy", "Repository": "r1", "ID": "sha256:a", "Digest": "sha256:z"}\n'
                  '{"Repository": "r2", "Digest": "sha256:b"}\n',
                  {"proxy": "sha256:a", "r2": "sha256:b"}, id="service-and-id-first-then-repository-and-digest"),
+    pytest.param('{"Service": "proxy", "ID": "sha256:a"}\n{"Service": "proxy", "ID": "sha256:b"}\n',
+                 {"proxy": "sha256:b"}, id="a-service-on-two-lines-keeps-the-last"),
     # A blank line, a line that is not JSON, an entry that is not an object, and
     # entries with no service or no digest are skipped.
     pytest.param('\nnot json\n["proxy", {"Service": "v3"}, {"ID": "sha256:d"}]\n{"Service": "lens", "ID": "sha256:c"}\n',
