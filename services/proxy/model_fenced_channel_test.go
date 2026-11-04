@@ -87,6 +87,8 @@ func TestFencedFetchAccountsEveryAttempt(t *testing.T) {
 		{"no block, then a block", []string{"no fence here, sorry", "```python\ny = 2\n```"}, "y = 2\n", 2},
 		{"sentinel only, then a block", []string{"```python\n@fenced\n```", "```python\nprint(\"real\")\n```"},
 			"print(\"real\")\n", 2},
+		{"raw sentinel only, then a block", []string{"```python\n__raw_text__\n```", "```python\nprint(\"real\")\n```"},
+			"print(\"real\")\n", 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
@@ -585,6 +587,70 @@ func TestASilentRetryIsRecordedWithWhatTheWireShowed(t *testing.T) {
 	}
 	if ctx.FencedStalls != 1 {
 		t.Errorf("FencedStalls = %d, want 1", ctx.FencedStalls)
+	}
+}
+
+// A session stopped while the model was writing the file ends the fetch as
+// cancelled. What the model had written is not a cut to answer and ask
+// again: one attempt, recorded as cancelled.
+func TestASessionStoppedMidReplyIsCancelledNotAskedAgain(t *testing.T) {
+	t.Setenv("ATLAS_FENCED_FIRST_CONTENT_SEC", "5")
+	t.Setenv("ATLAS_FENCED_IDLE_SEC", "30")
+	stop := make(chan struct{})
+	defer close(stop)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !isChatCompletion(r) {
+			http.NotFound(w, r)
+			return
+		}
+		serveStuckStream(w, r, stop, "````python\n", "print(1)\n")
+	}))
+	defer srv.Close()
+	ctx, fe := fencedEventCtx(t, srv.URL)
+	session, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx.Ctx = session
+	time.AfterFunc(500*time.Millisecond, cancel) // after the model has written
+	if _, err := fetchFencedContent(ctx, fencedEventCall, "app.py"); err == nil {
+		t.Fatal("the fetch succeeded")
+	}
+	evs := fe.all()
+	if len(evs) != 1 {
+		t.Fatalf("%d fenced_fetch events, want 1 (a stopped session is not asked again): %v", len(evs), evs)
+	}
+	if evs[0]["outcome"] != "cancelled" {
+		t.Errorf("outcome = %v, want cancelled", evs[0]["outcome"])
+	}
+}
+
+// A fetch that ends without a block names the cut of an earlier attempt,
+// also when the last attempt was a whole reply.
+func TestAWholeReplyAfterACutKeepsTheCutInTheError(t *testing.T) {
+	t.Setenv("ATLAS_FENCED_FIRST_CONTENT_SEC", "5")
+	t.Setenv("ATLAS_FENCED_IDLE_SEC", "1")
+	stop := make(chan struct{})
+	defer close(stop)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !isChatCompletion(r) {
+			http.NotFound(w, r)
+			return
+		}
+		var body map[string]interface{}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if _, withGrammar := body["grammar"]; withGrammar {
+			serveStuckStream(w, r, stop, "````python\n", "print(1)\n") // cut when it goes idle
+			return
+		}
+		serveReply(w, "I cannot write that file here.")
+	}))
+	defer srv.Close()
+	ctx, _ := fencedEventCtx(t, srv.URL)
+	_, err := fetchFencedContent(ctx, fencedEventCall, "app.py")
+	if err == nil {
+		t.Fatal("the fetch succeeded")
+	}
+	if !strings.Contains(err.Error(), "was cut after") {
+		t.Errorf("the error does not name the earlier cut: %v", err)
 	}
 }
 
