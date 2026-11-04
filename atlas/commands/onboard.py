@@ -185,7 +185,7 @@ def _start_llama_server(atlas_root: str, env: Dict[str, str], url: str, model_fi
         healthy, serving = _serving_this(url, model_file)
         if serving:
             return True, ""
-        rc, logs, _ = _run(_compose_args(
+        _, logs, _ = _run(_compose_args(
             atlas_root, env, ["logs", "--tail=200", "llama-server"]),
             timeout=20, cwd=atlas_root)
         excerpt = _arch_error_excerpt(logs)
@@ -216,7 +216,7 @@ def _arch_supported(atlas_root: str, env: Dict[str, str], model_file: str,
             return started
 
     # Not serving this model and either not starting or timed out — inspect logs.
-    rc, logs, _ = _run(_compose_args(
+    _, logs, _ = _run(_compose_args(
         atlas_root, env, ["logs", "--tail=200", "llama-server"]),
         timeout=20, cwd=atlas_root)
     excerpt = _arch_error_excerpt(logs)
