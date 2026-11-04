@@ -52,17 +52,7 @@ def _migrate(path: str, dry_run: bool = False) -> int:
                   eng.legacy_ghcr_owner_applies(env, keep_release_pin=False))
 
     if dry_run:
-        added = [] if have_version else ["ATLAS_CONFIG_SCHEMA_VERSION"]
-        print(f"config migrate (preview): +{len(added)} -{len(dropped)} keys, "
-              f"target schema v{cs.CONFIG_SCHEMA_VERSION}")
-        if dropped:
-            print("  would remove: " + ", ".join(sorted(dropped)))
-        if added:
-            print("  would add:    " + ", ".join(added))
-        if owner_moves:
-            print(f"  would set:    ATLAS_GHCR_OWNER={eng.GHCR_OWNER} "
-                  f"(was {eng.LEGACY_GHCR_OWNER})")
-        print("  (no changes written — drop --dry-run to apply)")
+        _print_preview(dropped, have_version, owner_moves)
         return 0
 
     if os.path.isfile(path):
@@ -70,6 +60,39 @@ def _migrate(path: str, dry_run: bool = False) -> int:
         shutil.copy2(path, path + ".bak")
         print(f"  backed up {path} → {path}.bak")
 
+    out_lines = _migrated_lines(path, dropped)
+    if not have_version:
+        out_lines.append(
+            f"ATLAS_CONFIG_SCHEMA_VERSION={cs.CONFIG_SCHEMA_VERSION}\n")
+
+    tmp = path + ".migrating"
+    with open(tmp, "w") as fh:
+        fh.writelines(out_lines)
+    os.replace(tmp, path)
+    _move_or_keep_owner(path, owner_moves, owner_kept)
+    print(f"config migrate: wrote schema v{cs.CONFIG_SCHEMA_VERSION} "
+          "(comments preserved)")
+    return 0
+
+
+def _print_preview(dropped: set, have_version: bool, owner_moves: bool) -> None:
+    """What the migration would change, for --dry-run; nothing is written."""
+    added = [] if have_version else ["ATLAS_CONFIG_SCHEMA_VERSION"]
+    print(f"config migrate (preview): +{len(added)} -{len(dropped)} keys, "
+          f"target schema v{cs.CONFIG_SCHEMA_VERSION}")
+    if dropped:
+        print("  would remove: " + ", ".join(sorted(dropped)))
+    if added:
+        print("  would add:    " + ", ".join(added))
+    if owner_moves:
+        print(f"  would set:    ATLAS_GHCR_OWNER={eng.GHCR_OWNER} "
+              f"(was {eng.LEGACY_GHCR_OWNER})")
+    print("  (no changes written — drop --dry-run to apply)")
+
+
+def _migrated_lines(path: str, dropped: set) -> List[str]:
+    """The file's lines without the dropped keys' lines and with the schema
+    stamp at the target; comments, blank lines and formatting are kept."""
     out_lines = []
     with open(path) as fh:
         for raw in fh:
@@ -86,14 +109,11 @@ def _migrate(path: str, dry_run: bool = False) -> int:
                         f"{cs.CONFIG_SCHEMA_VERSION}\n")
                     continue
             out_lines.append(raw if raw.endswith("\n") else raw + "\n")
-    if not have_version:
-        out_lines.append(
-            f"ATLAS_CONFIG_SCHEMA_VERSION={cs.CONFIG_SCHEMA_VERSION}\n")
+    return out_lines
 
-    tmp = path + ".migrating"
-    with open(tmp, "w") as fh:
-        fh.writelines(out_lines)
-    os.replace(tmp, path)
+
+def _move_or_keep_owner(path: str, owner_moves: bool, owner_kept: bool) -> None:
+    """Move the image owner off the pre-move name, or say why it stays."""
     if owner_moves:
         note = eng.migrate_legacy_ghcr_owner(path, keep_release_pin=True)
         if note:
@@ -102,9 +122,6 @@ def _migrate(path: str, dry_run: bool = False) -> int:
         print(f"  kept ATLAS_GHCR_OWNER={eng.LEGACY_GHCR_OWNER}: "
               "ATLAS_IMAGE_TAG pins a release from before the move. "
               "`atlas upgrade` moves it with the next release.")
-    print(f"config migrate: wrote schema v{cs.CONFIG_SCHEMA_VERSION} "
-          "(comments preserved)")
-    return 0
 
 
 def main(argv: Optional[List[str]] = None) -> int:
