@@ -874,16 +874,15 @@ def orphaned_new_symbols(previous_text: str, source_text: str) -> list:
         if name.startswith("_") or name.startswith("test_"):
             continue  # private helpers and pytest-collected tests
         def_line = source_text[:start_byte].count("\n")
-        referenced = False
-        for i, line in enumerate(lines):
-            if i == def_line:
-                continue
-            if name in line:
-                referenced = True
-                break
-        if not referenced:
+        if not _named_on_another_line(name, lines, def_line):
             orphans.append({"name": name, "line": def_line + 1})
     return orphans
+
+
+def _named_on_another_line(name: str, lines: list, def_line: int) -> bool:
+    """Whether name appears on any line but its own def line, the loose
+    test orphaned_new_symbols takes for a reference."""
+    return any(name in line for i, line in enumerate(lines) if i != def_line)
 
 
 def _python_top_level_bindings(text: str):
