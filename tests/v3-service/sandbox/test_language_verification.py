@@ -119,12 +119,14 @@ def test_build_verification_allows_detected_node_package_managers(command):
 @pytest.mark.parametrize("build_command,file_path,message", [
     pytest.param("python app.py; rm -rf .", "/workspace/app.py", "not allowed",
                  id="a command that is not allowed"),
-    pytest.param("pytest > /tmp/out", "/workspace/app.py", "not allowed", id="shell redirection"),
+    pytest.param("pytest > /tmp/out", "/workspace/app.py",
+                 "build command is not allowed by verification policy: pytest > /tmp/out", id="shell redirection"),
     pytest.param("python -m py_compile app.py", "/tmp/app.py", "under working_dir",
                  id="a file outside the workspace"),
 ])
 def test_build_verification_refuses_without_running(build_command, file_path, message):
     sandbox = RecordingBuildSandbox()
+    events = []
 
     ok, _, err, evidence = v3main.verify_build_command(
         code="print('candidate')\n",
@@ -133,12 +135,14 @@ def test_build_verification_refuses_without_running(build_command, file_path, me
         file_path=file_path,
         project_files={},
         working_dir="/workspace",
+        emit=lambda kind, text, **fields: events.append((kind, text, fields)),
     )
 
     assert ok is False
     assert message in err
     assert evidence["status"] == "unavailable"
     assert sandbox.calls == []
+    assert events == [("build_verify_unavailable", err, {"command": build_command})]
 
 
 def test_a_failed_build_fails_verification_with_its_output_as_evidence():
@@ -164,8 +168,12 @@ def test_a_failed_build_fails_verification_with_its_output_as_evidence():
     assert sandbox.calls[0]["timeout"] == 60
 
 
-def test_a_build_that_fails_without_output_names_the_command():
-    sandbox = RecordingBuildSandbox(answer=(False, "", "", {"exit_code": 1}))
+@pytest.mark.parametrize("out, error", [
+    pytest.param("compiling", "compiling", id="only-stdout"),
+    pytest.param("", "build command failed: make test", id="no-output"),
+])
+def test_a_failed_build_without_stderr_reports_its_output_or_the_command(out, error):
+    sandbox = RecordingBuildSandbox(answer=(False, out, "", {"exit_code": 1}))
 
     ok, _, err, _ = v3main.verify_build_command(
         code="print('candidate')\n",
@@ -177,21 +185,16 @@ def test_a_build_that_fails_without_output_names_the_command():
     )
 
     assert ok is False
-    assert err == "build command failed: make test"
+    assert err == error
 
 
-@pytest.mark.parametrize("sandbox, build_command, message", [
-    pytest.param(object(), "make test", "sandbox build command runner is unavailable", id="no-command-runner"),
-    pytest.param(RecordingBuildSandbox(), "pytest > /tmp/out",
-                 "build command is not allowed by verification policy: pytest > /tmp/out", id="not-allowed"),
-])
-def test_a_build_that_cannot_run_says_why_and_records_it(sandbox, build_command, message):
+def test_a_sandbox_without_a_command_runner_cannot_verify_a_build():
     events = []
 
     ok, _, err, evidence = v3main.verify_build_command(
         code="print('candidate')\n",
-        sandbox=sandbox,
-        build_command=build_command,
+        sandbox=object(),
+        build_command="make test",
         file_path="/workspace/app.py",
         project_files={},
         working_dir="/workspace",
@@ -199,9 +202,9 @@ def test_a_build_that_cannot_run_says_why_and_records_it(sandbox, build_command,
     )
 
     assert ok is False
-    assert err == message
+    assert err == "sandbox build command runner is unavailable"
     assert evidence["status"] == "unavailable"
-    assert events == [("build_verify_unavailable", message, {"command": build_command})]
+    assert events == [("build_verify_unavailable", err, {"command": "make test"})]
 
 
 @pytest.mark.parametrize("file_path,working_dir,expected", [
