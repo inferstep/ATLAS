@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
@@ -290,5 +292,76 @@ func TestTombstonedPathsAreSilentAndNeverResurrected(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "gone.py")); err == nil {
 		t.Error("a deleted file was resurrected")
+	}
+}
+
+// checkpointRestorable says yes only for a whole, verified earlier version and
+// a current version shown broken by the same kind of check. Each row changes
+// one thing from that state and names the refusal it gets.
+func TestCheckpointRestorableNamesEachReasonNotToRestore(t *testing.T) {
+	// A checkpoint exactly at the size limit is still kept; one byte more is not.
+	good := bytes.Repeat([]byte("#"), maxCheckpointFileBytes)
+	large := make([]byte, maxCheckpointFileBytes+1)
+	restorable := func() *taskcontract.DeliverableState {
+		return &taskcontract.DeliverableState{
+			Generation: 1, CheckpointHash: hashBytes(good), CheckpointBytes: good,
+			CheckpointKind: wire.ValidationKindSyntax, ValidationKind: wire.ValidationKindSyntax,
+			ValidationStatus: wire.ValidationFailed, ValidatedHash: "current",
+		}
+	}
+	if ok, why := checkpointRestorable(restorable(), "current", false); !ok {
+		t.Fatalf("the restorable state was refused: %s", why)
+	}
+	if ok, _ := checkpointRestorable(nil, "current", false); ok {
+		t.Error("no deliverable at all was restorable")
+	}
+	for _, tc := range []struct {
+		name      string
+		change    func(d *taskcontract.DeliverableState)
+		current   string
+		hazardous bool
+		reason    string
+	}{
+		{"never written", func(d *taskcontract.DeliverableState) { d.Generation = 0 }, "current", false,
+			"not a deliverable this session wrote"},
+		{"deleted on purpose", func(d *taskcontract.DeliverableState) { d.Tombstoned = true }, "current", false,
+			"deleted or moved on purpose"},
+		{"restoration prohibited", func(d *taskcontract.DeliverableState) { d.RestoreProhibited = true }, "current", false,
+			"restoration prohibited for this path"},
+		{"no valid version", func(d *taskcontract.DeliverableState) { d.CheckpointHash = "" }, "current", false,
+			"no version of it was ever shown to be valid"},
+		{"no valid version kept, and why", func(d *taskcontract.DeliverableState) {
+			d.CheckpointHash, d.CheckpointUnavailable = "", "over the size limit"
+		}, "current", false, "no earlier valid version was kept (over the size limit)"},
+		{"no bytes", func(d *taskcontract.DeliverableState) { d.CheckpointBytes = nil }, "current", false,
+			"the earlier valid version is no longer available"},
+		{"too large", func(d *taskcontract.DeliverableState) {
+			d.CheckpointBytes, d.CheckpointHash = large, hashBytes(large)
+		}, "current", false, "the earlier valid version is too large to hold"},
+		{"bytes and hash disagree", func(d *taskcontract.DeliverableState) { d.CheckpointHash = "another" }, "current", false,
+			"the earlier valid version could not be verified"},
+		{"already the valid version", func(d *taskcontract.DeliverableState) {}, hashBytes(good), false,
+			"the file already holds the last version shown to be valid"},
+		{"current contents never checked", func(d *taskcontract.DeliverableState) { d.ValidatedHash = "older" }, "current", false,
+			"the current contents were never checked"},
+		{"current contents not shown broken", func(d *taskcontract.DeliverableState) { d.ValidationStatus = wire.ValidationPassed },
+			"current", false, "the current contents were not shown to be broken"},
+		{"both checked by an unknown kind", func(d *taskcontract.DeliverableState) {
+			d.CheckpointKind, d.ValidationKind = wire.ValidationKindUnknown, wire.ValidationKindUnknown
+		}, "current", false, "the two versions were not checked the same way"},
+		{"checked by different kinds", func(d *taskcontract.DeliverableState) { d.CheckpointKind = wire.ValidationKindNone },
+			"current", false, "the two versions were not checked the same way"},
+		{"a background job may write", func(d *taskcontract.DeliverableState) {}, "current", true,
+			"a background job may still be writing"},
+	} {
+		d := restorable()
+		tc.change(d)
+		ok, why := checkpointRestorable(d, tc.current, tc.hazardous)
+		if ok {
+			t.Errorf("%s: restorable", tc.name)
+		}
+		if why != tc.reason {
+			t.Errorf("%s: refused as %q, want %q", tc.name, why, tc.reason)
+		}
 	}
 }
