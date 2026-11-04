@@ -124,6 +124,23 @@ func TestMentionsFilename(t *testing.T) {
 	if !mentionsFilename("python3 app.py:12: error", "app.py") {
 		t.Error("app.py must match when bounded by a colon")
 	}
+	if !mentionsFilename("cannot open app.py", "app.py") {
+		t.Error("app.py must match at the end of the text")
+	}
+}
+
+// A letter of either case, a digit, _, . or - on either side makes the name
+// part of a longer one.
+func TestMentionsFilenameNeedsANameBoundaryOnEachSide(t *testing.T) {
+	for _, text := range []string{
+		"my_app.py failed", "lib.app.py failed", "my-app.py failed",
+		"Xapp.py failed", "2app.py failed", "app.python failed",
+		"app.pyX failed", "app.py2 failed",
+	} {
+		if mentionsFilename(text, "app.py") {
+			t.Errorf("app.py must not match in %q", text)
+		}
+	}
 }
 
 // closestLineHint maps a from-memory paraphrase onto the real file line
