@@ -68,10 +68,7 @@ class PythonImportComparison:
                        "stdout": "", "stderr": "", "duration_ms": 0}
         if self.check_cancel:
             self.check_cancel()
-        left = self.remaining_ms() if self.remaining_ms else None
-        # run_command's transport allows ten seconds beyond its execution
-        # timeout. Account for that within the existing pipeline deadline.
-        timeout = 15 if left is None else min(15, int(left / 1000) - 10)
+        timeout = self._timeout()
         if timeout < 1:
             observation["stderr"] = "insufficient remaining budget for an import comparison"
             return observation
@@ -84,18 +81,7 @@ class PythonImportComparison:
                 cwd=self.working_dir, timeout=timeout)
             meta = meta or {}
             exit_code = meta.get("exit_code")
-            # A timeout, cancellation, transport error, or resource limit is
-            # not evidence of a Python exception or a successful import.
-            unavailable = (meta.get("timed_out") or
-                           meta.get("outcome") not in (None, "", "completed") or
-                           type(exit_code) is not int or exit_code < 0)
-            status = "unavailable" if unavailable else (
-                "passed" if ok and exit_code == 0 else "failed")
-            # sys.exit(0) while importing is not a completed import. A zero
-            # exit without the post-import marker establishes no observation.
-            if status == "passed" and IMPORT_COMPLETE not in (out or "").splitlines():
-                status = "unavailable"
-                err = "interpreter exited without completing the target import"
+            status, err = _run_status(ok, out, err, meta)
             observation.update(status=status, exit_code=exit_code,
                                stdout=_bounded_evidence(out), stderr=_bounded_evidence(err),
                                duration_ms=int(meta.get("elapsed_ms") or 0))
@@ -103,6 +89,13 @@ class PythonImportComparison:
             observation["stderr"] = f"sandbox import comparison unavailable: {type(exc).__name__}"
         self.cache[key] = observation
         return observation
+
+    def _timeout(self):
+        """Seconds one import run may take within the pipeline's remaining budget."""
+        left = self.remaining_ms() if self.remaining_ms else None
+        # run_command's transport allows ten seconds beyond its execution
+        # timeout. Account for that within the existing pipeline deadline.
+        return 15 if left is None else min(15, int(left / 1000) - 10)
 
     def check(self, code):
         """Return admission, diagnostic, evidence; never certify fulfillment."""
@@ -138,3 +131,21 @@ class PythonImportComparison:
                      f"candidate's import could not be observed. {detail}")
         evidence["reason"] = error
         return False, error, evidence
+
+
+def _run_status(ok, out, err, meta):
+    """One import run's status (passed, failed or unavailable), and its stderr."""
+    exit_code = meta.get("exit_code")
+    # A timeout, cancellation, transport error, or resource limit is
+    # not evidence of a Python exception or a successful import.
+    unavailable = (meta.get("timed_out") or
+                   meta.get("outcome") not in (None, "", "completed") or
+                   type(exit_code) is not int or exit_code < 0)
+    status = "unavailable" if unavailable else (
+        "passed" if ok and exit_code == 0 else "failed")
+    # sys.exit(0) while importing is not a completed import. A zero
+    # exit without the post-import marker establishes no observation.
+    if status == "passed" and IMPORT_COMPLETE not in (out or "").splitlines():
+        status = "unavailable"
+        err = "interpreter exited without completing the target import"
+    return status, err
