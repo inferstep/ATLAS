@@ -164,8 +164,15 @@ def test_parse_failure_categories_knows_every_category():
                  {0: "edge_case_miss", 1: "time_limit"}, id="candidate-n"),
     pytest.param("1) wrong_algorithm\n2) format_error", 2,
                  {0: "wrong_algorithm", 1: "format_error"}, id="numbered"),
-    pytest.param("SOLUTION 1: WRONG_ALGORITHM", 1, {0: "wrong_algorithm"}, id="upper-case"),
-    pytest.param("The code has a clear implementation_bug in the loop.", 2,
+    # A number names its candidate: a mention alone would go to the first one.
+    pytest.param("2) format_error", 2, {1: "format_error"}, id="numbered-second"),
+    pytest.param("SOLUTION 2: WRONG_ALGORITHM", 2, {1: "wrong_algorithm"}, id="upper-case"),
+    pytest.param("Solution 0: time_limit", 1, {0: "time_limit"}, id="solution-0-names-no-candidate"),
+    pytest.param("Solution 1: time_limit\nSolution 1: format_error", 1, {0: "format_error"},
+                 id="the-last-answer-for-a-candidate-wins"),
+    pytest.param("Solution 2: time_limit\nIt may also be a format_error.", 2, {1: "time_limit"},
+                 id="no-mentions-after-a-numbered-answer"),
+    pytest.param("The code has a clear IMPLEMENTATION_BUG in the loop.", 2,
                  {0: "implementation_bug"}, id="a-mention-goes-to-the-first-candidate"),
     pytest.param("Solution 10: wrong_algorithm", 2,
                  {0: "wrong_algorithm"}, id="index-out-of-range-falls-back-to-the-mention"),
@@ -174,6 +181,13 @@ def test_parse_failure_categories_knows_every_category():
 ])
 def test_parse_failure_categories(answer, num_candidates, expected):
     assert parse_failure_categories(answer, num_candidates) == expected
+
+
+def test_two_mentions_go_to_two_candidates():
+    # Which category goes first follows the set of categories, so only the pair is checked.
+    got = parse_failure_categories("Both a time_limit and a format_error.", 2)
+    assert sorted(got) == [0, 1]
+    assert sorted(got.values()) == ["format_error", "time_limit"]
 
 
 @pytest.mark.parametrize("answer, expected", [
