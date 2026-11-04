@@ -31,14 +31,7 @@ def validate_cx_normalization(value) -> dict:
     """Validate and normalize a deserialized C(x) calibration object."""
     if not isinstance(value, dict):
         raise ValueError("expected a JSON object")
-    required = ("midpoint", "steepness")
-    if not all(_is_number(value.get(k)) for k in required):
-        raise ValueError("expected numeric midpoint and steepness")
-    calibrated = {k: float(value[k]) for k in required}
-    if not all(math.isfinite(v) for v in calibrated.values()):
-        raise ValueError("midpoint and steepness must be finite")
-    if calibrated["steepness"] <= 0.0:
-        raise ValueError("steepness must be positive")
+    calibrated = _midpoint_and_steepness(value)
     # Optional length baseline. C(x) rises with token count whatever the
     # content — measured 2026-08-04, the same function repeated scored 1.84
     # at 20 tokens and 13.91 at 305 — so a fixed midpoint reads long output
@@ -47,15 +40,49 @@ def validate_cx_normalization(value) -> dict:
     # separates what the raw energy cannot (real code z=-0.09, a repetition
     # loop z=+2.92, stub spam z=+11.89, where the first two differ by 0.4
     # in raw C(x)).
-    baseline = value.get("length_baseline")
-    if isinstance(baseline, dict):
-        keys = ("intercept", "log_slope", "residual_sd")
-        if all(_is_number(baseline.get(k)) for k in keys):
-            fitted = {k: float(baseline[k]) for k in keys}
-            if (all(math.isfinite(v) for v in fitted.values())
-                    and fitted["residual_sd"] > 0.0):
-                calibrated["length_baseline"] = fitted
+    baseline = _length_baseline(value.get("length_baseline"))
+    if baseline is not None:
+        calibrated["length_baseline"] = baseline
 
+    calibrated.update(_energy_means(value))
+    if all(key in calibrated for key in ("pass_energy_mean",
+                                          "fail_energy_mean")):
+        if calibrated["fail_energy_mean"] <= calibrated["pass_energy_mean"]:
+            raise ValueError("FAIL energy mean must be greater than PASS energy mean")
+    return calibrated
+
+
+def _midpoint_and_steepness(value: dict) -> dict:
+    """The two required numbers: finite, and a positive steepness."""
+    required = ("midpoint", "steepness")
+    if not all(_is_number(value.get(k)) for k in required):
+        raise ValueError("expected numeric midpoint and steepness")
+    calibrated = {k: float(value[k]) for k in required}
+    if not all(math.isfinite(v) for v in calibrated.values()):
+        raise ValueError("midpoint and steepness must be finite")
+    if calibrated["steepness"] <= 0.0:
+        raise ValueError("steepness must be positive")
+    return calibrated
+
+
+def _length_baseline(baseline):
+    """The fitted length baseline, or None: one that is missing, not
+    numeric, not finite or without a positive residual sd is dropped."""
+    if not isinstance(baseline, dict):
+        return None
+    keys = ("intercept", "log_slope", "residual_sd")
+    if not all(_is_number(baseline.get(k)) for k in keys):
+        return None
+    fitted = {k: float(baseline[k]) for k in keys}
+    if (all(math.isfinite(v) for v in fitted.values())
+            and fitted["residual_sd"] > 0.0):
+        return fitted
+    return None
+
+
+def _energy_means(value: dict) -> dict:
+    """The PASS and FAIL energy means that are present, each a finite number."""
+    means = {}
     for key in ("pass_energy_mean", "fail_energy_mean"):
         if key in value:
             if not _is_number(value[key]):
@@ -63,12 +90,8 @@ def validate_cx_normalization(value) -> dict:
             number = float(value[key])
             if not math.isfinite(number):
                 raise ValueError(f"{key} must be finite")
-            calibrated[key] = number
-    if all(key in calibrated for key in ("pass_energy_mean",
-                                          "fail_energy_mean")):
-        if calibrated["fail_energy_mean"] <= calibrated["pass_energy_mean"]:
-            raise ValueError("FAIL energy mean must be greater than PASS energy mean")
-    return calibrated
+            means[key] = number
+    return means
 
 
 # Residual (in clean-code standard deviations) that maps to 0.5 once a

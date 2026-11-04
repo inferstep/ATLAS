@@ -33,7 +33,8 @@ def test_baseline_survives_validation_and_is_optional():
     assert out["length_baseline"]["log_slope"] == 2.530
     # Malformed or degenerate baselines are dropped, not fatal.
     for bad in ({"intercept": 1.0}, {"intercept": 1.0, "log_slope": 2.0,
-                                     "residual_sd": 0.0}, "nope", None):
+                                     "residual_sd": 0.0},
+                {"intercept": float("inf"), "log_slope": 2.0, "residual_sd": 1.0}, "nope", None):
         assert "length_baseline" not in validate_cx_normalization(
             {**BASE, "length_baseline": bad})
 

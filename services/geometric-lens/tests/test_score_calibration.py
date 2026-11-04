@@ -30,6 +30,7 @@ def test_missing_calibration_is_neutral_not_another_models_default():
 
 
 @pytest.mark.parametrize("value", [
+    pytest.param([], id="not-an-object"),
     pytest.param({}, id="empty"),
     pytest.param({"midpoint": 1.0, "steepness": 0.0}, id="zero-steepness"),
     pytest.param({"midpoint": math.inf, "steepness": 1.0}, id="infinite-midpoint"),
@@ -38,10 +39,19 @@ def test_missing_calibration_is_neutral_not_another_models_default():
     pytest.param({"midpoint": 1.0, "steepness": 1.0,
                   "pass_energy_mean": 2.0, "fail_energy_mean": 1.0},
                  id="pass-energy-above-fail-energy"),
+    pytest.param({"midpoint": 1.0, "steepness": 1.0, "pass_energy_mean": "low"}, id="a-text-energy-mean"),
+    pytest.param({"midpoint": 1.0, "steepness": 1.0, "pass_energy_mean": True}, id="a-bool-energy-mean"),
+    pytest.param({"midpoint": 1.0, "steepness": 1.0, "fail_energy_mean": math.inf}, id="an-infinite-energy-mean"),
 ])
 def test_invalid_cx_calibration_is_rejected(value):
     with pytest.raises(ValueError):
         validate_cx_normalization(value)
+
+
+def test_energy_means_are_kept_as_numbers():
+    value = {"midpoint": 1, "steepness": 2, "pass_energy_mean": 3, "fail_energy_mean": 4}
+    assert validate_cx_normalization(value) == {
+        "midpoint": 1.0, "steepness": 2.0, "pass_energy_mean": 3.0, "fail_energy_mean": 4.0}
 
 
 def test_derive_rejects_nonseparating_energy_distributions():
