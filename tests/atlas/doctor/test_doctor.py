@@ -622,3 +622,73 @@ def test_doctor_runs_every_check_in_order_and_hands_each_what_it_needs(
     assert given["check_workspace_mounts"] == (services,)
     assert given["check_image_skew"] == (services,)
     assert given["check_tier_constraints"] == (str(tmp_path),)
+
+
+# --- _emit(): the summary, the verdict and the exit code --------------------
+
+def _results(*statuses):
+    return [doctor.CheckResult(name=f"check {i}", status=s, message="m") for i, s in enumerate(statuses)]
+
+
+@pytest.mark.parametrize("statuses, summary, exit_code", [
+    pytest.param(("pass", "warn", "skip", "pass"), {"pass": 2, "warn": 1, "fail": 0, "skip": 1}, 0,
+                 id="no-failure-exits-0"),
+    pytest.param(("pass", "fail"), {"pass": 1, "warn": 0, "fail": 1, "skip": 0}, 1, id="a-failure-exits-1"),
+])
+def test_doctor_json_counts_each_status(capsys, statuses, summary, exit_code):
+    rc = doctor._emit(_results(*statuses), SimpleNamespace(json=True, verbose=False), color=False)
+
+    assert json.loads(capsys.readouterr().out)["summary"] == summary
+    assert rc == exit_code
+
+
+def test_doctor_json_that_stdout_cannot_encode_is_written_as_escaped_bytes(monkeypatch):
+    def print_cannot_encode(*args, **kwargs):
+        raise UnicodeEncodeError("ascii", "\u2014", 0, 1, "ordinal not in range")
+    monkeypatch.setattr(doctor, "print", print_cannot_encode, raising=False)
+    monkeypatch.setattr(doctor, "UNICODE_OK", True)
+    stdout = SimpleNamespace(buffer=io.BytesIO())
+    monkeypatch.setattr(sys, "stdout", stdout)
+    result = doctor.CheckResult(name="lens", status="pass", message="ready \u2014 calibrated")
+
+    doctor._emit([result], SimpleNamespace(json=True, verbose=False), color=False)
+
+    assert json.loads(stdout.buffer.getvalue())["checks"][0]["message"] == "ready \u2014 calibrated"
+    assert b"\\u2014" in stdout.buffer.getvalue()
+
+
+@pytest.mark.parametrize("statuses, color, summary_line, verdict, exit_code", [
+    pytest.param(("pass", "pass"), False, "  2 passed", "  ATLAS install is healthy.", 0, id="healthy"),
+    pytest.param(("pass", "warn"), False, "  1 passed, 1 warnings", "  ATLAS install is functional with warnings.", 0,
+                 id="warnings"),
+    pytest.param(("pass", "warn", "fail", "skip"), False, "  1 passed, 1 warnings, 1 failed, 1 skipped",
+                 f"  ATLAS install has failures {doctor.DASH} re-run with -v for detail.", 1, id="a-failure"),
+    pytest.param(("pass", "pass"), True, "  2 passed", f"  {doctor.GREEN}ATLAS install is healthy.{doctor.RESET}", 0,
+                 id="healthy-in-color"),
+    pytest.param(("pass", "warn"), True, f"  1 passed, {doctor.YELL}1 warnings{doctor.RESET}",
+                 f"  {doctor.YELL}ATLAS install is functional with warnings.{doctor.RESET}", 0, id="warnings-in-color"),
+    pytest.param(("pass", "warn", "fail", "skip"), True,
+                 f"  1 passed, {doctor.YELL}1 warnings{doctor.RESET}, {doctor.RED}1 failed{doctor.RESET}, 1 skipped",
+                 f"  {doctor.RED}ATLAS install has failures {doctor.DASH} re-run with -v for detail.{doctor.RESET}", 1,
+                 id="a-failure-in-color"),
+])
+def test_doctor_summary_names_the_counts_and_the_verdict(capsys, statuses, color, summary_line, verdict, exit_code):
+    rc = doctor._emit(_results(*statuses), SimpleNamespace(json=False, verbose=False), color=color,
+                      already_printed=True)
+
+    assert capsys.readouterr().out.splitlines()[-2:] == [summary_line, verdict]
+    assert rc == exit_code
+
+
+@pytest.mark.parametrize("already_printed, printed", [
+    pytest.param(False, ["check 0", "check 1"], id="each-result-printed"),
+    pytest.param(True, [], id="not-printed-again"),
+])
+def test_doctor_prints_each_result_unless_already_printed(monkeypatch, already_printed, printed):
+    seen = []
+    monkeypatch.setattr(doctor, "_print_result", lambda r, verbose, color: seen.append(r.name))
+
+    doctor._emit(_results("pass", "pass"), SimpleNamespace(json=False, verbose=False), color=False,
+                 already_printed=already_printed)
+
+    assert seen == printed
