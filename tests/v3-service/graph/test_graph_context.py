@@ -73,6 +73,15 @@ class TestRepairContext:
             "**Also transitively affected (1):** `top`",
             "**Calls out to:** none (`helper` is a leaf)",
         ], id="lists-over-the-cap"),
+        # Exactly as many callers as the cap: all of them, and no "more".
+        pytest.param("helper", {"max_items": 3}, [
+            "**Call path from an entry point (how execution reaches it):**",
+            "`top → a → helper`",
+            "",
+            "**Direct callers (3):** `a`, `b`, `c`",
+            "**Also transitively affected (1):** `top`",
+            "**Calls out to:** none (`helper` is a leaf)",
+        ], id="a-list-at-the-cap"),
         # No call path and no transitive line, though top reaches helper.
         pytest.param("helper", {"transitive": False}, [
             "**Direct callers (3):** `a`, `b`, `c`",
