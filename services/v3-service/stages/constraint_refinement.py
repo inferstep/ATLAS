@@ -200,22 +200,28 @@ def parse_hypotheses(response: str,
         constraints_match = re.search(r'CONSTRAINTS[:\s]*(.*?)$',
                                        block, re.DOTALL | re.IGNORECASE)
         if constraints_match:
-            for line in constraints_match.group(1).strip().split('\n'):
-                line = line.strip().lstrip('-*').strip()
-                if not line:
-                    continue
-                if line.upper().startswith('NEW:'):
-                    new_c = line[4:].strip()
-                    if new_c:
-                        h.new_constraints.append(new_c)
-                        h.constraints.append(new_c)
-                elif line and line not in h.constraints:
-                    h.constraints.append(line)
+            _add_constraints(h, constraints_match.group(1))
 
         if h.approach or h.new_constraints:
             hypotheses.append(h)
 
     return hypotheses
+
+
+def _add_constraints(h: RefinedHypothesis, text: str) -> None:
+    """Add each line of a CONSTRAINTS section to h. A "NEW:" line is also one
+    of h's new constraints; a line h already has is not added again."""
+    for line in text.strip().split('\n'):
+        line = line.strip().lstrip('-*').strip()
+        if not line:
+            continue
+        if line.upper().startswith('NEW:'):
+            new_c = line[4:].strip()
+            if new_c:
+                h.new_constraints.append(new_c)
+                h.constraints.append(new_c)
+        elif line and line not in h.constraints:
+            h.constraints.append(line)
 
 
 def filter_by_distance(hypotheses: List[RefinedHypothesis],

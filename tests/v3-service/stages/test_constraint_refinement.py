@@ -147,6 +147,16 @@ def test_parse_hypotheses_finds_one_hypothesis_per_block(response, approaches):
     assert [h.approach for h in parse_hypotheses(response, [])] == approaches
 
 
+@pytest.mark.parametrize("lines, new, constraints", [
+    pytest.param("- new: Check all pairs\n", ["Check all pairs"], ["Check all pairs"], id="NEW in any case"),
+    pytest.param("- NEW:\n- Check all pairs\n", [], ["Check all pairs"], id="an empty NEW is skipped"),
+])
+def test_parse_hypotheses_reads_each_constraint_line(lines, new, constraints):
+    [h] = parse_hypotheses("HYPOTHESIS 1:\nAPPROACH: Brute force\nCONSTRAINTS:\n" + lines, [])
+    assert h.new_constraints == new
+    assert h.constraints == constraints
+
+
 # ---------------------------------------------------------------------------
 # filter_by_distance
 # ---------------------------------------------------------------------------
