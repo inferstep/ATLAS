@@ -201,8 +201,7 @@ def _read_rocm_smi() -> List[GPUInfo]:
 
     rocm-smi has shifted JSON schema across versions; we tolerate both the
     pre-6.x "card0" / "Card Series" keys and the 6.x "GPU[0]" / "Card model"
-    keys. If --json fails entirely, fall back to text parsing of the
-    default rocm-smi table.
+    keys. If --json fails, no AMD GPU is reported.
     """
     if not shutil.which("rocm-smi"):
         return []
@@ -222,33 +221,46 @@ def _read_rocm_smi() -> List[GPUInfo]:
         return []
     gpus: List[GPUInfo] = []
     for key, info in data.items():
-        # Tolerate 'card0', 'GPU[0]', 'GPU0', etc.
-        idx_str = ''.join(c for c in key if c.isdigit())
-        if not idx_str:
-            continue
-        try:
-            idx = int(idx_str)
-        except ValueError:
-            continue
-        name = (info.get("Card Series") or info.get("Card Model")
-                or info.get("Card model") or info.get("Card SKU")
-                or info.get("GPU Model") or "AMD GPU")
-        # VRAM key varies: "VRAM Total Memory (B)", "VRAM Total (B)",
-        # "vram_total_bytes". Try each.
-        vram_bytes = 0.0
-        for vkey in ("VRAM Total Memory (B)", "VRAM Total (B)",
-                     "vram_total_bytes", "VRAM Total"):
-            if vkey in info:
-                try:
-                    vram_bytes = float(str(info[vkey]).replace(",", ""))
-                    break
-                except ValueError:
-                    continue
-        vram_gb = vram_bytes / (1024 ** 3) if vram_bytes else 0.0
-        gpus.append(GPUInfo(vendor="amd", name=name, vram_gb=vram_gb,
-                            compute_target=_amd_gfx_from_name(name),
-                            index=idx))
+        gpu = _rocm_gpu(key, info)
+        if gpu is not None:
+            gpus.append(gpu)
     return gpus
+
+
+def _rocm_gpu(key: str, info: dict) -> Optional[GPUInfo]:
+    """The GPU one rocm-smi entry describes, or None for an entry that is
+    not a card."""
+    # Tolerate 'card0', 'GPU[0]', 'GPU0', etc.
+    idx_str = ''.join(c for c in key if c.isdigit())
+    if not idx_str:
+        return None
+    try:
+        idx = int(idx_str)
+    except ValueError:
+        return None
+    name = (info.get("Card Series") or info.get("Card Model")
+            or info.get("Card model") or info.get("Card SKU")
+            or info.get("GPU Model") or "AMD GPU")
+    vram_bytes = _rocm_vram_bytes(info)
+    vram_gb = vram_bytes / (1024 ** 3) if vram_bytes else 0.0
+    return GPUInfo(vendor="amd", name=name, vram_gb=vram_gb,
+                   compute_target=_amd_gfx_from_name(name),
+                   index=idx)
+
+
+def _rocm_vram_bytes(info: dict) -> float:
+    """The card's VRAM in bytes, from the first key that holds a number,
+    or 0 when none does."""
+    # VRAM key varies: "VRAM Total Memory (B)", "VRAM Total (B)",
+    # "vram_total_bytes". Try each.
+    for vkey in ("VRAM Total Memory (B)", "VRAM Total (B)",
+                 "vram_total_bytes", "VRAM Total"):
+        if vkey in info:
+            try:
+                return float(str(info[vkey]).replace(",", ""))
+            except ValueError:
+                continue
+    return 0.0
 
 
 def _read_apple_metal() -> List[GPUInfo]:

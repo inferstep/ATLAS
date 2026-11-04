@@ -4,6 +4,7 @@ test needs nvidia-smi or rocm-smi.
 """
 
 import dataclasses
+import json
 import subprocess
 import sys
 import tempfile
@@ -106,6 +107,74 @@ def test_rocm_smi_json_gives_the_amd_gpu(monkeypatch):
     assert "7900 XTX" in gpus[0].name
     assert gpus[0].vram_gb == pytest.approx(24.0, rel=0.05)
     assert gpus[0].compute_target == "gfx1100"
+
+
+@pytest.mark.parametrize("rocm_smi_path, returncode, stdout", [
+    pytest.param(None, 0, '{"card0": {}}', id="no-rocm-smi"),
+    pytest.param("/opt/rocm/bin/rocm-smi", 1, '{"card0": {}}', id="a-failed-run"),
+    pytest.param("/opt/rocm/bin/rocm-smi", 0, "not json", id="an-answer-that-is-not-json"),
+])
+def test_rocm_smi_without_a_json_answer_gives_no_gpu(monkeypatch, rocm_smi_path, returncode, stdout):
+    ran = subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout)
+    monkeypatch.setattr(tier.shutil, "which", lambda x: rocm_smi_path)
+    monkeypatch.setattr(tier.subprocess, "run", lambda *a, **kw: ran)
+
+    assert tier._read_rocm_smi() == []
+
+
+def test_rocm_smi_that_times_out_gives_no_gpu(monkeypatch):
+    def time_out(*a, **kw):
+        raise subprocess.TimeoutExpired(cmd="rocm-smi", timeout=10)
+    monkeypatch.setattr(tier.shutil, "which", lambda x: "/opt/rocm/bin/rocm-smi")
+    monkeypatch.setattr(tier.subprocess, "run", time_out)
+
+    assert tier._read_rocm_smi() == []
+
+
+def test_rocm_smi_reads_the_index_from_each_card_key(monkeypatch):
+    """rocm-smi names a card card0 before 6.x and GPU[0] from 6.x. A key
+    with no digits, such as "system", or with a digit int() cannot read,
+    such as a superscript two, is not a card."""
+    rocm_smi_json = json.dumps({"card0": {}, "GPU[1]": {}, "system": {"Driver version": "6.7.0"},
+                                "card\u00b2": {}})
+    ran = subprocess.CompletedProcess(args=[], returncode=0, stdout=rocm_smi_json)
+    monkeypatch.setattr(tier.shutil, "which", lambda x: "/opt/rocm/bin/rocm-smi")
+    monkeypatch.setattr(tier.subprocess, "run", lambda *a, **kw: ran)
+
+    assert [gpu.index for gpu in tier._read_rocm_smi()] == [0, 1]
+
+
+@pytest.mark.parametrize("card, name", [
+    pytest.param({"Card Model": "Radeon PRO W7900"}, "Radeon PRO W7900", id="card-model"),
+    pytest.param({"Card model": "Radeon RX 7800 XT"}, "Radeon RX 7800 XT", id="card-model-from-6x"),
+    pytest.param({"Card SKU": "Radeon RX 6800"}, "Radeon RX 6800", id="card-sku"),
+    pytest.param({"GPU Model": "Radeon RX 6700 XT"}, "Radeon RX 6700 XT", id="gpu-model"),
+    pytest.param({}, "AMD GPU", id="no-name"),
+])
+def test_rocm_smi_reads_the_name_under_each_key_it_knows(monkeypatch, card, name):
+    ran = subprocess.CompletedProcess(args=[], returncode=0, stdout=json.dumps({"card0": card}))
+    monkeypatch.setattr(tier.shutil, "which", lambda x: "/opt/rocm/bin/rocm-smi")
+    monkeypatch.setattr(tier.subprocess, "run", lambda *a, **kw: ran)
+
+    assert tier._read_rocm_smi()[0].name == name
+
+
+# 17179869184 bytes are 16 GiB.
+@pytest.mark.parametrize("card, vram_gb", [
+    pytest.param({"VRAM Total (B)": "17179869184"}, 16.0, id="vram-total-b"),
+    pytest.param({"vram_total_bytes": 17179869184}, 16.0, id="vram-total-bytes"),
+    pytest.param({"VRAM Total": "17,179,869,184"}, 16.0, id="commas-dropped"),
+    pytest.param({"VRAM Total Memory (B)": "8589934592", "VRAM Total (B)": "17179869184"}, 8.0,
+                 id="the-first-key-wins"),
+    pytest.param({"VRAM Total Memory (B)": "N/A", "VRAM Total (B)": "17179869184"}, 16.0,
+                 id="a-value-that-is-not-a-number-is-passed-over"),
+])
+def test_rocm_smi_reads_the_vram_in_gib(monkeypatch, card, vram_gb):
+    ran = subprocess.CompletedProcess(args=[], returncode=0, stdout=json.dumps({"card0": card}))
+    monkeypatch.setattr(tier.shutil, "which", lambda x: "/opt/rocm/bin/rocm-smi")
+    monkeypatch.setattr(tier.subprocess, "run", lambda *a, **kw: ran)
+
+    assert tier._read_rocm_smi()[0].vram_gb == vram_gb
 
 
 # --- evaluate_constraints(): pass, warn or fail ------------------------------
