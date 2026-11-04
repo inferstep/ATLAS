@@ -138,7 +138,7 @@ def run_task(suite, task, url, arm: str, attempts: int,
         shutil.rmtree(work, ignore_errors=True)
 
 
-def main() -> int:
+def _parse_args():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tasks", default="aoc_sonar,aoc_course,aoc_slope,aoc_shoal")
     ap.add_argument("--reps", type=int, default=2)
@@ -147,13 +147,11 @@ def main() -> int:
     ap.add_argument("--arms", default="oneshot,loop")
     ap.add_argument("--temperature", type=float, default=0.6)
     ap.add_argument("--json", dest="json_out", default="")
-    args = ap.parse_args()
+    return ap.parse_args()
 
-    suite = _load_suite()
-    url = _llama_url()
-    names = [t.strip() for t in args.tasks.split(",") if t.strip()]
-    arms = [a.strip() for a in args.arms.split(",") if a.strip()]
 
+def _run_all(suite, url, arms: list, names: list, args) -> list:
+    """Every arm, task and rep in turn, printing each verdict as it lands."""
     results = []
     for arm in arms:
         for name in names:
@@ -167,7 +165,11 @@ def main() -> int:
                 mark = "PASS" if row["passed"] else "fail"
                 print(f"      {mark} attempts={row['attempts']} "
                       f"{row['wall_s']}s — {row['detail'][:90]}", flush=True)
+    return results
 
+
+def _print_table(results: list, arms: list, names: list) -> None:
+    """Passes per arm and task, then each arm's total."""
     print("\n" + "=" * 62)
     print(f"{'arm':10} {'task':14} {'passed':>8}")
     for arm in arms:
@@ -181,6 +183,17 @@ def main() -> int:
         print(f"{arm:10} {'TOTAL':14} {p:>4}/{len(rows)}  ({pct:.0f}%)")
     print("=" * 62)
     print("Compare against ATLAS on the same four tasks, from the e2e runs.")
+
+
+def main() -> int:
+    args = _parse_args()
+    suite = _load_suite()
+    url = _llama_url()
+    names = [t.strip() for t in args.tasks.split(",") if t.strip()]
+    arms = [a.strip() for a in args.arms.split(",") if a.strip()]
+
+    results = _run_all(suite, url, arms, names, args)
+    _print_table(results, arms, names)
 
     if args.json_out:
         Path(args.json_out).write_text(json.dumps(results, indent=1))
