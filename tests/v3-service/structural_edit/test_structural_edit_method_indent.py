@@ -116,7 +116,8 @@ def test_multiline_string_inside_a_method_is_not_reindented():
             "        return '''\n<b>\n  total\n\tby tab\n</b>\n'''") in res["new_content"]
 
 
-@pytest.mark.parametrize("lead", ["\n", "# v2\n"], ids=["blank-line-first", "comment-first"])
+@pytest.mark.parametrize("lead", ["\n", "# v2\n", "    \n"],
+                         ids=["blank-line-first", "comment-first", "blank-line-with-spaces-first"])
 def test_a_method_never_leaves_its_class(lead):
     """A column-0 method behind a blank line or a comment. Spliced as sent,
     the node line's whitespace goes to that first row, the def lands at column
@@ -145,17 +146,19 @@ def test_a_method_added_after_the_last_one_stays_in_its_class():
 
 @pytest.mark.parametrize("content, error", [
     # Re-basing turns the indentation error into the real one.
-    ("def deposit(self, amount):\n    return amount +", "invalid syntax"),
+    ("def deposit(self, amount):\n    return amount +", "line 6: invalid syntax"),
     # Re-based, the error is still about indentation: the one as sent is reported.
     ("def deposit(self, amount):\n    if amount:\n    return amount",
-     "expected an indented block after function definition"),
+     "line 6: expected an indented block after function definition"),
+    # Neither error is about indentation: the one as sent is reported.
+    ("def deposit(self, amount):\n        return amount +\n    )", "line 7: unmatched ')'"),
     # As sent, the node would land off its column: the re-based error is reported.
-    ("    def deposit(self, amount):\n        return amount +", "invalid syntax"),
-], ids=["in-place-other-error", "in-place-indentation-error", "off-its-column"])
+    ("    def deposit(self, amount):\n        return amount +", "line 6: invalid syntax"),
+], ids=["in-place-other-error", "in-place-indentation-error", "in-place-two-other-errors", "off-its-column"])
 def test_when_neither_form_compiles_the_error_that_helps_is_reported(content, error):
     res = structural_edit("acct.py", SRC, "function:deposit", content)
     assert res["success"] is False
-    assert f"SyntaxError at line 6: {error}" in res["error"]
+    assert f"SyntaxError at {error}" in res["error"]
 
 
 @pytest.mark.parametrize("content", [
