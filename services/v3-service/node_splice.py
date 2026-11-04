@@ -116,35 +116,57 @@ def _rebase_python(source: bytes, target, content: str, path: str,
         return None, None  # no statement to place; the syntax gate reports it
     statements, strings = roles
     rows = content.splitlines(keepends=True)
-    col, first = len(prefix), min(statements)
-
-    def lands(i: int) -> int:
-        """Column of row i when the content is spliced in as sent."""
-        indent = len(_leading_ws(rows[i]))
-        return col + indent if i == 0 else indent
-
-    in_scope = lands(first) == col and all(lands(i) >= col for i in statements)
+    in_scope = _lands_in_scope(rows, statements, len(prefix))
     sent_error = _compile_error(sent_text, path) if in_scope else None
     if in_scope and sent_error is None:
         return None, None
 
-    code_rows = [i for i, row in enumerate(rows) if row.strip() and i not in strings]
-    if len(set(prefix) | set("".join(_leading_ws(rows[i]) for i in code_rows))) > 1:
+    if _mixes_tabs_and_spaces(rows, strings, prefix):
         return None, _mixed_indent_refusal(prefix)
     base = min(len(_leading_ws(rows[i])) for i in statements)
-    if len(_leading_ws(rows[first])) != base:
+    if len(_leading_ws(rows[min(statements)])) != base:
         return None, None  # not one block that starts at its first statement
     rebased = _rebased(rows, strings, base, prefix)
     if rebased == content:
         return None, None
     rebased_error = _compile_error(_spliced(source, target, rebased).decode("utf-8"), path)
-    if rebased_error is None or not in_scope:
-        return rebased, None
-    # Neither form compiles. Re-basing cannot fix quoting, but when it turns an
-    # indentation error into another error, that is the one to report.
-    if isinstance(sent_error, IndentationError) and not isinstance(rebased_error, IndentationError):
+    if _rebased_is_better(in_scope, sent_error, rebased_error):
         return rebased, None
     return None, None
+
+
+def _lands_in_scope(rows: List[str], statements: Set[int], col: int) -> bool:
+    """Whether the content, spliced in as sent, starts its first statement on
+    the node's column `col` and no statement left of it.
+
+    The first row lands after the node line's indentation; every other row
+    lands at its own indentation.
+    """
+    def lands(i: int) -> int:
+        indent = len(_leading_ws(rows[i]))
+        return col + indent if i == 0 else indent
+
+    return lands(min(statements)) == col and all(lands(i) >= col for i in statements)
+
+
+def _mixes_tabs_and_spaces(rows: List[str], strings: Set[int], prefix: str) -> bool:
+    """Whether the node line's indentation and the indentation of the code rows
+    use both tabs and spaces. Blank rows and rows inside a string do not count."""
+    code_rows = [i for i, row in enumerate(rows) if row.strip() and i not in strings]
+    return len(set(prefix) | set("".join(_leading_ws(rows[i]) for i in code_rows))) > 1
+
+
+def _rebased_is_better(in_scope: bool, sent_error: Optional[SyntaxError],
+                       rebased_error: Optional[SyntaxError]) -> bool:
+    """Whether the re-based content replaces the content as sent.
+
+    It does when it compiles, or when the content as sent does not land in the
+    node's scope. When neither form compiles, re-basing cannot fix quoting, but when
+    it turns an indentation error into another error, that is the one to report.
+    """
+    if rebased_error is None or not in_scope:
+        return True
+    return isinstance(sent_error, IndentationError) and not isinstance(rebased_error, IndentationError)
 
 
 def _rebased(rows: List[str], strings: Set[int], base: int, prefix: str) -> str:
