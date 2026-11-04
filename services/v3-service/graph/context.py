@@ -93,27 +93,19 @@ def repair_context(
         sb.append("")
 
     if direct_callers:
-        capped = direct_callers[:max_items]
-        sb.append(f"**Direct callers ({len(direct_callers)}):** "
-                  + ", ".join("`" + c + "`" for c in capped)
-                  + (f" … +{len(direct_callers) - max_items} more" if len(direct_callers) > max_items else ""))
+        sb.append(f"**Direct callers ({len(direct_callers)}):** " + _capped_names(direct_callers, max_items))
     else:
         sb.append("**Direct callers:** none (entry point or called only externally)")
 
     # The impact set beyond the direct callers is the transitive blast radius.
     direct_set = set(direct_callers)
-    transitive = [n for n in impact if n not in direct_set]
-    if transitive:
-        capped = transitive[:max_items]
-        sb.append(f"**Also transitively affected ({len(transitive)}):** "
-                  + ", ".join("`" + c + "`" for c in capped)
-                  + (f" … +{len(transitive) - max_items} more" if len(transitive) > max_items else ""))
+    beyond_callers = [n for n in impact if n not in direct_set]
+    if beyond_callers:
+        sb.append(f"**Also transitively affected ({len(beyond_callers)}):** "
+                  + _capped_names(beyond_callers, max_items))
 
     if callees:
-        capped = callees[:max_items]
-        sb.append(f"**Calls out to ({len(callees)}):** "
-                  + ", ".join("`" + c + "`" for c in capped)
-                  + (f" … +{len(callees) - max_items} more" if len(callees) > max_items else ""))
+        sb.append(f"**Calls out to ({len(callees)}):** " + _capped_names(callees, max_items))
     else:
         sb.append(f"**Calls out to:** none (`{function_name}` is a leaf)")
 
@@ -122,3 +114,10 @@ def repair_context(
               "raises can break everything in the affected set above; changing what "
               "it calls usually can't.")
     return "\n".join(sb)
+
+
+def _capped_names(names: List[str], max_items: int) -> str:
+    """The first max_items names, each in backticks, and how many more there are."""
+    capped = names[:max_items]
+    more = f" … +{len(names) - max_items} more" if len(names) > max_items else ""
+    return ", ".join("`" + c + "`" for c in capped) + more

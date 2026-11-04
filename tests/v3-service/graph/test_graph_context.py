@@ -30,6 +30,15 @@ PROJECT = {
     ),
 }
 
+# helper has three direct callers, and top reaches it only through them.
+WIDE = {"wide.py": (
+    "def helper():\n    return 1\n\n"
+    "def a():\n    return helper()\n\n"
+    "def b():\n    return helper()\n\n"
+    "def c():\n    return helper()\n\n"
+    "def top():\n    return a() + b() + c()\n"
+)}
+
 
 class TestRepairContext:
     def test_includes_callers_callees_and_path(self):
@@ -55,6 +64,39 @@ class TestRepairContext:
         ctx = graph.repair_context(PROJECT, "clean")
         assert "leaf" in ctx  # clean calls nothing
 
+    @pytest.mark.parametrize("function, options, lines", [
+        pytest.param("helper", {"max_items": 2}, [
+            "**Call path from an entry point (how execution reaches it):**",
+            "`top → a → helper`",
+            "",
+            "**Direct callers (3):** `a`, `b` … +1 more",
+            "**Also transitively affected (1):** `top`",
+            "**Calls out to:** none (`helper` is a leaf)",
+        ], id="lists-over-the-cap"),
+        # No call path and no transitive line, though top reaches helper.
+        pytest.param("helper", {"transitive": False}, [
+            "**Direct callers (3):** `a`, `b`, `c`",
+            "**Calls out to:** none (`helper` is a leaf)",
+        ], id="one-hop-only"),
+        pytest.param("a", {}, [
+            "**Call path from an entry point (how execution reaches it):**",
+            "`top → a`",
+            "",
+            "**Direct callers (1):** `top`",
+            "**Calls out to (1):** `helper`",
+        ], id="a-function-that-calls-out"),
+    ])
+    def test_the_whole_block(self, function, options, lines):
+        assert graph.repair_context(WIDE, function, **options) == "\n".join([
+            f"## Call-graph context for failing function `{function}`",
+            "",
+            "Defined in: `wide.py`",
+            "",
+            *lines,
+            "",
+            f"Scope the fix with this: changing what `{function}` returns or raises can break everything "
+            "in the affected set above; changing what it calls usually can't.",
+        ])
 
 class TestSymbolNeighborhood:
     def test_callers_callees_impact(self):
