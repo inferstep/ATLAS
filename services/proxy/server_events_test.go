@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -265,6 +266,9 @@ func TestHandleEventsStreamsEmittedEnvelopeToConnectedClient(t *testing.T) {
 	go func() {
 		// Tiny delay so the handler's select loop is parked.
 		time.Sleep(50 * time.Millisecond)
+		// An envelope that does not marshal is skipped, and the stream goes
+		// on: the next one is the first data line the client reads.
+		Emit(wire.NewEnvelope(wire.EvtMetric, "lens", map[string]interface{}{"value": func() {}}))
 		Emit(wire.NewEnvelope(wire.EvtMetric, "lens", map[string]interface{}{
 			"name": "gx_score", "value": 0.83,
 		}))
@@ -303,6 +307,44 @@ func TestHandleEventsStreamsEmittedEnvelopeToConnectedClient(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("emitted envelope didn't reach connected client within 2s")
+	}
+}
+
+// writeFailsAfterFirst stands in for a client that took the connected line
+// and is gone after it: every later write fails.
+type writeFailsAfterFirst struct {
+	header http.Header
+	writes int
+}
+
+func (w *writeFailsAfterFirst) Header() http.Header { return w.header }
+func (w *writeFailsAfterFirst) WriteHeader(int)     {}
+func (w *writeFailsAfterFirst) Flush()              {}
+func (w *writeFailsAfterFirst) Write(b []byte) (int, error) {
+	w.writes++
+	if w.writes > 1 {
+		return 0, errors.New("client gone")
+	}
+	return len(b), nil
+}
+
+// A write that fails ends the stream, though the request's context is still open.
+func TestHandleEventsReturnsWhenAWriteFails(t *testing.T) {
+	w := &writeFailsAfterFirst{header: http.Header{}}
+	req := httptest.NewRequest(http.MethodGet, "/events", nil)
+	done := make(chan struct{})
+	go func() {
+		handleEvents(w, req)
+		close(done)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	Emit(wire.NewEnvelope(wire.EvtMetric, "lens", map[string]interface{}{"name": "unread"}))
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handleEvents went on after a write failed")
 	}
 }
 

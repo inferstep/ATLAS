@@ -149,14 +149,9 @@ func handleEvents(w http.ResponseWriter, r *http.Request) {
 			if !open {
 				return
 			}
-			line, err := json.Marshal(ev)
-			if err != nil {
-				continue
-			}
-			if _, err := fmt.Fprintf(w, "data: %s\n\n", line); err != nil {
+			if !sendEvent(w, flusher, ev) {
 				return
 			}
-			flusher.Flush()
 		case <-heartbeat.C:
 			if _, err := fmt.Fprint(w, ": heartbeat\n\n"); err != nil {
 				return
@@ -164,4 +159,18 @@ func handleEvents(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
+}
+
+// sendEvent writes one envelope as an SSE data line and flushes it. An
+// envelope that does not marshal is skipped; false means the client is gone.
+func sendEvent(w http.ResponseWriter, flusher http.Flusher, ev wire.Envelope) bool {
+	line, err := json.Marshal(ev)
+	if err != nil {
+		return true
+	}
+	if _, err := fmt.Fprintf(w, "data: %s\n\n", line); err != nil {
+		return false
+	}
+	flusher.Flush()
+	return true
 }
