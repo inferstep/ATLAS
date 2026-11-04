@@ -6,6 +6,7 @@ written direction is known in advance.
 import importlib.util
 import json
 import sys
+import types
 from pathlib import Path
 
 import gguf
@@ -69,8 +70,11 @@ def test_limit_keeps_the_first_pairs_and_progress_shows_every_50_and_the_last(tm
 
     monkeypatch.setattr(module, "render_prompt", lambda pair: pair["user"])
     monkeypatch.setattr(module, "extract_mean_residual", mean_residual)
+    # The clock reads 1000 s at the start, then 1025 s and 1026 s at the two progress lines.
+    monkeypatch.setattr(module, "time", types.SimpleNamespace(monotonic=iter([1000.0, 1025.0, 1026.0]).__next__))
     pairs = tmp_path / "pairs.jsonl"
-    lines = [_pair("structural_edit" if i % 2 == 0 else "edit_file", f"p{i}") for i in range(120)]
+    # One prompt in four is an edit_file one, so the two counts differ.
+    lines = [_pair("edit_file" if i % 4 == 3 else "structural_edit", f"p{i}") for i in range(120)]
     pairs.write_text("\n".join(lines) + "\n")
     monkeypatch.setattr(sys, "argv", ["build_steering_vector.py", "--pairs", str(pairs),
                                       "--out", str(tmp_path / "vector.gguf"), "--layer", "1", "--limit", "26"])
@@ -78,8 +82,9 @@ def test_limit_keeps_the_first_pairs_and_progress_shows_every_50_and_the_last(tm
     assert module.main() == 0
 
     assert seen == [f"p{i}" for i in range(52)]
-    progress = [line.split("]")[0] for line in capsys.readouterr().out.splitlines() if line.startswith("  [")]
-    assert progress == ["  [  50/52", "  [  52/52"]
+    progress = [line for line in capsys.readouterr().out.splitlines() if line.startswith("  [")]
+    assert progress == ["  [  50/52] pos=38 neg=12 elapsed=25.0s rate=2.00/s eta=1s",
+                        "  [  52/52] pos=39 neg=13 elapsed=26.0s rate=2.00/s eta=0s"]
 
 
 # Each run has a pair of both kinds besides the line that stops it.
