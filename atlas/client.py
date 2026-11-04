@@ -107,6 +107,26 @@ def probe_llama(url: Optional[str] = None,
     # 2. /props — n_layer + model name. Field names changed across
     # llama-server versions; tolerate both `n_layer` and `default_generation_settings`.
     props = get_json_or_none(f"{url}/props", timeout=5.0) or {}
+    _read_props(probe, props)
+
+    # 3. /embedding — authoritative dim. Send a small sample; pooled or
+    # per-token both yield the dim. The PC-202 patch is signalled by the
+    # presence of `hidden_states_dim` in the response when `layers` is
+    # requested; on an unpatched server the field is silently absent.
+    emb = post_json_or_none(f"{url}/embedding",
+                            {"content": sample_text, "layers": [0]},
+                            timeout=30.0)
+    _read_embedding(probe, emb)
+    if probe.embedding_dim == 0:
+        probe.error = (f"llama-server at {url} is up but /embedding "
+                       f"didn't return an embedding. Likely cause: model "
+                       f"was started without `--embeddings`. Check "
+                       f"services/inference/entrypoint-v3.1.sh.")
+    return probe
+
+
+def _read_props(probe: LlamaProbe, props: dict) -> None:
+    """The layer count and model name from /props, as each server version names them."""
     probe.n_layers = (
         int(props.get("n_layer", 0))
         or int((props.get("default_generation_settings") or {}).get("n_layer", 0))
@@ -116,27 +136,20 @@ def probe_llama(url: Optional[str] = None,
                         or props.get("model")
                         or "")
 
-    # 3. /embedding — authoritative dim. Send a small sample; pooled or
-    # per-token both yield the dim. The PC-202 patch is signalled by the
-    # presence of `hidden_states_dim` in the response when `layers` is
-    # requested; on an unpatched server the field is silently absent.
-    emb = post_json_or_none(f"{url}/embedding",
-                            {"content": sample_text, "layers": [0]},
-                            timeout=30.0)
-    if isinstance(emb, list) and emb:
-        first = emb[0]
-        if isinstance(first, dict):
-            raw = first.get("embedding")
-            if isinstance(raw, list) and raw:
-                if isinstance(raw[0], list):
-                    probe.embedding_dim = len(raw[0])  # per-token
-                else:
-                    probe.embedding_dim = len(raw)     # pooled
-            if "hidden_states_dim" in first:
-                probe.has_hidden_states_patch = True
-    if probe.embedding_dim == 0:
-        probe.error = (f"llama-server at {url} is up but /embedding "
-                       f"didn't return an embedding. Likely cause: model "
-                       f"was started without `--embeddings`. Check "
-                       f"services/inference/entrypoint-v3.1.sh.")
-    return probe
+
+def _read_embedding(probe: LlamaProbe, emb) -> None:
+    """The embedding dim, pooled or per token, and whether the hidden-states
+    patch answered, from the /embedding reply; nothing when it holds none."""
+    if not (isinstance(emb, list) and emb):
+        return
+    first = emb[0]
+    if not isinstance(first, dict):
+        return
+    raw = first.get("embedding")
+    if isinstance(raw, list) and raw:
+        if isinstance(raw[0], list):
+            probe.embedding_dim = len(raw[0])  # per-token
+        else:
+            probe.embedding_dim = len(raw)     # pooled
+    if "hidden_states_dim" in first:
+        probe.has_hidden_states_patch = True
