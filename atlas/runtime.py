@@ -603,38 +603,49 @@ def ensure_proxy(required_capability: Optional[str] = None) -> bool:
 
     # Already running?
     if _check_url(PROXY_URL):
-        if required_capability and not _repair_proxy_capability(
-            atlas_dir, required_capability
-        ):
-            return False
-        _align_workspace(atlas_dir)
-        return True
+        return _use_running_proxy(atlas_dir, required_capability)
 
     # #118: macOS hybrid + Linux + CUDA/ROCm all run atlas-proxy in
     # docker. If the user's compose stack defines it, the stack owns
-    # :8090 — don't auto-launch a competing local proxy. Two sub-cases:
+    # :8090 — don't auto-launch a competing local proxy.
     if _docker_compose_owns_proxy(atlas_dir):
-        # The stack is configured. Wait for the proxy to bind — it
-        # may be mid-startup (we polled too early).
-        print("  Docker compose stack owns atlas-proxy. Waiting for it to come up...")
-        if _wait_for_proxy(timeout=60):
-            print(f"  Proxy responded on port {PROXY_PORT}")
-            if required_capability and not _repair_proxy_capability(
-                atlas_dir, required_capability
-            ):
-                return False
-            _align_workspace(atlas_dir)
-            return True
-        # Still nothing after 60s — the stack probably isn't running.
-        # Tell the user how to start it instead of silently launching a
-        # local proxy that would collide later.
-        print("  Proxy never responded. The docker stack is probably not running.")
-        print("  Start it with:")
-        print(f"    {compose_config.format_command(atlas_dir, ['up', '-d'])}")
-        print("  Then re-run atlas.")
-        return False
+        return _wait_for_compose_proxy(atlas_dir, required_capability)
 
     # Try to find or build and launch locally (dev workflow, no docker).
+    return _start_local_proxy(atlas_dir, required_capability)
+
+
+def _use_running_proxy(atlas_dir: str, required_capability: Optional[str]) -> bool:
+    """A proxy that answers: repaired for the capability the caller needs,
+    then aligned to the workspace of the current folder."""
+    if required_capability and not _repair_proxy_capability(
+        atlas_dir, required_capability
+    ):
+        return False
+    _align_workspace(atlas_dir)
+    return True
+
+
+def _wait_for_compose_proxy(atlas_dir: str, required_capability: Optional[str]) -> bool:
+    """The compose stack owns the proxy: wait for it to bind (it may be
+    mid-startup, polled too early), or tell the user how to start the stack."""
+    print("  Docker compose stack owns atlas-proxy. Waiting for it to come up...")
+    if _wait_for_proxy(timeout=60):
+        print(f"  Proxy responded on port {PROXY_PORT}")
+        return _use_running_proxy(atlas_dir, required_capability)
+    # Still nothing after 60s — the stack probably isn't running.
+    # Tell the user how to start it instead of silently launching a
+    # local proxy that would collide later.
+    print("  Proxy never responded. The docker stack is probably not running.")
+    print("  Start it with:")
+    print(f"    {compose_config.format_command(atlas_dir, ['up', '-d'])}")
+    print("  Then re-run atlas.")
+    return False
+
+
+def _start_local_proxy(atlas_dir: str, required_capability: Optional[str]) -> bool:
+    """Find or build the proxy binary and launch it here; True only when it
+    started and has the capability the caller needs."""
     proxy_bin = _select_proxy_binary(atlas_dir)
 
     if proxy_bin:
