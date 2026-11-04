@@ -81,7 +81,8 @@ class Look:
 
     def calls(self):
         log = self.root / "calls.log"
-        return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+        # A stand-in may be writing its line at this moment: a line without its newline is not read yet.
+        return [json.loads(line) for line in log.read_text().split("\n")[:-1]] if log.exists() else []
 
 
 ASKED = ["the-nightly-run", "--dir", "a folder", "--tick", "--look"]
