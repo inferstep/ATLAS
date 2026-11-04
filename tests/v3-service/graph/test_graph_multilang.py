@@ -69,6 +69,39 @@ class TestJsGoldenParity:
         assert ("Pipeline", "load") in pairs
 
 
+def test_what_the_reference_fixture_leaves_out():
+    src = (
+        'import * as fs from "fs";\n'
+        'import { readFile as rf } from "./io.js";\n'
+        "\n"
+        "const parse = function (text) {\n"
+        "  return split(text);\n"
+        "};\n"
+        "class Store {\n"
+        "  cache = makeCache();\n"
+        "  save() {\n"
+        "    const write = () => flush();\n"
+        "    write();\n"
+        "    write();\n"
+        "    function log() { record(); }\n"
+        "  }\n"
+        "}\n"
+        "function start() {}\n"
+        "start();\n"
+    )
+    g = extract_file("store.js", src)
+    # A function value inside a class counts as a method, like the class's own.
+    assert sorted([d.name, d.kind, d.line] for d in g.defines) == [
+        ["Store", "class", 7], ["log", "function", 13], ["parse", "function", 4], ["save", "method", 9],
+        ["start", "function", 16], ["write", "method", 10]]
+    # A call in the class body belongs to the class, a call in a function value
+    # to that value, a pair made twice is recorded once, and the call outside
+    # any scope is not recorded.
+    assert sorted((c.caller, c.callee) for c in g.calls) == [
+        ("Store", "makeCache"), ("log", "record"), ("parse", "split"), ("save", "write"), ("write", "flush")]
+    assert sorted((i.name, i.source) for i in g.imports) == [("fs", "fs"), ("rf", "./io.js")]
+
+
 class TestMixedProject:
     def test_python_and_js_in_one_graph(self):
         files = {

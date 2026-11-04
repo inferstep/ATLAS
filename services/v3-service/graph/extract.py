@@ -98,91 +98,128 @@ def _resolve_callee(call_node) -> Optional[str]:
     return None
 
 
-def _walk(node, file_path: str, scope: List[str], g: CodeGraph, call_set: Set[str]) -> None:  # noqa: C901
+def _walk_children(walk, node, file_path: str, scope: List[str], g: CodeGraph, call_set: Set[str]) -> None:
+    for i in range(node.child_count):
+        walk(node.child(i), file_path, scope, g, call_set)
+
+
+def _walk_in_scope(walk, node, name: str, file_path: str, scope: List[str], g: CodeGraph,
+                   call_set: Set[str]) -> None:
+    """Walk node's children with name as the innermost scope, so the calls in
+    them are charged to it."""
+    scope.append(name)
+    _walk_children(walk, node, file_path, scope, g, call_set)
+    scope.pop()
+
+
+def _record_call(callee: Optional[str], scope: List[str], g: CodeGraph, call_set: Set[str]) -> None:
+    """A calls fact from the innermost scope to callee, once per pair. A call
+    outside any scope is not recorded."""
+    caller = scope[-1] if scope else None
+    if callee and caller:
+        key = f"{caller}->{callee}"
+        if key not in call_set:
+            call_set.add(key)
+            g.calls.append(CallsFact(caller=caller, callee=callee))
+
+
+def _walk(node, file_path: str, scope: List[str], g: CodeGraph, call_set: Set[str]) -> None:
     t = node.type
 
-    if t == "function_definition":
-        name_node = node.child_by_field_name("name")
-        if name_node is not None:
-            name = _text(name_node)
-            enclosing = _find_enclosing_class(node)
-            kind = "method" if enclosing else "function"
-            g.defines.append(DefinesFact(
-                file=file_path, name=name, kind=kind,
-                line=node.start_point[0] + 1,
-                signature=_extract_python_signature(node),
-            ))
-            if enclosing:
-                g.contains.append(ContainsFact(parent=enclosing, child=name))
-            scope.append(name)
-            for i in range(node.child_count):
-                _walk(node.child(i), file_path, scope, g, call_set)
-            scope.pop()
-            return
-
-    elif t == "class_definition":
-        name_node = node.child_by_field_name("name")
-        if name_node is not None:
-            name = _text(name_node)
-            g.defines.append(DefinesFact(
-                file=file_path, name=name, kind="class",
-                line=node.start_point[0] + 1,
-            ))
-            scope.append(name)
-            for i in range(node.child_count):
-                _walk(node.child(i), file_path, scope, g, call_set)
-            scope.pop()
-            return
-
-    elif t == "call":
-        callee = _resolve_callee(node)
-        caller = scope[-1] if scope else None
-        if callee and caller:
-            key = f"{caller}->{callee}"
-            if key not in call_set:
-                call_set.add(key)
-                g.calls.append(CallsFact(caller=caller, callee=callee))
+    if t == "function_definition" and _walk_function(node, file_path, scope, g, call_set):
+        return
+    if t == "class_definition" and _walk_class(node, file_path, scope, g, call_set):
+        return
+    if t == "call":
+        _record_call(_resolve_callee(node), scope, g, call_set)
         # fall through to children to catch nested calls in args
-
     elif t == "import_statement":
-        for i in range(node.child_count):
-            child = node.child(i)
-            if child.type == "dotted_name":
-                txt = _text(child)
-                g.imports.append(ImportsFact(file=file_path, name=txt, source=txt))
-            elif child.type == "aliased_import":
-                dotted = child.child_by_field_name("name")
-                if dotted is not None:
-                    alias_node = child.child_by_field_name("alias")
-                    alias = _text(alias_node) if alias_node is not None else _text(dotted)
-                    g.imports.append(ImportsFact(file=file_path, name=alias, source=_text(dotted)))
+        _record_imports(node, file_path, g)
         return
-
     elif t == "import_from_statement":
-        module_node = node.child_by_field_name("module_name")
-        source = _text(module_node) if module_node is not None else ""
-        # `from mod import *` -> record a wildcard so the veto can resolve it to
-        # the module's actual exports (or stay lenient if the module is opaque).
-        if any(node.child(i).type == "wildcard_import" for i in range(node.child_count)):
-            g.imports.append(ImportsFact(file=file_path, name="*", source=source))
-            return
-        name_node = node.child_by_field_name("name")
-        if name_node is not None and name_node.type in ("dotted_name", "identifier"):
-            g.imports.append(ImportsFact(file=file_path, name=_text(name_node), source=source))
-        for i in range(node.child_count):
-            child = node.child(i)
-            if child.type == "dotted_name" and child != module_node and child != name_node:
-                g.imports.append(ImportsFact(file=file_path, name=_text(child), source=source))
-            elif child.type == "aliased_import":
-                imp = child.child_by_field_name("name")
-                alias = child.child_by_field_name("alias")
-                if imp is not None:
-                    nm = _text(alias) if alias is not None else _text(imp)
-                    g.imports.append(ImportsFact(file=file_path, name=nm, source=source))
+        _record_from_imports(node, file_path, g)
         return
 
+    _walk_children(_walk, node, file_path, scope, g, call_set)
+
+
+def _walk_function(node, file_path: str, scope: List[str], g: CodeGraph, call_set: Set[str]) -> bool:
+    """A function or method: its define, its class's contains fact, and its
+    body in its scope. False when it has no name, so it is walked as any node."""
+    name_node = node.child_by_field_name("name")
+    if name_node is not None:
+        name = _text(name_node)
+        enclosing = _find_enclosing_class(node)
+        kind = "method" if enclosing else "function"
+        g.defines.append(DefinesFact(
+            file=file_path, name=name, kind=kind,
+            line=node.start_point[0] + 1,
+            signature=_extract_python_signature(node),
+        ))
+        if enclosing:
+            g.contains.append(ContainsFact(parent=enclosing, child=name))
+        _walk_in_scope(_walk, node, name, file_path, scope, g, call_set)
+        return True
+    return False
+
+
+def _walk_class(node, file_path: str, scope: List[str], g: CodeGraph, call_set: Set[str]) -> bool:
+    """A class: its define, and its body in its scope. False when it has no
+    name, so it is walked as any node."""
+    name_node = node.child_by_field_name("name")
+    if name_node is not None:
+        name = _text(name_node)
+        g.defines.append(DefinesFact(
+            file=file_path, name=name, kind="class",
+            line=node.start_point[0] + 1,
+        ))
+        _walk_in_scope(_walk, node, name, file_path, scope, g, call_set)
+        return True
+    return False
+
+
+def _record_imports(node, file_path: str, g: CodeGraph) -> None:
+    """The names `import a.b` and `import a as b` bring in."""
     for i in range(node.child_count):
-        _walk(node.child(i), file_path, scope, g, call_set)
+        child = node.child(i)
+        if child.type == "dotted_name":
+            txt = _text(child)
+            g.imports.append(ImportsFact(file=file_path, name=txt, source=txt))
+        elif child.type == "aliased_import":
+            dotted = child.child_by_field_name("name")
+            if dotted is not None:
+                alias_node = child.child_by_field_name("alias")
+                alias = _text(alias_node) if alias_node is not None else _text(dotted)
+                g.imports.append(ImportsFact(file=file_path, name=alias, source=_text(dotted)))
+
+
+def _record_from_imports(node, file_path: str, g: CodeGraph) -> None:
+    """The names `from mod import ...` brings in."""
+    module_node = node.child_by_field_name("module_name")
+    source = _text(module_node) if module_node is not None else ""
+    # `from mod import *` -> record a wildcard so the veto can resolve it to
+    # the module's actual exports (or stay lenient if the module is opaque).
+    if any(node.child(i).type == "wildcard_import" for i in range(node.child_count)):
+        g.imports.append(ImportsFact(file=file_path, name="*", source=source))
+        return
+    name_node = node.child_by_field_name("name")
+    if name_node is not None and name_node.type in ("dotted_name", "identifier"):
+        g.imports.append(ImportsFact(file=file_path, name=_text(name_node), source=source))
+    for i in range(node.child_count):
+        child = node.child(i)
+        if child.type == "dotted_name" and child != module_node and child != name_node:
+            g.imports.append(ImportsFact(file=file_path, name=_text(child), source=source))
+        elif child.type == "aliased_import":
+            _record_aliased_from_import(child, file_path, source, g)
+
+
+def _record_aliased_from_import(child, file_path: str, source: str, g: CodeGraph) -> None:
+    """`name as alias` in a from-import brings in the alias."""
+    imp = child.child_by_field_name("name")
+    alias = child.child_by_field_name("alias")
+    if imp is not None:
+        nm = _text(alias) if alias is not None else _text(imp)
+        g.imports.append(ImportsFact(file=file_path, name=nm, source=source))
 
 
 def _module_exports(g: CodeGraph, file_path: str) -> None:
@@ -230,98 +267,104 @@ def _js_callee(call_node) -> Optional[str]:
     return None
 
 
-def _walk_js(node, file_path: str, scope: List[str], g: CodeGraph, call_set: Set[str]) -> None:  # noqa: C901
+def _walk_js(node, file_path: str, scope: List[str], g: CodeGraph, call_set: Set[str]) -> None:
     t = node.type
 
-    if t == "function_declaration":
-        nm = node.child_by_field_name("name")
-        if nm is not None:
-            name = _text(nm)
-            g.defines.append(DefinesFact(file_path, name, "function", node.start_point[0] + 1))
-            scope.append(name)
-            for i in range(node.child_count):
-                _walk_js(node.child(i), file_path, scope, g, call_set)
-            scope.pop()
-            return
-
-    elif t == "class_declaration":
-        nm = node.child_by_field_name("name")
-        if nm is not None:
-            name = _text(nm)
-            g.defines.append(DefinesFact(file_path, name, "class", node.start_point[0] + 1))
-            scope.append(name)
-            for i in range(node.child_count):
-                _walk_js(node.child(i), file_path, scope, g, call_set)
-            scope.pop()
-            return
-
-    elif t == "method_definition":
-        nm = node.child_by_field_name("name")
-        if nm is not None:
-            name = _text(nm)
-            g.defines.append(DefinesFact(file_path, name, "method", node.start_point[0] + 1))
-            enclosing = _js_enclosing_class(node)
-            if enclosing:
-                g.contains.append(ContainsFact(parent=enclosing, child=name))
-            scope.append(name)
-            for i in range(node.child_count):
-                _walk_js(node.child(i), file_path, scope, g, call_set)
-            scope.pop()
-            return
-
-    elif t == "variable_declarator":
-        # `const f = () => {}` / `const f = function () {}` -> a function define.
-        value = node.child_by_field_name("value")
-        nm = node.child_by_field_name("name")
-        if value is not None and nm is not None and value.type in ("arrow_function", "function_expression", "function"):
-            name = _text(nm)
-            kind = "method" if _js_enclosing_class(node) else "function"
-            g.defines.append(DefinesFact(file_path, name, kind, node.start_point[0] + 1))
-            scope.append(name)
-            for i in range(node.child_count):
-                _walk_js(node.child(i), file_path, scope, g, call_set)
-            scope.pop()
-            return
-
-    elif t == "call_expression":
-        callee = _js_callee(node)
-        caller = scope[-1] if scope else None
-        if callee and caller:
-            key = f"{caller}->{callee}"
-            if key not in call_set:
-                call_set.add(key)
-                g.calls.append(CallsFact(caller=caller, callee=callee))
+    if t == "function_declaration" and _walk_js_declaration(node, "function", file_path, scope, g, call_set):
+        return
+    if t == "class_declaration" and _walk_js_declaration(node, "class", file_path, scope, g, call_set):
+        return
+    if t == "method_definition" and _walk_js_method(node, file_path, scope, g, call_set):
+        return
+    if t == "variable_declarator" and _walk_js_function_value(node, file_path, scope, g, call_set):
+        return
+    if t == "call_expression":
+        _record_call(_js_callee(node), scope, g, call_set)
         # fall through to children (args may contain calls)
-
     elif t == "import_statement":
-        source_node = node.child_by_field_name("source")
-        source = _text(source_node).strip("'\"") if source_node is not None else ""
-        for i in range(node.child_count):
-            clause = node.child(i)
-            if clause.type != "import_clause":
-                continue
-            for j in range(clause.child_count):
-                spec = clause.child(j)
-                if spec.type == "identifier":  # default import
-                    g.imports.append(ImportsFact(file_path, _text(spec), source))
-                elif spec.type == "namespace_import":  # * as ns
-                    for k in range(spec.child_count):
-                        c = spec.child(k)
-                        if c.type == "identifier":
-                            g.imports.append(ImportsFact(file_path, _text(c), source))
-                elif spec.type == "named_imports":  # { a, b as c }
-                    for k in range(spec.child_count):
-                        isp = spec.child(k)
-                        if isp.type == "import_specifier":
-                            alias = isp.child_by_field_name("alias")
-                            nm = isp.child_by_field_name("name")
-                            if nm is not None:
-                                g.imports.append(ImportsFact(
-                                    file_path, _text(alias) if alias is not None else _text(nm), source))
+        _record_js_imports(node, file_path, g)
         return
 
+    _walk_children(_walk_js, node, file_path, scope, g, call_set)
+
+
+def _walk_js_declaration(node, kind: str, file_path: str, scope: List[str], g: CodeGraph,
+                         call_set: Set[str]) -> bool:
+    """A function or class declaration: its define, and its body in its scope.
+    False when it has no name, so it is walked as any node."""
+    nm = node.child_by_field_name("name")
+    if nm is not None:
+        name = _text(nm)
+        g.defines.append(DefinesFact(file_path, name, kind, node.start_point[0] + 1))
+        _walk_in_scope(_walk_js, node, name, file_path, scope, g, call_set)
+        return True
+    return False
+
+
+def _walk_js_method(node, file_path: str, scope: List[str], g: CodeGraph, call_set: Set[str]) -> bool:
+    """A method: its define, its class's contains fact, and its body in its
+    scope. False when it has no name, so it is walked as any node."""
+    nm = node.child_by_field_name("name")
+    if nm is not None:
+        name = _text(nm)
+        g.defines.append(DefinesFact(file_path, name, "method", node.start_point[0] + 1))
+        enclosing = _js_enclosing_class(node)
+        if enclosing:
+            g.contains.append(ContainsFact(parent=enclosing, child=name))
+        _walk_in_scope(_walk_js, node, name, file_path, scope, g, call_set)
+        return True
+    return False
+
+
+def _walk_js_function_value(node, file_path: str, scope: List[str], g: CodeGraph, call_set: Set[str]) -> bool:
+    """`const f = () => {}` / `const f = function () {}` -> a function define,
+    and its body in its scope. False for any other value, so it is walked as
+    any node."""
+    value = node.child_by_field_name("value")
+    nm = node.child_by_field_name("name")
+    if value is not None and nm is not None and value.type in ("arrow_function", "function_expression", "function"):
+        name = _text(nm)
+        kind = "method" if _js_enclosing_class(node) else "function"
+        g.defines.append(DefinesFact(file_path, name, kind, node.start_point[0] + 1))
+        _walk_in_scope(_walk_js, node, name, file_path, scope, g, call_set)
+        return True
+    return False
+
+
+def _record_js_imports(node, file_path: str, g: CodeGraph) -> None:
+    """The names an `import ... from "source"` statement brings in."""
+    source_node = node.child_by_field_name("source")
+    source = _text(source_node).strip("'\"") if source_node is not None else ""
     for i in range(node.child_count):
-        _walk_js(node.child(i), file_path, scope, g, call_set)
+        clause = node.child(i)
+        if clause.type != "import_clause":
+            continue
+        for j in range(clause.child_count):
+            spec = clause.child(j)
+            if spec.type == "identifier":  # default import
+                g.imports.append(ImportsFact(file_path, _text(spec), source))
+            elif spec.type == "namespace_import":  # * as ns
+                _record_js_namespace_import(spec, file_path, source, g)
+            elif spec.type == "named_imports":  # { a, b as c }
+                _record_js_named_imports(spec, file_path, source, g)
+
+
+def _record_js_namespace_import(spec, file_path: str, source: str, g: CodeGraph) -> None:
+    for k in range(spec.child_count):
+        c = spec.child(k)
+        if c.type == "identifier":
+            g.imports.append(ImportsFact(file_path, _text(c), source))
+
+
+def _record_js_named_imports(spec, file_path: str, source: str, g: CodeGraph) -> None:
+    for k in range(spec.child_count):
+        isp = spec.child(k)
+        if isp.type == "import_specifier":
+            alias = isp.child_by_field_name("alias")
+            nm = isp.child_by_field_name("name")
+            if nm is not None:
+                g.imports.append(ImportsFact(
+                    file_path, _text(alias) if alias is not None else _text(nm), source))
 
 
 def _extract_with(lang, walk, language_name: str, file_path: str, content: str) -> CodeGraph:
