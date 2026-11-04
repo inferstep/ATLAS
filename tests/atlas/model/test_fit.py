@@ -287,3 +287,36 @@ def test_sliding_window_layers_and_their_note(tmp_path, extra_keys, local_mask, 
     meta = read_gguf_meta(write_gguf(tmp_path / "m.gguf", GEOMETRY + extra_keys))
     assert meta.local_mask == local_mask
     assert meta.swa_note == swa_note
+
+
+# An 8-layer, 4096-dim model with 8 K/V heads of 128 on every layer: 16384 K+V
+# elements per token over its global layers when none slides.
+FULL_ATTENTION = dict(
+    path="m.gguf", file_size=int(4 * GIB), architecture="fixture", n_layers=8, n_embd=4096, n_head=32,
+    head_dim=128, v_len=128, k_len_swa=128, v_len_swa=128, kv_heads=[8] * 8, n_ctx_train=0,
+    sliding_window=0, local_mask=[False] * 8, swa_note="full attention",
+)
+
+
+@pytest.mark.parametrize("changes, vram_gib, slots, expected", [
+    pytest.param({}, 48, 4,
+                 {"per_slot": 32768, "ctx_total": 131072, "kv_gib": 4.0, "note": ""},
+                 id="ample-memory-reaches-the-per-slot-cap"),
+    pytest.param({"n_ctx_train": 20000}, 48, 2,
+                 {"per_slot": 19456, "ctx_total": 38912, "kv_gib": 1.19, "note": ""},
+                 id="the-trained-context-caps-a-slot-rounded-down"),
+    pytest.param({"sliding_window": 1024, "local_mask": [True, True, True, False] * 2,
+                  "swa_note": "window 1024, assumed 1 global per 4 layers"}, 12, 2,
+                 {"per_slot": 32768, "ctx_total": 65536, "kv_gib": 0.59,
+                  "note": "window 1024, assumed 1 global per 4 layers"},
+                 id="sliding-layers-cost-slots-times-window-plus-a-batch"),
+    pytest.param({"sliding_window": 1024, "local_mask": [True] * 8,
+                  "swa_note": "window 1024, per-layer mask (8/8 sliding)"}, 12, 2,
+                 {"per_slot": 32768, "ctx_total": 65536, "kv_gib": 0.12, "note": ""},
+                 id="an-all-sliding-model-gets-the-cap-for-every-slot"),
+    pytest.param({}, 6, 2, {"fits": False, "kv_gib": 0.27},
+                 id="no-fit-accounts-the-minimum-context-at-q8"),
+])
+def test_the_fit_sizes_each_slot_from_what_is_left(changes, vram_gib, slots, expected):
+    result = fit_runtime_knobs(GGUFMeta(**{**FULL_ATTENTION, **changes}), vram_gib=vram_gib, slots=slots)
+    assert {key: getattr(result, key) for key in expected} == expected
