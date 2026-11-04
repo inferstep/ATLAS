@@ -256,6 +256,9 @@ func TestBytesThatDidNotLandAsAuthorizedNeverClaimDelivery(t *testing.T) {
 			if res.Success {
 				t.Error("a delivery that did not settle is reported successful")
 			}
+			if res.Error == "" {
+				t.Error("a delivery that did not settle gives no error")
+			}
 		})
 	}
 }
