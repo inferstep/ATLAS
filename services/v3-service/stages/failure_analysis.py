@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 
 # Type alias for LLM callable
@@ -165,8 +165,20 @@ def parse_failure_categories(response: str,
     Looks for category assignments per candidate. Returns dict mapping
     candidate index to category name.
     """
-    categories: Dict[int, str] = {}
     valid_cats = set(FAILURE_CATEGORIES.keys())
+    categories = _numbered_categories(response, num_candidates, valid_cats)
+
+    # If no structured matches, try to find any category mention
+    if not categories:
+        categories = _mentioned_categories(response, num_candidates, valid_cats)
+
+    return categories
+
+
+def _numbered_categories(response: str, num_candidates: int, valid_cats: Set[str]) -> Dict[int, str]:
+    """The categories the answer gives by number: "Solution N: category",
+    "Candidate N: category", "N. category" or "N) category"."""
+    categories: Dict[int, str] = {}
 
     # Look for "Solution N: category" or "Candidate N: category" patterns
     patterns = [
@@ -184,15 +196,18 @@ def parse_failure_categories(response: str,
             except (ValueError, IndexError):
                 continue
 
-    # If no structured matches, try to find any category mention
-    if not categories:
-        for cat in valid_cats:
-            if cat in response.lower():
-                for i in range(num_candidates):
-                    if i not in categories:
-                        categories[i] = cat
-                        break
+    return categories
 
+
+def _mentioned_categories(response: str, num_candidates: int, valid_cats: Set[str]) -> Dict[int, str]:
+    """Each category the answer mentions, given to the first candidate that has none."""
+    categories: Dict[int, str] = {}
+    for cat in valid_cats:
+        if cat in response.lower():
+            for i in range(num_candidates):
+                if i not in categories:
+                    categories[i] = cat
+                    break
     return categories
 
 
