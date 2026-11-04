@@ -120,12 +120,23 @@ def _parse_plan_json(raw: str) -> Optional[dict]:
     brace_start = raw.find("{")
     if brace_start < 0:
         return None
+    end = _object_end(raw, brace_start)
+    if end < 0:
+        return None
+    try:
+        return json.loads(raw[brace_start:end])
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+def _object_end(raw: str, brace_start: int) -> int:
+    """The index just past the brace that closes the object opening at
+    brace_start, or -1 when it never closes."""
     # Scan to matching closing brace (depth-aware, ignores braces in strings
     # to be safe — though plan JSON shouldn't have embedded strings with `{`).
     depth = 0
     in_str = False
     escape = False
-    end = -1
     for i in range(brace_start, len(raw)):
         c = raw[i]
         if escape:
@@ -144,14 +155,8 @@ def _parse_plan_json(raw: str) -> Optional[dict]:
         elif c == "}":
             depth -= 1
             if depth == 0:
-                end = i + 1
-                break
-    if end < 0:
-        return None
-    try:
-        return json.loads(raw[brace_start:end])
-    except (json.JSONDecodeError, ValueError):
-        return None
+                return i + 1
+    return -1
 
 
 # What a plan's verify step has to do to earn the verification credit: run
