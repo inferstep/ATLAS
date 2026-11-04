@@ -109,13 +109,7 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.cycleMode()
 
 	case "ctrl+r":
-		if !m.turnActive && m.lastUserMsg != "" {
-			m.chat = append(m.chat, sessionstore.ChatMessage{
-				Role: sessionstore.RoleUser, Body: m.lastUserMsg,
-			})
-			return m, m.sendChatCmd(m.lastUserMsg + m.contextSuffix())
-		}
-		return m, nil
+		return m.resendLastMessage()
 
 	case "pgup":
 		m.scrollChat(10)
@@ -182,6 +176,18 @@ func (m tuiModel) cycleMode() (tea.Model, tea.Cmd) {
 		Role: sessionstore.RoleSystem, Meta: "mode",
 		Body: fmt.Sprintf("mode → %s", m.mode),
 	})
+	return m, nil
+}
+
+// resendLastMessage answers Ctrl+R: when no turn runs, it sends the last
+// message again as a new turn.
+func (m tuiModel) resendLastMessage() (tea.Model, tea.Cmd) {
+	if !m.turnActive && m.lastUserMsg != "" {
+		m.chat = append(m.chat, sessionstore.ChatMessage{
+			Role: sessionstore.RoleUser, Body: m.lastUserMsg,
+		})
+		return m, m.sendChatCmd(m.lastUserMsg + m.contextSuffix())
+	}
 	return m, nil
 }
 
