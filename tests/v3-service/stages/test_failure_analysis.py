@@ -174,7 +174,7 @@ def test_parse_failure_categories_knows_every_category():
                  id="no-mentions-after-a-numbered-answer"),
     pytest.param("The code has a clear IMPLEMENTATION_BUG in the loop.", 2,
                  {0: "implementation_bug"}, id="a-mention-goes-to-the-first-candidate"),
-    pytest.param("Solution 10: wrong_algorithm", 2,
+    pytest.param("Solution 3: wrong_algorithm", 2,
                  {0: "wrong_algorithm"}, id="index-out-of-range-falls-back-to-the-mention"),
     pytest.param("Solution 1: nonexistent_category", 1, {}, id="unknown-category-ignored"),
     pytest.param("", 2, {}, id="empty-answer"),
