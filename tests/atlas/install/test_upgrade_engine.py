@@ -377,8 +377,7 @@ def test_a_dry_run_prints_the_plan_and_changes_nothing(tmp_path, monkeypatch, ca
         "upgrade plan: 3.1.6 → 3.2.0",
         *digest_lines,
         "  target digests resolve on `docker compose pull` at apply.",
-        "  steps: verify signatures → record restore point → pull → up → readiness → smoke → finalize "
-        "(auto-restore on failure).",
+        "  steps: verify signatures → record restore point → pull → up → readiness → smoke → finalize (auto-restore on failure).",
         "  (dry run — nothing changed)",
     ]
     assert eng.read_env_tag(root) == "3.1.6"
