@@ -551,23 +551,15 @@ def verify_build_command(
     if not command:
         return True, "", "", {}
     if not hasattr(sandbox, "run_command"):
-        evidence["stderr"] = "sandbox build command runner is unavailable"
-        if emit:
-            emit("build_verify_unavailable", evidence["stderr"], command=command)
-        return False, "", evidence["stderr"], evidence
+        return _build_unavailable(evidence, "sandbox build command runner is unavailable", emit)
     if not _build_command_allowed(command):
-        evidence["stderr"] = f"build command is not allowed by verification policy: {command}"
-        if emit:
-            emit("build_verify_unavailable", evidence["stderr"], command=command)
-        return False, "", evidence["stderr"], evidence
+        return _build_unavailable(
+            evidence, f"build command is not allowed by verification policy: {command}", emit)
 
     try:
         rel_path = _project_relative_path(file_path, working_dir)
     except ValueError as e:
-        evidence["stderr"] = str(e)
-        if emit:
-            emit("build_verify_unavailable", evidence["stderr"], command=command)
-        return False, "", evidence["stderr"], evidence
+        return _build_unavailable(evidence, str(e), emit)
 
     # Build verification snapshots the real /workspace inside the sandbox.
     # Do not overlay `project_files` here: that map is prompt context from
@@ -599,6 +591,15 @@ def verify_build_command(
     if not ok:
         return False, out, err or out or f"build command failed: {command}", evidence
     return True, out, err, evidence
+
+
+def _build_unavailable(evidence: Dict[str, Any], reason: str, emit) -> Tuple[bool, str, str, Dict[str, Any]]:
+    """The answer when the build command cannot run: the reason as the
+    evidence's stderr, one build_verify_unavailable event, and no pass."""
+    evidence["stderr"] = reason
+    if emit:
+        emit("build_verify_unavailable", evidence["stderr"], command=evidence["command"])
+    return False, "", evidence["stderr"], evidence
 
 
 # interactive_lint's reason when it could not parse the code and checked
