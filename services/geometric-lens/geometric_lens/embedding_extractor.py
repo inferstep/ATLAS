@@ -195,7 +195,6 @@ def extract_embedding(text: str) -> List[float]:
     return vec
 
 
-
 def _log_shape_once(got: str, contract: dict) -> None:
     """Log, once per contract, a response shape other than the one the
     loaded artifacts declare."""
@@ -229,6 +228,7 @@ def _mean_pool(per_token: List[List[float]]) -> List[float]:
     for i in range(dim):
         pooled[i] /= n_tokens
     return pooled
+
 
 def observe_embedding_convention(
         text: str = "def add(a, b):\n    return a + b") -> dict:
