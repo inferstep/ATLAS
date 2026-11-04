@@ -783,6 +783,7 @@ def test_preflight_dry_run_skips_auth_gates(monkeypatch, capsys):
 def test_preflight_blocks_non_dryrun_when_token_missing(monkeypatch, capsys):
     for k in ("HF_TOKEN", "HUGGINGFACE_HUB_TOKEN", "HUGGING_FACE_HUB_TOKEN"):
         monkeypatch.delenv(k, raising=False)
+    monkeypatch.setattr(publishing, "huggingface_hub_available", lambda: True)
     ok = publishing.publish_preflight("lens", dry_run=False, color=False)
     out = capsys.readouterr().out
     assert ok is False, "missing HF_TOKEN in real run should block"
@@ -790,13 +791,9 @@ def test_preflight_blocks_non_dryrun_when_token_missing(monkeypatch, capsys):
     assert "huggingface.co/settings/tokens" in out
 
 
-@pytest.mark.parametrize("token, hub_installed", [
-    pytest.param(None, True, id="no-token"),
-    pytest.param("hf_dummy", False, id="no-huggingface-hub"),
-])
-def test_preflight_blocks_a_real_run_missing_either_requirement(monkeypatch, capsys, token, hub_installed):
-    monkeypatch.setattr(publishing, "hf_token", lambda: token)
-    monkeypatch.setattr(publishing, "huggingface_hub_available", lambda: hub_installed)
+def test_preflight_blocks_non_dryrun_when_huggingface_hub_missing(monkeypatch, capsys):
+    monkeypatch.setattr(publishing, "hf_token", lambda: "hf_dummy")
+    monkeypatch.setattr(publishing, "huggingface_hub_available", lambda: False)
     monkeypatch.setattr(publishing, "gh_available", lambda: True)
 
     assert publishing.publish_preflight("lens", dry_run=False, color=False) is False
