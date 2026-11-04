@@ -46,23 +46,16 @@ def process_control_flow_breaker(
     node: Union[ast.If, ast.For, ast.While, ast.IfExp, ast.ExceptHandler],
     increment_by: int,
 ) -> Tuple[int, int, bool]:
-    if isinstance(node, ast.IfExp):
-        # C if A else B; ternary operator equivalent
-        increment = 0
-        increment_by += 1
-    elif isinstance(node, ast.If) and len(node.orelse) == 1 and isinstance(node.orelse[0], ast.If):
+    if isinstance(node, ast.If) and len(node.orelse) == 1 and isinstance(node.orelse[0], ast.If):
         # node is an elif; the increment will be counted on the ast.If
         increment = 0
-    elif isinstance(node, ast.ExceptHandler):
-        # +1 for the catch/except-handler
-        increment = 0
-        increment_by += 1
-    elif node.orelse:
+    elif not isinstance(node, (ast.IfExp, ast.ExceptHandler)) and node.orelse:
         # +1 for the else and add a nesting level
         increment = 1
         increment_by += 1
     else:
-        # no 'else' to count, just add a nesting level
+        # a ternary (C if A else B), an except handler, or no 'else' to count:
+        # just add a nesting level
         increment = 0
         increment_by += 1
     return increment_by, max(1, increment_by) + increment, True
