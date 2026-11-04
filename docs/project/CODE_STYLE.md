@@ -23,7 +23,7 @@ change one thing without reading everything else.
   is to follow, SonarQube's rule S3776) and its cyclomatic complexity (how
   many paths it has) stay at 15 or under. Over 15 **fails the code-health
   check** for a new function: cognitive for Go and Python, cyclomatic for Go,
-  and Go's tests count too. Python's cyclomatic complexity is ruff's C901, at
+  and tests count too, in both. Python's cyclomatic complexity is ruff's C901, at
   the same 15. A function already over is on the baseline with its score: it
   may fall but not rise. When your change lowers one, run
   `python scripts/ci/code_health.py --update` and commit the baseline.
