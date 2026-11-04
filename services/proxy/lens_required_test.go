@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -195,32 +197,58 @@ func TestReadyAgreesWithTheRequestGate(t *testing.T) {
 	}
 }
 
-func TestAScoreAnswerSaysWhetherTheLensItselfIsDown(t *testing.T) {
+func TestAScoreAnswerSaysWhetherItIsAScoreAndWhyTheLensIsDown(t *testing.T) {
 	for _, c := range []struct {
 		name   string
 		status int
 		body   string
-		down   bool
+		scored bool
+		down   string
 	}{
-		{"no model loaded", 200, `{"enabled":false}`, true},
-		{"model server down", 200, `{"enabled":true,"scored":false,"failure":{"kind":"model_server_unreachable","detail":"URLError"}}`, true},
-		{"http error", 503, `{"detail":"x"}`, true},
-		{"input too long", 200, `{"enabled":true,"scored":false,"failure":{"kind":"embed_capacity","input_tokens":2055,"capacity_tokens":2048}}`, false},
-		{"empty input", 200, `{"enabled":true,"scored":false,"failure":{"kind":"empty_input"}}`, false},
-		{"scored", 200, `{"enabled":true,"scored":true,"gx_available":true,"n_tokens":3,"aggregate":{"gx_score_min":0.7,"gx_score_mean":0.8,"first_off_rails_idx":-1}}`, false},
+		{"no model loaded", 200, `{"enabled":false}`, false, "it has no model loaded"},
+		{"model server down", 200, `{"enabled":true,"scored":false,"failure":{"kind":"model_server_unreachable","detail":"URLError"}}`, false, "model_server_unreachable: URLError"},
+		{"http error", 503, `{"detail":"x"}`, false, "it answered HTTP 503"},
+		{"http client error", 404, `{"detail":"x"}`, false, "it answered HTTP 404"},
+		{"an answer that is not json", 200, `not json`, false, "its answer could not be read"},
+		{"input too long", 200, `{"enabled":true,"scored":false,"failure":{"kind":"embed_capacity","input_tokens":2055,"capacity_tokens":2048}}`, false, ""},
+		{"empty input", 200, `{"enabled":true,"scored":false,"failure":{"kind":"empty_input"}}`, false, ""},
+		// Each of these three alone makes an answer unscored.
+		{"a failure with tokens and no scored field", 200, `{"enabled":true,"n_tokens":3,"failure":{"kind":"empty_input"}}`, false, ""},
+		{"scored false with tokens", 200, `{"enabled":true,"scored":false,"n_tokens":3}`, false, ""},
+		{"no tokens scored", 200, `{"enabled":true,"scored":true,"n_tokens":0}`, false, ""},
+		{"scored", 200, `{"enabled":true,"scored":true,"gx_available":true,"n_tokens":3,"aggregate":{"gx_score_min":0.7,"gx_score_mean":0.8,"first_off_rails_idx":-1}}`, true, ""},
 	} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(c.status)
 			w.Write([]byte(c.body))
 		}))
-		_, _, down := scoreContentForAgent(context.Background(), srv.URL, "x = 1\n")
+		_, scored, down := scoreContentForAgent(context.Background(), srv.URL, "x = 1\n")
 		srv.Close()
-		if (down != "") != c.down {
-			t.Errorf("%s: down=%q, want down=%v", c.name, down, c.down)
+		if scored != c.scored {
+			t.Errorf("%s: scored=%v, want %v", c.name, scored, c.scored)
+		}
+		if down != c.down {
+			t.Errorf("%s: down=%q, want %q", c.name, down, c.down)
 		}
 	}
 	if _, _, down := scoreContentForAgent(context.Background(), "http://127.0.0.1:9", "x = 1\n"); down == "" {
 		t.Error("an unreachable lens was not reported down")
+	}
+}
+
+func TestAScoreRequestPostsTheTextAndNoTextAsksNothing(t *testing.T) {
+	var calls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		calls = append(calls, r.Method+" "+r.URL.Path+" "+string(body))
+		w.Write([]byte(`{"enabled":true,"scored":true,"n_tokens":3}`))
+	}))
+	scoreContentForAgent(context.Background(), srv.URL, "x = 1\n")
+	scoreContentForAgent(context.Background(), srv.URL, "")
+	srv.Close() // waits for the handler, so calls is safe to read
+	want := []string{`POST /internal/lens/score-per-step {"text":"x = 1\n"}`}
+	if !slices.Equal(calls, want) {
+		t.Fatalf("calls %q, want %q", calls, want)
 	}
 }
 
