@@ -244,6 +244,7 @@ def test_the_requested_declarations_are_the_ones_under_the_heading(problem, name
 
 @pytest.mark.parametrize("code, repaired", [
     pytest.param("x = 1)\ny = 2)\n", "x = 1\ny = 2\n", id="two-unmatched-closers"),
+    pytest.param("x = [1]]\ny = {2}}\n", "x = [1]\ny = {2}\n", id="an-unmatched-bracket-and-brace"),
     pytest.param("\tx = 1\n", "x = 1\n", id="a-tab-indent-at-the-top-level"),
     pytest.param("x = 1)))))\n", "x = 1)))))\n", id="more-than-four-fixes-leaves-it-as-sent"),
     pytest.param("x = 1)\ny = (\n", "x = 1)\ny = (\n", id="another-error-after-a-fix-leaves-it-as-sent"),
@@ -266,6 +267,9 @@ EXACT = "Implement exactly:\ndef solve(value: int) -> int:"
                  id="each-requested-function"),
     pytest.param("def solve(value):\n    return value\n\ndef solve(value):\n    return value\n", EXACT,
                  "def solve(value):\n    return value\n\ndef solve(value):\n    return value\n", id="two-targets-are-left"),
+    pytest.param("class Box:\n    def solve(self):\n        return 1\n\ndef solve(value):\n    return value\n", EXACT,
+                 "class Box:\n    def solve(self):\n        return 1\n\ndef solve(value: int) -> int:\n    return value\n",
+                 id="a-method-of-the-same-name-is-not-a-second-target"),
     pytest.param("async def solve(value):\n    return value\n", EXACT,
                  "async def solve(value):\n    return value\n", id="async-for-sync-is-left"),
     pytest.param("def solve(value): return value\n", EXACT,
