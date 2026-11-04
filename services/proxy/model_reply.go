@@ -151,7 +151,6 @@ func classifyParseFailure(raw, streamCut string) (category, feedback string) {
 	return "malformed_tool", "Your tool_call JSON was malformed. Re-emit it as a single valid JSON object: {\"type\":\"tool_call\",\"name\":\"<tool>\",\"args\":{...}}. No prose, no markdown fences, no trailing commas."
 }
 
-// truncatedCallFeedback tells the model how to shrink a call the token cap cut.
 // streamCutFailure is the category and feedback for a reply the stream cut
 // short, by the reason it was cut; false when it was not cut.
 func streamCutFailure(streamCut string) (category, feedback string, ok bool) {
@@ -191,6 +190,7 @@ func entityEncodedToolCall(stripped string) bool {
 	return htmlEntities && embeddedToolCall
 }
 
+// truncatedCallFeedback tells the model how to shrink a call the token cap cut.
 func truncatedCallFeedback(stripped string) string {
 	hasEditOrWrite := strings.Contains(stripped, `"edit_file"`) ||
 		strings.Contains(stripped, `"write_file"`)
