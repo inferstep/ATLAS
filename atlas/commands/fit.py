@@ -229,61 +229,20 @@ def _layer_dims(meta: GGUFMeta):
 def fit_runtime_knobs(meta: GGUFMeta, vram_gib: float,
                       slots: int = 4) -> FitResult:
     """Largest context + micro-batch whose full budget fits in `vram_gib`."""
-    weights = meta.file_size * WEIGHTS_OVERHEAD / GIB
-    global_dims, local_dims = _layer_dims(meta)
-
     best = None
     for ubatch in (2048, 1024, 512):
-        compute = max(COMPUTE_FLOOR_GIB,
-                      ubatch * meta.n_embd * COMPUTE_BYTES_PER_TOK_EMBD / GIB)
         for kv_type in ("f16", "q8_0"):
-            bpe = KV_BYTES[kv_type]
-            budget = vram_gib - weights - compute - RESERVE_GIB
-            # llama.cpp sizes the sliding-window cache at one batch beyond
-            # slots × window, so bill the same.
-            local_tokens = slots * meta.sliding_window + ubatch
-            local_cost = (local_tokens * local_dims * bpe / GIB
-                          if local_dims else 0.0)
-            budget -= local_cost
-            if budget <= 0:
-                # Weights + compute + sliding-window KV alone overflow VRAM
-                # at this rung — no context budget left to allocate.
+            result = _fit_at(meta, vram_gib, slots, ubatch, kv_type)
+            if result is None:
                 continue
-            if global_dims <= 0:
-                # Pure sliding-window model: KV doesn't grow with context,
-                # so context is bounded only by the per-slot cap.
-                ctx_total = PER_SLOT_CAP * slots
-            else:
-                ctx_total = int(budget * GIB / (global_dims * bpe))
-            per_slot = ctx_total // slots
-            if meta.n_ctx_train:
-                per_slot = min(per_slot, meta.n_ctx_train)
-            per_slot = min(per_slot, PER_SLOT_CAP)
-            per_slot = (per_slot // CTX_ROUND) * CTX_ROUND
-            if per_slot < PER_SLOT_MIN:
-                continue
-            ctx_total = per_slot * slots
-            kv_gib = ctx_total * global_dims * bpe / GIB + local_cost
-            note = meta.swa_note if "assumed" in meta.swa_note else ""
-            result = FitResult(
-                fits=True, ctx_total=ctx_total, per_slot=per_slot,
-                parallel=slots, kv_type_k=kv_type, kv_type_v=kv_type,
-                # llama.cpp self-embeddings require n_batch <= n_ubatch.
-                # ATLAS always enables embeddings, so advertise the value the
-                # runtime can actually use instead of relying on its clamp.
-                ubatch=ubatch, batch=ubatch,
-                vram_gib=round(vram_gib, 2), weights_gib=round(weights, 2),
-                kv_gib=round(kv_gib, 2), compute_gib=round(compute, 2),
-                reserve_gib=RESERVE_GIB, note=note)
             if best is None or (result.per_slot, -result.ubatch) > (
                     best.per_slot, -best.ubatch):
                 best = result
-        if best is not None and best.ubatch == ubatch:
-            # A larger ubatch (faster prompt processing) already yields an
-            # acceptable context; smaller ubatch can only trade speed for
-            # context we cap anyway.
-            if best.per_slot >= PER_SLOT_CAP:
-                break
+        # A larger ubatch (faster prompt processing) already yields an
+        # acceptable context; smaller ubatch can only trade speed for
+        # context we cap anyway.
+        if best is not None and best.ubatch == ubatch and best.per_slot >= PER_SLOT_CAP:
+            break
 
     if best is not None:
         return best
@@ -291,7 +250,56 @@ def fit_runtime_knobs(meta: GGUFMeta, vram_gib: float,
     # Nothing acceptable — report the most frugal configuration's accounting
     # (ubatch 512, q8_0 KV, minimum context) so the operator sees exactly
     # what doesn't fit, plus the largest quant of THIS geometry that would.
+    global_dims, local_dims = _layer_dims(meta)
     return _no_fit_result(meta, vram_gib, slots, global_dims, local_dims)
+
+
+def _fit_at(meta: GGUFMeta, vram_gib: float, slots: int, ubatch: int,
+            kv_type: str) -> Optional[FitResult]:
+    """The fit at one micro-batch and K/V type: the context each slot gets
+    from what is left of `vram_gib`, or None when no slot gets the minimum."""
+    weights = meta.file_size * WEIGHTS_OVERHEAD / GIB
+    global_dims, local_dims = _layer_dims(meta)
+    compute = max(COMPUTE_FLOOR_GIB,
+                  ubatch * meta.n_embd * COMPUTE_BYTES_PER_TOK_EMBD / GIB)
+    bpe = KV_BYTES[kv_type]
+    budget = vram_gib - weights - compute - RESERVE_GIB
+    # llama.cpp sizes the sliding-window cache at one batch beyond
+    # slots × window, so bill the same.
+    local_tokens = slots * meta.sliding_window + ubatch
+    local_cost = (local_tokens * local_dims * bpe / GIB
+                  if local_dims else 0.0)
+    budget -= local_cost
+    if budget <= 0:
+        # Weights + compute + sliding-window KV alone overflow VRAM
+        # at this rung — no context budget left to allocate.
+        return None
+    if global_dims <= 0:
+        # Pure sliding-window model: KV doesn't grow with context,
+        # so context is bounded only by the per-slot cap.
+        ctx_total = PER_SLOT_CAP * slots
+    else:
+        ctx_total = int(budget * GIB / (global_dims * bpe))
+    per_slot = ctx_total // slots
+    if meta.n_ctx_train:
+        per_slot = min(per_slot, meta.n_ctx_train)
+    per_slot = min(per_slot, PER_SLOT_CAP)
+    per_slot = (per_slot // CTX_ROUND) * CTX_ROUND
+    if per_slot < PER_SLOT_MIN:
+        return None
+    ctx_total = per_slot * slots
+    kv_gib = ctx_total * global_dims * bpe / GIB + local_cost
+    note = meta.swa_note if "assumed" in meta.swa_note else ""
+    return FitResult(
+        fits=True, ctx_total=ctx_total, per_slot=per_slot,
+        parallel=slots, kv_type_k=kv_type, kv_type_v=kv_type,
+        # llama.cpp self-embeddings require n_batch <= n_ubatch.
+        # ATLAS always enables embeddings, so advertise the value the
+        # runtime can actually use instead of relying on its clamp.
+        ubatch=ubatch, batch=ubatch,
+        vram_gib=round(vram_gib, 2), weights_gib=round(weights, 2),
+        kv_gib=round(kv_gib, 2), compute_gib=round(compute, 2),
+        reserve_gib=RESERVE_GIB, note=note)
 
 
 def _no_fit_result(meta: GGUFMeta, vram_gib: float, slots: int,
