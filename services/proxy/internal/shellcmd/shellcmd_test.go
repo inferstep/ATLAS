@@ -171,6 +171,40 @@ func TestProgramWords(t *testing.T) {
 	}
 }
 
+// A prefix option that takes a separate value has that value skipped too, so
+// the word found is the program the prefix runs, not the option's value. (The
+// guard tests run sudo -u, doas -u, env -u, timeout --signal and stdbuf -o.)
+func TestCommandPositionSkipsTheValueOfEachPrefixOption(t *testing.T) {
+	for _, cmd := range []string{
+		"sudo --user nobody python3 app.py",
+		"sudo -g staff python3 app.py",
+		"sudo --group staff python3 app.py",
+		"sudo -h buildhost python3 app.py",
+		"sudo --host buildhost python3 app.py",
+		"sudo -p prompt python3 app.py",
+		"sudo --prompt prompt python3 app.py",
+		"sudo -r role python3 app.py",
+		"sudo --role role python3 app.py",
+		"sudo -t type python3 app.py",
+		"sudo --type type python3 app.py",
+		"env --unset HOME python3 app.py",
+		"env -C /tmp python3 app.py",
+		"env --chdir /tmp python3 app.py",
+		"timeout -s KILL 5 python3 app.py",
+		"stdbuf -i L python3 app.py",
+		"stdbuf -e L python3 app.py",
+		"time -f %e python3 app.py",
+		"time --format %e python3 app.py",
+		"time -o out.txt python3 app.py",
+		"time --output out.txt python3 app.py",
+	} {
+		fields := ShellFields(cmd)
+		if got := strings.Join(fields[CommandPosition(fields):], " "); got != "python3 app.py" {
+			t.Errorf("CommandPosition(%q) runs %q, want python3 app.py", cmd, got)
+		}
+	}
+}
+
 // --- what the loop records -----------------------------------------------------
 
 // A segment that runs no program, or a program that is not a runner, adds
