@@ -115,6 +115,41 @@ def test_combined_nonfinite_field_is_unscored(monkeypatch, field, value):
     assert out["failure"]["kind"] == "nonfinite_score"
 
 
+def test_combined_scored_answer_keeps_its_numbers(monkeypatch):
+    _lens_answers(monkeypatch, {"enabled": True, "scored": True, "cx_energy": 3.0,
+                                "cx_normalized": 0.3, "cx_calibrated": True,
+                                "gx_score": 0.8, "gx_available": True,
+                                "verdict": "likely_correct"})
+    assert best_of_k.score_candidate_combined("text", "http://lens") == {
+        "cx_energy": 3.0, "cx_normalized": 0.3, "cx_calibrated": True,
+        "gx_score": 0.8, "gx_available": True, "verdict": "likely_correct"}
+
+
+@pytest.mark.parametrize(
+    ("answer", "detail"),
+    [
+        ({"enabled": True, "scored": True, "gx_score": 0.8}, "no C(x) energy in the answer"),
+        ({"enabled": True, "scored": False}, "unscored"),
+        (["not", "an", "object"], "malformed body"),
+    ],
+    ids=["no-cx-energy", "unscored-without-a-reason", "not-an-object"],
+)
+def test_combined_answer_without_a_score_names_why(monkeypatch, answer, detail):
+    _lens_answers(monkeypatch, answer)
+    out = best_of_k.score_candidate_combined("text", "http://lens")
+    assert out["verdict"] == "unscored"
+    assert out["failure"] == {"kind": "lens_error", "detail": detail}
+
+
+def test_combined_transport_failure_is_unscored(monkeypatch):
+    def refuse(req, timeout=None):
+        raise urllib.error.URLError("connection refused")
+    monkeypatch.setattr(best_of_k.urllib.request, "urlopen", refuse)
+    out = best_of_k.score_candidate_combined("text", "http://lens")
+    assert out["verdict"] == "unscored"
+    assert out["failure"] == {"kind": "lens_unreachable", "detail": "URLError"}
+
+
 def test_combined_disabled_lens_stays_neutral(monkeypatch):
     _lens_answers(monkeypatch, {"enabled": False})
     assert best_of_k.score_candidate_combined("text", "http://lens") == \

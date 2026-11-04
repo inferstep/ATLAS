@@ -120,14 +120,16 @@ def score_candidate_combined(text: str, lens_url: str) -> Dict:
     except (urllib.error.URLError, urllib.error.HTTPError, OSError, ValueError) as exc:
         return {**UNSCORED_COMBINED,
                 "failure": {"kind": "lens_unreachable", "detail": type(exc).__name__}}
+    return _combined_answer(data)
+
+
+def _combined_answer(data) -> Dict:
+    """The combined score a Lens answer gives: neutral when no model is loaded,
+    unscored with its failure, or the scores."""
     if isinstance(data, dict) and not data.get("enabled", False):
         return dict(NEUTRAL_COMBINED)
     if _unscored_answer(data):
-        failure = data.get("failure") if isinstance(data, dict) else None
-        if not isinstance(failure, dict):
-            error = data.get("error") if isinstance(data, dict) else "malformed body"
-            failure = {"kind": "lens_error", "detail": str(error or "unscored")[:200]}
-        return {**UNSCORED_COMBINED, "failure": failure}
+        return {**UNSCORED_COMBINED, "failure": _unscored_failure(data)}
     if "cx_energy" not in data:
         return {**UNSCORED_COMBINED,
                 "failure": {"kind": "lens_error", "detail": "no C(x) energy in the answer"}}
@@ -143,3 +145,12 @@ def score_candidate_combined(text: str, lens_url: str) -> Dict:
         "gx_available": bool(data.get("gx_available", False)),
         "verdict": data.get("verdict", "unavailable"),
     }
+
+
+def _unscored_failure(data) -> Dict:
+    """The typed failure an unscored answer carries, or one made from its error."""
+    failure = data.get("failure") if isinstance(data, dict) else None
+    if not isinstance(failure, dict):
+        error = data.get("error") if isinstance(data, dict) else "malformed body"
+        failure = {"kind": "lens_error", "detail": str(error or "unscored")[:200]}
+    return failure
