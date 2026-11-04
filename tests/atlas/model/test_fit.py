@@ -213,11 +213,12 @@ GEOMETRY = [
 def test_the_header_is_read_up_to_the_tokenizer_once_the_geometry_is_known(tmp_path):
     # A tokenizer key before the geometry does not stop the read; one after it does,
     # so the file's count of keys may name more than are there.
-    path = write_gguf(tmp_path / "m.gguf", [("tokenizer.ggml.model", STRING, "gpt2")] + GEOMETRY
+    gguf = tmp_path / "m.gguf"
+    path = write_gguf(gguf, [("tokenizer.ggml.model", STRING, "gpt2")] + GEOMETRY
                       + [("tokenizer.ggml.pre", STRING, "default")])
-    data = bytearray(open(path, "rb").read())
+    data = bytearray(gguf.read_bytes())
     struct.pack_into("<Q", data, 16, len(GEOMETRY) + 3)  # one key more than the file holds
-    open(path, "wb").write(bytes(data))
+    gguf.write_bytes(bytes(data))
 
     assert read_gguf_meta(path).n_layers == 2
 
@@ -256,14 +257,16 @@ def test_a_header_without_its_geometry_is_incomplete(tmp_path, changed_key, valu
     # The key length is given, so the head dim does not come from the embedding.
     keys = [(k, t, value if k == changed_key else v) for k, t, v in GEOMETRY]
     keys.append(("fixture.attention.key_length", UINT32, 128))
+    path = write_gguf(tmp_path / "m.gguf", keys)
     with pytest.raises(ValueError, match="GGUF header incomplete"):
-        read_gguf_meta(write_gguf(tmp_path / "m.gguf", keys))
+        read_gguf_meta(path)
 
 
 def test_an_empty_head_list_is_an_incomplete_header(tmp_path):
     keys = GEOMETRY[:3] + [("fixture.attention.head_count", ARRAY, (UINT32, []))]
+    path = write_gguf(tmp_path / "m.gguf", keys)
     with pytest.raises(ValueError, match="GGUF header incomplete"):
-        read_gguf_meta(write_gguf(tmp_path / "m.gguf", keys))
+        read_gguf_meta(path)
 
 
 @pytest.mark.parametrize("extra_keys, local_mask, swa_note", [
