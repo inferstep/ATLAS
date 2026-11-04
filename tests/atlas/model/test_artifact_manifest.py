@@ -60,6 +60,36 @@ def test_verify_fails_when_a_listed_file_is_changed_or_gone(
     assert any(expected_problem in p for p in problems)
 
 
+@pytest.mark.parametrize(
+    "manifest, expected_problem",
+    [(None, "no provenance.json"), ("not json", "manifest unreadable")],
+    ids=["no-manifest", "unreadable-manifest"],
+)
+def test_verify_fails_without_a_manifest_it_can_read(tmp_path, manifest, expected_problem):
+    if manifest is not None:
+        (tmp_path / "provenance.json").write_text(manifest)
+
+    ok, problems = am.verify_manifest(str(tmp_path))
+
+    assert not ok
+    assert expected_problem in problems
+
+
+def test_a_signature_with_no_known_signer_is_not_verified(tmp_path, monkeypatch):
+    (tmp_path / ".github").mkdir()
+    (tmp_path / ".github" / "allowed_signers").write_text("# no signers yet\n")
+    monkeypatch.setattr(am, "atlas_root", lambda: str(tmp_path))
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    bundle_dir = _bundle(bundle)
+    (bundle / "provenance.json.sig").write_text("not a signature")
+
+    ok, problems = am.verify_manifest(bundle_dir)
+
+    assert not ok
+    assert any("cannot determine signer principal" in p for p in problems)
+
+
 def _ssh_keygen_unusable():
     """ssh-keygen must be on PATH, and it refuses to run for a uid that has
     no account (a container started with a bare --user has none)."""
