@@ -154,7 +154,7 @@ def _select_proxy_binary(atlas_dir: str) -> Optional[str]:
     return _build_proxy(atlas_dir) if _find_go() else None
 
 
-def _kill_stale_proxy() -> None:  # noqa: C901
+def _kill_stale_proxy() -> None:
     """Reap any pre-existing atlas-proxy-v2 process before launching a new
     one. Without this, an orphaned proxy from a previous `atlas` session
     (whose parent died ungracefully — terminal closed, SIGKILL, etc.)
@@ -170,6 +170,16 @@ def _kill_stale_proxy() -> None:  # noqa: C901
 
     Anything found gets SIGTERM, then SIGKILL after 2s if still alive.
     """
+    pids = _proxy_pids_by_name()
+    for pid in _pids_on_proxy_port():
+        if pid not in pids:
+            pids.append(pid)
+    _stop_processes(pids)
+
+
+def _proxy_pids_by_name() -> List[int]:
+    """Other processes whose executable is atlas-proxy-v2, also when it shows
+    as "(deleted)" after a rebuild. Empty where there is no /proc."""
     pids: List[int] = []
     # /proc walk — works on Linux, where this proxy actually runs.
     try:
@@ -190,8 +200,13 @@ def _kill_stale_proxy() -> None:  # noqa: C901
     except FileNotFoundError:
         # best-effort: swallow on failure (caller continues)
         pass
+    return pids
 
-    # Fallback: anything listening on PROXY_PORT.
+
+def _pids_on_proxy_port() -> List[int]:
+    """Other processes that ss shows listening on PROXY_PORT. Empty where
+    there is no ss."""
+    pids: List[int] = []
     try:
         result = subprocess.run(
             ["ss", "-tlnpH", f"sport = :{PROXY_PORT}"],
@@ -200,21 +215,30 @@ def _kill_stale_proxy() -> None:  # noqa: C901
         for line in result.stdout.splitlines():
             # Format: ... users:(("name",pid=N,fd=M))
             if "pid=" in line:
-                for tok in line.split("pid="):
-                    digits = ""
-                    for c in tok:
-                        if c.isdigit():
-                            digits += c
-                        else:
-                            break
-                    if digits:
-                        pid = int(digits)
-                        if pid != os.getpid() and pid not in pids:
-                            pids.append(pid)
+                pids += [pid for pid in _pids_in_ss_line(line) if pid != os.getpid()]
     except (FileNotFoundError, subprocess.TimeoutExpired):
         # best-effort: swallow on failure (caller continues)
         pass
+    return pids
 
+
+def _pids_in_ss_line(line: str) -> List[int]:
+    """The number that starts each piece of an ss line split at "pid="."""
+    pids: List[int] = []
+    for tok in line.split("pid="):
+        digits = ""
+        for c in tok:
+            if c.isdigit():
+                digits += c
+            else:
+                break
+        if digits:
+            pids.append(int(digits))
+    return pids
+
+
+def _stop_processes(pids: List[int]) -> None:
+    """SIGTERM to each pid, then SIGKILL to any still alive after 2 s."""
     for pid in pids:
         try:
             print(f"  Reaping stale atlas-proxy-v2 (pid {pid})")
@@ -225,20 +249,24 @@ def _kill_stale_proxy() -> None:  # noqa: C901
             print(f"  WARN: can't kill pid {pid} — not owned by us")
             continue
     if pids:
-        # Give SIGTERM ~2s to take, then escalate to SIGKILL.
-        deadline = time.time() + 2.0
-        while time.time() < deadline:
-            alive = [p for p in pids if _pid_alive(p)]
-            if not alive:
-                break
-            time.sleep(0.1)
-        for pid in pids:
-            if _pid_alive(pid):
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    # best-effort: swallow on failure (caller continues)
-                    pass
+        _kill_after_grace(pids)
+
+
+def _kill_after_grace(pids: List[int]) -> None:
+    """Give SIGTERM ~2s to take, then escalate to SIGKILL."""
+    deadline = time.time() + 2.0
+    while time.time() < deadline:
+        alive = [p for p in pids if _pid_alive(p)]
+        if not alive:
+            break
+        time.sleep(0.1)
+    for pid in pids:
+        if _pid_alive(pid):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                # best-effort: swallow on failure (caller continues)
+                pass
 
 
 def _pid_alive(pid: int) -> bool:
