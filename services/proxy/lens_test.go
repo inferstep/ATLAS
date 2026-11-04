@@ -45,6 +45,12 @@ func TestProbeLensStatusReportsALensThatIsNotReady(t *testing.T) {
 	}{
 		{"not calibrated", map[string]any{"cx_calibrated": false}, "uncalibrated", ""},
 		{"G(x) missing", map[string]any{"gx_loaded": false}, "incomplete-artifacts", ""},
+		{"G(x) not calibrated", map[string]any{"gx_calibrated": false}, "uncalibrated", ""},
+		{"artifacts for another embedding size", map[string]any{"embed_dim": 4096}, "dim-mismatch", ""},
+		// A lens that does not report the model's embedding size is not a mismatch.
+		{"embedding size not reported", map[string]any{"embed_dim": 0}, "supported", ""},
+		{"drifted", map[string]any{"fingerprint_ok": false, "fingerprint_error": "reference scored 40.0"},
+			"drifted", "the lens has drifted from the served model: reference scored 40.0"},
 		{"built for another model", map[string]any{
 			"cost_field_loaded": false,
 			"self_test_error":   "artifacts are for model-a, selected model is model-b",
