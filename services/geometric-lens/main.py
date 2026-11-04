@@ -162,22 +162,8 @@ def _run_lens_self_test() -> None:
             _BOOT_STATE["self_test_error"] = "C(x) evaluation returned zeros"
             return
 
-        # Drift fingerprint: re-score the reference texts written at
-        # training time. A deviation means the serving stack no longer
-        # matches what the artifacts were trained on (wrong pooling /
-        # normalization / model) even though every request "works" —
-        # the failure mode of the 2026-07-15 bench incident.
-        from geometric_lens.drift import check_fingerprint
-        fp_dir = lens_service.active_models_dir()
-        if fp_dir:
-            present, fp_ok, fp_detail = check_fingerprint(
-                fp_dir, lambda t: lens_service.evaluate_energy(t)[0])
-            _BOOT_STATE["fingerprint_present"] = present
-            _BOOT_STATE["fingerprint_ok"] = fp_ok if present else None
-            _BOOT_STATE["fingerprint_error"] = fp_detail or None
-            if present and not fp_ok:
-                _BOOT_STATE["self_test_error"] = fp_detail
-                return
+        if not _fingerprint_matches(lens_service):
+            return
 
         _BOOT_STATE["self_test_pass"] = True
         logger.info(
@@ -197,6 +183,29 @@ def _run_lens_self_test() -> None:
         # artifacts had loaded fine and llama came up healthy seconds later.
         # Mark connectivity failures retryable so /ready can settle itself.
         _BOOT_STATE["self_test_retryable"] = _self_test_retryable(e)
+
+
+def _fingerprint_matches(lens_service) -> bool:
+    """Re-score the drift fingerprint's reference texts, written at training
+    time, and record what was found. False, with the drift as the self-test
+    error, when they no longer score as they did.
+
+    A deviation means the serving stack no longer matches what the artifacts
+    were trained on (wrong pooling / normalization / model) even though every
+    request "works" — the failure mode of the 2026-07-15 bench incident.
+    """
+    from geometric_lens.drift import check_fingerprint
+    fp_dir = lens_service.active_models_dir()
+    if fp_dir:
+        present, fp_ok, fp_detail = check_fingerprint(
+            fp_dir, lambda t: lens_service.evaluate_energy(t)[0])
+        _BOOT_STATE["fingerprint_present"] = present
+        _BOOT_STATE["fingerprint_ok"] = fp_ok if present else None
+        _BOOT_STATE["fingerprint_error"] = fp_detail or None
+        if present and not fp_ok:
+            _BOOT_STATE["self_test_error"] = fp_detail
+            return False
+    return True
 
 
 def _self_test_retryable(exc: BaseException) -> bool:

@@ -130,3 +130,25 @@ def test_a_healthy_lens_passes(main_module, monkeypatch, tmp_path):
     state = main_module._BOOT_STATE
     assert state["self_test_pass"] is True, state["self_test_error"]
     assert state["fingerprint_ok"] is True
+
+
+def test_drift_fails_the_self_test_and_names_the_drift(main_module, monkeypatch, tmp_path):
+    drift.write_fingerprint(str(tmp_path), lambda _t: 20.0)
+    _loaded(monkeypatch, lambda _t: (40.0, 0.5), models_dir=str(tmp_path))
+    main_module._run_lens_self_test()
+    state = main_module._BOOT_STATE
+    assert state["self_test_pass"] is False
+    assert state["fingerprint_present"] is True
+    assert state["fingerprint_ok"] is False
+    assert state["fingerprint_error"].startswith("embedding stack drift")
+    assert state["self_test_error"] == state["fingerprint_error"]
+
+
+def test_without_a_fingerprint_file_the_self_test_passes_and_checked_none(main_module, monkeypatch, tmp_path):
+    _loaded(monkeypatch, lambda _t: (20.0, 0.5), models_dir=str(tmp_path))
+    main_module._run_lens_self_test()
+    state = main_module._BOOT_STATE
+    assert state["self_test_pass"] is True, state["self_test_error"]
+    assert state["fingerprint_present"] is False
+    assert state["fingerprint_ok"] is None
+    assert state["fingerprint_error"] is None
