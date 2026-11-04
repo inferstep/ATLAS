@@ -489,7 +489,6 @@ def publish_preflight(kind: str, dry_run: bool, color: bool) -> bool:
 
     `kind` is "lens" or "asa" — only affects the printed wording.
     """
-    GREEN_ = GREEN if color else ""
     RED_ = RED if color else ""
     YELL_ = YELLOW if color else ""
     RESET_ = RESET if color else ""
@@ -507,41 +506,22 @@ def publish_preflight(kind: str, dry_run: bool, color: bool) -> bool:
     hf_pkg_ok = huggingface_hub_available()
     gh_ok = gh_available()
 
-    # In dry-run mode the auth gates aren't enforced, so rendering a red
-    # ✗ next to "HF_TOKEN required" is alarming and confusing — users
-    # think they did something wrong when --dry-run is exactly the path
-    # for previewing without setting any of this up. Render missing
-    # items as dim ○ in dry-run, ✗/⚠ in real-run.
-    def _row(label: str, ok: bool, required: bool, hint: str) -> None:
-        if ok:
-            mark = f"{GREEN_}✓{RESET_}"
-        elif dry_run:
-            mark = "○"  # neutral — not enforced
-        elif required:
-            mark = f"{RED_}✗{RESET_}"
-        else:
-            mark = f"{YELL_}⚠{RESET_}"
-        if ok or dry_run:
-            # Don't print the "required" hint when we're not enforcing it —
-            # it adds visual noise that contradicts the dry-run header.
-            suffix = "" if ok else "  (would be needed for a real upload)"
-        else:
-            suffix = f"  {hint}"
-        _safe_print(f"  {mark} {label}{suffix}")
-
-    _row("HF_TOKEN env var",
-         token_ok, required=True,
-         hint=(f"{RED_}required{RESET_} — get a write token at "
-               "https://huggingface.co/settings/tokens, then "
-               "`export HF_TOKEN=hf_...`"))
-    _row("huggingface_hub Python pkg",
-         hf_pkg_ok, required=True,
-         hint=(f"{RED_}required{RESET_} — `pip install huggingface_hub`"))
-    _row("gh CLI",
-         gh_ok, required=False,
-         hint=(f"{YELL_}optional{RESET_} — without it we'll print the PR "
-               "body for you to paste at "
-               "https://github.com/inferstep/ATLAS/compare"))
+    _print_requirement("HF_TOKEN env var",
+                       token_ok, required=True,
+                       hint=(f"{RED_}required{RESET_} — get a write token at "
+                             "https://huggingface.co/settings/tokens, then "
+                             "`export HF_TOKEN=hf_...`"),
+                       dry_run=dry_run, color=color)
+    _print_requirement("huggingface_hub Python pkg",
+                       hf_pkg_ok, required=True,
+                       hint=(f"{RED_}required{RESET_} — `pip install huggingface_hub`"),
+                       dry_run=dry_run, color=color)
+    _print_requirement("gh CLI",
+                       gh_ok, required=False,
+                       hint=(f"{YELL_}optional{RESET_} — without it we'll print the PR "
+                             "body for you to paste at "
+                             "https://github.com/inferstep/ATLAS/compare"),
+                       dry_run=dry_run, color=color)
     _safe_print("")
 
     if dry_run:
@@ -559,3 +539,36 @@ def publish_preflight(kind: str, dry_run: bool, color: bool) -> bool:
         return False
 
     return True
+
+
+def _print_requirement(label: str, ok: bool, required: bool, hint: str,
+                       dry_run: bool, color: bool) -> None:
+    """One row of the publish pre-flight panel: a mark, the label, and what
+    to do about it.
+
+    In dry-run mode the auth gates aren't enforced, so rendering a red
+    ✗ next to "HF_TOKEN required" is alarming and confusing — users
+    think they did something wrong when --dry-run is exactly the path
+    for previewing without setting any of this up. Render missing
+    items as dim ○ in dry-run, ✗/⚠ in real-run.
+    """
+    GREEN_ = GREEN if color else ""
+    RED_ = RED if color else ""
+    YELL_ = YELLOW if color else ""
+    RESET_ = RESET if color else ""
+
+    if ok:
+        mark = f"{GREEN_}✓{RESET_}"
+    elif dry_run:
+        mark = "○"  # neutral — not enforced
+    elif required:
+        mark = f"{RED_}✗{RESET_}"
+    else:
+        mark = f"{YELL_}⚠{RESET_}"
+    if ok or dry_run:
+        # Don't print the "required" hint when we're not enforcing it —
+        # it adds visual noise that contradicts the dry-run header.
+        suffix = "" if ok else "  (would be needed for a real upload)"
+    else:
+        suffix = f"  {hint}"
+    _safe_print(f"  {mark} {label}{suffix}")
