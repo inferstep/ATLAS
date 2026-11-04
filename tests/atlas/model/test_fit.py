@@ -316,6 +316,13 @@ FULL_ATTENTION = dict(
                  id="an-all-sliding-model-gets-the-cap-for-every-slot"),
     pytest.param({}, 6, 2, {"fits": False, "kv_gib": 0.27},
                  id="no-fit-accounts-the-minimum-context-at-q8"),
+    pytest.param({}, 6.8, 2, {"per_slot": 8192, "ctx_total": 16384, "kv_type_k": "q8_0"},
+                 id="exactly-the-minimum-per-slot-fits"),
+    pytest.param({"sliding_window": 1024, "local_mask": [True, True, True, False] * 2,
+                  "swa_note": "window 1024, assumed 1 global per 4 layers"}, 6.6, 2, {"fits": False},
+                 id="the-sliding-cache-is-paid-before-the-context"),
+    pytest.param({"n_embd": 512}, 6.4, 2, {"fits": False, "compute_gib": 0.4},
+                 id="a-small-model-still-pays-the-compute-floor"),
 ])
 def test_the_fit_sizes_each_slot_from_what_is_left(changes, vram_gib, slots, expected):
     result = fit_runtime_knobs(GGUFMeta(**{**FULL_ATTENTION, **changes}), vram_gib=vram_gib, slots=slots)
