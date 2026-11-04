@@ -33,7 +33,7 @@ import json
 import os
 import struct
 from dataclasses import dataclass, asdict
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from atlas.gguf import read_gguf_kv
 # Canonical resolver; imported under the module-local name so tests can
@@ -89,15 +89,7 @@ class GGUFMeta:
 
 def read_gguf_meta(path: str) -> GGUFMeta:
     """Read the architecture/geometry keys the fit solver needs."""
-    wanted = {}
-    with open(path, "rb") as f:
-        for key, val in read_gguf_kv(f):
-            wanted[key] = val
-            # The tokenizer block comes after the architecture keys; once we
-            # have the essentials there is no need to walk the rest.
-            if key.startswith("tokenizer.") and "block_count" in str(wanted):
-                break
-
+    wanted = _header_keys(path)
     arch = wanted.get("general.architecture", "")
 
     def a(key, default=None):
@@ -105,11 +97,7 @@ def read_gguf_meta(path: str) -> GGUFMeta:
 
     n_layers = int(a("block_count", 0))
     n_embd = int(a("embedding_length", 0))
-    n_head_raw = a("attention.head_count", 0) or 0
-    if isinstance(n_head_raw, list):
-        n_head = max(int(x) for x in n_head_raw) if n_head_raw else 0
-    else:
-        n_head = int(n_head_raw)
+    n_head = _most_heads(a("attention.head_count", 0) or 0)
     head_dim = int(a("attention.key_length", 0) or 0)
     if not head_dim and n_head:
         head_dim = n_embd // n_head
@@ -119,11 +107,7 @@ def read_gguf_meta(path: str) -> GGUFMeta:
     k_len_swa = int(a("attention.key_length_swa", 0) or 0) or head_dim
     v_len_swa = int(a("attention.value_length_swa", 0) or 0) or v_len
 
-    kv_raw = a("attention.head_count_kv", n_head)
-    if isinstance(kv_raw, list):
-        kv_heads = [int(x) for x in kv_raw] or [n_head] * n_layers
-    else:
-        kv_heads = [int(kv_raw)] * n_layers
+    kv_heads = _kv_heads(a("attention.head_count_kv", n_head), n_head, n_layers)
 
     if not n_layers or not n_embd or not head_dim or not kv_heads:
         raise ValueError(
@@ -131,21 +115,7 @@ def read_gguf_meta(path: str) -> GGUFMeta:
             f"embd={n_embd}, head_dim={head_dim})")
 
     sliding = int(a("attention.sliding_window", 0) or 0)
-    pattern = a("attention.sliding_window_pattern", 0)
-    if not sliding:
-        local_mask = [False] * n_layers
-        swa_note = "full attention"
-    elif isinstance(pattern, list) and pattern:
-        # Per-layer flags straight from the GGUF: truthy = sliding layer.
-        local_mask = [bool(x) for x in pattern]
-        local_mask += [False] * (n_layers - len(local_mask))
-        swa_note = (f"window {sliding}, per-layer mask "
-                    f"({sum(local_mask)}/{n_layers} sliding)")
-    else:
-        p = int(pattern or 0) or SWA_PATTERN_DEFAULT
-        local_mask = [(i + 1) % p != 0 for i in range(n_layers)]
-        swa_note = (f"window {sliding}, assumed 1 global per {p} layers"
-                    + ("" if pattern else " (pattern not in GGUF)"))
+    local_mask, swa_note = _sliding_layers(sliding, a("attention.sliding_window_pattern", 0), n_layers)
 
     return GGUFMeta(
         path=path,
@@ -196,6 +166,51 @@ class FitResult:
             "ATLAS_UBATCH": str(self.ubatch),
             "ATLAS_BATCH": str(self.batch),
         }
+
+
+def _header_keys(path: str) -> dict:
+    """The header's keys, read up to the tokenizer block once the geometry
+    is known."""
+    wanted = {}
+    with open(path, "rb") as f:
+        for key, val in read_gguf_kv(f):
+            wanted[key] = val
+            # The tokenizer block comes after the architecture keys; once we
+            # have the essentials there is no need to walk the rest.
+            if key.startswith("tokenizer.") and "block_count" in str(wanted):
+                break
+    return wanted
+
+
+def _most_heads(n_head_raw) -> int:
+    """The attention head count: one number, or the most of a per-layer list."""
+    if isinstance(n_head_raw, list):
+        return max(int(x) for x in n_head_raw) if n_head_raw else 0
+    return int(n_head_raw)
+
+
+def _kv_heads(kv_raw, n_head: int, n_layers: int) -> List[int]:
+    """The K/V head count of each layer: a per-layer list as given (the head
+    count for every layer when it is empty), else one count for every layer."""
+    if isinstance(kv_raw, list):
+        return [int(x) for x in kv_raw] or [n_head] * n_layers
+    return [int(kv_raw)] * n_layers
+
+
+def _sliding_layers(sliding: int, pattern, n_layers: int) -> Tuple[List[bool], str]:
+    """Which layers use the sliding window, and a note on how that is known."""
+    if not sliding:
+        return [False] * n_layers, "full attention"
+    if isinstance(pattern, list) and pattern:
+        # Per-layer flags straight from the GGUF: truthy = sliding layer.
+        local_mask = [bool(x) for x in pattern]
+        local_mask += [False] * (n_layers - len(local_mask))
+        return local_mask, (f"window {sliding}, per-layer mask "
+                            f"({sum(local_mask)}/{n_layers} sliding)")
+    p = int(pattern or 0) or SWA_PATTERN_DEFAULT
+    local_mask = [(i + 1) % p != 0 for i in range(n_layers)]
+    return local_mask, (f"window {sliding}, assumed 1 global per {p} layers"
+                        + ("" if pattern else " (pattern not in GGUF)"))
 
 
 def _layer_dims(meta: GGUFMeta):
