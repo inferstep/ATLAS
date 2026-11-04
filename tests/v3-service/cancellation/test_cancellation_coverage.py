@@ -9,11 +9,17 @@ reintroduces that hole.
 import ast
 import os
 import re
+import socket
 import sys
+import time
+from types import SimpleNamespace
+
+import pytest
 
 V3 = os.path.join(os.path.dirname(__file__), "..", "..", "..", "services", "v3-service")
 sys.path.insert(0, V3)
 import adapters
+import main
 
 
 def src(name):
@@ -105,3 +111,78 @@ def test_a_successful_request_is_not_marked_cancelled_before_release():
     scope.unregister(c)
     assert scope.cancelled is False
     assert C.closed == 0
+
+
+class _ScriptedParent:
+    """A stand-in for the handler's socket. Each peek gets the next answer
+    in the script, bytes or an exception to raise; after the script, every
+    peek would block."""
+
+    def __init__(self, answers):
+        self.answers = list(answers)
+        self.looks = 0
+
+    def recv(self, size, flags):
+        self.looks += 1
+        answer = self.answers.pop(0) if self.answers else BlockingIOError()
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+
+@pytest.mark.parametrize("answers, looks", [
+    pytest.param([b""], 1, id="a-hang-up-cancels"),
+    pytest.param([ConnectionResetError()], 1, id="a-broken-socket-cancels"),
+    pytest.param([ValueError()], 1, id="a-socket-that-cannot-peek-cancels"),
+    pytest.param([BlockingIOError(), b""], 2, id="a-peek-that-would-block-keeps-watching"),
+    pytest.param([b"x", b""], 2, id="request-bytes-keep-watching"),
+])
+def test_the_watcher_cancels_when_the_parent_hangs_up_or_breaks(monkeypatch, answers, looks):
+    # select always says the socket is ready, so the script alone decides.
+    monkeypatch.setattr(main, "select", SimpleNamespace(select=lambda r, w, x, timeout: (r, [], [])))
+    parent = _ScriptedParent(answers)
+
+    scope, stop_watch, watcher = main._watch_parent_for(SimpleNamespace(connection=parent), "test")
+    watcher.join(timeout=5)
+    still_watching = watcher.is_alive()
+    cancelled = scope.cancelled
+    main._release_scope(scope, stop_watch, watcher, "test")
+
+    assert not still_watching
+    assert cancelled
+    assert parent.looks == looks
+
+
+def test_a_watcher_that_cannot_select_stops_without_cancelling(monkeypatch):
+    # The handler's own release cancels at its exit; the watcher does not.
+    def select_fails(r, w, x, timeout):
+        raise OSError("bad file descriptor")
+    monkeypatch.setattr(main, "select", SimpleNamespace(select=select_fails))
+
+    scope, stop_watch, watcher = main._watch_parent_for(SimpleNamespace(connection=_ScriptedParent([])), "test")
+    watcher.join(timeout=5)
+    still_watching = watcher.is_alive()
+    cancelled = scope.cancelled
+    main._release_scope(scope, stop_watch, watcher, "test")
+
+    assert not still_watching
+    assert not cancelled
+
+
+def test_a_quiet_parent_is_watched_until_the_handler_stops_the_watcher():
+    # The real select on a socket pair: while the parent sends nothing, each poll times out.
+    handler_end, parent_end = socket.socketpair()
+    scope, stop_watch, watcher = main._watch_parent_for(SimpleNamespace(connection=handler_end), "test")
+    time.sleep(3 * main.WATCH_POLL_SEC)
+    watching_while_quiet = watcher.is_alive()
+    cancelled_while_quiet = scope.cancelled
+    stop_watch.set()
+    watcher.join(timeout=5)
+    still_watching = watcher.is_alive()
+    main._release_scope(scope, stop_watch, watcher, "test")
+    handler_end.close()
+    parent_end.close()
+
+    assert watching_while_quiet
+    assert not cancelled_while_quiet
+    assert not still_watching
