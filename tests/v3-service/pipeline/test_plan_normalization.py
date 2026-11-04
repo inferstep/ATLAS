@@ -110,3 +110,76 @@ def test_a_verify_step_that_only_starts_the_app_is_setup(command, why, setup_onl
     assert out.get("verify_is_setup_only", False) is setup_only, notes
     _, reasons = planning._score_plan(out, "build the app")
     assert any("setup, not verification" in r for r in reasons) is setup_only, reasons
+
+
+def test_a_later_edit_of_a_file_written_earlier_is_folded_into_the_write():
+    # The action's spelling and the spaces around the target do not matter,
+    # and structural_edit is an edit too.
+    plan = {"steps": [
+        {"id": "s1", "action": "write_file", "target": "app.py", "why": "Create it."},
+        {"id": "s2", "action": " Structural_Edit ", "target": " app.py ", "why": " Add main. "},
+    ], "verify_step": "s1"}
+
+    out, notes = planning.normalize_plan(plan)
+
+    assert [s["id"] for s in out["steps"]] == ["s1"]
+    assert out["steps"][0]["why"] == "Create it. Also: Add main."
+    note = ("collapsed structural_edit on app.py into its initial write (greenfield artifact — "
+            "everything known at planning time belongs in the first write)")
+    assert notes == [note]
+
+
+def test_steps_that_are_not_an_edit_of_an_earlier_write_are_kept():
+    plan = {"steps": [
+        "a note the planner left in the list",
+        {"id": "s1", "action": "write_file", "target": "", "why": "No target."},
+        {"id": "s2", "action": "edit_file", "target": "", "why": "No target either."},
+        {"id": "s3", "action": "run_command", "target": "pytest -q"},
+    ]}
+
+    out, notes = planning.normalize_plan(plan)
+
+    assert out["steps"] == plan["steps"]
+    assert notes == []
+    assert "verify_step" not in out  # with nothing folded, none is chosen
+
+
+def test_steps_that_are_not_a_list_are_left_alone():
+    assert planning.normalize_plan({"steps": 3}) == ({"steps": 3}, [])
+
+
+def test_a_verify_step_that_was_folded_away_moves_to_the_last_command():
+    plan = {"steps": [
+        {"id": "s1", "action": "run_command", "target": "pip install flask"},
+        {"id": "s2", "action": "write_file", "target": "app.py"},
+        {"id": "s3", "action": "Run_Command", "target": "python3 app.py --check"},
+        {"id": "s4", "action": "write_file", "target": "notes.md"},
+        {"id": "s5", "action": "edit_file", "target": "app.py"},
+    ], "verify_step": "s5"}
+
+    out, _ = planning.normalize_plan(plan)
+
+    assert out["verify_step"] == "s3"
+    assert plan["verify_step"] == "s5"  # the plan given is not changed
+
+
+def test_a_server_start_that_is_not_the_verify_step_is_not_flagged():
+    plan = {"steps": [
+        {"id": "s1", "action": "run_command", "target": "python3 -m http.server 8000"},
+        {"id": "s2", "action": "run_command", "target": "pytest -q"},
+    ], "verify_step": "s2"}
+
+    out, notes = planning.normalize_plan(plan)
+
+    assert "verify_is_setup_only" not in out
+    assert notes == []
+
+
+def test_flagging_a_setup_only_verify_step_leaves_the_plan_given_unchanged():
+    plan = {"steps": [{"id": "s1", "action": "run_command", "target": "python3 -m http.server 8000"}],
+            "verify_step": "s1"}
+
+    out, _ = planning.normalize_plan(plan)
+
+    assert out["verify_is_setup_only"] is True
+    assert "verify_is_setup_only" not in plan

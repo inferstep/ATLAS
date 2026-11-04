@@ -282,8 +282,22 @@ def normalize_plan(plan: dict) -> Tuple[dict, List[str]]:
         return plan, notes
 
     # 1. write_file X ... edit_file X  ->  one write_file X.
-    #    Only when the write comes FIRST in this same plan (the artifact is
-    #    greenfield here), so an edit to a pre-existing file is untouched.
+    keep = _collapse_greenfield_edits(steps, notes)
+    if len(keep) != len(steps):
+        plan = _with_steps(plan, keep)
+
+    # 2. Flag a verify_step that only starts a server.
+    plan = _flag_setup_only_verify(plan, notes)
+    return plan, notes
+
+
+def _collapse_greenfield_edits(steps: list, notes: List[str]) -> list:
+    """The steps with each edit of a file that an earlier step of the same
+    plan writes folded into that write, with a note for each.
+
+    Only when the write comes FIRST in this same plan (the artifact is
+    greenfield here), so an edit to a pre-existing file is untouched.
+    """
     written: Dict[str, dict] = {}
     keep: List[dict] = []
     for s in steps:
@@ -306,19 +320,26 @@ def normalize_plan(plan: dict) -> Tuple[dict, List[str]]:
                 f"belongs in the first write)")
             continue
         keep.append(s)
+    return keep
 
-    if len(keep) != len(steps):
-        plan = dict(plan)
-        plan["steps"] = keep
-        # The verify_step id may have pointed at a collapsed step.
-        ids = {s.get("id") for s in keep if isinstance(s, dict)}
-        if plan.get("verify_step") not in ids:
-            for s in reversed(keep):
-                if isinstance(s, dict) and (s.get("action") or "").lower() == "run_command":
-                    plan["verify_step"] = s.get("id")
-                    break
 
-    # 2. Flag a verify_step that only starts a server.
+def _with_steps(plan: dict, keep: list) -> dict:
+    """A copy of the plan with these steps. The verify_step id may have
+    pointed at a collapsed step: it then moves to the last run_command."""
+    plan = dict(plan)
+    plan["steps"] = keep
+    ids = {s.get("id") for s in keep if isinstance(s, dict)}
+    if plan.get("verify_step") not in ids:
+        for s in reversed(keep):
+            if isinstance(s, dict) and (s.get("action") or "").lower() == "run_command":
+                plan["verify_step"] = s.get("id")
+                break
+    return plan
+
+
+def _flag_setup_only_verify(plan: dict, notes: List[str]) -> dict:
+    """The plan, copied and marked verify_is_setup_only with a note, when its
+    verify_step only starts a server; else the plan as it is."""
     vid = plan.get("verify_step")
     for s in plan.get("steps", []):
         if isinstance(s, dict) and s.get("id") == vid and _is_server_start(s):
@@ -328,7 +349,7 @@ def normalize_plan(plan: dict) -> Tuple[dict, List[str]]:
             plan = dict(plan)
             plan["verify_is_setup_only"] = True
             break
-    return plan, notes
+    return plan
 
 
 def _score_plan(plan: dict, user_message: str,
