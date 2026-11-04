@@ -338,3 +338,62 @@ def test_unprefixed_semver_is_immutable():
     assert not eng.tag_is_mutable("3.1.3")
     assert not eng.tag_is_mutable("v3.1.3")
     assert eng.tag_is_mutable("latest")
+
+
+@pytest.mark.parametrize("compose_says, digests", [
+    pytest.param('{"Service": "proxy", "ID": "sha256:a"}\n{"Service": "v3", "ID": "sha256:b"}\n',
+                 {"proxy": "sha256:a", "v3": "sha256:b"}, id="one-object-a-line"),
+    pytest.param('[{"Service": "proxy", "ID": "sha256:a"}, {"Service": "v3", "ID": "sha256:b"}]\n',
+                 {"proxy": "sha256:a", "v3": "sha256:b"}, id="one-array"),
+    pytest.param('{"Service": "proxy", "Repository": "r1", "ID": "sha256:a", "Digest": "sha256:z"}\n'
+                 '{"Repository": "r2", "Digest": "sha256:b"}\n',
+                 {"proxy": "sha256:a", "r2": "sha256:b"}, id="service-and-id-first-then-repository-and-digest"),
+    pytest.param('{"Service": "proxy", "ID": "sha256:a"}\n{"Service": "proxy", "ID": "sha256:b"}\n',
+                 {"proxy": "sha256:b"}, id="a-service-on-two-lines-keeps-the-last"),
+    # A blank line, a line that is not JSON, an entry that is not an object, and
+    # entries with no service or no digest are skipped.
+    pytest.param('\nnot json\n["proxy", {"Service": "v3"}, {"ID": "sha256:d"}]\n{"Service": "lens", "ID": "sha256:c"}\n',
+                 {"lens": "sha256:c"}, id="what-is-skipped"),
+])
+def test_the_restore_point_reads_each_services_digest_from_compose(tmp_path, monkeypatch, compose_says, digests):
+    from atlas.commands import upgrade
+    monkeypatch.setattr(upgrade.compose_config, "command", lambda root, args: ["docker", "compose", *args])
+    monkeypatch.setattr(upgrade.subprocess, "check_output", lambda cmd, **kwargs: compose_says)
+    assert upgrade._snapshot_digests(str(tmp_path)) == digests
+
+
+@pytest.mark.parametrize("digests, digest_lines", [
+    pytest.param({"v3": "sha256:b", "proxy": "sha256:a"},
+                 ["  current image digests:", "    proxy: sha256:a", "    v3: sha256:b"], id="digests-in-order"),
+    pytest.param({}, ["  (no running images to diff against)"], id="no-running-images"),
+])
+def test_a_dry_run_prints_the_plan_and_changes_nothing(tmp_path, monkeypatch, capsys, digests, digest_lines):
+    from atlas.commands import upgrade
+    root = _root(tmp_path, "3.1.6")
+    monkeypatch.setattr(upgrade.cli_env, "atlas_root", lambda: root)
+    monkeypatch.setattr(upgrade, "_snapshot_digests", lambda atlas_root: digests)
+    assert upgrade.main(["--dry-run", "--to", "3.2.0"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "upgrade plan: 3.1.6 → 3.2.0",
+        *digest_lines,
+        "  target digests resolve on `docker compose pull` at apply.",
+        "  steps: verify signatures → record restore point → pull → up → readiness → smoke → finalize (auto-restore on failure).",
+        "  (dry run — nothing changed)",
+    ]
+    assert eng.read_env_tag(root) == "3.1.6"
+
+
+@pytest.mark.parametrize("result, last_line", [
+    pytest.param({"status": "noop", "detail": "already on 3.2.0"}, "already on 3.2.0", id="nothing-to-do"),
+    pytest.param({"status": "refreshed", "target_tag": "latest"},
+                 "Refreshed latest. For reversible upgrades, pin release tags (--to vX.Y.Z).", id="refreshed"),
+    pytest.param({"status": "upgraded", "target_tag": "3.2.0"},
+                 "Upgraded to 3.2.0. Roll back with: atlas rollback", id="upgraded"),
+])
+def test_the_upgrade_says_what_it_did(tmp_path, monkeypatch, capsys, result, last_line):
+    from atlas.commands import upgrade
+    root = _root(tmp_path, "3.1.6")
+    monkeypatch.setattr(upgrade.cli_env, "atlas_root", lambda: root)
+    monkeypatch.setattr(upgrade.eng, "run_upgrade", lambda *args, **kwargs: result)
+    assert upgrade.main(["--to", "3.2.0", "--yes"]) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == last_line
