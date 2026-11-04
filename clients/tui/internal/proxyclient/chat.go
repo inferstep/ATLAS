@@ -485,6 +485,20 @@ func parseChatSSE(ctx context.Context, r io.Reader, out chan<- ChatEvent) error 
 // relative to cwd. Returns "" if no token is found — caller must
 // handle the empty case (don't set the header).
 func loadBearerToken() string {
+	path := apiKeysPath()
+	if path == "" {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return tokenFromAPIKeys(data)
+}
+
+// apiKeysPath is $ATLAS_API_KEYS_PATH, else ./secrets/api-keys.json when it
+// exists, else "".
+func apiKeysPath() string {
 	path := os.Getenv("ATLAS_API_KEYS_PATH")
 	if path == "" {
 		wd, err := os.Getwd()
@@ -495,13 +509,11 @@ func loadBearerToken() string {
 			}
 		}
 	}
-	if path == "" {
-		return ""
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
+	return path
+}
+
+// tokenFromAPIKeys reads the token from an api-keys file's content, or "".
+func tokenFromAPIKeys(data []byte) string {
 	// File shapes: {"api_key": "..."}, {"keys": {"tui": "..."}}, or the
 	// `atlas init` shape {"sk-…": {"user": "local", …}} where each top-
 	// level key IS a token mapping to a metadata object. Try in order.
@@ -519,11 +531,15 @@ func loadBearerToken() string {
 			return v
 		}
 	}
-	// Token-keyed shape ({"sk-…": {"user": "local", …}}): accept only
-	// entries whose key looks like a token or whose value carries key
-	// metadata, so an unrelated object-of-objects (e.g. {"keys": {...}})
-	// is not mistaken for a token map. Use the lexicographically first
-	// qualifying token so repeated loads pick the same one.
+	return firstKeyedToken(data)
+}
+
+// firstKeyedToken reads the token-keyed shape ({"sk-…": {"user": "local", …}}):
+// accept only entries whose key looks like a token or whose value carries key
+// metadata, so an unrelated object-of-objects (e.g. {"keys": {...}}) is not
+// mistaken for a token map. Use the lexicographically first qualifying token so
+// repeated loads pick the same one.
+func firstKeyedToken(data []byte) string {
 	var keyed map[string]map[string]interface{}
 	if err := json.Unmarshal(data, &keyed); err == nil && len(keyed) > 0 {
 		tokens := make([]string, 0, len(keyed))
