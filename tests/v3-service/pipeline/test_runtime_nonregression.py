@@ -137,6 +137,24 @@ def test_interrupted_candidate_is_not_promoted_as_success(comparison, monkeypatc
     assert ev["status"] == "unavailable"
 
 
+# One run's result, and the status an observation takes from it. Each run that
+# is not a plain pass prints the completion marker, so only the field under
+# test can make it unavailable or failed.
+@pytest.mark.parametrize("ok, meta, status", [
+    pytest.param(True, {"exit_code": 0, "outcome": "completed"}, "passed", id="completed"),
+    pytest.param(True, {"exit_code": 0, "timed_out": True}, "unavailable", id="timed-out-flag"),
+    pytest.param(True, {"exit_code": 0, "outcome": "cancelled"}, "unavailable", id="cancelled-outcome"),
+    pytest.param(True, {"exit_code": -9}, "unavailable", id="killed-by-a-signal"),
+    pytest.param(True, {"exit_code": "0"}, "unavailable", id="exit-code-not-a-number"),
+    pytest.param(False, {"exit_code": 0}, "failed", id="runner-reports-not-ok"),
+    pytest.param(True, {"exit_code": 1}, "failed", id="nonzero-exit"),
+])
+def test_a_runs_result_decides_the_observation(comparison, monkeypatch, ok, meta, status):
+    monkeypatch.setattr(comparison.sandbox, "run_command", lambda *a, **kw:
+        (ok, IMPORT_COMPLETE + "\n", "", meta))
+    assert comparison._observe(GOOD)["status"] == status
+
+
 def test_no_budget_means_no_probe_and_no_runtime_claim(comparison):
     comparison.remaining_ms = lambda: 10_000
     admitted, _, ev = comparison.check(GOOD)
