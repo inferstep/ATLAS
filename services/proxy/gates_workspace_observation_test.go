@@ -91,15 +91,21 @@ func TestASnapshotRecordsTheWorkAndLeavesOutByProducts(t *testing.T) {
 	if snap.files["app.py"].mtime != info.ModTime().UnixNano() {
 		t.Errorf("app.py recorded with mtime %d, want %d", snap.files["app.py"].mtime, info.ModTime().UnixNano())
 	}
-	if !snap.taken || snap.truncated {
-		t.Errorf("taken %v truncated %v, want a whole walk taken", snap.taken, snap.truncated)
+	if !snap.taken {
+		t.Error("the snapshot was not taken")
+	}
+	if snap.truncated {
+		t.Error("the snapshot is marked cut, want a whole walk")
 	}
 }
 
 func TestASnapshotOfNoRootIsTakenAndEmpty(t *testing.T) {
 	snap := snapshotWorkspace("")
-	if !snap.taken || len(snap.files) != 0 {
-		t.Fatalf("taken %v with %d files, want taken and empty", snap.taken, len(snap.files))
+	if !snap.taken {
+		t.Error("the snapshot of no root was not taken")
+	}
+	if len(snap.files) != 0 {
+		t.Errorf("the snapshot of no root has %d files, want none", len(snap.files))
 	}
 }
 
