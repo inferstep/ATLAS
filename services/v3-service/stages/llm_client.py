@@ -19,7 +19,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 
 def _service_token() -> str:
@@ -449,6 +449,28 @@ def _parse_logprobs(data: dict) -> List[float]:
         return []
 
 
+def _chat_messages(user: Optional[str], system: Optional[str]) -> List[Dict[str, str]]:
+    """The system prompt, when there is one, and the user's message."""
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": user or ""})
+    return messages
+
+
+def _reply_text(data: dict) -> Tuple[str, str]:
+    """(content, reasoning) of the answer's first choice. The content is the
+    reasoning when it is empty, and leaked reasoning is removed from it."""
+    msg = (data.get("choices") or [{}])[0].get("message", {}) or {}
+    content = msg.get("content") or ""
+    reasoning = msg.get("reasoning_content") or ""
+    # Universal fallback: a reasoning model that ignored enable_thinking and put
+    # its answer in reasoning_content still yields usable output.
+    if not content.strip() and reasoning.strip():
+        content = reasoning
+    return strip_reasoning_leak(content), reasoning
+
+
 def chat_completion(
     llm_url: str,
     user: Optional[str] = None,
@@ -471,10 +493,7 @@ def chat_completion(
     `reasoning_content`, that is used as the content fallback.
     """
     if messages is None:
-        messages = []
-        if system:
-            messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": user or ""})
+        messages = _chat_messages(user, system)
 
     body = {
         "messages": messages,
@@ -508,14 +527,7 @@ def chat_completion(
             data = json.loads(r.read().decode("utf-8"))
     time_ms = (time.time() - start) * 1000
 
-    msg = (data.get("choices") or [{}])[0].get("message", {}) or {}
-    content = msg.get("content") or ""
-    reasoning = msg.get("reasoning_content") or ""
-    # Universal fallback: a reasoning model that ignored enable_thinking and put
-    # its answer in reasoning_content still yields usable output.
-    if not content.strip() and reasoning.strip():
-        content = reasoning
-    content = strip_reasoning_leak(content)
+    content, reasoning = _reply_text(data)
 
     usage = data.get("usage", {}) or {}
     tokens = usage.get("completion_tokens", 0)
