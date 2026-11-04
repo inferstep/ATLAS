@@ -21,7 +21,7 @@ can be tightened gradually.
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 from . import extract as _extract
 from .resolve import resolve_imports
@@ -79,14 +79,7 @@ def unresolved_calls(
     # not just def/class names — otherwise callbacks and assigned callables
     # false-positive. See symbols._extract_python_bound_names.
     local = _extract_python_bound_names(candidate_bytes) | {d.name for d in cand.defines}
-    import_names: Set[str] = set()
-    for i in cand.imports:
-        if i.name == "*":
-            continue  # handled below via wildcard resolution
-        import_names.add(i.name)
-        # `import a.b.c` binds only the top package `a` (you'd call a.b.c.x()
-        # as an attribute, never bare `c`). Bind the first segment, not the last.
-        import_names.add(i.name.split(".")[0])
+    import_names = _imported_names(cand.imports)
 
     # Build the project graph (cached) to resolve wildcard modules to their
     # actual exported names, and for the non-strict project-symbol fallback.
@@ -99,31 +92,14 @@ def unresolved_calls(
 
     # Resolve the candidate's wildcard imports to in-batch files.
     resolve_imports(cand, list(all_files.keys()))
-    wildcard_names: Set[str] = set()
-    lenient = False
-    for i in cand.imports:
-        if i.name != "*":
-            continue
-        if i.resolved and i.resolved in defs_by_file:
-            wildcard_names |= defs_by_file[i.resolved]
-        else:
-            # Wildcard from an unresolved module (stdlib / third-party): we can't
-            # know what it supplies, so don't flag anything.
-            lenient = True
+    wildcard_names, lenient = _wildcard_names(cand.imports, defs_by_file)
 
     resolved = local | set(builtins) | import_names | wildcard_names
     if not strict:
         resolved |= project_symbols
 
     calls = _extract_python_call_targets(candidate_bytes)
-    unresolved: List[str] = []
-    seen: Set[str] = set()
-    if not lenient:
-        for name in calls:
-            if name in resolved or name in seen:
-                continue
-            seen.add(name)
-            unresolved.append(name)
+    unresolved = [] if lenient else _first_unresolved(calls, resolved)
 
     return {
         "ok": True,
@@ -132,3 +108,45 @@ def unresolved_calls(
         "n_calls_total": len(calls),
         "lenient": lenient,
     }
+
+
+def _imported_names(imports) -> Set[str]:
+    """The names the candidate's imports bind, wildcards left to _wildcard_names."""
+    import_names: Set[str] = set()
+    for i in imports:
+        if i.name == "*":
+            continue  # resolved against the batch in _wildcard_names
+        import_names.add(i.name)
+        # `import a.b.c` binds only the top package `a` (you'd call a.b.c.x()
+        # as an attribute, never bare `c`). Bind the first segment, not the last.
+        import_names.add(i.name.split(".")[0])
+    return import_names
+
+
+def _wildcard_names(imports, defs_by_file: Dict[str, Set[str]]) -> Tuple[Set[str], bool]:
+    """The names the wildcard imports supply, and whether one comes from a
+    module outside the batch, so that nothing can be flagged (lenient)."""
+    wildcard_names: Set[str] = set()
+    lenient = False
+    for i in imports:
+        if i.name != "*":
+            continue
+        if i.resolved and i.resolved in defs_by_file:
+            wildcard_names |= defs_by_file[i.resolved]
+        else:
+            # Wildcard from an unresolved module (stdlib / third-party): we can't
+            # know what it supplies, so don't flag anything.
+            lenient = True
+    return wildcard_names, lenient
+
+
+def _first_unresolved(calls: List[str], resolved: Set[str]) -> List[str]:
+    """Each called name that nothing resolves, once, in the order of the calls."""
+    unresolved: List[str] = []
+    seen: Set[str] = set()
+    for name in calls:
+        if name in resolved or name in seen:
+            continue
+        seen.add(name)
+        unresolved.append(name)
+    return unresolved
