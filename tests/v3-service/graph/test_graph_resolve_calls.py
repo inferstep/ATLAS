@@ -22,11 +22,10 @@ HELPER = "def helper():\n    return 1\n"
 
 
 def test_identifier_calls_only():
-    code = "def f():\n    g()\n    obj.method()\n    h(x)\n"
+    # k() is found inside g's arguments; obj.method() is an attribute call.
+    code = "def f():\n    g(k())\n    obj.method()\n    h(x)\n"
     names = _extract_python_call_targets(code.encode("utf-8"))
-    assert "g" in names
-    assert "h" in names
-    assert "method" not in names  # attribute call skipped
+    assert sorted(names) == ["g", "h", "k"]
 
 
 @pytest.mark.parametrize("code, project, expected", [
