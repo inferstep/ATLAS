@@ -6,6 +6,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -340,6 +341,94 @@ func TestDeclaredCommandWithStagingUnavailable(t *testing.T) {
 	}
 	d := w.decide(evID, append([]proxyEvidence{ev}, behavioral...)...)
 	expectReason(t, "staging unavailable", d, false, ReasonEvidenceMissing)
+}
+
+// A declared set the staging budget cannot hold whole runs nothing, and each
+// of its commands is unmet as out of budget: a part of the set is not a
+// smaller obligation.
+func TestADeclaredSetOverTheStagingBudgetRunsNothing(t *testing.T) {
+	w := stagedWorld(t, "python3 a.py", "python3 b.py", "python3 c.py", "python3 d.py", "python3 e.py")
+	_, evID := w.mustObserve(t)
+	evidence, unmet, _ := observeCandidateVerification(w.ctx, w.path, w.code, evID, mutationScope{})
+	if len(evidence) != 0 {
+		t.Errorf("a set over the budget produced %d records", len(evidence))
+	}
+	if len(unmet) != 5 {
+		t.Fatalf("%d of the 5 commands are unmet, want all of them: %v", len(unmet), unmet)
+	}
+	for id, reason := range unmet {
+		if reason != ReasonEvidenceTimedOut {
+			t.Errorf("%s is unmet as %q, want %q", id, reason, ReasonEvidenceTimedOut)
+		}
+	}
+	if w.shellRuns != 0 {
+		t.Errorf("the executor ran %d times for a set over the budget", w.shellRuns)
+	}
+}
+
+// With no executor, each declared command is unmet because nothing could run
+// it, not because its evidence went missing.
+func TestWithNoExecutorEachDeclaredCommandIsUnmetAsUnavailable(t *testing.T) {
+	w := stagedWorld(t, "python3 a.py", "python3 b.py")
+	_, evID := w.mustObserve(t)
+	w.ctx.SandboxURL = ""
+	evidence, unmet, _ := observeCandidateVerification(w.ctx, w.path, w.code, evID, mutationScope{})
+	if len(evidence) != 0 {
+		t.Errorf("no executor produced %d records", len(evidence))
+	}
+	if len(unmet) != 2 {
+		t.Fatalf("%d of the 2 commands are unmet, want both: %v", len(unmet), unmet)
+	}
+	for id, reason := range unmet {
+		if reason != ReasonProducerUnavailable {
+			t.Errorf("%s is unmet as %q, want %q", id, reason, ReasonProducerUnavailable)
+		}
+	}
+}
+
+// Nothing is staged for a candidate the request cannot be tied to: a target
+// it did not declare, or an identity without its invocation or its candidate.
+func TestNothingIsStagedForACandidateTheRequestCannotBeTiedTo(t *testing.T) {
+	for name, change := range map[string]func(w *authWorld, id *candidateEvidenceIdentity) string{
+		"an undeclared target": func(w *authWorld, id *candidateEvidenceIdentity) string {
+			return filepath.Join(w.ctx.WorkingDir, "other.py")
+		},
+		"no invocation id": func(w *authWorld, id *candidateEvidenceIdentity) string {
+			id.InvocationID = " "
+			return w.path
+		},
+		"no candidate id": func(w *authWorld, id *candidateEvidenceIdentity) string {
+			id.CandidateInstanceID = ""
+			return w.path
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := stagedWorld(t, "python3 solve.py")
+			_, evID := w.mustObserve(t)
+			path := change(w, &evID)
+			evidence, unmet, _ := observeCandidateVerification(w.ctx, path, w.code, evID, mutationScope{})
+			if len(evidence) != 0 || len(unmet) != 0 {
+				t.Errorf("staged anyway: %d records, unmet %v", len(evidence), unmet)
+			}
+			if w.shellRuns != 0 {
+				t.Errorf("the executor ran %d times", w.shellRuns)
+			}
+		})
+	}
+}
+
+// The path a caller passes may be relative to the workspace; it names the
+// same candidate as the resolved one.
+func TestARelativePathIsStagedAsTheCandidateItNames(t *testing.T) {
+	w := stagedWorld(t, "python3 solve.py")
+	_, evID := w.mustObserve(t)
+	evidence, unmet, _ := observeCandidateVerification(w.ctx, "solve.py", w.code, evID, mutationScope{})
+	if len(evidence) != 1 || evidence[0].Outcome != wire.ValidationPassed {
+		t.Errorf("the relative path staged %v, want one pass", evidence)
+	}
+	if len(unmet) != 0 {
+		t.Errorf("unmet %v, want none", unmet)
+	}
 }
 
 func TestTwoDeclaredCommandsWhereOnlyOnePasses(t *testing.T) {
