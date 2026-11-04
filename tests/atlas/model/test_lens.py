@@ -783,11 +783,21 @@ def test_preflight_dry_run_skips_auth_gates(monkeypatch, capsys):
 def test_preflight_blocks_non_dryrun_when_token_missing(monkeypatch, capsys):
     for k in ("HF_TOKEN", "HUGGINGFACE_HUB_TOKEN", "HUGGING_FACE_HUB_TOKEN"):
         monkeypatch.delenv(k, raising=False)
+    monkeypatch.setattr(publishing, "huggingface_hub_available", lambda: True)
     ok = publishing.publish_preflight("lens", dry_run=False, color=False)
     out = capsys.readouterr().out
     assert ok is False, "missing HF_TOKEN in real run should block"
     assert "HF_TOKEN" in out
     assert "huggingface.co/settings/tokens" in out
+
+
+def test_preflight_blocks_non_dryrun_when_huggingface_hub_missing(monkeypatch, capsys):
+    monkeypatch.setattr(publishing, "hf_token", lambda: "hf_dummy")
+    monkeypatch.setattr(publishing, "huggingface_hub_available", lambda: False)
+    monkeypatch.setattr(publishing, "gh_available", lambda: True)
+
+    assert publishing.publish_preflight("lens", dry_run=False, color=False) is False
+    assert "Cannot continue: missing required credentials." in capsys.readouterr().out
 
 
 def test_preflight_mentions_both_lens_and_asa_kinds(monkeypatch, capsys):

@@ -103,27 +103,8 @@ func recoverStructuredReasoning(s string) (string, bool) {
 //	truncated_tool  — JSON tool_call envelope cut off mid-args (max_tokens)
 //	malformed_tool  — tool_call envelope present but JSON malformed
 func classifyParseFailure(raw, streamCut string) (category, feedback string) {
-	switch streamCut {
-	case "content_loop":
-		return "loop_cut", "Your response was cut off because it had started repeating " +
-			"itself — the same line over and over — so what arrived was an unfinished " +
-			"tool call. The response was NOT too long for the token cap, and re-sending " +
-			"a smaller version of the same call will not help.\n\nThis happens when you " +
-			"try to reproduce a large block of data you already have. You do not need to " +
-			"copy a file's contents to work with it: read_file already showed you the " +
-			"file, and input or fixture data should be read at runtime by the code you " +
-			"write, never retyped into a tool call. Write the CODE that processes the " +
-			"data, not the data."
-	case "old_str_unmatched":
-		return "old_str_cut", "Your edit_file call was stopped while old_str was still arriving: " +
-			"it had stopped matching any text in the file and kept going. Nothing was executed " +
-			"and the file is unchanged. old_str must be text copied from the file; one short " +
-			"line that appears once in it is enough to place an edit, or use replace_lines " +
-			"with the line numbers read_file showed."
-	case "reasoning_budget":
-		return "reasoning_cut", "Your response was cut off: it spent the whole per-turn " +
-			"budget on reasoning without emitting a tool call. Skip the deliberation and " +
-			"respond with the single JSON action you want to take next."
+	if category, feedback, ok := streamCutFailure(streamCut); ok {
+		return category, feedback
 	}
 	stripped := strings.TrimSpace(raw)
 	if stripped == "" {
@@ -139,12 +120,7 @@ func classifyParseFailure(raw, streamCut string) (category, feedback string) {
 	// targeted corrective unfired. Checked FIRST: the entity bug is a
 	// stronger signal than "this is narration", so it wins over
 	// prose/non_json/malformed.
-	htmlEntities := strings.Contains(stripped, "&lt;") ||
-		strings.Contains(stripped, "&gt;") ||
-		strings.Contains(stripped, "&amp;")
-	embeddedToolCall := strings.Contains(stripped, `"type":"tool_call"`) ||
-		strings.Contains(stripped, `"type": "tool_call"`)
-	if htmlEntities && embeddedToolCall {
+	if entityEncodedToolCall(stripped) {
 		return "html_entities", "Your tool call has HTML-entity-encoded angle brackets (`&lt;` / `&gt;` / `&amp;`) inside the JSON string args. JSON strings should contain literal `<` and `>` — don't HTML-escape them. The file content goes verbatim onto disk; entities like `&lt;!DOCTYPE&gt;` would write the literal text `&lt;!DOCTYPE&gt;` into the file, not `<!DOCTYPE>`. Re-emit with literal angle brackets. For HTML rewrites, structural_edit is also a good alternative — it takes `selector: \"<body>\"` and the content body, no old_str needed. Also: respond with ONLY the JSON object — no prose preamble."
 	}
 	// Truncated tool_call detection: response starts with the tool-call
@@ -173,6 +149,45 @@ func classifyParseFailure(raw, streamCut string) (category, feedback string) {
 		return "truncated_tool", truncatedCallFeedback(stripped)
 	}
 	return "malformed_tool", "Your tool_call JSON was malformed. Re-emit it as a single valid JSON object: {\"type\":\"tool_call\",\"name\":\"<tool>\",\"args\":{...}}. No prose, no markdown fences, no trailing commas."
+}
+
+// streamCutFailure is the category and feedback for a reply the stream cut
+// short, by the reason it was cut; false when it was not cut.
+func streamCutFailure(streamCut string) (category, feedback string, ok bool) {
+	switch streamCut {
+	case "content_loop":
+		return "loop_cut", "Your response was cut off because it had started repeating " +
+			"itself — the same line over and over — so what arrived was an unfinished " +
+			"tool call. The response was NOT too long for the token cap, and re-sending " +
+			"a smaller version of the same call will not help.\n\nThis happens when you " +
+			"try to reproduce a large block of data you already have. You do not need to " +
+			"copy a file's contents to work with it: read_file already showed you the " +
+			"file, and input or fixture data should be read at runtime by the code you " +
+			"write, never retyped into a tool call. Write the CODE that processes the " +
+			"data, not the data.", true
+	case "old_str_unmatched":
+		return "old_str_cut", "Your edit_file call was stopped while old_str was still arriving: " +
+			"it had stopped matching any text in the file and kept going. Nothing was executed " +
+			"and the file is unchanged. old_str must be text copied from the file; one short " +
+			"line that appears once in it is enough to place an edit, or use replace_lines " +
+			"with the line numbers read_file showed.", true
+	case "reasoning_budget":
+		return "reasoning_cut", "Your response was cut off: it spent the whole per-turn " +
+			"budget on reasoning without emitting a tool call. Skip the deliberation and " +
+			"respond with the single JSON action you want to take next.", true
+	}
+	return "", "", false
+}
+
+// entityEncodedToolCall reports whether the reply holds a tool call whose
+// string args carry HTML entities.
+func entityEncodedToolCall(stripped string) bool {
+	htmlEntities := strings.Contains(stripped, "&lt;") ||
+		strings.Contains(stripped, "&gt;") ||
+		strings.Contains(stripped, "&amp;")
+	embeddedToolCall := strings.Contains(stripped, `"type":"tool_call"`) ||
+		strings.Contains(stripped, `"type": "tool_call"`)
+	return htmlEntities && embeddedToolCall
 }
 
 // truncatedCallFeedback tells the model how to shrink a call the token cap cut.
@@ -334,11 +349,19 @@ func liftMissingArgs(resp *wire.ModelResponse, raw string) {
 		return
 	}
 
+	if args := liftedArgs(top); args != nil {
+		resp.Args = args
+	}
+}
+
+// liftedArgs finds a tool call's arguments among the reply's top-level
+// fields: an alt-key wrapper when there is one, else every field that is not
+// part of the envelope. Nil when there is nothing to lift.
+func liftedArgs(top map[string]json.RawMessage) json.RawMessage {
 	// Prefer explicit alt-key wrappers when present.
 	for _, key := range []string{"arguments", "parameters", "params", "input"} {
 		if v, ok := top[key]; ok && len(v) > 0 && string(v) != "null" {
-			resp.Args = v
-			return
+			return v
 		}
 	}
 
@@ -354,11 +377,13 @@ func liftMissingArgs(resp *wire.ModelResponse, raw string) {
 		lifted[k] = v
 	}
 	if len(lifted) == 0 {
-		return
+		return nil
 	}
-	if buf, err := json.Marshal(lifted); err == nil {
-		resp.Args = buf
+	buf, err := json.Marshal(lifted)
+	if err != nil {
+		return nil
 	}
+	return buf
 }
 
 // knownArgKeys is the set of JSON argument names a tool legitimately accepts,

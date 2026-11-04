@@ -280,7 +280,7 @@ func recordPlanAdherence(ctx *AgentContext, toolName string, args json.RawMessag
 	// and never run. The run spent the rest of its budget elsewhere and
 	// delivered that file unchanged. The step is the work, not the call.
 	if idx >= 0 && success && writeLikePlanAction(toolName) {
-		if path := extractToolTarget(toolName, args); path != "" && currentValidationDetail(ctx, path) != "" {
+		if path := writtenFileWithFailedCheck(ctx, toolName, args); path != "" {
 			log.Printf("[agent] plan step %q not satisfied: %s is on disk with a failed check",
 				ctx.Plan.Steps[idx].ID, logPath(path))
 			success = false
@@ -342,6 +342,15 @@ func recordPlanAdherence(ctx *AgentContext, toolName string, args json.RawMessag
 		return true
 	}
 	return false
+}
+
+// writtenFileWithFailedCheck is the file a write landed in when that file is
+// on disk with a failed check, else "".
+func writtenFileWithFailedCheck(ctx *AgentContext, toolName string, args json.RawMessage) string {
+	if path := extractToolTarget(toolName, args); path != "" && currentValidationDetail(ctx, path) != "" {
+		return path
+	}
+	return ""
 }
 
 // samePlanSteps reports whether two plans describe the same work. Compares

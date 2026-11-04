@@ -267,6 +267,31 @@ type restoreDecision struct {
 // bytes all end here, because the alternative is overwriting a user's file on
 // a guess.
 func checkpointRestorable(d *taskcontract.DeliverableState, currentHash string, hazardous bool) (bool, string) {
+	if ok, why := checkpointUsable(d); !ok {
+		return false, why
+	}
+	switch {
+	case d.CheckpointHash == currentHash:
+		return false, "the file already holds the last version shown to be valid"
+	case d.ValidatedHash != currentHash:
+		// The verdict describes bytes that are no longer there.
+		return false, "the current contents were never checked"
+	case d.ValidationStatus != wire.ValidationFailed:
+		// Only a DEMONSTRATED failure justifies replacing what is there.
+		return false, "the current contents were not shown to be broken"
+	case d.CheckpointKind == wire.ValidationKindUnknown || d.ValidationKind == wire.ValidationKindUnknown:
+		return false, "the two versions were not checked the same way"
+	case d.CheckpointKind != d.ValidationKind:
+		return false, "the two versions were not checked the same way"
+	case hazardous:
+		return false, "a background job may still be writing"
+	}
+	return true, ""
+}
+
+// checkpointUsable reports whether d is a deliverable this session wrote, may
+// be restored at all, and holds an earlier valid version whole and verified.
+func checkpointUsable(d *taskcontract.DeliverableState) (bool, string) {
 	switch {
 	case d == nil || d.Generation == 0:
 		return false, "not a deliverable this session wrote"
@@ -287,20 +312,6 @@ func checkpointRestorable(d *taskcontract.DeliverableState, currentHash string, 
 		// Held bytes and recorded hash disagree: something is wrong with the
 		// ledger itself, so it is not allowed to touch the workspace.
 		return false, "the earlier valid version could not be verified"
-	case d.CheckpointHash == currentHash:
-		return false, "the file already holds the last version shown to be valid"
-	case d.ValidatedHash != currentHash:
-		// The verdict describes bytes that are no longer there.
-		return false, "the current contents were never checked"
-	case d.ValidationStatus != wire.ValidationFailed:
-		// Only a DEMONSTRATED failure justifies replacing what is there.
-		return false, "the current contents were not shown to be broken"
-	case d.CheckpointKind == wire.ValidationKindUnknown || d.ValidationKind == wire.ValidationKindUnknown:
-		return false, "the two versions were not checked the same way"
-	case d.CheckpointKind != d.ValidationKind:
-		return false, "the two versions were not checked the same way"
-	case hazardous:
-		return false, "a background job may still be writing"
 	}
 	return true, ""
 }
