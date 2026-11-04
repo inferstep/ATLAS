@@ -83,6 +83,7 @@ def test_what_the_reference_fixture_leaves_out():
         "    const write = () => flush();\n"
         "    write();\n"
         "    write();\n"
+        "    function log() { record(); }\n"
         "  }\n"
         "}\n"
         "function start() {}\n"
@@ -91,13 +92,13 @@ def test_what_the_reference_fixture_leaves_out():
     g = extract_file("store.js", src)
     # A function value inside a class counts as a method, like the class's own.
     assert sorted([d.name, d.kind, d.line] for d in g.defines) == [
-        ["Store", "class", 7], ["parse", "function", 4], ["save", "method", 9],
-        ["start", "function", 15], ["write", "method", 10]]
+        ["Store", "class", 7], ["log", "function", 13], ["parse", "function", 4], ["save", "method", 9],
+        ["start", "function", 16], ["write", "method", 10]]
     # A call in the class body belongs to the class, a call in a function value
     # to that value, a pair made twice is recorded once, and the call outside
     # any scope is not recorded.
     assert sorted((c.caller, c.callee) for c in g.calls) == [
-        ("Store", "makeCache"), ("parse", "split"), ("save", "write"), ("write", "flush")]
+        ("Store", "makeCache"), ("log", "record"), ("parse", "split"), ("save", "write"), ("write", "flush")]
     assert sorted((i.name, i.source) for i in g.imports) == [("fs", "fs"), ("rf", "./io.js")]
 
 
