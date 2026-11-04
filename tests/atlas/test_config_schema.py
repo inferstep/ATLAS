@@ -1,5 +1,7 @@
 """Typed config schema: validation + migration."""
 
+import pytest
+
 from atlas import config_schema as cs
 
 
@@ -138,6 +140,18 @@ def test_float_fields_validate_range_and_type():
 
     # Integers are valid floats — 1 must be accepted for a float field.
     assert cs.validate({"ATLAS_DRY_BASE": "2"})["errors"] == []
+
+
+@pytest.mark.parametrize("key, value, errors", [
+    pytest.param("ATLAS_KEEP_LLAMA_WARM", "TRUE", [], id="a-boolean-in-capitals"),
+    pytest.param("ATLAS_PROXY_PORT", "65535", [], id="the-highest-port"),
+    pytest.param("ATLAS_PROXY_PORT", "0", ["ATLAS_PROXY_PORT=0: below minimum 1"], id="port-0"),
+    pytest.param("ATLAS_CTX_SIZE", "511", ["ATLAS_CTX_SIZE=511: below minimum 512"], id="an-integer-below-its-minimum"),
+    pytest.param("ATLAS_REPEAT_PENALTY", "2.5", ["ATLAS_REPEAT_PENALTY=2.5: above maximum 2"],
+                 id="a-number-above-its-maximum"),
+])
+def test_each_kind_takes_its_values_and_refuses_the_rest(key, value, errors):
+    assert cs.validate({key: value})["errors"] == errors
 
 
 def test_repetition_sampling_keys_are_known():
