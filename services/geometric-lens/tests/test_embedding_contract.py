@@ -7,6 +7,7 @@ against a calibrated ~20-30 with every health check green. The contract
 makes the wrong convention a hard error instead of a silent one.
 """
 
+import logging
 import math
 import os
 import sys
@@ -130,6 +131,22 @@ def test_single_row_nested_is_pooled_not_per_token(monkeypatch):
     out = ee.extract_embedding("x")
     assert len(out) == 8
     assert not isinstance(out[0], list)
+
+
+@pytest.mark.parametrize("contract, embedding, notes", [
+    pytest.param(NORMALIZED_CONTRACT, [[1.0, 2.0], [3.0, 4.0]], 1, id="per-token-against-a-flat-contract"),
+    pytest.param(NORMALIZED_CONTRACT, _flat(norm=1.0), 0, id="flat-against-a-flat-contract"),
+    pytest.param({"normalized": False}, _flat(norm=1.0), 0, id="flat-against-a-contract-naming-no-shape"),
+])
+def test_a_shape_other_than_the_contract_names_is_logged_once(monkeypatch, caplog, contract, embedding, notes):
+    ee.set_embedding_contract(contract)
+    _install_response(monkeypatch, embedding)
+    caplog.set_level(logging.INFO, logger=ee.logger.name)
+
+    ee.extract_embedding("x")
+    ee.extract_embedding("x")
+
+    assert caplog.text.count("the loaded artifacts declare") == notes
 
 
 def test_requests_raw_vectors_regardless_of_contract(monkeypatch):

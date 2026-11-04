@@ -176,35 +176,10 @@ def extract_embedding(text: str) -> List[float]:
     is_per_token = got == "per_token"
 
     if contract:
-        expected = contract.get("response_shape", "flat")
-        if got != expected and not _shape_warn["warned"]:
-            _shape_warn["warned"] = True
-            logger.info(
-                "embed server returned a %s /embedding response; the loaded "
-                "artifacts declare %s. Pooling and normalization are applied "
-                "client-side, so both shapes yield the same vector.",
-                got, expected,
-            )
+        _log_shape_once(got, contract)
 
     if is_per_token:
-        # Per-token: mean-pool across tokens
-        per_token = raw
-        n_tokens = len(per_token)
-
-        if n_tokens == 0:
-            raise ValueError("No token embeddings returned")
-
-        _reject_prenormalized(per_token)
-
-        dim = len(per_token[0])
-
-        pooled = [0.0] * dim
-        for tok_emb in per_token:
-            for i, v in enumerate(tok_emb):
-                pooled[i] += v
-        for i in range(dim):
-            pooled[i] /= n_tokens
-        vec = pooled
+        vec = _mean_pool(raw)
     else:
         vec = _unwrap(raw)
 
@@ -218,6 +193,41 @@ def extract_embedding(text: str) -> List[float]:
         vec = _l2_normalize(vec)
 
     return vec
+
+
+def _log_shape_once(got: str, contract: dict) -> None:
+    """Log, once per contract, a response shape other than the one the
+    loaded artifacts declare."""
+    expected = contract.get("response_shape", "flat")
+    if got != expected and not _shape_warn["warned"]:
+        _shape_warn["warned"] = True
+        logger.info(
+            "embed server returned a %s /embedding response; the loaded "
+            "artifacts declare %s. Pooling and normalization are applied "
+            "client-side, so both shapes yield the same vector.",
+            got, expected,
+        )
+
+
+def _mean_pool(per_token: List[List[float]]) -> List[float]:
+    """The mean of the per-token vectors, refused when the server
+    normalized each one already."""
+    n_tokens = len(per_token)
+
+    if n_tokens == 0:
+        raise ValueError("No token embeddings returned")
+
+    _reject_prenormalized(per_token)
+
+    dim = len(per_token[0])
+
+    pooled = [0.0] * dim
+    for tok_emb in per_token:
+        for i, v in enumerate(tok_emb):
+            pooled[i] += v
+    for i in range(dim):
+        pooled[i] /= n_tokens
+    return pooled
 
 
 def observe_embedding_convention(
