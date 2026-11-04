@@ -151,6 +151,8 @@ def test_an_oracle_floor_rejects_merely_behavioural_evidence():
     {"reqs": [C.requirement("")]},
     {"reqs": [C.requirement("a", weight=float("inf"))]},
     {"reqs": [C.requirement("a", weight=-1)]},
+    {"reqs": [C.requirement(None)]},
+    {"reqs": [{"id": "a", "required": True, "weight": "1"}]},  # requirement() would make it a float
 ])
 def test_malformed_requirements_are_rejected(bad):
     task = C.task_contract("x.v1", "1", bad["reqs"])
@@ -162,12 +164,26 @@ def test_malformed_requirements_are_rejected(bad):
 @pytest.mark.parametrize("obs", [
     {"alpha": {"status": "made_up", "confidence": 1.0}},
     {"alpha": C.observation(C.DEMONSTRATED, confidence=1.5)},
+    {"alpha": C.observation(C.DEMONSTRATED, confidence=-0.1)},
     {"omega": C.observation(C.DEMONSTRATED)},
     {"omega": C.observation(C.REFUTED)},
 ])
 def test_malformed_or_overreaching_observations_are_rejected(obs):
     with pytest.raises(C.ContractError):
         _rec(obs)
+
+
+@pytest.mark.parametrize("task, obs", [
+    pytest.param(C.task_contract("x.v1", "1", [C.requirement("alpha", weight=0)]), {}, id="a-weight-of-0"),
+    pytest.param(TASK, {"alpha": C.observation(C.DEMONSTRATED, confidence=0.0)}, id="a-confidence-of-0"),
+])
+def test_the_lowest_weight_and_confidence_are_accepted(task, obs):
+    assert _rec(obs, task=task)["contract_id"] == task["contract_id"]
+
+
+def test_a_skipped_run_cannot_be_reported_as_supported():
+    with pytest.raises(C.ContractError):
+        _rec({"alpha": D}, execution_status=C.EXEC_SKIPPED, supported=True)
 
 
 def test_unknown_statuses_are_rejected():
@@ -184,7 +200,24 @@ def test_derived_observations_are_materialised_for_telemetry():
     back = json.loads(json.dumps(rec))
     assert back["observations"]["delta"]["status"] == C.NOT_APPLICABLE, \
         "telemetry must be able to explain why completion failed"
+    assert back["observations"]["delta"]["detail"] == "not measurable by this adapter"
     assert "delta" in back["missing_required"]
+
+
+@pytest.mark.parametrize("reqs, required, optional, overall", [
+    pytest.param([C.requirement("alpha", required=False)], 1.0, 1.0, 1.0, id="no-required-criterion"),
+    pytest.param([C.requirement("alpha")], 1.0, 0.0, 1.0, id="no-optional-criterion"),
+    pytest.param([], 1.0, 0.0, 0.0, id="no-criterion"),
+])
+def test_scores_when_a_kind_of_criterion_is_absent(reqs, required, optional, overall):
+    rec = _rec({"alpha": D}, task=C.task_contract("x.v1", "1", reqs))
+    assert rec["required_coverage_score"] == required
+    assert rec["optional_quality_score"] == optional
+    assert rec["overall_quality_score"] == overall
+
+
+def test_an_unsupported_record_is_never_complete():
+    assert _rec({"alpha": D, "beta": D}, supported=False)["requirements_complete"] is False
 
 
 def test_unobserved_survives_serialization():
