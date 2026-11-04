@@ -179,36 +179,53 @@ SCHEMA: Dict[str, Field] = {
 
 def _check_value(key: str, val: str, spec: Field) -> Optional[str]:
     if spec.kind == "bool":
-        if val.lower() not in _BOOLS:
-            return f"{key}={val!r}: expected a boolean ({'/'.join(sorted(_BOOLS))})"
-        return None
+        return _check_bool(key, val)
     if spec.kind == "enum":
-        if spec.enum and val not in spec.enum:
-            return f"{key}={val!r}: expected one of {spec.enum}"
-        return None
+        return _check_enum(key, val, spec)
     if spec.kind in ("int", "port"):
-        try:
-            n = int(val)
-        except ValueError:
-            return f"{key}={val!r}: expected an integer"
-        lo = 1 if spec.kind == "port" else spec.min
-        hi = 65535 if spec.kind == "port" else spec.max
-        if lo is not None and n < lo:
-            return f"{key}={n}: below minimum {lo}"
-        if hi is not None and n > hi:
-            return f"{key}={n}: above maximum {hi}"
-        return None
+        return _check_int(key, val, spec)
     if spec.kind == "float":
-        try:
-            f = float(val)
-        except ValueError:
-            return f"{key}={val!r}: expected a number"
-        if spec.min is not None and f < spec.min:
-            return f"{key}={f}: below minimum {spec.min}"
-        if spec.max is not None and f > spec.max:
-            return f"{key}={f}: above maximum {spec.max}"
-        return None
+        return _check_float(key, val, spec)
     return None  # str: presence only
+
+
+def _check_bool(key: str, val: str) -> Optional[str]:
+    if val.lower() not in _BOOLS:
+        return f"{key}={val!r}: expected a boolean ({'/'.join(sorted(_BOOLS))})"
+    return None
+
+
+def _check_enum(key: str, val: str, spec: Field) -> Optional[str]:
+    if spec.enum and val not in spec.enum:
+        return f"{key}={val!r}: expected one of {spec.enum}"
+    return None
+
+
+def _check_int(key: str, val: str, spec: Field) -> Optional[str]:
+    """An integer within the field's range; a port's range is 1 to 65535."""
+    try:
+        n = int(val)
+    except ValueError:
+        return f"{key}={val!r}: expected an integer"
+    lo = 1 if spec.kind == "port" else spec.min
+    hi = 65535 if spec.kind == "port" else spec.max
+    if lo is not None and n < lo:
+        return f"{key}={n}: below minimum {lo}"
+    if hi is not None and n > hi:
+        return f"{key}={n}: above maximum {hi}"
+    return None
+
+
+def _check_float(key: str, val: str, spec: Field) -> Optional[str]:
+    try:
+        f = float(val)
+    except ValueError:
+        return f"{key}={val!r}: expected a number"
+    if spec.min is not None and f < spec.min:
+        return f"{key}={f}: below minimum {spec.min}"
+    if spec.max is not None and f > spec.max:
+        return f"{key}={f}: above maximum {spec.max}"
+    return None
 
 
 def validate(env: Dict[str, str]) -> Dict[str, List[str]]:
