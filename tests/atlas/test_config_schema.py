@@ -99,6 +99,30 @@ def test_migrate_preserves_comments_and_blanks(tmp_path):
     assert (tmp_path / ".env.bak").exists()   # backup written
 
 
+def test_migrate_dry_run_says_what_it_would_change(tmp_path, capsys):
+    from atlas.commands import config as cfg
+    p = tmp_path / ".env"
+    p.write_text("# c\nATLAS_REGISTRY=old\nATLAS_CTX_SIZE=131072\n")
+    assert cfg._migrate(str(p), dry_run=True) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "  dropped ATLAS_REGISTRY (deprecated: removed; the registry is in-package)",
+        "config migrate (preview): +1 -1 keys, target schema v1",
+        "  would remove: ATLAS_REGISTRY",
+        "  would add:    ATLAS_CONFIG_SCHEMA_VERSION",
+        "  (no changes written — drop --dry-run to apply)",
+    ]
+    assert p.read_text() == "# c\nATLAS_REGISTRY=old\nATLAS_CTX_SIZE=131072\n"
+
+
+def test_migrate_rewrites_a_stale_stamp_and_ends_every_line(tmp_path):
+    from atlas.commands import config as cfg
+    p = tmp_path / ".env"
+    p.write_text("# c\nATLAS_CONFIG_SCHEMA_VERSION=0\nATLAS_REGISTRY=old\nATLAS_CTX_SIZE=131072")
+    assert cfg._migrate(str(p)) == 0
+    # The stamp is rewritten in place, so none is added at the end.
+    assert p.read_text() == "# c\nATLAS_CONFIG_SCHEMA_VERSION=1\nATLAS_CTX_SIZE=131072\n"
+
+
 def test_float_fields_validate_range_and_type():
     """Repetition-sampling knobs are floats; the schema gained a float kind
     for them rather than demoting them to unvalidated strings."""
