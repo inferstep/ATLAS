@@ -34,6 +34,42 @@ def test_probe_llama_reads_reachability_dim_and_patch(monkeypatch, health_reply,
     assert got == expected
 
 
+@pytest.mark.parametrize("props_reply, expected", [
+    pytest.param({"n_layer": 48, "model_path": "/models/a.gguf"}, (48, "/models/a.gguf"), id="n_layer-and-path"),
+    pytest.param({"default_generation_settings": {"n_layer": 32}, "model_name": "b"}, (32, "b"),
+                 id="older-field-names"),
+    pytest.param({"model": "c"}, (0, "c"), id="no-layer-count"),
+    pytest.param(None, (0, ""), id="no-props"),
+])
+def test_probe_llama_reads_the_layer_count_and_model_name(monkeypatch, props_reply, expected):
+    monkeypatch.setattr(client, "get_json_or_none",
+                        lambda url, timeout: {"status": "ok"} if url.endswith("/health") else props_reply)
+    monkeypatch.setattr(client, "post_json_or_none",
+                        lambda url, body, timeout: [{"embedding": [0.1]}])
+
+    probe = client.probe_llama("http://llama:8080")
+
+    got = (probe.n_layers, probe.model_name)
+    assert got == expected
+
+
+@pytest.mark.parametrize("embedding_reply", [
+    pytest.param([], id="empty-list"),
+    pytest.param({"error": "embeddings disabled"}, id="an-object"),
+    pytest.param([{"embedding": []}], id="empty-vector"),
+])
+def test_a_server_without_an_embedding_is_reachable_but_named(monkeypatch, embedding_reply):
+    monkeypatch.setattr(client, "get_json_or_none",
+                        lambda url, timeout: {"status": "ok"} if url.endswith("/health") else {})
+    monkeypatch.setattr(client, "post_json_or_none", lambda url, body, timeout: embedding_reply)
+
+    probe = client.probe_llama("http://llama:8080")
+
+    assert probe.reachable
+    assert probe.embedding_dim == 0
+    assert "didn't return an embedding" in probe.error
+
+
 @pytest.mark.parametrize("env, expected", [
     pytest.param({"ATLAS_LENS_URL": "http://current:1111",
                   "ATLAS_RAG_URL": "http://deprecated:2222"},
