@@ -65,14 +65,14 @@ func commandSegments(cmd string) []string {
 		case c == '"' && !inSingle:
 			inDouble = !inDouble
 		case inSingle:
-		case c == '`' || c == ')' || (c == '$' && i+1 < len(cmd) && cmd[i+1] == '('):
+		case substitutionBoundary(cmd, i):
 			cut()
 			if c == '$' {
 				i++ // the `(` of `$(`
 			}
 			continue
 		case inDouble:
-		case c == ';' || c == '|' || c == '&' || c == '\n' || c == '(':
+		case separatesCommands(c):
 			cut()
 			continue
 		}
@@ -80,6 +80,18 @@ func commandSegments(cmd string) []string {
 	}
 	cut()
 	return out
+}
+
+// substitutionBoundary reports whether the byte at i opens or closes a command
+// the shell runs inside the line: a backtick, `)`, or the `$(` of `$(...)`.
+func substitutionBoundary(cmd string, i int) bool {
+	c := cmd[i]
+	return c == '`' || c == ')' || (c == '$' && i+1 < len(cmd) && cmd[i+1] == '(')
+}
+
+// separatesCommands reports whether c ends one command so that another can start.
+func separatesCommands(c byte) bool {
+	return c == ';' || c == '|' || c == '&' || c == '\n' || c == '('
 }
 
 // catastrophicCommand checks the command one segment runs.
