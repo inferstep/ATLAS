@@ -2,6 +2,7 @@
 
 import io
 import os
+import signal
 import urllib.request
 from types import SimpleNamespace
 
@@ -188,3 +189,126 @@ def test_the_cli_finds_the_checkout_it_runs_from(monkeypatch, tmp_path):
     monkeypatch.setattr(runtime, "__file__", str(tmp_path / "atlas" / "runtime.py"))
     monkeypatch.chdir(checkout)
     assert runtime._find_atlas_dir() == checkout, "not from the folder the CLI runs in"
+
+
+class FakeOs:
+    """The os calls the stale-proxy reaper makes, answered from a fixed table
+    of processes. kill() only records a signal, so nothing real is stopped; a
+    pid in `stubborn` outlives SIGTERM, one in `refused` belongs to another
+    user, one in `gone` has exited since the scan, and one in
+    `exits_before_sigkill` exits during the grace."""
+    path = os.path
+
+    def __init__(self, exes, own_pid, stubborn=(), refused=(), gone=(), exits_before_sigkill=()):
+        self.exes, self.own_pid = exes, own_pid
+        self.stubborn, self.refused = set(stubborn), set(refused)
+        self.gone, self.exits_before_sigkill = set(gone), set(exits_before_sigkill)
+        self.signals = []
+
+    def listdir(self, path):
+        return ["self", "cpuinfo", *(str(pid) for pid in self.exes)]
+
+    def readlink(self, path):
+        exe = self.exes[int(path.split("/")[2])]
+        if exe is None:
+            raise PermissionError(path)
+        return exe
+
+    def getpid(self):
+        return self.own_pid
+
+    def kill(self, pid, sig):
+        if pid in self.refused:
+            raise PermissionError(pid)
+        if pid in self.gone:
+            raise ProcessLookupError(pid)
+        if sig == signal.SIGKILL and pid in self.exits_before_sigkill:
+            raise ProcessLookupError(pid)
+        if sig == 0:
+            return
+        self.signals.append((pid, sig))
+        if sig == signal.SIGKILL or pid not in self.stubborn:
+            self.gone.add(pid)
+
+
+class FakeClock:
+    """time.time and time.sleep without the wait: sleep moves the clock on."""
+
+    def __init__(self):
+        self.now = 0.0
+
+    def time(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+def test_a_stale_proxy_found_by_name_or_by_port_is_stopped(monkeypatch, capsys):
+    fake = FakeOs(own_pid=999, stubborn={200}, refused={500}, exes={
+        100: "/usr/local/bin/atlas-proxy-v2",
+        200: "/usr/local/bin/atlas-proxy-v2 (deleted)",  # its binary was rebuilt
+        300: "/usr/bin/python3",
+        400: None,  # its exe cannot be read
+        999: "/usr/local/bin/atlas-proxy-v2",  # this process
+    })
+    listening = ('LISTEN 0 4096 *:8090 *:* users:(("atlas-proxy-v2",pid=100,fd=3),'
+                 '("proxy",pid=500,fd=7),("me",pid=999,fd=4))\n')
+    asked = []
+    monkeypatch.setattr(runtime, "os", fake)
+    monkeypatch.setattr(runtime, "time", FakeClock())
+    monkeypatch.setattr(runtime.subprocess, "run",
+                        lambda cmd, **kwargs: asked.append((cmd, kwargs)) or SimpleNamespace(stdout=listening))
+
+    runtime._kill_stale_proxy()
+
+    assert asked == [(["ss", "-tlnpH", f"sport = :{runtime.PROXY_PORT}"],
+                      {"capture_output": True, "text": True, "timeout": 3})]
+    assert fake.signals == [(100, signal.SIGTERM), (200, signal.SIGTERM), (200, signal.SIGKILL)]
+    assert runtime.time.now == pytest.approx(2.0, abs=0.11)  # SIGKILL only after the 2 s grace
+    assert capsys.readouterr().out.splitlines() == [
+        "  Reaping stale atlas-proxy-v2 (pid 100)",
+        "  Reaping stale atlas-proxy-v2 (pid 200)",
+        "  Reaping stale atlas-proxy-v2 (pid 500)",
+        "  WARN: can't kill pid 500 — not owned by us",
+    ]
+
+
+def test_a_proxy_that_stops_at_sigterm_is_not_waited_for(monkeypatch):
+    fake = FakeOs(own_pid=999, exes={100: "/usr/local/bin/atlas-proxy-v2"})
+    monkeypatch.setattr(runtime, "os", fake)
+    monkeypatch.setattr(runtime, "time", FakeClock())
+    monkeypatch.setattr(runtime.subprocess, "run", lambda cmd, **kwargs: SimpleNamespace(stdout=""))
+
+    runtime._kill_stale_proxy()
+
+    assert fake.signals == [(100, signal.SIGTERM)]
+    assert runtime.time.now == 0.0
+
+
+def test_a_proxy_that_exits_on_its_own_before_a_signal_is_passed_over(monkeypatch):
+    fake = FakeOs(own_pid=999, gone={600}, stubborn={700}, exits_before_sigkill={700}, exes={
+        600: "/usr/local/bin/atlas-proxy-v2",  # exits before SIGTERM
+        700: "/usr/local/bin/atlas-proxy-v2",  # exits before SIGKILL
+    })
+    monkeypatch.setattr(runtime, "os", fake)
+    monkeypatch.setattr(runtime, "time", FakeClock())
+    monkeypatch.setattr(runtime.subprocess, "run", lambda cmd, **kwargs: SimpleNamespace(stdout=""))
+
+    runtime._kill_stale_proxy()
+
+    assert fake.signals == [(700, signal.SIGTERM)]
+
+
+def test_without_proc_or_ss_the_reaper_stops_nothing(monkeypatch):
+    def missing(*args, **kwargs):
+        raise FileNotFoundError(args[0])
+
+    fake = FakeOs(own_pid=999, exes={})
+    fake.listdir = missing
+    monkeypatch.setattr(runtime, "os", fake)
+    monkeypatch.setattr(runtime.subprocess, "run", missing)
+
+    runtime._kill_stale_proxy()
+
+    assert fake.signals == []
