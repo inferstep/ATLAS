@@ -124,6 +124,9 @@ func TestMentionsFilename(t *testing.T) {
 	if !mentionsFilename("python3 app.py:12: error", "app.py") {
 		t.Error("app.py must match when bounded by a colon")
 	}
+	if !mentionsFilename("cannot open app.py", "app.py") {
+		t.Error("app.py must match at the end of the text")
+	}
 }
 
 // A letter of either case, a digit, _, . or - on either side makes the name
