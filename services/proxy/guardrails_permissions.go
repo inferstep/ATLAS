@@ -77,17 +77,40 @@ func denyReadPathReason(path string) string {
 func credentialFileName(clean string) string {
 	base := filepath.Base(clean)
 	parent := filepath.Base(filepath.Dir(clean))
+	if credentialFileBase(base) {
+		return base
+	}
+	if name := credentialFileInFolder(parent, base); name != "" {
+		return name
+	}
+	if strings.Contains(base, "credentials") {
+		return base
+	}
+	return ""
+}
+
+// credentialFileBase reports whether a file's own name marks a credential
+// store, wherever it is.
+func credentialFileBase(base string) bool {
 	switch {
 	case base == ".env" || (strings.HasPrefix(base, ".env.") && base != ".env.example"):
-		return base
+		return true
 	case base == ".netrc" || base == "_netrc":
-		return base
+		return true
 	case base == ".npmrc" || base == ".pypirc":
-		return base
+		return true
 	case strings.HasSuffix(base, ".pem") || strings.HasSuffix(base, ".key"):
-		return base
+		return true
 	case base == "id_rsa" || base == "id_ecdsa" || base == "id_ed25519" || base == "id_dsa":
-		return base
+		return true
+	}
+	return false
+}
+
+// credentialFileInFolder is the name a refusal reports, folder and file, for
+// a credential store known by the folder it is in, or "".
+func credentialFileInFolder(parent, base string) string {
+	switch {
 	case parent == ".ssh" && !strings.HasSuffix(base, ".pub"):
 		return ".ssh/" + base
 	case parent == ".aws" && (base == "credentials" || base == "config"):
@@ -100,8 +123,6 @@ func credentialFileName(clean string) string {
 		return "secrets/" + base
 	case base == "api-keys.json" && parent == "secrets":
 		return "secrets/" + base
-	case strings.Contains(base, "credentials"):
-		return base
 	}
 	return ""
 }
