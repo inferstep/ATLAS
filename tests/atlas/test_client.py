@@ -49,7 +49,8 @@ def test_probe_llama_reads_the_layer_count_and_model_name(monkeypatch, props_rep
 
     probe = client.probe_llama("http://llama:8080")
 
-    assert (probe.n_layers, probe.model_name) == expected
+    got = (probe.n_layers, probe.model_name)
+    assert got == expected
 
 
 @pytest.mark.parametrize("embedding_reply", [
