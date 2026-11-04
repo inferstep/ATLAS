@@ -78,6 +78,19 @@ def task_contract(contract_id: str, contract_version: str,
 
 
 def _validate(reqs, obs, caps, strength, execution_status, supported):
+    _validate_requirements(reqs)
+    _validate_observations(obs, caps)
+    if strength not in STRENGTH_ORDER:
+        raise ContractError(f"unknown evidence strength {strength!r}")
+    if execution_status not in EXECUTION_STATUSES:
+        raise ContractError(f"unknown execution status {execution_status!r}")
+    if supported and execution_status == EXEC_SKIPPED:
+        raise ContractError("a skipped execution cannot be reported as supported")
+
+
+def _validate_requirements(reqs):
+    """Each criterion id is a non-empty string, none is repeated, and each
+    weight is a finite number of at least 0."""
     ids = [r.get("id") for r in reqs]
     if any(not isinstance(i, str) or not i.strip() for i in ids):
         raise ContractError("criterion ids must be non-empty strings")
@@ -87,6 +100,11 @@ def _validate(reqs, obs, caps, strength, execution_status, supported):
         w = r.get("weight")
         if not isinstance(w, (int, float)) or not math.isfinite(w) or w < 0:
             raise ContractError(f"weight for {r.get('id')!r} must be finite and >= 0")
+
+
+def _validate_observations(obs, caps):
+    """Each observation has a known status and a confidence within [0,1], and
+    demonstrates or refutes only a criterion the adapter can measure."""
     for cid, o in obs.items():
         if o.get("status") not in OBSERVATION_STATUSES:
             raise ContractError(f"unknown observation status {o.get('status')!r} for {cid!r}")
@@ -98,12 +116,6 @@ def _validate(reqs, obs, caps, strength, execution_status, supported):
         # overreach as claiming demonstration.
         if cid not in caps and o.get("status") in (DEMONSTRATED, REFUTED):
             raise ContractError(f"adapter reported {o['status']} for {cid!r}, outside its capabilities")
-    if strength not in STRENGTH_ORDER:
-        raise ContractError(f"unknown evidence strength {strength!r}")
-    if execution_status not in EXECUTION_STATUSES:
-        raise ContractError(f"unknown execution status {execution_status!r}")
-    if supported and execution_status == EXEC_SKIPPED:
-        raise ContractError("a skipped execution cannot be reported as supported")
 
 
 def build(task: Dict, adapter_id: str, adapter_version: str,
@@ -117,38 +129,10 @@ def build(task: Dict, adapter_id: str, adapter_version: str,
     caps = set(capabilities)
     _validate(reqs, observations, caps, evidence_strength, execution_status, supported)
 
-    # Materialise derived observations so telemetry can explain WHY a record
-    # failed to complete; previously they only existed inside this function.
-    materialised = dict(observations)
-    for r in reqs:
-        cid = r["id"]
-        if cid not in materialised:
-            materialised[cid] = observation(
-                UNOBSERVED if cid in caps else NOT_APPLICABLE,
-                detail="not measurable by this adapter" if cid not in caps else "")
-
-    req_got = req_tot = opt_got = opt_tot = 0.0
-    missing: List[str] = []
-    for r in reqs:
-        cid, w = r["id"], r["weight"]
-        demonstrated = materialised[cid]["status"] == DEMONSTRATED
-        if r["required"]:
-            req_tot += w
-            if demonstrated:
-                req_got += w
-            else:
-                missing.append(cid)
-        else:
-            opt_tot += w
-            if demonstrated:
-                opt_got += w
+    materialised = _materialised(reqs, observations, caps)
+    required_coverage, optional_quality, overall, missing = _scores(reqs, materialised)
 
     execution_ok = execution_status == EXEC_OK
-    required_coverage = (req_got / req_tot) if req_tot else 1.0
-    optional_quality = (opt_got / opt_tot) if opt_tot else 0.0
-    total_tot = req_tot + opt_tot
-    overall = ((req_got + opt_got) / total_tot) if total_tot else 0.0
-
     requirements_complete = bool(not missing and supported and execution_ok)
     return {
         "schema_version": SCHEMA_VERSION,
@@ -175,6 +159,47 @@ def build(task: Dict, adapter_id: str, adapter_version: str,
         "closure_eligible": _closure(task, evidence_strength, requirements_complete,
                                      overall, supported, execution_ok),
     }
+
+
+def _materialised(reqs, observations: Dict[str, Dict], caps) -> Dict[str, Dict]:
+    """The observations, with one derived for each requirement the adapter did
+    not report: unobserved when it can measure it, not applicable when not."""
+    # Materialise derived observations so telemetry can explain WHY a record
+    # failed to complete; previously they only existed inside this function.
+    materialised = dict(observations)
+    for r in reqs:
+        cid = r["id"]
+        if cid not in materialised:
+            materialised[cid] = observation(
+                UNOBSERVED if cid in caps else NOT_APPLICABLE,
+                detail="not measurable by this adapter" if cid not in caps else "")
+    return materialised
+
+
+def _scores(reqs, materialised: Dict[str, Dict]) -> Tuple[float, float, float, List[str]]:
+    """(required coverage, optional quality, overall quality, the required
+    criteria not demonstrated), each share by weight."""
+    req_got = req_tot = opt_got = opt_tot = 0.0
+    missing: List[str] = []
+    for r in reqs:
+        cid, w = r["id"], r["weight"]
+        demonstrated = materialised[cid]["status"] == DEMONSTRATED
+        if r["required"]:
+            req_tot += w
+            if demonstrated:
+                req_got += w
+            else:
+                missing.append(cid)
+        else:
+            opt_tot += w
+            if demonstrated:
+                opt_got += w
+
+    required_coverage = (req_got / req_tot) if req_tot else 1.0
+    optional_quality = (opt_got / opt_tot) if opt_tot else 0.0
+    total_tot = req_tot + opt_tot
+    overall = ((req_got + opt_got) / total_tot) if total_tot else 0.0
+    return required_coverage, optional_quality, overall, missing
 
 
 def _closure(task, strength, requirements_complete, quality, supported, execution_ok) -> bool:
