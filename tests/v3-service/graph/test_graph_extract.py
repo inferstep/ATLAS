@@ -108,6 +108,14 @@ def test_from_import_of_one_aliased_name():
     assert [(i.name, i.source) for i in g.imports] == [("h", ".utils")]
 
 
+def test_a_call_is_charged_to_its_innermost_scope_once():
+    # A call in a class body belongs to the class, a call outside any scope is
+    # not recorded, and a pair made twice is recorded once.
+    src = "class Config:\n    defaults = load_defaults()\n\n\ndef run():\n    step()\n    step()\n\n\nmain()\n"
+    g = extract_file("c.py", src)
+    assert sorted((c.caller, c.callee) for c in g.calls) == [("Config", "load_defaults"), ("run", "step")]
+
+
 def test_decorated_function():
     g = extract_file("d.py", "@app.route('/x')\ndef handler():\n    return 1\n")
     assert any(d.name == "handler" and d.kind == "function" for d in g.defines)
