@@ -367,34 +367,57 @@ function splicePythonNode(
  * same tag name, self-closing handled) with `content`. Naive text scan. */
 function spliceHtmlElement(source: string, tag: string, content: string): string | undefined {
 	const tokenRe = new RegExp(`<(/?)${escapeRegExp(tag)}(?=[\\s/>])`, 'gi');
-	let depth = 0;
-	let start = -1;
+	const scan: ElementScan = { depth: 0, start: -1 };
 	let match: RegExpExecArray | null;
 	while ((match = tokenRe.exec(source)) !== null) {
 		const gt = source.indexOf('>', match.index);
 		if (gt === -1) {
 			return undefined;
 		}
-		if (match[1] === '') {
-			const selfClosing = source[gt - 1] === '/';
-			if (depth === 0) {
-				start = match.index;
-				if (selfClosing) {
-					return source.slice(0, start) + content + source.slice(gt + 1);
-				}
-			}
-			if (!selfClosing) {
-				depth++;
-			}
-		} else {
-			depth--;
-			if (depth === 0 && start !== -1) {
-				return source.slice(0, start) + content + source.slice(gt + 1);
-			}
-			if (depth < 0) {
-				return undefined;
-			}
+		const step = match[1] === ''
+			? openingTag(scan, match.index, source[gt - 1] === '/')
+			: closingTag(scan);
+		if (step === 'broken') {
+			return undefined;
+		}
+		if (step === 'element') {
+			return source.slice(0, scan.start) + content + source.slice(gt + 1);
 		}
 	}
 	return undefined;
+}
+
+/** Where a scan for one element is: how deep among elements of the same name,
+ * and where the first top-level one starts (-1 before it). */
+interface ElementScan {
+	depth: number;
+	start: number;
+}
+
+/** An opening tag. The first at the top level starts the element, which ends
+ * here when the tag closes itself. */
+function openingTag(scan: ElementScan, index: number, selfClosing: boolean): 'element' | 'more' {
+	if (scan.depth === 0) {
+		scan.start = index;
+		if (selfClosing) {
+			return 'element';
+		}
+	}
+	if (!selfClosing) {
+		scan.depth++;
+	}
+	return 'more';
+}
+
+/** A closing tag. Back at the top level, it ends the element; one closing tag
+ * too many is broken HTML. */
+function closingTag(scan: ElementScan): 'element' | 'more' | 'broken' {
+	scan.depth--;
+	if (scan.depth === 0 && scan.start !== -1) {
+		return 'element';
+	}
+	if (scan.depth < 0) {
+		return 'broken';
+	}
+	return 'more';
 }

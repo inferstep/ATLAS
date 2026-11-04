@@ -173,6 +173,21 @@ describe('predictEdit: structural_edit html', () => {
 		expect(p.left).toBe(HTML);
 		expect(p.note).toContain('not matched locally');
 	});
+
+	it('a self-closing element is the whole element', () => {
+		const source = '<p>a</p>\n<img src="x"/>\n<p>b</p>';
+		const p = predictEdit('structural_edit', { path: 'i.html', selector: '<img>', content: '<img src="y"/>' }, source)!;
+		expect(p.right).toBe('<p>a</p>\n<img src="y"/>\n<p>b</p>');
+	});
+
+	it.each([
+		// Read on past the stray tag, this one would seem to hold an element.
+		['a closing tag comes before any opening one', '</div>\n<div><div>a</div>'],
+		['a tag never closes', '<div class="a"'],
+	])('broken html is not guessed at when %s: whole-file fallback', (_case, source) => {
+		const p = predictEdit('structural_edit', { path: 'i.html', selector: '<div>', content: '<div>b</div>' }, source)!;
+		expect(p.note).toContain('not matched locally');
+	});
 });
 
 describe('predictEdit: insert_after', () => {
