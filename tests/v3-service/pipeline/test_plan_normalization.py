@@ -117,7 +117,7 @@ def test_a_later_edit_of_a_file_written_earlier_is_folded_into_the_write():
     # and structural_edit is an edit too.
     plan = {"steps": [
         {"id": "s1", "action": "write_file", "target": "app.py", "why": "Create it."},
-        {"id": "s2", "action": " Structural_Edit ", "target": " app.py ", "why": "Add main."},
+        {"id": "s2", "action": " Structural_Edit ", "target": " app.py ", "why": " Add main. "},
     ], "verify_step": "s1"}
 
     out, notes = planning.normalize_plan(plan)
@@ -134,12 +134,14 @@ def test_steps_that_are_not_an_edit_of_an_earlier_write_are_kept():
         "a note the planner left in the list",
         {"id": "s1", "action": "write_file", "target": "", "why": "No target."},
         {"id": "s2", "action": "edit_file", "target": "", "why": "No target either."},
+        {"id": "s3", "action": "run_command", "target": "pytest -q"},
     ]}
 
     out, notes = planning.normalize_plan(plan)
 
     assert out["steps"] == plan["steps"]
     assert notes == []
+    assert "verify_step" not in out  # with nothing folded, none is chosen
 
 
 def test_steps_that_are_not_a_list_are_left_alone():
@@ -150,7 +152,7 @@ def test_a_verify_step_that_was_folded_away_moves_to_the_last_command():
     plan = {"steps": [
         {"id": "s1", "action": "run_command", "target": "pip install flask"},
         {"id": "s2", "action": "write_file", "target": "app.py"},
-        {"id": "s3", "action": "run_command", "target": "python3 app.py --check"},
+        {"id": "s3", "action": "Run_Command", "target": "python3 app.py --check"},
         {"id": "s4", "action": "write_file", "target": "notes.md"},
         {"id": "s5", "action": "edit_file", "target": "app.py"},
     ], "verify_step": "s5"}
@@ -158,6 +160,7 @@ def test_a_verify_step_that_was_folded_away_moves_to_the_last_command():
     out, _ = planning.normalize_plan(plan)
 
     assert out["verify_step"] == "s3"
+    assert plan["verify_step"] == "s5"  # the plan given is not changed
 
 
 def test_a_server_start_that_is_not_the_verify_step_is_not_flagged():
