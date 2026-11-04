@@ -218,6 +218,48 @@ func TestAPostWriteValidationFailureNeverClaimsDelivery(t *testing.T) {
 	}
 }
 
+// What landed is read back from disk, not assumed. When the write succeeded
+// but the file does not hold the authorized bytes, or cannot be read, the
+// delivery does not settle and names why.
+func TestBytesThatDidNotLandAsAuthorizedNeverClaimDelivery(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		after  func(path string) error // what happens to the file once the write returns
+		reason string
+	}{
+		{"other bytes", func(path string) error { return os.WriteFile(path, []byte("x = 2\n"), 0o644) },
+			"delivered_bytes_are_not_the_authorized_ones"},
+		{"nothing to read", os.Remove, "delivered_bytes_unreadable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newDeliveryWorld(t)
+			write := func(path, code string, ctx *AgentContext) (*wire.ToolResult, error) {
+				res, err := writeFileRecorded(path, code, ctx)
+				if err != nil {
+					return res, err
+				}
+				return res, tc.after(path)
+			}
+			res, out, err := deliverCandidateBytes(w.ctx, candidateDeliveryRequest{
+				Path: w.path, Code: w.code, Grant: w.grant, Observed: w.check,
+				BaselinePreserved: true, Write: write,
+			})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if out.Delivered {
+				t.Error("bytes that did not land as authorized were reported delivered")
+			}
+			if out.Reason != tc.reason {
+				t.Errorf("reason %q, want %q", out.Reason, tc.reason)
+			}
+			if res.Success {
+				t.Error("a delivery that did not settle is reported successful")
+			}
+		})
+	}
+}
+
 func TestRestorationRehashesRatherThanTrustingTheLedger(t *testing.T) {
 	w := newAuthWorld(t,
 		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`,
