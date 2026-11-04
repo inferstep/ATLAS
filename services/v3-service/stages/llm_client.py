@@ -220,26 +220,38 @@ def _requested_python_function_contracts(problem: str) -> Dict[str, tuple]:
         # every matching ``def`` let that later baseline overwrite the user's
         # exact contract.  Existing project context can contain the same name
         # too.  Neither is permission to rewrite the requested interface.
-        previous = line_index - 1
-        while previous >= 0 and not lines[previous].strip():
-            previous -= 1
-        if previous < 0 or not re.search(
-            r"\bImplement\s+exactly\s*:\s*$",
-            lines[previous], re.IGNORECASE,
-        ):
+        if not _under_exact_heading(lines, line_index):
             continue
-        try:
-            parsed = ast.parse(declaration + "\n    pass").body
-        except SyntaxError:
-            continue
-        if len(parsed) != 1 or not isinstance(
-            parsed[0], (ast.FunctionDef, ast.AsyncFunctionDef)
-        ):
-            continue
-        node = parsed[0]
-        if node.name in requested:
+        node = _parsed_declaration(declaration)
+        if node is not None and node.name in requested:
             contracts[node.name] = (declaration, node)
     return contracts
+
+
+def _under_exact_heading(lines: List[str], line_index: int) -> bool:
+    """Whether the nearest non-blank line above line_index ends with the
+    ``Implement exactly:`` heading."""
+    previous = line_index - 1
+    while previous >= 0 and not lines[previous].strip():
+        previous -= 1
+    return previous >= 0 and bool(re.search(
+        r"\bImplement\s+exactly\s*:\s*$",
+        lines[previous], re.IGNORECASE,
+    ))
+
+
+def _parsed_declaration(declaration: str):
+    """The function node of a one-line declaration, or None when it does not
+    parse as one function."""
+    try:
+        parsed = ast.parse(declaration + "\n    pass").body
+    except SyntaxError:
+        return None
+    if len(parsed) != 1 or not isinstance(
+        parsed[0], (ast.FunctionDef, ast.AsyncFunctionDef)
+    ):
+        return None
+    return parsed[0]
 
 
 def _declares_name(code: str, name: str) -> bool:
@@ -264,26 +276,36 @@ def _repair_unambiguous_python_syntax(code: str) -> str:
             ast.parse(current)
             return current
         except SyntaxError as exc:
-            if not exc.lineno or not exc.offset:
+            repaired = _repaired_slip(current, exc)
+            if repaired is None:
                 return original
-            lines = current.splitlines(keepends=True)
-            if exc.lineno > len(lines):
-                return original
-            line = lines[exc.lineno - 1]
-            pos = exc.offset - 1
-            if (exc.msg.startswith("unmatched ") and 0 <= pos < len(line)
-                    and line[pos] in ")]}"):
-                lines[exc.lineno - 1] = line[:pos] + line[pos + 1:]
-            elif exc.msg == "unexpected indent" and line[:1] in (" ", "\t"):
-                lines[exc.lineno - 1] = line.lstrip(" \t")
-            else:
-                return original
-            current = "".join(lines)
+            current = repaired
     try:
         ast.parse(current)
     except SyntaxError:
         return original
     return current
+
+
+def _repaired_slip(code: str, exc: SyntaxError) -> Optional[str]:
+    """code with the one slip exc points at repaired: an unmatched closing
+    delimiter removed, or an unexpected indent stripped. None for any other
+    error."""
+    if not exc.lineno or not exc.offset:
+        return None
+    lines = code.splitlines(keepends=True)
+    if exc.lineno > len(lines):
+        return None
+    line = lines[exc.lineno - 1]
+    pos = exc.offset - 1
+    if (exc.msg.startswith("unmatched ") and 0 <= pos < len(line)
+            and line[pos] in ")]}"):
+        lines[exc.lineno - 1] = line[:pos] + line[pos + 1:]
+    elif exc.msg == "unexpected indent" and line[:1] in (" ", "\t"):
+        lines[exc.lineno - 1] = line.lstrip(" \t")
+    else:
+        return None
+    return "".join(lines)
 
 
 def _restore_exact_requested_signatures(code: str, problem: str) -> str:
@@ -311,52 +333,66 @@ def _restore_exact_requested_signatures(code: str, problem: str) -> str:
             parsed = ast.parse(current)
         except SyntaxError:
             return code
-        matches = [
-            node for node in parsed.body
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name == name
-        ]
-        if len(matches) != 1:
-            continue
-        candidate = matches[0]
-        if type(candidate) is not type(requested) or not candidate.body:
-            continue
-        # A same-line body cannot be separated from its header without a broad
-        # rewrite.  Leave it to normal fail-closed handling.
-        if candidate.body[0].lineno <= candidate.lineno:
-            continue
-        lines = current.splitlines(keepends=True)
-        start = candidate.lineno - 1
-        body_start = candidate.body[0].lineno - 1
-        indent = lines[start][:len(lines[start]) - len(lines[start].lstrip(" \t"))]
-        newline = "\r\n" if lines[start].endswith("\r\n") else "\n"
-        trial = "".join(lines[:start] + [indent + declaration + newline] + lines[body_start:])
-        try:
-            checked = ast.parse(trial)
-        except SyntaxError:
-            continue
-        restored = [
-            node for node in checked.body
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name == name
-        ]
-        if len(restored) != 1:
-            continue
-        restored_node = restored[0]
-        restored_return = (
-            ast.dump(restored_node.returns, include_attributes=False)
-            if restored_node.returns is not None else None
-        )
-        requested_return = (
-            ast.dump(requested.returns, include_attributes=False)
-            if requested.returns is not None else None
-        )
-        if (ast.dump(restored_node.args, include_attributes=False)
-                != ast.dump(requested.args, include_attributes=False)
-                or restored_return != requested_return):
-            continue
-        current = trial
+        trial = _with_requested_header(current, parsed, name, declaration, requested)
+        if trial is not None:
+            current = trial
     return current
+
+
+def _top_level_functions(tree: ast.Module, name: str) -> list:
+    """The top-level functions of tree named name."""
+    return [
+        node for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == name
+    ]
+
+
+def _with_requested_header(current: str, parsed: ast.Module, name: str, declaration: str,
+                           requested) -> Optional[str]:
+    """current with the header of its one top-level function name replaced by
+    the requested declaration, or None when that is not safe: no single
+    target, async for sync, a one-line body, or a result that does not parse
+    with exactly the requested signature."""
+    matches = _top_level_functions(parsed, name)
+    if len(matches) != 1:
+        return None
+    candidate = matches[0]
+    if type(candidate) is not type(requested) or not candidate.body:
+        return None
+    # A same-line body cannot be separated from its header without a broad
+    # rewrite.  Leave it to normal fail-closed handling.
+    if candidate.body[0].lineno <= candidate.lineno:
+        return None
+    lines = current.splitlines(keepends=True)
+    start = candidate.lineno - 1
+    body_start = candidate.body[0].lineno - 1
+    indent = lines[start][:len(lines[start]) - len(lines[start].lstrip(" \t"))]
+    newline = "\r\n" if lines[start].endswith("\r\n") else "\n"
+    trial = "".join(lines[:start] + [indent + declaration + newline] + lines[body_start:])
+    try:
+        checked = ast.parse(trial)
+    except SyntaxError:
+        return None
+    restored = _top_level_functions(checked, name)
+    if len(restored) != 1 or not _same_signature(restored[0], requested):
+        return None
+    return trial
+
+
+def _same_signature(node, requested) -> bool:
+    """Whether node has exactly the requested arguments and return annotation."""
+    restored_return = (
+        ast.dump(node.returns, include_attributes=False)
+        if node.returns is not None else None
+    )
+    requested_return = (
+        ast.dump(requested.returns, include_attributes=False)
+        if requested.returns is not None else None
+    )
+    return (ast.dump(node.args, include_attributes=False)
+            == ast.dump(requested.args, include_attributes=False)
+            and restored_return == requested_return)
 
 
 def extract_code_for_problem(
