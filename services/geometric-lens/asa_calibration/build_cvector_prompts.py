@@ -34,6 +34,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 from urllib.request import Request, urlopen
 
 
@@ -83,6 +84,38 @@ def render(pair: dict, llama_url: str) -> str:
     return (prompt + pair["assistant_prefix"]).replace("\n", "\\n")
 
 
+def _read_pair(lineno: int, raw: str) -> Optional[dict]:
+    """The pair on one line of the pairs file. None, after saying why, when the
+    line is not JSON or lacks a field."""
+    try:
+        pair = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        print(f"line {lineno}: bad JSON: {exc}", file=sys.stderr)
+        return None
+    for key in ("label", "user", "assistant_prefix"):
+        if key not in pair:
+            print(f"line {lineno}: missing field {key!r}", file=sys.stderr)
+            return None
+    return pair
+
+
+def _both_sides(pos: list[str], neg: list[str]) -> bool:
+    """Whether there are prompts of both labels; says so when there are not,
+    and warns when the two counts differ."""
+    if not pos or not neg:
+        print(f"need both structural_edit and edit_file pairs; "
+              f"got {len(pos)} positive, {len(neg)} negative", file=sys.stderr)
+        return False
+    if len(pos) != len(neg):
+        # cvector-generator pairs them positionally — line N of positive
+        # is contrasted against line N of negative. Mismatched counts
+        # silently truncate the longer side, which biases the vector.
+        print(f"warning: {len(pos)} positive vs {len(neg)} negative — "
+              f"cvector-generator will use min(N) pairs, biasing the result",
+              file=sys.stderr)
+    return True
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--pairs", required=True, type=Path,
@@ -106,15 +139,9 @@ def main() -> int:
             raw = raw.strip()
             if not raw:
                 continue
-            try:
-                pair = json.loads(raw)
-            except json.JSONDecodeError as exc:
-                print(f"line {lineno}: bad JSON: {exc}", file=sys.stderr)
+            pair = _read_pair(lineno, raw)
+            if pair is None:
                 return 1
-            for key in ("label", "user", "assistant_prefix"):
-                if key not in pair:
-                    print(f"line {lineno}: missing field {key!r}", file=sys.stderr)
-                    return 1
             try:
                 rendered = render(pair, args.llama_url)
             except RuntimeError as exc:
@@ -129,17 +156,8 @@ def main() -> int:
                       f"(expected 'structural_edit' or 'edit_file')", file=sys.stderr)
                 return 1
 
-    if not pos or not neg:
-        print(f"need both structural_edit and edit_file pairs; "
-              f"got {len(pos)} positive, {len(neg)} negative", file=sys.stderr)
+    if not _both_sides(pos, neg):
         return 1
-    if len(pos) != len(neg):
-        # cvector-generator pairs them positionally — line N of positive
-        # is contrasted against line N of negative. Mismatched counts
-        # silently truncate the longer side, which biases the vector.
-        print(f"warning: {len(pos)} positive vs {len(neg)} negative — "
-              f"cvector-generator will use min(N) pairs, biasing the result",
-              file=sys.stderr)
 
     args.positive.write_text("\n".join(pos) + "\n")
     args.negative.write_text("\n".join(neg) + "\n")
