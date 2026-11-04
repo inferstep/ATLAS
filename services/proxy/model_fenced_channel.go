@@ -69,45 +69,37 @@ const rawEmissionSentinel = "__raw_text__"
 // short of the multi-minute run to max_tokens it replaces.
 const rawFenceGraceChars = 800
 
+// fenceTags is the fence language tag the sub-call prompt asks for, by the
+// target file's extension.
+var fenceTags = map[string]string{
+	".py":   "python",
+	".js":   "javascript",
+	".mjs":  "javascript",
+	".ts":   "typescript",
+	".html": "html",
+	".htm":  "html",
+	".css":  "css",
+	".go":   "go",
+	".rs":   "rust",
+	".c":    "c",
+	".h":    "c",
+	".cpp":  "c++",
+	".cc":   "c++",
+	".hpp":  "c++",
+	".java": "java",
+	".rb":   "ruby",
+	".sh":   "bash",
+	".json": "json",
+	".md":   "markdown",
+	".sql":  "sql",
+	".yaml": "yaml",
+	".yml":  "yaml",
+}
+
 // fenceTagForPath picks the fence language tag the sub-call prompt asks
 // for, from the target file's extension. Empty means "use a bare fence".
 func fenceTagForPath(path string) string {
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".py":
-		return "python"
-	case ".js", ".mjs":
-		return "javascript"
-	case ".ts":
-		return "typescript"
-	case ".html", ".htm":
-		return "html"
-	case ".css":
-		return "css"
-	case ".go":
-		return "go"
-	case ".rs":
-		return "rust"
-	case ".c", ".h":
-		return "c"
-	case ".cpp", ".cc", ".hpp":
-		return "c++"
-	case ".java":
-		return "java"
-	case ".rb":
-		return "ruby"
-	case ".sh":
-		return "bash"
-	case ".json":
-		return "json"
-	case ".md":
-		return "markdown"
-	case ".sql":
-		return "sql"
-	case ".yaml", ".yml":
-		return "yaml"
-	default:
-		return ""
-	}
+	return fenceTags[strings.ToLower(filepath.Ext(path))]
 }
 
 // Fenced-fetch progress bounds. The sub-call asks for ONE fenced block and
