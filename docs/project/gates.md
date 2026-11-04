@@ -109,7 +109,7 @@ job on this list that does not start gives no red:
 | `e2e acceptance (proxy + sandbox + fake llama)` | The real proxy and sandbox against a stand-in model server |
 | `ruff (python lint)`, `shellcheck`, `yamllint (workflows)` | Lint for Python, shell and workflow files |
 | `docker compose config` | Every compose file and overlay parses |
-| `code health (size)` | No new function over 100 lines or file over 1,500, and nothing on the size baseline grows (`dev` only) |
+| `code health (size)` | No new function over 100 lines or over complexity 15 (cognitive for Go and Python, cyclomatic for Go), no new file over 1,500 lines, and nothing on the baseline grows (`dev` only) |
 | `llama.cpp patches apply to pinned SHA` | The patches still apply to the pinned upstream commit |
 | `bootstrap on debian-12`, `bootstrap on rockylinux-9`, `bootstrap on ubuntu-22.04`, `bootstrap on ubuntu-24.04`, `bootstrap via sudo for a regular user` | The installer's dry run on each system |
 | `codeql (go)`, `codeql (python)` | CodeQL analysis ran to its end |
@@ -203,10 +203,10 @@ It cannot judge these, and says so when it meets one:
 
 | Tool | Where the setting is | Setting |
 |---|---|---|
-| Size check | `scripts/ci/code_health.py`, `.github/code-health-baseline.json` | 100 lines per function, 1,500 per file. Entries on the baseline may shrink and may not grow, and the proxy's main package may not gain a file (`proxy_main`); its line count is printed as a trend. A folder over 25 entries gets a note and never a failure |
+| Size check | `scripts/ci/code_health.py`, `.github/code-health-baseline.json` | 100 lines per function, 1,500 per file. Complexity 15 per function: cognitive for Go (gocognit v1.2.1) and Python (cognitive_complexity 1.3.0, a copy in `scripts/ci/cognitive_complexity/`), and cyclomatic for Go (gocyclo v0.6.0), the Go tools at the versions golangci-lint v2.14.0 bundles, which the job installs in a step of its own, tried three times; Go's tests are measured for complexity too. A machine without Go or the two tools skips Go's measure and says what to install; CI never skips it. Entries on the baseline may shrink and may not grow, and the proxy's main package may not gain a file (`proxy_main`); its line count is printed as a trend. A folder over 25 entries gets a note and never a failure |
 | Workflow lint | `.github/workflows/workflow-lint.yml` | zizmor v1.30.1 at its default level, with lookups on GitHub by the job's read-only token; actionlint 1.7.12 without its shellcheck and pyflakes passes, which would use whatever version the runner has. Both are release binaries held against the checksums the workflow records. A step that must stay as it is carries `# zizmor: ignore[<rule>]` with its reason. Five lines carry one today: the checkout of `star-chart.yml`, whose job pushes with the token; and the four lines of `test.yml` and `dev-results.yml` that use the two upload actions of this repository (`ignore[self-repository]`). zizmor asks for the form `$/...` on those four, and actionlint 1.7.12, its newest release, does not read that form yet (its issues 711 and 732). When actionlint reads it, the four lines take the new form and their marks go |
 | Go vulnerabilities | `.github/workflows/govulncheck.yml` | govulncheck v1.9.0, built with `go install` at that version, on the Go of the test jobs (a test holds the two the same). A finding the code calls fails the job |
-| Go lint | `.golangci.yml` | errcheck, nilerr, unused, gocognit (15), forbidigo for `os.Getenv`, nolintlint. Judges new code only |
+| Go lint | `.golangci.yml` | errcheck, nilerr, unused, gocognit (15), forbidigo for `os.Getenv`, nolintlint. Judges new code only; the size check holds the complexity of the old functions |
 | Extension lint | `clients/extensions/vscode/eslint.config.mjs` | 100 lines per function, and 15 decision points per function, where a switch counts once. A file that holds a larger function is listed with that function's size, and the limit holds for the whole file. A listed number may go down and may not go up |
 | Coverage | `pyproject.toml` (`[tool.coverage.run]`), `scripts/ci/production-readiness.py` | Go statement coverage per module; Python line coverage over `atlas`, `v3-service`, `geometric-lens`, `sandbox`, `scripts`; TypeScript line coverage of the extension |
 | Codecov | `.github/codecov.yml`; default branch set to `dev` on Codecov | No comment on pull requests, no notes on diff lines. Two statuses that show numbers and always pass. One flag per report (`go-proxy`, `go-tui`, `python`, `typescript`); a flag that a commit does not upload keeps its parent's result. The result of each test goes there too, under the same four flags: the Go and pytest gates and the extension's tests write JUnit files in CI. The report is the "Tests" tab of the repository on Codecov (https://app.codecov.io/gh/inferstep/ATLAS/tests); it names failed tests and tests that pass only sometimes, and it blocks nothing |
@@ -253,8 +253,8 @@ How to read the coverage rows:
 ## Keeping the baselines honest
 
 - The size and lint counts may go down and may not go up. When something on
-  the size baseline shrinks, run `python scripts/ci/code_health.py --update` and
-  commit the baseline with the change.
+  the code-health baseline shrinks, a size or a complexity score, run
+  `python scripts/ci/code_health.py --update` and commit the baseline with the change.
 - When a listed function of the extension shrinks, lower its number in
   `clients/extensions/vscode/eslint.config.mjs`. The extension's test
   `test/sizeRules.test.ts` fails while a listed number is larger than the

@@ -46,6 +46,12 @@ Rocky), `rocm/dev-ubuntu` (AMD/Canonical), `ubuntu` (Canonical, for the
 Vulkan build), `alpine/socat` (GPL-2.0 — macOS compose overlay only,
 where it stands in for the containerized llama-server slot).
 
+## Code copied into the repository
+
+| Component | License | Where |
+|---|---|---|
+| cognitive_complexity 1.3.0 (Ilya Lebedev) | MIT | `scripts/ci/cognitive_complexity/`, with its `LICENSE`. Copied from the PyPI sdist (sha256 `a0cfbd47dee0b19f4056f892389f501694b205c3af69fb703cc744541e03dde5`, released 2022-08-09), as released but for two changes that keep every score: an unused lint marker removed, and three branches of the same body made one. The code-health check measures Python's cognitive complexity with it |
+
 ## Models
 
 Model weights are **not** distributed with ATLAS; the registry records
