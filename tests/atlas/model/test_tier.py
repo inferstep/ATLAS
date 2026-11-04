@@ -237,6 +237,38 @@ def test_tier_card_prints_with_color_and_unicode(monkeypatch, capsys):
     assert "─" * 60 in capsys.readouterr().out  # the card's bar line
 
 
+@pytest.mark.parametrize("tier_name, vram_range", [
+    pytest.param("cpu", "n/a (no GPU detected)", id="no-gpu"),
+    pytest.param("small", f"8 GB {tier.DASH} 12 GB", id="a-tier-with-a-cap"),
+    pytest.param("xlarge", "32 GB and up", id="the-top-tier"),
+])
+def test_tier_card_names_the_vram_range(capsys, tier_name, vram_range):
+    tier._print_tier_card(tier.by_name(tier_name), None, color=False)
+
+    assert f"  VRAM range:    {vram_range}" in capsys.readouterr().out.splitlines()
+
+
+NO_ARTIFACTS_MARKER = "[Lens NO-ARTIFACTS \u2014 G(x) will no-op]"
+
+
+@pytest.mark.parametrize("lens_status, color, marker", [
+    pytest.param("supported", False, "[Lens supported]", id="supported"),
+    pytest.param("supported", True, tier.GREEN + "[Lens supported]" + tier.RESET, id="supported-in-color"),
+    pytest.param("no-artifacts", False, NO_ARTIFACTS_MARKER, id="no-artifacts"),
+    pytest.param("no-artifacts", True, tier.YELL + NO_ARTIFACTS_MARKER + tier.RESET, id="no-artifacts-in-color"),
+    pytest.param("unverified", False, "", id="no-marker-for-another-status"),
+])
+def test_tier_card_marks_the_models_lens_status(monkeypatch, capsys, lens_status, color, marker):
+    monkeypatch.setattr(display, "UNICODE_OK", True)  # the marker's dash prints as it is
+    recommended = SimpleNamespace(model_display="Test Model", model_size_gb=9.6,
+                                  model_file="test-model.gguf", lens_status=lens_status)
+    monkeypatch.setattr(tier.model_registry, "for_tier", lambda tier_name: recommended)
+
+    tier._print_tier_card(tier.by_name("medium"), None, color=color)
+
+    assert f"    Model:           Test Model (9.6 GB on disk)  {marker}" in capsys.readouterr().out.splitlines()
+
+
 # --- probe() -----------------------------------------------------------------
 
 @pytest.mark.parametrize("install_dir, measured_path", [
