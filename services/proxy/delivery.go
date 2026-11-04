@@ -454,22 +454,7 @@ func deliverCandidateBytes(ctx *AgentContext,
 
 	// (2) and (6): read the workspace and the target as they are NOW. A grant
 	// froze a moment; this is a later one, and the claim has to describe it.
-	generation, stateHash := workspaceIdentity(ctx)
-	claim := grantClaim{
-		RequestID:           requestIDOf(ctx),
-		InvocationID:        g.InvocationID,
-		CandidateInstanceID: g.CandidateInstanceID,
-		CandidateHash:       contentSHA256(code),
-		TargetPath:          resolved,
-		WorkspaceGeneration: generation,
-		WorkspaceStateHash:  stateHash,
-		BaselineIdentity:    baselineIdentityFor(ctx, resolved),
-		BaselineHash:        fileSHA256(ctx, resolved),
-		BaselineGeneration:  targetGeneration(ctx, resolved),
-		BaselineTombstoned:  targetTombstoned(ctx, resolved),
-		ObligationSetID:     g.ObligationSetID,
-		EvidenceSetID:       g.EvidenceSetID,
-	}
+	claim := grantClaimNow(ctx, g, code, resolved)
 	// (1) and (3): consuming IS the re-validation, and it happens exactly
 	// once. Nothing is mutated before this returns.
 	spent, why := consumeAuthorizationGrant(ctx, claim)
@@ -503,16 +488,8 @@ func deliverCandidateBytes(ctx *AgentContext,
 	// (9): the observation made on exactly these bytes.
 	overlayValidation(result, observed)
 
-	switch {
-	case !readable:
-		out.Reason = "delivered_bytes_unreadable"
-	case out.Hash != g.CandidateHash:
-		out.Reason = "delivered_bytes_are_not_the_authorized_ones"
-	case observed.Status == wire.ValidationFailed:
-		out.Reason = "post_write_validation_failed"
-	default:
-		out.Delivered = true
-	}
+	out.Reason = settlementRefusal(readable, out.Hash, g.CandidateHash, observed)
+	out.Delivered = out.Reason == ""
 	if out.Delivered {
 		result.AuthorizedDeliveryHash = g.CandidateHash
 		markGrantDelivery(ctx, spent.ID, deliveryConsumedAndLanded)
@@ -549,6 +526,41 @@ func deliverCandidateBytes(ctx *AgentContext,
 		result.Error = "the authorized candidate did not land as authorized"
 	}
 	return result, out, nil
+}
+
+// grantClaimNow is the claim a delivery spends its grant with: the grant's
+// identities, and the workspace and the target as they are now.
+func grantClaimNow(ctx *AgentContext, g *authorizationGrant, code, resolved string) grantClaim {
+	generation, stateHash := workspaceIdentity(ctx)
+	return grantClaim{
+		RequestID:           requestIDOf(ctx),
+		InvocationID:        g.InvocationID,
+		CandidateInstanceID: g.CandidateInstanceID,
+		CandidateHash:       contentSHA256(code),
+		TargetPath:          resolved,
+		WorkspaceGeneration: generation,
+		WorkspaceStateHash:  stateHash,
+		BaselineIdentity:    baselineIdentityFor(ctx, resolved),
+		BaselineHash:        fileSHA256(ctx, resolved),
+		BaselineGeneration:  targetGeneration(ctx, resolved),
+		BaselineTombstoned:  targetTombstoned(ctx, resolved),
+		ObligationSetID:     g.ObligationSetID,
+		EvidenceSetID:       g.EvidenceSetID,
+	}
+}
+
+// settlementRefusal is why the bytes a delivery wrote do not settle it, or ""
+// when they were read back, are the authorized ones and were not shown broken.
+func settlementRefusal(readable bool, landedHash, authorizedHash string, observed checkOutcome) string {
+	switch {
+	case !readable:
+		return "delivered_bytes_unreadable"
+	case landedHash != authorizedHash:
+		return "delivered_bytes_are_not_the_authorized_ones"
+	case observed.Status == wire.ValidationFailed:
+		return "post_write_validation_failed"
+	}
+	return ""
 }
 
 // errDeliveryUnauthorized is what a refused delivery returns. It names no
