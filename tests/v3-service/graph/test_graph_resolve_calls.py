@@ -70,6 +70,18 @@ def test_unresolved_calls_in_strict_mode(code, project, expected):
     assert result["unresolved"] == expected
 
 
+def test_each_unresolved_name_is_listed_once_and_at_most_ten():
+    # b is called twice; twelve names in all are unresolved.
+    names = ["b", "a"] + [f"n{i}" for i in range(10)]
+    code = "def m():\n" + "".join(f"    {name}()\n" for name in ["b", *names])
+    result = graph.unresolved_calls("cand.py", code, {})
+    assert len(result["unresolved"]) == 10
+    assert len(set(result["unresolved"])) == 10
+    assert set(result["unresolved"]) <= set(names)
+    assert result["n_unresolved"] == 12
+    assert result["n_calls_total"] == 13
+
+
 def test_non_strict_mode_accepts_a_project_symbol_that_is_not_imported():
     result = graph.unresolved_calls("cand.py", "def main():\n    return helper()\n",
                                     {"other.py": HELPER}, strict=False)
