@@ -17,14 +17,16 @@ _spec.loader.exec_module(baseline_vs_atlas)
 
 
 def test_main_runs_each_arm_task_and_rep_and_counts_what_passed(monkeypatch, capsys, tmp_path):
+    suite = SimpleNamespace(TASKS={"a": SimpleNamespace(name="a"), "b": SimpleNamespace(name="b")})
     ran = []
 
-    def run_task(suite, task, url, arm, attempts, temperature):
-        ran.append((arm, task, attempts, temperature))
+    def run_task(suite_given, task, url, arm, attempts, temperature):
+        ran.append(SimpleNamespace(suite=suite_given, task=task.name, url=url, arm=arm, attempts=attempts,
+                                   temperature=temperature))
         # The loop arm passes everything; the one-shot arm only its first run.
         passed = arm == "loop" or len(ran) == 1
-        return {"task": task, "arm": arm, "passed": passed, "detail": "d", "attempts": 1, "wall_s": 0.1}
-    monkeypatch.setattr(baseline_vs_atlas, "_load_suite", lambda: SimpleNamespace(TASKS={"a": "a", "b": "b"}))
+        return {"task": task.name, "arm": arm, "passed": passed, "detail": "d", "attempts": 1, "wall_s": 0.1}
+    monkeypatch.setattr(baseline_vs_atlas, "_load_suite", lambda: suite)
     monkeypatch.setattr(baseline_vs_atlas, "_llama_url", lambda: "http://llama")
     monkeypatch.setattr(baseline_vs_atlas, "run_task", run_task)
     out = tmp_path / "results.json"
@@ -35,10 +37,11 @@ def test_main_runs_each_arm_task_and_rep_and_counts_what_passed(monkeypatch, cap
     rc = baseline_vs_atlas.main()
 
     assert rc == 0
-    assert [(arm, task) for arm, task, _, _ in ran] == [
+    assert [(run.arm, run.task) for run in ran] == [
         ("oneshot", "a"), ("oneshot", "a"), ("oneshot", "b"), ("oneshot", "b"),
         ("loop", "a"), ("loop", "a"), ("loop", "b"), ("loop", "b")]
-    assert {(attempts, temperature) for _, _, attempts, temperature in ran} == {(3, 0.2)}
+    assert all(run.suite is suite for run in ran)
+    assert {(run.url, run.attempts, run.temperature) for run in ran} == {("http://llama", 3, 0.2)}
     lines = capsys.readouterr().out.splitlines()
     assert [line.split()[0] for line in lines if line.startswith("      ")] == ["PASS", "fail", "fail", "fail",
                                                                              "PASS", "PASS", "PASS", "PASS"]
