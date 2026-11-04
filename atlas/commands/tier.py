@@ -941,31 +941,34 @@ def _print_constraints(p: Probe, t: TierProfile, color: bool) -> None:
     _safe_print(verdict)
 
 
+def _classify_json(p: Probe, t: TierProfile) -> dict:
+    # Include constraints + overall status so PC-054 wizard and PC-056
+    # model registry can render the same evaluation without re-implementing
+    # the rules. Existing keys (probe, tier, env, constraints, overall)
+    # preserved across PC-055.1 -> PC-055.2; the only schema change is
+    # that `tier` no longer carries model_*. The model fields move under
+    # the new `recommendation` key, and `env` is the merged dict (model
+    # vars + tier runtime vars) so consumers writing .env get one bag.
+    constraints = (evaluate_constraints(p, t) if t.tier != "cpu" else [])
+    rec = model_registry.for_tier(t.tier)
+    env = dict(t.env_vars())
+    if rec is not None:
+        env.update(rec.env_vars())
+    return {
+        "probe": _round_floats(asdict(p)),
+        "tier": asdict(t),
+        "recommendation": (model_registry.as_dict(rec)
+                           if rec is not None else None),
+        "env": env,
+        "constraints": [_round_floats(asdict(c)) for c in constraints],
+        "overall": overall_status(constraints) if constraints else "skip",
+    }
+
+
 def _emit_classify(p: Probe, t: TierProfile, args: argparse.Namespace,
                    color: bool) -> int:
     if args.json:
-        # Include constraints + overall status so PC-054 wizard and PC-056
-        # model registry can render the same evaluation without re-implementing
-        # the rules. Existing keys (probe, tier, env, constraints, overall)
-        # preserved across PC-055.1 -> PC-055.2; the only schema change is
-        # that `tier` no longer carries model_*. The model fields move under
-        # the new `recommendation` key, and `env` is the merged dict (model
-        # vars + tier runtime vars) so consumers writing .env get one bag.
-        constraints = (evaluate_constraints(p, t) if t.tier != "cpu" else [])
-        rec = model_registry.for_tier(t.tier)
-        env = dict(t.env_vars())
-        if rec is not None:
-            env.update(rec.env_vars())
-        out = {
-            "probe": _round_floats(asdict(p)),
-            "tier": asdict(t),
-            "recommendation": (model_registry.as_dict(rec)
-                               if rec is not None else None),
-            "env": env,
-            "constraints": [_round_floats(asdict(c)) for c in constraints],
-            "overall": overall_status(constraints) if constraints else "skip",
-        }
-        print(json.dumps(out, indent=2, ensure_ascii=not UNICODE_OK))
+        print(json.dumps(_classify_json(p, t), indent=2, ensure_ascii=not UNICODE_OK))
         return 0
     if args.raw:
         for k, v in _round_floats(asdict(p)).items():
