@@ -9,7 +9,9 @@ reintroduces that hole.
 import ast
 import os
 import re
+import socket
 import sys
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -131,6 +133,7 @@ class _ScriptedParent:
 @pytest.mark.parametrize("answers, looks", [
     pytest.param([b""], 1, id="a-hang-up-cancels"),
     pytest.param([ConnectionResetError()], 1, id="a-broken-socket-cancels"),
+    pytest.param([ValueError()], 1, id="a-socket-that-cannot-peek-cancels"),
     pytest.param([BlockingIOError(), b""], 2, id="a-peek-that-would-block-keeps-watching"),
     pytest.param([b"x", b""], 2, id="request-bytes-keep-watching"),
 ])
@@ -164,3 +167,22 @@ def test_a_watcher_that_cannot_select_stops_without_cancelling(monkeypatch):
 
     assert not still_watching
     assert not cancelled
+
+
+def test_a_quiet_parent_is_watched_until_the_handler_stops_the_watcher():
+    # The real select on a socket pair: while the parent sends nothing, each poll times out.
+    handler_end, parent_end = socket.socketpair()
+    scope, stop_watch, watcher = main._watch_parent_for(SimpleNamespace(connection=handler_end), "test")
+    time.sleep(3 * main.WATCH_POLL_SEC)
+    watching_while_quiet = watcher.is_alive()
+    cancelled_while_quiet = scope.cancelled
+    stop_watch.set()
+    watcher.join(timeout=5)
+    still_watching = watcher.is_alive()
+    main._release_scope(scope, stop_watch, watcher, "test")
+    handler_end.close()
+    parent_end.close()
+
+    assert watching_while_quiet
+    assert not cancelled_while_quiet
+    assert not still_watching
