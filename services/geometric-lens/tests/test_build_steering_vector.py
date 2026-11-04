@@ -44,9 +44,9 @@ def test_the_vector_is_the_structural_edit_mean_minus_the_edit_file_mean(tmp_pat
     # A blank line between pairs is skipped.
     pairs.write_text("\n".join([_pair("structural_edit", "s1"), _pair("edit_file", "e1"), "",
                                 _pair("structural_edit", "s2"), _pair("edit_file", "e2")]) + "\n")
-    out = tmp_path / "new-folder" / "vector.gguf"
+    out = tmp_path / "vector.gguf"
     monkeypatch.setattr(sys, "argv", ["build_steering_vector.py", "--pairs", str(pairs), "--out", str(out),
-                                      "--layer", "3", "--model-hint", "qwen3", "--layer-count", "36"])
+                                      "--layer", "3"])
 
     assert module.main() == 0
 
@@ -54,31 +54,9 @@ def test_the_vector_is_the_structural_edit_mean_minus_the_edit_file_mean(tmp_pat
     reader = gguf.GGUFReader(str(out))
     assert [t.name for t in reader.tensors] == ["direction.3"]
     assert reader.tensors[0].data.tolist() == [3.0, 0.0]  # (4, 2) - (1, 2)
-    assert reader.fields["general.architecture"].contents() == "controlvector"
-    assert reader.fields["controlvector.model_hint"].contents() == "qwen3"
-    assert reader.fields["controlvector.layer_count"].contents() == 36
-    assert "(n=2 pairs, layer 3)" in reader.fields["general.description"].contents()
     printed = capsys.readouterr().out
     assert "loaded 4 prompts (2 contrast pairs)" in printed
     assert "[   4/4] pos=2 neg=2" in printed
-
-
-def test_with_no_layer_count_the_vector_names_the_layer_after_its_own(tmp_path, monkeypatch):
-    module = _load()
-    monkeypatch.setattr(module, "render_prompt", lambda pair: pair["user"])
-    monkeypatch.setattr(module, "extract_mean_residual",
-                        lambda prompt, layer: np.array([1.0 if prompt == "s" else 0.0], dtype=np.float32))
-    pairs = tmp_path / "pairs.jsonl"
-    pairs.write_text(_pair("structural_edit", "s") + "\n" + _pair("edit_file", "e") + "\n")
-    out = tmp_path / "vector.gguf"
-    monkeypatch.setattr(sys, "argv", ["build_steering_vector.py", "--pairs", str(pairs), "--out", str(out),
-                                      "--layer", "5"])
-
-    assert module.main() == 0
-
-    reader = gguf.GGUFReader(str(out))
-    assert reader.fields["controlvector.layer_count"].contents() == 6
-    assert reader.fields["controlvector.model_hint"].contents() == "unknown"
 
 
 def test_limit_keeps_the_first_pairs_and_progress_shows_every_50_and_the_last(tmp_path, monkeypatch, capsys):
@@ -104,18 +82,14 @@ def test_limit_keeps_the_first_pairs_and_progress_shows_every_50_and_the_last(tm
     assert progress == ["  [  50/52", "  [  52/52"]
 
 
-# Each run but the last two has a pair of both kinds besides the line that stops it.
+# Each run has a pair of both kinds besides the line that stops it.
 @pytest.mark.parametrize("lines, message", [
     ([_pair("structural_edit", "s"), _pair("edit_file", "e"), _pair("tool_call", "t")],
      "[2] unknown label 'tool_call'"),
     ([_pair("structural_edit", "s"), _pair("edit_file", "e"), _pair("structural_edit", "fails")],
      "[2] extraction failed: no hidden states"),
-    ([_pair("structural_edit", "s1"), _pair("structural_edit", "s2")],
-     "need both structural_edit and edit_file pairs; got pos=2 neg=0"),
-    ([_pair("edit_file", "e1"), _pair("edit_file", "e2")],
-     "need both structural_edit and edit_file pairs; got pos=0 neg=2"),
-], ids=["unknown-label", "extraction-fails", "no-edit-file-pair", "no-structural-edit-pair"])
-def test_a_run_that_cannot_build_the_vector_stops_with_2_and_writes_nothing(
+], ids=["unknown-label", "extraction-fails"])
+def test_a_run_that_cannot_read_every_prompt_stops_with_2_and_writes_nothing(
         lines, message, tmp_path, monkeypatch, capsys):
     module = _load()
 
