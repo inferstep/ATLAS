@@ -606,21 +606,29 @@ def ask(args, service: str, url: str) -> dict:
 
 def not_whole(answers: dict) -> list:
     """What the answers say is wrong with the services, in words. An empty list: each service is whole."""
-    faults = []
-    proxy = answers["the proxy's /ready"]
-    if not isinstance(proxy["answer"], dict):
-        faults.append(f"the proxy gave no answer about the services ({proxy['answer']})")
-    else:
-        for part, name in PROXY_PARTS.items():
-            if proxy["answer"].get(part) is not True:
-                why = f" ({proxy['answer']['lens_reason']})" if part == "lens_ready" and proxy["answer"].get("lens_reason") else ""
-                faults.append(f"the proxy says that {name} is not ready{why}")
+    faults = proxy_faults(answers["the proxy's /ready"]["answer"])
     lens = answers["the lens's /ready"]
     if lens["status"] != 200:
-        said = lens["answer"].get("detail") if isinstance(lens["answer"], dict) else None
-        why = said.get("reason") if isinstance(said, dict) else lens["answer"]
-        faults.append(f"the lens says that it cannot score ({why})")
+        faults.append(f"the lens says that it cannot score ({lens_reason(lens['answer'])})")
     return faults
+
+
+def proxy_faults(answer) -> list:
+    """The parts that the proxy's /ready answer does not call ready, in words, or that it gave no answer."""
+    if not isinstance(answer, dict):
+        return [f"the proxy gave no answer about the services ({answer})"]
+    faults = []
+    for part, name in PROXY_PARTS.items():
+        if answer.get(part) is not True:
+            why = f" ({answer['lens_reason']})" if part == "lens_ready" and answer.get("lens_reason") else ""
+            faults.append(f"the proxy says that {name} is not ready{why}")
+    return faults
+
+
+def lens_reason(answer):
+    """Why the lens cannot score: the reason in the detail of its answer, or else the answer itself."""
+    said = answer.get("detail") if isinstance(answer, dict) else None
+    return said.get("reason") if isinstance(said, dict) else answer
 
 
 def ask_the_services(args, settle_seconds: float) -> tuple:
