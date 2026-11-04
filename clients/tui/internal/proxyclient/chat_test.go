@@ -218,6 +218,14 @@ func TestLoadBearerToken(t *testing.T) {
 		// sorted order wins.
 		{"atlas init shape", `{"sk-atlas-zzz": {"user": "local", "created_by": "atlas init"},
 			"sk-atlas-aaa": {"user": "local", "created_by": "atlas init"}}`, "sk-atlas-aaa"},
+		// A token-keyed entry counts when its key starts with sk- or its value
+		// names a user or who created it; any other object is not a token.
+		{"an sk- key with no metadata", `{"sk-only": {}}`, "sk-only"},
+		{"a key with a user", `{"tok-u": {"user": "local"}}`, "tok-u"},
+		{"a key with its creator", `{"tok-c": {"created_by": "atlas init"}}`, "tok-c"},
+		{"an object of objects with no token", `{"settings": {"theme": "dark"}}`, ""},
+		// An empty tui token is no token, so the next shape is read.
+		{"an empty tui token", `{"keys": {"tui": ""}, "sk-next": {"user": "local"}}`, "sk-next"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -232,6 +240,23 @@ func TestLoadBearerToken(t *testing.T) {
 				t.Errorf("loadBearerToken = %q, want %q", got, c.want)
 			}
 		})
+	}
+}
+
+// Without ATLAS_API_KEYS_PATH the file is secrets/api-keys.json under the
+// folder the TUI runs in.
+func TestLoadBearerTokenFallsBackToTheSecretsFolder(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "secrets"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "secrets", "api-keys.json"), []byte(`{"api_key": "from-cwd"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ATLAS_API_KEYS_PATH", "")
+	t.Chdir(dir)
+	if got := loadBearerToken(); got != "from-cwd" {
+		t.Errorf("loadBearerToken = %q, want from-cwd", got)
 	}
 }
 
