@@ -330,16 +330,25 @@ func (f *fencedFetch) ask(grammar string, attempt int, attemptStart time.Time) f
 			"total_tokens":     ctx.TotalTokens,
 		},
 	})
-	// A cut that came after the model had written content is not a stall:
-	// the channel works, and the block was not closed (under the fence
-	// grammar the model's three-backtick closer is a body line, so the
-	// attempt runs until the watchdog cuts it). It is answered like any
-	// reply without a usable block, below, and the retry without the
-	// grammar follows. Counting it as a stall turned the channel off for
-	// the session and skipped that retry.
-	cutWithContent := err != nil && strings.TrimSpace(reply) != "" &&
+	outcome, cutWithContent := fencedOutcome(ctx, err, reply, got)
+	emitFencedFetch(ctx, path, attempt, grammar, elapsed, tokens, outcome)
+	return fencedAnswer{reply: reply, framing: framing, content: content, err: err, got: got,
+		cutWithContent: cutWithContent}
+}
+
+// fencedOutcome names how one fenced attempt ended: cancelled, stalled, used
+// or unusable, and whether it was cut after the model had written content.
+//
+// A cut that came after the model had written content is not a stall: the
+// channel works, and the block was not closed (under the fence grammar the
+// model's three-backtick closer is a body line, so the attempt runs until the
+// watchdog cuts it). It is answered like any reply without a usable block, and
+// the retry without the grammar follows. Counting it as a stall turned the
+// channel off for the session and skipped that retry.
+func fencedOutcome(ctx *AgentContext, err error, reply string, got bool) (outcome string, cutWithContent bool) {
+	cutWithContent = err != nil && strings.TrimSpace(reply) != "" &&
 		(ctx.Ctx == nil || ctx.Ctx.Err() == nil)
-	outcome := "unusable"
+	outcome = "unusable"
 	switch {
 	case err != nil && !cutWithContent && ctx.Ctx != nil && ctx.Ctx.Err() != nil:
 		outcome = "cancelled"
@@ -348,9 +357,7 @@ func (f *fencedFetch) ask(grammar string, attempt int, attemptStart time.Time) f
 	case got:
 		outcome = "used"
 	}
-	emitFencedFetch(ctx, path, attempt, grammar, elapsed, tokens, outcome)
-	return fencedAnswer{reply: reply, framing: framing, content: content, err: err, got: got,
-		cutWithContent: cutWithContent}
+	return outcome, cutWithContent
 }
 
 // settle answers one attempt. A stall is charged, and ends the fetch when the
