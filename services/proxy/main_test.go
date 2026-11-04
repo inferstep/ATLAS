@@ -77,7 +77,7 @@ func TestModelsPrefersLoadedModelOverStaleConfig(t *testing.T) {
 		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"loaded-runtime-model"}]}`))
 	}))
 	t.Cleanup(upstream.Close)
-	withInferenceURL(t, upstream.URL)
+	withInferenceURL(t, upstream.URL+"/") // a trailing / is trimmed
 
 	rec := httptest.NewRecorder()
 	newProxyMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
@@ -95,7 +95,8 @@ func TestModelsPrefersLoadedModelOverStaleConfig(t *testing.T) {
 }
 
 // The loaded model is the first id llama-server reports that is not blank,
-// trimmed; an answer that is not 200 leaves the configured name.
+// trimmed; an answer that is not 200, does not decode or is over 1 MiB
+// leaves the configured name.
 func TestModelsReadsTheFirstLoadedModel(t *testing.T) {
 	previous := modelName
 	modelName = "configured-model"
@@ -110,6 +111,10 @@ func TestModelsReadsTheFirstLoadedModel(t *testing.T) {
 			`{"data":[{"id":"busy-model"}]}`, "configured-model"},
 		{"the first id that is not blank, trimmed", http.StatusOK,
 			`{"data":[{"id":"  "},{"id":" first "},{"id":"second"}]}`, "first"},
+		{"an id that is not a string spoils the list", http.StatusOK,
+			`{"data":[{"id":"first"},{"id":5}]}`, "configured-model"},
+		{"a list over 1 MiB is not read", http.StatusOK,
+			`{"data":[{"id":"first"}],"pad":"` + strings.Repeat("x", 1<<20) + `"}`, "configured-model"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
