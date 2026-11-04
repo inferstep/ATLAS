@@ -63,6 +63,7 @@ interface ViewInternals {
 		handleDenied(tool: string): void;
 	};
 	promptPrediction: unknown;
+	snapshots: Map<string, { path: string; before: string | undefined }[]>;
 }
 
 /** A chat view whose webview is a list: each message the view posts lands in `posted`. */
@@ -162,6 +163,45 @@ describe('what the chat view posts for each event of the stream', () => {
 			{ type: 'toolResult', tool: 'write_file', success: true, elapsed: '1ms', error: undefined, diffId: 1, summary: 'wrote a.py' },
 		]);
 		expect(recorded).toEqual([['call', 'write_file', args], ['result', 'write_file', true]]);
+	});
+
+	// The turn loop awaits dispatch for each event, so the next event is read
+	// only once this one is handled. A read of a local file the test holds
+	// open shows whether dispatch waits for it.
+	it('a tool call is handled only once its target has been read', async () => {
+		const { chat } = chatWithPosts();
+		let finishRead: (text: string) => void = () => {};
+		chat.readLocalFile = () => new Promise((resolve) => { finishRead = resolve; });
+		chat.mismatch = { recordToolCall: async () => {}, recordToolResult: async () => {} };
+		let handled = false;
+
+		const dispatched = chat.dispatch('tool_call', { name: 'write_file', args: { path: 'a.py', content: 'x' } }, undefined)
+			.then(() => { handled = true; });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(handled).toBe(false);
+		finishRead('before');
+		await dispatched;
+
+		expect(chat.snapshots.get('write_file')).toEqual([{ path: 'a.py', before: 'before' }]);
+	});
+
+	it('a permission prompt opens only once the file it would change has been read', async () => {
+		const { chat } = chatWithPosts();
+		let finishRead: (text: string) => void = () => {};
+		chat.readLocalFile = () => new Promise((resolve) => { finishRead = resolve; });
+		let prompted = 0;
+		chat.permissions = { handleRequest: () => { prompted += 1; }, handleDenied: () => {} };
+		let handled = false;
+
+		const dispatched = chat.dispatch('permission_request', { tool_name: 'write_file', args: { path: 'a.py', content: 'x' } }, 'the client')
+			.then(() => { handled = true; });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(handled).toBe(false);
+		expect(prompted).toBe(0);
+		finishRead('old');
+		await dispatched;
+
+		expect(prompted).toBe(1);
 	});
 
 	it('a failed tool result offers no diff and no summary', async () => {

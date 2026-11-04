@@ -308,130 +308,46 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
 	private async dispatch(type: string, data: unknown, client: AtlasClient): Promise<void> {
 		switch (type) {
-			case 'text': {
-				const payload = data as TextEventData;
-				if (typeof payload?.content === 'string') {
-					this.post({ type: 'assistantDelta', text: payload.content });
-				}
+			case 'text':
+				this.onText(data as TextEventData);
 				break;
-			}
-			case 'reasoning_token': {
-				const payload = data as ReasoningTokenEventData;
-				if (typeof payload?.text === 'string') {
-					this.post({ type: 'reasoningDelta', text: payload.text });
-				}
+			case 'reasoning_token':
+				this.onReasoningToken(data as ReasoningTokenEventData);
 				break;
-			}
-			case 'tool_call': {
-				const payload = data as ToolCallEventData;
-				this.post({ type: 'toolCall', name: payload.name, detail: condenseArgs(payload.args) });
-				// Snapshot the target now (before permission/execution) so a
-				// successful result can show the exact applied change. At
-				// tool_call time rather than permission time: accept-edits
-				// and yolo turns never raise a permission_request.
-				const target = editTargetPath(payload.name, payload.args);
-				if (target !== undefined) {
-					const before = await this.readLocalFile(target);
-					const queue = this.snapshots.get(payload.name) ?? [];
-					queue.push({ path: target, before });
-					this.snapshots.set(payload.name, queue);
-				}
-				await this.mismatch.recordToolCall(payload.name, payload.args);
+			case 'tool_call':
+				await this.onToolCall(data as ToolCallEventData);
 				break;
-			}
-			case 'tool_result': {
-				const payload = data as ToolResultEventData;
-				const diffId = await this.recordAppliedDiff(payload);
-				this.post({
-					type: 'toolResult',
-					tool: payload.tool,
-					success: payload.success,
-					elapsed: payload.elapsed,
-					error: payload.error,
-					diffId,
-					// The proxy ships the tool's real output here; without it a
-					// read-only ask ("list the files") renders as a green check
-					// and nothing else.
-					summary: payload.success ? summarizeToolResult(payload.tool, payload) : undefined,
-				});
-				// Fire-and-forget: the check sleeps its settle delay before
-				// stat-ing, and the stream must not wait on it.
-				void this.mismatch.recordToolResult(payload.tool, payload.success);
+			case 'tool_result':
+				await this.onToolResult(data as ToolResultEventData);
 				break;
-			}
-			case 'permission_request': {
-				const payload = data as PermissionRequestEventData;
-				// Predict the edit from the CURRENT local file so the prompt
-				// can offer "View Diff" before the user decides. structural_edit has
-				// no post-content in its result, so this is the only pre-view.
-				const target = editTargetPath(payload.tool_name, payload.args);
-				const current = target === undefined ? undefined : await this.readLocalFile(target);
-				this.promptPrediction = predictEdit(payload.tool_name, payload.args, current);
-				try {
-					this.permissions.handleRequest(client, this.turns.sessionId, payload);
-				} finally {
-					this.promptPrediction = undefined;
-				}
+			case 'permission_request':
+				await this.onPermissionRequest(data as PermissionRequestEventData, client);
 				break;
-			}
-			case 'permission_denied': {
-				// Proxy-side resolution (timeout/cancel) — may arrive while our
-				// prompt is still up; the flow dismisses it by tool name. The
-				// denied row itself renders here (TUI convention: the local deny
-				// path renders NO row to avoid duplicating this event).
-				const payload = data as PermissionDeniedEventData;
-				this.permissions.handleDenied(payload.tool);
-				// The proxy answers a denial with permission_denied and then a
-				// tool_result whose success is false (services/proxy/loop_checks.go), so that
-				// result consumes the snapshot, the pre-op state and the chip,
-				// as for any failed call. A stream that ends before it leaves
-				// nothing behind: the turn's end clears all three.
-				this.post({ type: 'note', text: `Permission denied for '${payload.tool}'.` });
+			case 'permission_denied':
+				this.onPermissionDenied(data as PermissionDeniedEventData);
 				break;
-			}
-			case 'plan_loaded': {
-				const payload = data as PlanLoadedEventData;
-				if (Array.isArray(payload?.steps)) {
-					this.post({
-						type: 'planLoaded',
-						steps: payload.steps.map((step) => ({ id: step.id, label: `${step.action} ${step.target}`.trim() })),
-						revision: payload.revision ?? 0,
-					});
-				}
+			case 'plan_loaded':
+				this.onPlanLoaded(data as PlanLoadedEventData);
 				break;
-			}
-			case 'plan_adherence': {
-				const payload = data as PlanAdherenceEventData;
-				if (payload?.matched && typeof payload.step_id === 'string') {
-					this.post({ type: 'planStep', stepId: payload.step_id });
-				}
+			case 'plan_adherence':
+				this.onPlanAdherence(data as PlanAdherenceEventData);
 				break;
-			}
-			case 'plan_revise': {
-				const payload = data as PlanReviseEventData;
-				this.post({ type: 'note', text: `Plan going off track — revising (${payload?.reason || 'off-plan streak'}).` });
+			case 'plan_revise':
+				this.onPlanRevise(data as PlanReviseEventData);
 				break;
-			}
 			case 'llm_call_start':
 				this.postProgress('Thinking…');
 				break;
-			case 'llm_prompt_progress': {
-				const payload = data as LlmPromptProgressEventData;
-				const pct = typeof payload?.pct === 'number' && payload.pct > 0 ? ` ${Math.round(payload.pct * 100)}%` : '';
-				this.postProgress(`Processing prompt${pct}…`);
+			case 'llm_prompt_progress':
+				this.onPromptProgress(data as LlmPromptProgressEventData);
 				break;
-			}
 			case 'llm_first_token':
 			case 'llm_call_end':
 				this.postProgress('');
 				break;
-			case 'v3_progress': {
-				const payload = data as V3ProgressEventData;
-				if (typeof payload?.message === 'string') {
-					this.postProgress(`V3: ${payload.message}`);
-				}
+			case 'v3_progress':
+				this.onV3Progress(data as V3ProgressEventData);
 				break;
-			}
 			case 'v3_phase':
 			case 'v3_sandbox':
 			case 'v3_repair':
@@ -443,38 +359,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 			case 'v3_select':
 			case 'v3_probe':
 			case 'v3_self_test':
-			case 'v3_plan': {
-				const payload = data as V3StageEventData;
-				if (typeof payload?.stage === 'string') {
-					this.postProgress(`V3: ${payload.stage}${payload.detail ? ` — ${payload.detail}` : ''}`);
-				}
+			case 'v3_plan':
+				this.onV3Stage(data as V3StageEventData);
 				break;
-			}
 			case 'v3_lens_veto':
-			case 'v3_structural_veto': {
-				const payload = data as V3StageEventData;
-				const why = type === 'v3_lens_veto' ? 'lens quality veto' : 'unresolved-call veto';
-				this.post({ type: 'badge', text: `Candidate rejected (${why})${payload?.detail ? `: ${payload.detail}` : ''}` });
+			case 'v3_structural_veto':
+				this.onV3Veto(type, data as V3StageEventData);
 				break;
-			}
-			case 'agent_lens_intervention': {
-				const payload = data as AgentLensInterventionEventData;
-				this.post({ type: 'badge', text: `Lens intervention: ${payload?.reason || 'corrective queued'}` });
+			case 'agent_lens_intervention':
+				this.onLensIntervention(data as AgentLensInterventionEventData);
 				break;
-			}
-			case 'error': {
-				const payload = data as ErrorEventData;
-				this.post({ type: 'turnError', message: payload.error || 'unknown stream error' });
+			case 'error':
+				this.onStreamError(data as ErrorEventData);
 				break;
-			}
-			case 'done': {
+			case 'done':
 				// The run's outcome (status and reason) and, on a tool-shaped
 				// turn, the model's final answer, which arrives ONLY in this
 				// summary (services/proxy/loop_turn.go). Posted even with no summary: whether
 				// the run completed, stopped or failed is the point (#236).
 				this.post({ type: 'doneSummary', ...doneOutcome(data as DoneEventData) });
 				break;
-			}
 			// High-volume / TUI-internal streams the panel deliberately drops:
 			// llm_token duplicates the JSON tool-call content, v3 token streams
 			// churn the DOM for no user signal, agent_lens_score fires per write,
@@ -491,6 +395,131 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 				// Forward compatibility: unknown event types are logged, never fatal.
 				this.log(`unhandled event '${type}'`, data);
 		}
+	}
+
+	private onText(payload: TextEventData): void {
+		if (typeof payload?.content === 'string') {
+			this.post({ type: 'assistantDelta', text: payload.content });
+		}
+	}
+
+	private onReasoningToken(payload: ReasoningTokenEventData): void {
+		if (typeof payload?.text === 'string') {
+			this.post({ type: 'reasoningDelta', text: payload.text });
+		}
+	}
+
+	private async onToolCall(payload: ToolCallEventData): Promise<void> {
+		this.post({ type: 'toolCall', name: payload.name, detail: condenseArgs(payload.args) });
+		// Snapshot the target now (before permission/execution) so a
+		// successful result can show the exact applied change. At
+		// tool_call time rather than permission time: accept-edits
+		// and yolo turns never raise a permission_request.
+		const target = editTargetPath(payload.name, payload.args);
+		if (target !== undefined) {
+			const before = await this.readLocalFile(target);
+			const queue = this.snapshots.get(payload.name) ?? [];
+			queue.push({ path: target, before });
+			this.snapshots.set(payload.name, queue);
+		}
+		await this.mismatch.recordToolCall(payload.name, payload.args);
+	}
+
+	private async onToolResult(payload: ToolResultEventData): Promise<void> {
+		const diffId = await this.recordAppliedDiff(payload);
+		this.post({
+			type: 'toolResult',
+			tool: payload.tool,
+			success: payload.success,
+			elapsed: payload.elapsed,
+			error: payload.error,
+			diffId,
+			// The proxy ships the tool's real output here; without it a
+			// read-only ask ("list the files") renders as a green check
+			// and nothing else.
+			summary: payload.success ? summarizeToolResult(payload.tool, payload) : undefined,
+		});
+		// Fire-and-forget: the check sleeps its settle delay before
+		// stat-ing, and the stream must not wait on it.
+		void this.mismatch.recordToolResult(payload.tool, payload.success);
+	}
+
+	private async onPermissionRequest(payload: PermissionRequestEventData, client: AtlasClient): Promise<void> {
+		// Predict the edit from the CURRENT local file so the prompt
+		// can offer "View Diff" before the user decides. structural_edit has
+		// no post-content in its result, so this is the only pre-view.
+		const target = editTargetPath(payload.tool_name, payload.args);
+		const current = target === undefined ? undefined : await this.readLocalFile(target);
+		this.promptPrediction = predictEdit(payload.tool_name, payload.args, current);
+		try {
+			this.permissions.handleRequest(client, this.turns.sessionId, payload);
+		} finally {
+			this.promptPrediction = undefined;
+		}
+	}
+
+	private onPermissionDenied(payload: PermissionDeniedEventData): void {
+		// Proxy-side resolution (timeout/cancel) — may arrive while our
+		// prompt is still up; the flow dismisses it by tool name. The
+		// denied row itself renders here (TUI convention: the local deny
+		// path renders NO row to avoid duplicating this event).
+		this.permissions.handleDenied(payload.tool);
+		// The proxy answers a denial with permission_denied and then a
+		// tool_result whose success is false (services/proxy/loop_checks.go), so that
+		// result consumes the snapshot, the pre-op state and the chip,
+		// as for any failed call. A stream that ends before it leaves
+		// nothing behind: the turn's end clears all three.
+		this.post({ type: 'note', text: `Permission denied for '${payload.tool}'.` });
+	}
+
+	private onPlanLoaded(payload: PlanLoadedEventData): void {
+		if (Array.isArray(payload?.steps)) {
+			this.post({
+				type: 'planLoaded',
+				steps: payload.steps.map((step) => ({ id: step.id, label: `${step.action} ${step.target}`.trim() })),
+				revision: payload.revision ?? 0,
+			});
+		}
+	}
+
+	private onPlanAdherence(payload: PlanAdherenceEventData): void {
+		if (payload?.matched && typeof payload.step_id === 'string') {
+			this.post({ type: 'planStep', stepId: payload.step_id });
+		}
+	}
+
+	private onPlanRevise(payload: PlanReviseEventData): void {
+		this.post({ type: 'note', text: `Plan going off track — revising (${payload?.reason || 'off-plan streak'}).` });
+	}
+
+	private onPromptProgress(payload: LlmPromptProgressEventData): void {
+		const pct = typeof payload?.pct === 'number' && payload.pct > 0 ? ` ${Math.round(payload.pct * 100)}%` : '';
+		this.postProgress(`Processing prompt${pct}…`);
+	}
+
+	private onV3Progress(payload: V3ProgressEventData): void {
+		if (typeof payload?.message === 'string') {
+			this.postProgress(`V3: ${payload.message}`);
+		}
+	}
+
+	private onV3Stage(payload: V3StageEventData): void {
+		if (typeof payload?.stage === 'string') {
+			this.postProgress(`V3: ${payload.stage}${payload.detail ? ` — ${payload.detail}` : ''}`);
+		}
+	}
+
+	private onV3Veto(type: string, payload: V3StageEventData): void {
+		const why = type === 'v3_lens_veto' ? 'lens quality veto' : 'unresolved-call veto';
+		this.post({ type: 'badge', text: `Candidate rejected (${why})${payload?.detail ? `: ${payload.detail}` : ''}` });
+	}
+
+	private onLensIntervention(payload: AgentLensInterventionEventData): void {
+		this.post({ type: 'badge', text: `Lens intervention: ${payload?.reason || 'corrective queued'}` });
+	}
+
+	private onStreamError(payload: ErrorEventData): void {
+		this.post({ type: 'turnError', message: payload.error || 'unknown stream error' });
 	}
 
 	/** Single-line progress indicator under the newest message. Transient:

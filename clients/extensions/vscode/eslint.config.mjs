@@ -19,8 +19,6 @@ const sizeRules = (lines, complexity) => ({
 // entry when the file meets the limits above. Do not add an entry or raise a
 // number to make a change pass.
 const OVER_THE_LIMIT = {
-    // ChatViewProvider.dispatch
-    "src/ui/chatView.ts": { lines: 186, complexity: 32 },
     // predictEdit
     "src/session/editPreview.ts": { lines: FUNCTION_LINES, complexity: 17 },
 };
