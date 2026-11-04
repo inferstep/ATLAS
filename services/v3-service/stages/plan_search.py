@@ -325,34 +325,13 @@ def parse_constraint_sets(response: str, expected_n: int) -> List[ConstraintSet]
 
     if matches:
         for _num, block in matches:
-            constraints = []
-            family = ""
-            for line in block.strip().split('\n'):
-                line = line.strip().lstrip('-').strip()
-                if not line:
-                    continue
-                if line.lower().startswith('constraint:'):
-                    constraints.append(line.split(':', 1)[1].strip())
-                elif line.lower().startswith('eliminates:'):
-                    constraints.append(f"Eliminates: {line.split(':', 1)[1].strip()}")
-                elif line.lower().startswith('implies:'):
-                    family = line.split(':', 1)[1].strip()
-                    constraints.append(f"Implies: {family}")
-                elif line:
-                    constraints.append(line)
-            if constraints:
-                sets.append(ConstraintSet(constraints=constraints,
-                                          algorithmic_family=family))
+            constraint_set = _labelled_constraint_set(block)
+            if constraint_set is not None:
+                sets.append(constraint_set)
         return sets[:expected_n]
 
     # Fallback: split by numbered headers (1., 2., 3.)
-    numbered = re.split(r'\n\s*\d+[.)]\s+', '\n' + response)
-    for block in numbered[1:]:  # skip empty first split
-        block = block.strip()
-        if block:
-            lines = [l.strip() for l in block.split('\n') if l.strip()]
-            if lines:
-                sets.append(ConstraintSet(constraints=lines))
+    sets = _numbered_constraint_sets(response)
     if sets:
         return sets[:expected_n]
 
@@ -361,6 +340,43 @@ def parse_constraint_sets(response: str, expected_n: int) -> List[ConstraintSet]
     if lines:
         sets.append(ConstraintSet(constraints=lines))
     return sets[:expected_n]
+
+
+def _labelled_constraint_set(block: str) -> Optional[ConstraintSet]:
+    """The constraint set one "CONSTRAINT SET N:" block holds, read line by
+    line by its label, or None when it holds no line."""
+    constraints = []
+    family = ""
+    for line in block.strip().split('\n'):
+        line = line.strip().lstrip('-').strip()
+        if not line:
+            continue
+        if line.lower().startswith('constraint:'):
+            constraints.append(line.split(':', 1)[1].strip())
+        elif line.lower().startswith('eliminates:'):
+            constraints.append(f"Eliminates: {line.split(':', 1)[1].strip()}")
+        elif line.lower().startswith('implies:'):
+            family = line.split(':', 1)[1].strip()
+            constraints.append(f"Implies: {family}")
+        elif line:
+            constraints.append(line)
+    if constraints:
+        return ConstraintSet(constraints=constraints, algorithmic_family=family)
+    return None
+
+
+def _numbered_constraint_sets(response: str) -> List[ConstraintSet]:
+    """One constraint set per block under a numbered header (1., 2) ...),
+    each line of the block a constraint."""
+    sets: List[ConstraintSet] = []
+    numbered = re.split(r'\n\s*\d+[.)]\s+', '\n' + response)
+    for block in numbered[1:]:  # skip empty first split
+        block = block.strip()
+        if block:
+            lines = [l.strip() for l in block.split('\n') if l.strip()]
+            if lines:
+                sets.append(ConstraintSet(constraints=lines))
+    return sets
 
 
 def parse_plan(response: str, constraint_set: ConstraintSet) -> Plan:
