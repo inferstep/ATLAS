@@ -380,3 +380,19 @@ def test_a_dry_run_prints_the_plan_and_changes_nothing(tmp_path, monkeypatch, ca
         "  (dry run — nothing changed)",
     ]
     assert eng.read_env_tag(root) == "3.1.6"
+
+
+@pytest.mark.parametrize("result, last_line", [
+    pytest.param({"status": "noop", "detail": "already on 3.2.0"}, "already on 3.2.0", id="nothing-to-do"),
+    pytest.param({"status": "refreshed", "target_tag": "latest"},
+                 "Refreshed latest. For reversible upgrades, pin release tags (--to vX.Y.Z).", id="refreshed"),
+    pytest.param({"status": "upgraded", "target_tag": "3.2.0"},
+                 "Upgraded to 3.2.0. Roll back with: atlas rollback", id="upgraded"),
+])
+def test_the_upgrade_says_what_it_did(tmp_path, monkeypatch, capsys, result, last_line):
+    from atlas.commands import upgrade
+    root = _root(tmp_path, "3.1.6")
+    monkeypatch.setattr(upgrade.cli_env, "atlas_root", lambda: root)
+    monkeypatch.setattr(upgrade.eng, "run_upgrade", lambda *args, **kwargs: result)
+    assert upgrade.main(["--to", "3.2.0", "--yes"]) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == last_line
