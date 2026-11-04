@@ -129,37 +129,42 @@ def path(graph: CodeGraph, frm: str, to: str) -> List[str]:
             continue
         if f in to_targets and f in idx.adj.get(f, ()):
             return [f, f]
-        parent: Dict[str, str] = {}
-        seen = {f}
-        queue = [f]
-        head = 0
-        target: Optional[str] = None
-        while head < len(queue):
-            u = queue[head]
-            head += 1
-            hit = False
-            for v in idx.adj.get(u, ()):
-                if v in seen:
-                    continue
-                seen.add(v)
-                parent[v] = u
-                if v in to_targets:
-                    target = v
-                    hit = True
-                    break
-                queue.append(v)
-            if hit:
-                break
-        if target is None:
-            continue
-        chain: List[str] = []
-        cur: Optional[str] = target
-        while cur is not None:
-            chain.append(cur)
-            cur = parent.get(cur)
-        chain.reverse()
-        return chain
+        chain = _shortest_chain(idx.adj, f, to_targets)
+        if chain:
+            return chain
     return []
+
+
+def _shortest_chain(adj: Dict[str, List[str]], f: str, to_targets: Set[str]) -> List[str]:
+    """The shortest call chain from `f` to the first of `to_targets` the BFS
+    reaches, following first-seen edge order, or []."""
+    parent: Dict[str, str] = {}
+    seen = {f}
+    queue = [f]
+    head = 0
+    while head < len(queue):
+        u = queue[head]
+        head += 1
+        for v in adj.get(u, ()):
+            if v in seen:
+                continue
+            seen.add(v)
+            parent[v] = u
+            if v in to_targets:
+                return _chain_to(parent, v)
+            queue.append(v)
+    return []
+
+
+def _chain_to(parent: Dict[str, str], target: str) -> List[str]:
+    """The chain of names that `parent` links from the BFS source to `target`."""
+    chain: List[str] = []
+    cur: Optional[str] = target
+    while cur is not None:
+        chain.append(cur)
+        cur = parent.get(cur)
+    chain.reverse()
+    return chain
 
 
 def impact(graph: CodeGraph, target: str) -> List[str]:
@@ -175,19 +180,25 @@ def impact(graph: CodeGraph, target: str) -> List[str]:
     for t in targets:
         if t not in idx.nodes:
             continue
-        reached = _bfs(idx.rev, t)
-        self_loop = t in idx.adj.get(t, ())
-        for n in reached:
-            if n == t:
-                if self_loop and n not in seen:
-                    seen.add(n)
-                    union.append(n)
-                continue
-            if n in target_set or n in seen:
-                continue
-            seen.add(n)
-            union.append(n)
+        for n in _callers_reaching(idx, t, target_set):
+            if n not in seen:
+                seen.add(n)
+                union.append(n)
     return union
+
+
+def _callers_reaching(idx: _Index, t: str, target_set: Set[str]) -> List[str]:
+    """The transitive callers of `t` in BFS discovery order, without the other
+    targets; `t` itself only when it calls itself."""
+    self_loop = t in idx.adj.get(t, ())
+    out: List[str] = []
+    for n in _bfs(idx.rev, t):
+        if n == t:
+            if self_loop:
+                out.append(n)
+        elif n not in target_set:
+            out.append(n)
+    return out
 
 
 def detect_entry_points(graph: CodeGraph) -> List[str]:

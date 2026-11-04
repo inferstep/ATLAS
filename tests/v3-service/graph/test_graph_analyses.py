@@ -8,6 +8,8 @@ the identical graph via `npx tsx`. Divergence flags a behavioral fork.
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "services" / "v3-service"))
 
 from graph.types import (
@@ -75,6 +77,39 @@ class TestDeterminism:
 class TestImpact:
     def test_impact_of_a_function_nobody_calls_is_empty(self):
         assert analyses.impact(_graph(), "main") == []
+
+    def test_a_recursive_function_is_its_own_caller(self):
+        assert analyses.impact(_graph(), "recurse") == ["recurse"]
+
+
+class TestPath:
+    def test_a_recursive_function_reaches_itself_in_one_call(self):
+        assert analyses.path(_graph(), "recurse", "recurse") == ["recurse", "recurse"]
+
+    def test_a_cycle_without_a_route_ends_with_no_path(self):
+        g = CodeGraph(calls=[CallsFact("a", "b"), CallsFact("b", "a")],
+                      defines=[DefinesFact("c.py", "c", "function", 1)])
+        assert analyses.path(g, "a", "c") == []
+
+    @pytest.mark.parametrize("frm, to", [
+        pytest.param("leaf", "main", id="no-route"),
+        pytest.param("nosuch", "leaf", id="unknown-start"),
+        pytest.param("main", "nosuch", id="unknown-end"),
+    ])
+    def test_no_route_gives_no_path(self, frm, to):
+        assert analyses.path(_graph(), frm, to) == []
+
+
+class TestNamespacedTargets:
+    """A bare `f` names both `a/f` and `b/f`; `a/f` calls `b/f`, and `x` calls `a/f`."""
+
+    GRAPH = CodeGraph(calls=[CallsFact("x", "a/f"), CallsFact("a/f", "b/f")])
+
+    def test_the_impact_of_a_bare_name_leaves_out_its_other_targets(self):
+        assert analyses.impact(self.GRAPH, "f") == ["x"]
+
+    def test_a_path_to_a_bare_name_ends_at_the_first_target_reached(self):
+        assert analyses.path(self.GRAPH, "x", "f") == ["x", "a/f"]
 
 
 class TestEntryPoints:
