@@ -246,7 +246,8 @@ def test_fit_says_why_it_cannot_size_the_model(monkeypatch, tmp_path, capsys, ar
     (tmp_path / "elsewhere" / "not-gguf.bin").write_bytes(b"not a GGUF file")
 
     assert tier.main(argv) == exit_code
-    assert message in capsys.readouterr().out
+    # The reason it stops is the last thing it says.
+    assert capsys.readouterr().out.splitlines()[-1].strip().startswith(message)
 
 
 def test_fit_without_a_configured_model_says_how_to_name_one(monkeypatch, tmp_path, capsys):
