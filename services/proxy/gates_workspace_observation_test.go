@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -293,5 +294,46 @@ func TestWhatAReapedJobLeftIsRecorded(t *testing.T) {
 	reapSessionBackgroundJobs(ctx) // the deadline and cancel paths
 	if d := ctx.Ledger[ledgerKey(ctx, "util.py")]; d == nil || d.TombstoneReason != "deleted:shell" {
 		t.Fatalf("the user's file the job removed is not recorded: %+v", d)
+	}
+}
+
+func TestAnEntryTheWalkCannotReadIsSkippedAndTheWalkGoesOn(t *testing.T) {
+	snap := workspaceSnapshot{files: map[string]workspaceFile{}, taken: true}
+	root := t.TempDir()
+
+	next := snap.observe(root, filepath.Join(root, "locked"), nil, os.ErrPermission)
+
+	if next != nil {
+		t.Errorf("an unreadable entry returned %v, want nil so the walk goes on", next)
+	}
+	if len(snap.files) != 0 {
+		t.Errorf("an unreadable entry recorded %v", snap.files)
+	}
+}
+
+func TestAWalkAtTheCapStopsAndSaysItWasCut(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "one.py"), []byte("x = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := workspaceSnapshot{files: map[string]workspaceFile{}, taken: true}
+	for i := 0; i < maxObservedWorkspaceFiles; i++ {
+		snap.files[fmt.Sprintf("f%d.py", i)] = workspaceFile{}
+	}
+
+	next := snap.observe(root, filepath.Join(root, "one.py"), entries[0], nil)
+
+	if next != filepath.SkipAll {
+		t.Errorf("at the cap the walk got %v, want SkipAll", next)
+	}
+	if !snap.truncated {
+		t.Error("at the cap the snapshot is not marked truncated")
+	}
+	if _, ok := snap.files["one.py"]; ok {
+		t.Error("a file past the cap was recorded")
 	}
 }
