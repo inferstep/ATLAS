@@ -111,6 +111,11 @@ class TestNamespacedTargets:
     def test_a_path_to_a_bare_name_ends_at_the_first_target_reached(self):
         assert analyses.path(self.GRAPH, "x", "f") == ["x", "a/f"]
 
+    def test_a_path_from_a_bare_name_tries_each_start(self):
+        # Only the second start, b/g, has a route to t.
+        g = CodeGraph(calls=[CallsFact("a/g", "x"), CallsFact("b/g", "t")])
+        assert analyses.path(g, "g", "t") == ["b/g", "t"]
+
 
 class TestEntryPoints:
     def test_zero_in_degree_exports(self):
