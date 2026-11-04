@@ -110,6 +110,8 @@ func TestValidateShellCommandAllowsEverythingElse(t *testing.T) {
 			"python app.py >> server.log",
 			"pytest -v 2> errors.log",
 			"python app.py 2>&1",
+			// A line that ends in `$`: the splitter must not read past the end.
+			"echo $",
 			"node app.js >& output.log",
 			"go test ./... 2>&1 | tee out.log",
 			"python app.py > flask.log 2>&1 &",
