@@ -94,6 +94,78 @@ func TestModelsPrefersLoadedModelOverStaleConfig(t *testing.T) {
 	}
 }
 
+// The loaded model is the first id llama-server reports that is not blank,
+// trimmed; an answer that is not 200 leaves the configured name.
+func TestModelsReadsTheFirstLoadedModel(t *testing.T) {
+	previous := modelName
+	modelName = "configured-model"
+	t.Cleanup(func() { modelName = previous })
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		want   string
+	}{
+		{"a busy server's list is not read", http.StatusServiceUnavailable,
+			`{"data":[{"id":"busy-model"}]}`, "configured-model"},
+		{"the first id that is not blank, trimmed", http.StatusOK,
+			`{"data":[{"id":"  "},{"id":" first "},{"id":"second"}]}`, "first"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer upstream.Close()
+			withInferenceURL(t, upstream.URL)
+
+			rec := httptest.NewRecorder()
+			newProxyMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+			var payload struct {
+				Data []struct {
+					ID string `json:"id"`
+				} `json:"data"`
+			}
+			if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if len(payload.Data) != 1 {
+				t.Fatalf("model data = %#v, want one model", payload.Data)
+			}
+			if payload.Data[0].ID != tc.want {
+				t.Errorf("model id = %q, want %q", payload.Data[0].ID, tc.want)
+			}
+		})
+	}
+}
+
+// A llama-server that cannot be reached leaves the configured name.
+func TestModelsWithoutAReachableModelServerKeepsTheConfiguredName(t *testing.T) {
+	previous := modelName
+	modelName = "configured-model"
+	t.Cleanup(func() { modelName = previous })
+	upstream := httptest.NewServer(http.NotFoundHandler())
+	upstream.Close() // nothing answers at its address now
+	withInferenceURL(t, upstream.URL)
+
+	rec := httptest.NewRecorder()
+	newProxyMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+	var payload struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(payload.Data) != 1 {
+		t.Fatalf("model data = %#v, want one model", payload.Data)
+	}
+	if payload.Data[0].ID != "configured-model" {
+		t.Errorf("model id = %q, want configured-model", payload.Data[0].ID)
+	}
+}
+
 func TestHealthAdvertisesRawDemoCapability(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)

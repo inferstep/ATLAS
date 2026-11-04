@@ -150,27 +150,8 @@ func handleModels(w http.ResponseWriter, r *http.Request) {
 	// keeps the API (and /demo title) truthful when a local launch overrides
 	// ATLAS_MODEL_NAME or the local .env lags behind the running server.
 	id := modelName
-	upstreamReq, err := http.NewRequestWithContext(r.Context(), http.MethodGet,
-		strings.TrimRight(inferenceURL, "/")+"/v1/models", nil)
-	if err == nil {
-		if upstream, upstreamErr := healthClient.Do(upstreamReq); upstreamErr == nil {
-			defer upstream.Body.Close()
-			if upstream.StatusCode == http.StatusOK {
-				var loaded struct {
-					Data []struct {
-						ID string `json:"id"`
-					} `json:"data"`
-				}
-				if json.NewDecoder(io.LimitReader(upstream.Body, 1<<20)).Decode(&loaded) == nil {
-					for _, candidate := range loaded.Data {
-						if candidate.ID = strings.TrimSpace(candidate.ID); candidate.ID != "" {
-							id = candidate.ID
-							break
-						}
-					}
-				}
-			}
-		}
+	if loaded := upstreamModelID(r.Context()); loaded != "" {
+		id = loaded
 	}
 	resp := map[string]any{
 		"object": "list",
@@ -179,6 +160,38 @@ func handleModels(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// upstreamModelID is the first model llama-server reports as loaded, trimmed,
+// or "" when it cannot be asked, does not answer 200, or names none.
+func upstreamModelID(ctx context.Context) string {
+	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		strings.TrimRight(inferenceURL, "/")+"/v1/models", nil)
+	if err != nil {
+		return ""
+	}
+	upstream, err := healthClient.Do(upstreamReq)
+	if err != nil {
+		return ""
+	}
+	defer upstream.Body.Close()
+	if upstream.StatusCode != http.StatusOK {
+		return ""
+	}
+	var loaded struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if json.NewDecoder(io.LimitReader(upstream.Body, 1<<20)).Decode(&loaded) != nil {
+		return ""
+	}
+	for _, candidate := range loaded.Data {
+		if id := strings.TrimSpace(candidate.ID); id != "" {
+			return id
+		}
+	}
+	return ""
 }
 
 // healthPath is where a service of the stack, this proxy among them, answers
