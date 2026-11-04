@@ -46,6 +46,55 @@ def test_nonmetal_log_inspection_uses_backend_overlay(monkeypatch, tmp_path):
     ]]
 
 
+def test_metal_names_the_model_a_healthy_server_serves_instead(monkeypatch, tmp_path):
+    monkeypatch.setattr(onboard, "_serving_this", lambda url, model: (True, False))
+    monkeypatch.setattr(onboard, "_loaded_model_name", lambda url: "other.gguf")
+    ready, detail = onboard._arch_supported(
+        str(tmp_path), {"ATLAS_BACKEND": "metal"}, "model.gguf", start=True, color=False)
+    assert ready is False
+    assert "serves 'other.gguf', not 'model.gguf'" in detail
+
+
+UP = ["docker", "compose", "up", "-d", "llama-server", "--no-deps"]
+RECREATE = ["docker", "compose", "up", "-d", "--force-recreate", "llama-server", "--no-deps"]
+LOGS = ["docker", "compose", "logs", "--tail=200", "llama-server"]
+ARCH_ERROR = "llama_model_load: error loading model: unknown architecture 'novel'"
+
+
+# answers: what each health check says in turn, (healthy, serving this model).
+@pytest.mark.parametrize("start, answers, logs, ready, detail, commands", [
+    pytest.param(True, [(True, False), (True, True)], "", True, "", [RECREATE],
+                 id="a-server-with-another-model-is-recreated-and-serves"),
+    pytest.param(True, [(False, False), (False, False)], ARCH_ERROR, False, "unknown architecture", [UP, LOGS],
+                 id="a-stopped-server-is-started-and-its-load-error-read"),
+    pytest.param(True, [(False, False)] * 32, "", False, "may still be loading", [UP] + [LOGS] * 31,
+                 id="a-server-that-never-serves-is-polled-30-times"),
+    pytest.param(False, [(False, False)], ARCH_ERROR, False, "unknown architecture", [LOGS],
+                 id="not-started-the-logs-say-why"),
+    pytest.param(False, [(False, False), (True, True)], "", True, "", [LOGS],
+                 id="not-started-it-came-up-meanwhile"),
+    pytest.param(False, [(False, False), (False, False)], "", False, "may still be loading", [LOGS],
+                 id="not-started-and-nothing-says-why"),
+])
+def test_a_container_server_is_started_waited_for_and_its_logs_read(
+        monkeypatch, tmp_path, start, answers, logs, ready, detail, commands):
+    told = iter(answers)
+    monkeypatch.setattr(onboard, "_serving_this", lambda url, model: next(told))
+    monkeypatch.setattr(onboard.time, "sleep", lambda seconds: None)
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        return 0, logs, ""
+
+    monkeypatch.setattr(onboard, "_run", run)
+    got_ready, got_detail = onboard._arch_supported(
+        str(tmp_path), {"ATLAS_BACKEND": "cuda"}, "model.gguf", start=start, color=False)
+    assert got_ready is ready
+    assert detail in got_detail
+    assert calls == commands
+
+
 @pytest.mark.parametrize("flags, expected_env_writes, expected_texts", [
     (["--apply"],
      [{"ATLAS_MODEL_FILE": "My-Model-Q4_K_M.gguf", "ATLAS_MODEL_NAME": "My-Model-Q4_K_M"}],
