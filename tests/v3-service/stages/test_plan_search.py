@@ -180,7 +180,7 @@ def test_each_line_of_a_constraint_set_is_read_by_its_label():
 
 
 def test_numbered_blocks_are_read_when_there_are_no_constraint_set_headers():
-    response = "Two ways:\n1) Sort first\n   then use two pointers\n2) Use a hash map\n3) Brute force"
+    response = "Two ways:\n1) Sort first\n\n   then use two pointers\n2) Use a hash map\n3) Brute force"
 
     sets = parse_constraint_sets(response, 2)
 
