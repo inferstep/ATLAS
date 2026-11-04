@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from atlas import publishing
+from atlas import display, publishing
 from atlas.commands import lens, lens_card, lens_publish
 
 
@@ -800,19 +800,6 @@ def test_preflight_blocks_non_dryrun_when_huggingface_hub_missing(monkeypatch, c
     assert "Cannot continue: missing required credentials." in capsys.readouterr().out
 
 
-def test_preflight_passes_when_token_and_pkg_present(monkeypatch, capsys):
-    monkeypatch.setenv("HF_TOKEN", "hf_dummy_for_test")
-    # huggingface_hub may or may not be installed in CI; only assert pass
-    # when the pkg is genuinely available (otherwise the test would be
-    # flaky depending on host env).
-    if not publishing.huggingface_hub_available():
-        pytest.skip("huggingface_hub not installed on this host")
-    ok = publishing.publish_preflight("lens", dry_run=False, color=False)
-    out = capsys.readouterr().out
-    assert ok is True
-    assert "HF_TOKEN env var" in out
-
-
 def test_preflight_mentions_both_lens_and_asa_kinds(monkeypatch, capsys):
     """The panel header should reflect whichever publish flow invoked it
     so the user isn't confused about what they're shipping."""
@@ -851,17 +838,52 @@ def test_preflight_dry_run_doesnt_flag_missing_token_as_failure(
     ok = publishing.publish_preflight("lens", dry_run=True, color=False)
     out = capsys.readouterr().out
     assert ok is True
-    # The red ✗ marker must not appear next to HF_TOKEN in dry-run mode.
-    # (We render the row with a neutral ○ instead.)
-    assert "✗ HF_TOKEN" not in out, (
-        "dry-run preflight should not show ✗ for missing token; "
-        "got:\n" + out
-    )
     # The alarming "Cannot continue" footer must not fire either.
     assert "Cannot continue" not in out
     # The dry-run footer should still be present and tell the user
     # nothing is being enforced.
     assert "nothing will leave the host" in out
+
+
+TOKEN_TODO = ("get a write token at https://huggingface.co/settings/tokens, "
+              "then `export HF_TOKEN=hf_...`")
+GH_TODO = ("without it we'll print the PR body for you to paste at "
+           "https://github.com/inferstep/ATLAS/compare")
+RED, YELLOW, RESET = display.RED, display.YELLOW, display.RESET
+
+
+@pytest.mark.parametrize("dry_run, present, color, passes, rows", [
+    pytest.param(False, True, False, True, [
+        "  ✓ HF_TOKEN env var",
+        "  ✓ huggingface_hub Python pkg",
+        "  ✓ gh CLI",
+    ], id="a-real-run-with-everything"),
+    pytest.param(False, False, False, False, [
+        f"  ✗ HF_TOKEN env var  required — {TOKEN_TODO}",
+        "  ✗ huggingface_hub Python pkg  required — `pip install huggingface_hub`",
+        f"  ⚠ gh CLI  optional — {GH_TODO}",
+    ], id="a-real-run-with-nothing"),
+    pytest.param(True, False, False, True, [
+        "  ○ HF_TOKEN env var  (would be needed for a real upload)",
+        "  ○ huggingface_hub Python pkg  (would be needed for a real upload)",
+        "  ○ gh CLI  (would be needed for a real upload)",
+    ], id="a-dry-run-with-nothing"),
+    pytest.param(False, False, True, False, [
+        f"  {RED}✗{RESET} HF_TOKEN env var  {RED}required{RESET} — {TOKEN_TODO}",
+        f"  {RED}✗{RESET} huggingface_hub Python pkg  {RED}required{RESET} — `pip install huggingface_hub`",
+        f"  {YELLOW}⚠{RESET} gh CLI  {YELLOW}optional{RESET} — {GH_TODO}",
+    ], id="a-coloured-real-run-with-nothing"),
+])
+def test_preflight_marks_each_requirement(monkeypatch, capsys, dry_run, present, color, passes, rows):
+    monkeypatch.setattr(display, "UNICODE_OK", True)  # read as a UTF-8 terminal shows it
+    monkeypatch.setattr(publishing, "hf_token", lambda: "hf_dummy" if present else None)
+    monkeypatch.setattr(publishing, "huggingface_hub_available", lambda: present)
+    monkeypatch.setattr(publishing, "gh_available", lambda: present)
+
+    assert publishing.publish_preflight("lens", dry_run=dry_run, color=color) is passes
+
+    # The three requirement rows come after the 8 lines that say what publishing does.
+    assert capsys.readouterr().out.splitlines()[8:11] == rows
 
 
 def test_publish_opens_pr_via_github_api(monkeypatch, tmp_path, capsys):
