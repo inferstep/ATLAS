@@ -199,3 +199,88 @@ def test_tier_fit_write_sizes_the_configured_model_into_the_install_env(monkeypa
     # gets the file's whole training context of 16384.
     assert "ATLAS_CTX_SIZE=32768" in env_lines
     assert "ATLAS_PARALLEL_SLOTS=2" in env_lines
+
+
+# The geometry every header below starts from: 2 layers, 4096-dim, 32 heads.
+GEOMETRY = [
+    ("general.architecture", STRING, "fixture"),
+    ("fixture.block_count", UINT32, 2),
+    ("fixture.embedding_length", UINT32, 4096),
+    ("fixture.attention.head_count", UINT32, 32),
+]
+
+
+def test_the_header_is_read_up_to_the_tokenizer_once_the_geometry_is_known(tmp_path):
+    # A tokenizer key before the geometry does not stop the read; one after it does,
+    # so the file's count of keys may name more than are there.
+    path = write_gguf(tmp_path / "m.gguf", [("tokenizer.ggml.model", STRING, "gpt2")] + GEOMETRY
+                      + [("tokenizer.ggml.pre", STRING, "default")])
+    data = bytearray(open(path, "rb").read())
+    struct.pack_into("<Q", data, 16, len(GEOMETRY) + 3)  # one key more than the file holds
+    open(path, "wb").write(bytes(data))
+
+    assert read_gguf_meta(path).n_layers == 2
+
+
+@pytest.mark.parametrize("extra_keys, n_head, kv_heads", [
+    pytest.param([], 32, [32, 32], id="kv-heads-default-to-the-heads"),
+    pytest.param([("fixture.attention.head_count_kv", UINT32, 8)], 32, [8, 8], id="one-kv-count-for-every-layer"),
+    pytest.param([("fixture.attention.head_count_kv", ARRAY, (UINT32, [4, 8]))], 32, [4, 8], id="kv-heads-per-layer"),
+    pytest.param([("fixture.attention.head_count_kv", ARRAY, (UINT32, []))], 32, [32, 32], id="an-empty-kv-list"),
+    pytest.param([("fixture.attention.head_count", ARRAY, (UINT32, [8, 32]))], 32, [32, 32], id="the-most-heads-of-a-list"),
+])
+def test_heads_and_kv_heads(tmp_path, extra_keys, n_head, kv_heads):
+    meta = read_gguf_meta(write_gguf(tmp_path / "m.gguf", GEOMETRY + extra_keys))
+    assert meta.n_head == n_head
+    assert meta.kv_heads == kv_heads
+
+
+@pytest.mark.parametrize("extra_keys, v_len, k_len_swa, v_len_swa", [
+    pytest.param([], 128, 128, 128, id="every-length-from-the-head-dim"),
+    pytest.param([("fixture.attention.value_length", UINT32, 64)], 64, 128, 64, id="swa-values-from-the-values"),
+    pytest.param([("fixture.attention.key_length_swa", UINT32, 96),
+                  ("fixture.attention.value_length_swa", UINT32, 48)], 128, 96, 48, id="swa-lengths-from-the-file"),
+])
+def test_value_and_sliding_window_lengths(tmp_path, extra_keys, v_len, k_len_swa, v_len_swa):
+    meta = read_gguf_meta(write_gguf(tmp_path / "m.gguf", GEOMETRY + extra_keys))
+    assert meta.v_len == v_len
+    assert meta.k_len_swa == k_len_swa
+    assert meta.v_len_swa == v_len_swa
+
+
+@pytest.mark.parametrize("changed_key, value", [
+    pytest.param("fixture.block_count", 0, id="no-layers"),
+    pytest.param("fixture.embedding_length", 0, id="no-embedding"),
+])
+def test_a_header_without_its_geometry_is_incomplete(tmp_path, changed_key, value):
+    # The key length is given, so the head dim does not come from the embedding.
+    keys = [(k, t, value if k == changed_key else v) for k, t, v in GEOMETRY]
+    keys.append(("fixture.attention.key_length", UINT32, 128))
+    with pytest.raises(ValueError, match="GGUF header incomplete"):
+        read_gguf_meta(write_gguf(tmp_path / "m.gguf", keys))
+
+
+def test_an_empty_head_list_is_an_incomplete_header(tmp_path):
+    keys = GEOMETRY[:3] + [("fixture.attention.head_count", ARRAY, (UINT32, []))]
+    with pytest.raises(ValueError, match="GGUF header incomplete"):
+        read_gguf_meta(write_gguf(tmp_path / "m.gguf", keys))
+
+
+@pytest.mark.parametrize("extra_keys, local_mask, swa_note", [
+    pytest.param([("fixture.attention.sliding_window_pattern", UINT32, 2)], [False, False], "full attention",
+                 id="no-window-is-full-attention-whatever-the-pattern"),
+    pytest.param([("fixture.attention.sliding_window", UINT32, 512),
+                  ("fixture.attention.sliding_window_pattern", ARRAY, (BOOL, [True]))],
+                 [True, False], "window 512, per-layer mask (1/2 sliding)", id="a-short-mask-pads-with-global-layers"),
+    pytest.param([("fixture.attention.sliding_window", UINT32, 512),
+                  ("fixture.attention.sliding_window_pattern", ARRAY, (BOOL, []))],
+                 [True, True], "window 512, assumed 1 global per 6 layers (pattern not in GGUF)",
+                 id="an-empty-mask-is-the-default-pattern"),
+    pytest.param([("fixture.attention.sliding_window", UINT32, 512)],
+                 [True, True], "window 512, assumed 1 global per 6 layers (pattern not in GGUF)",
+                 id="no-pattern-is-the-default-and-says-so"),
+])
+def test_sliding_window_layers_and_their_note(tmp_path, extra_keys, local_mask, swa_note):
+    meta = read_gguf_meta(write_gguf(tmp_path / "m.gguf", GEOMETRY + extra_keys))
+    assert meta.local_mask == local_mask
+    assert meta.swa_note == swa_note
