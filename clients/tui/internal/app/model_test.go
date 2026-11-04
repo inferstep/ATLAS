@@ -190,8 +190,11 @@ func TestCtrlRSendsTheLastMessageAgain(t *testing.T) {
 	if len(mu.chat) != 1 {
 		t.Fatalf("the chat has %d rows, want the one row of the message sent again", len(mu.chat))
 	}
-	if mu.chat[0].Role != sessionstore.RoleUser || mu.chat[0].Body != "fix the test" {
-		t.Errorf("the chat row is %+v, want the user's message", mu.chat[0])
+	if mu.chat[0].Role != sessionstore.RoleUser {
+		t.Errorf("the chat row is from %v, want the user", mu.chat[0].Role)
+	}
+	if mu.chat[0].Body != "fix the test" {
+		t.Errorf("the chat row says %q, want the message sent again", mu.chat[0].Body)
 	}
 }
 
