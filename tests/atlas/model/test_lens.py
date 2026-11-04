@@ -790,6 +790,19 @@ def test_preflight_blocks_non_dryrun_when_token_missing(monkeypatch, capsys):
     assert "huggingface.co/settings/tokens" in out
 
 
+@pytest.mark.parametrize("token, hub_installed", [
+    pytest.param(None, True, id="no-token"),
+    pytest.param("hf_dummy", False, id="no-huggingface-hub"),
+])
+def test_preflight_blocks_a_real_run_missing_either_requirement(monkeypatch, capsys, token, hub_installed):
+    monkeypatch.setattr(publishing, "hf_token", lambda: token)
+    monkeypatch.setattr(publishing, "huggingface_hub_available", lambda: hub_installed)
+    monkeypatch.setattr(publishing, "gh_available", lambda: True)
+
+    assert publishing.publish_preflight("lens", dry_run=False, color=False) is False
+    assert "Cannot continue: missing required credentials." in capsys.readouterr().out
+
+
 def test_preflight_passes_when_token_and_pkg_present(monkeypatch, capsys):
     monkeypatch.setenv("HF_TOKEN", "hf_dummy_for_test")
     # huggingface_hub may or may not be installed in CI; only assert pass
