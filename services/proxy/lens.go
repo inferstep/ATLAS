@@ -599,12 +599,20 @@ func probeLensStatus(ctx context.Context, lensBaseURL string) LensStatus {
 		out.EmbedCapacitySource = h.Subsystems.Lens.EmbedCapacitySource
 	}
 
-	lens := h.Subsystems.Lens
+	setLensVerdict(&out, h.Subsystems.Lens)
+	out.CanScore = lensVerdictCanScore(out.Verdict)
+	return out
+}
+
+// setLensVerdict names what a lens with this health can do, with a hint for
+// the operator: the first reason it cannot score, else uncalibrated or
+// supported.
+func setLensVerdict(out *LensStatus, lens lensSubsystemHealth) {
 	switch {
 	case !out.CostFieldLoaded:
 		out.Verdict = "no-artifacts"
-		if h.Subsystems.Lens.SelfTestError != "" {
-			out.Hint = h.Subsystems.Lens.SelfTestError
+		if lens.SelfTestError != "" {
+			out.Hint = lens.SelfTestError
 		} else {
 			out.Hint = "no cost_field.pt loaded — run `atlas lens build` to train one"
 		}
@@ -634,8 +642,6 @@ func probeLensStatus(ctx context.Context, lensBaseURL string) LensStatus {
 		out.Verdict = "supported"
 		out.Hint = "ready"
 	}
-	out.CanScore = lensVerdictCanScore(out.Verdict)
-	return out
 }
 
 // lensVerdictCanScore is whether a lens with this verdict can score: the
