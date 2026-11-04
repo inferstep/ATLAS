@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -43,6 +44,61 @@ func shell(t *testing.T, ctx *AgentContext, command string) {
 	args, _ := json.Marshal(wire.RunCommandInput{Command: command, Timeout: &timeout})
 	if res := executeToolCall("run_command", args, ctx); res == nil || !res.Success {
 		t.Fatalf("%q did not run: %+v", command, res)
+	}
+}
+
+// One walk records each regular file under the root by its slash path, and
+// leaves out what installs and builds rewrite, by-product files and links. A
+// root named like a skipped folder is still walked.
+func TestASnapshotRecordsTheWorkAndLeavesOutByProducts(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "build")
+	for name, body := range map[string]string{
+		"app.py": "print(1)\n", "pkg/mod.py": "x = 1\n",
+		"node_modules/x/i.js": "1", "pkg/__pycache__/mod.cpython-312.pyc": "b",
+		".DS_Store": "f", "pkg/old.pyc": "b", ".atlas-session": "m",
+	} {
+		p := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink("app.py", filepath.Join(root, "link.py")); err != nil {
+		t.Fatal(err)
+	}
+
+	snap := snapshotWorkspace(root)
+
+	var got []string
+	for rel := range snap.files {
+		got = append(got, rel)
+	}
+	sort.Strings(got)
+	if strings.Join(got, ",") != "app.py,pkg/mod.py" {
+		t.Fatalf("the walk recorded %v, want app.py and pkg/mod.py", got)
+	}
+	if snap.files["app.py"].size != 9 {
+		t.Errorf("app.py recorded at %d bytes, want 9", snap.files["app.py"].size)
+	}
+	// The mtime is what tells a same-size rewrite from an untouched file.
+	info, err := os.Stat(filepath.Join(root, "app.py"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.files["app.py"].mtime != info.ModTime().UnixNano() {
+		t.Errorf("app.py recorded with mtime %d, want %d", snap.files["app.py"].mtime, info.ModTime().UnixNano())
+	}
+	if !snap.taken || snap.truncated {
+		t.Errorf("taken %v truncated %v, want a whole walk taken", snap.taken, snap.truncated)
+	}
+}
+
+func TestASnapshotOfNoRootIsTakenAndEmpty(t *testing.T) {
+	snap := snapshotWorkspace("")
+	if !snap.taken || len(snap.files) != 0 {
+		t.Fatalf("taken %v with %d files, want taken and empty", snap.taken, len(snap.files))
 	}
 }
 
