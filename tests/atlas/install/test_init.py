@@ -6,6 +6,7 @@ secrets/api-keys.json, when it refuses, when it prompts, and which backend
 it picks for each kind of GPU.
 """
 
+import argparse
 import grp
 import json
 import os
@@ -382,6 +383,28 @@ def test_the_gpu_picked_at_the_prompt_goes_into_env(atlas_root, monkeypatch):
 
     assert rc == 0
     assert "ATLAS_GPU_INDEX=1" in (atlas_root / ".env").read_text()
+
+
+@pytest.mark.parametrize("env, picked", [
+    pytest.param({}, "NVIDIA RTX 4090", id="the-largest-without-an-override"),
+    pytest.param({"ATLAS_GPU_VENDOR": "amd"}, "AMD Radeon RX 7600", id="the-vendor-named"),
+    pytest.param({"ATLAS_GPU_INDEX": "1"}, "NVIDIA RTX 3060", id="the-index-named"),
+    pytest.param({"ATLAS_GPU_INDEX": "one"}, "NVIDIA RTX 4090", id="an-index-that-is-not-a-number-is-ignored"),
+])
+def test_the_gpu_named_in_the_environment_is_picked(monkeypatch, env, picked):
+    monkeypatch.delenv("ATLAS_GPU_VENDOR", raising=False)
+    monkeypatch.delenv("ATLAS_GPU_INDEX", raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    three_gpus = tier.Probe(has_gpu=True, gpu_count=3, gpus=[
+        tier.GPUInfo(vendor="nvidia", name="NVIDIA RTX 4090", vram_gb=24.0, index=0),
+        tier.GPUInfo(vendor="nvidia", name="NVIDIA RTX 3060", vram_gb=12.0, index=1),
+        tier.GPUInfo(vendor="amd", name="AMD Radeon RX 7600", vram_gb=8.0, index=0),
+    ])
+
+    gpu = init._pick_gpu(three_gpus, argparse.Namespace(yes=True), color=False)
+
+    assert gpu.name == picked
 
 
 # ---------------------------------------------------------------------------
