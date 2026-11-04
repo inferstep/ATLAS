@@ -29,7 +29,7 @@ def test_report_prints_rates_defects_guards_stack_tasks_quality_and_tui_coverage
                  quality={"max_complexity": 12, "max_complexity_where": "a.py:solve",
                           "max_function_lines": 40, "max_function_where": "a.py:solve",
                           "max_file_lines": 90, "lint_defects": 2, "lint_style": 5,
-                          "unused_imports": 1, "syntax_errors": ["b.py"],
+                          "unused_imports": 1, "syntax_errors": ["b.py", "c.py"],
                           "defect_codes": ["F821"], "findings": ["complexity"]},
                  events=[TURN] * 5 + [{"type": "tool_call"}]),
         _Session(task="alpha", rep=2, task_passed=True, defects=[],
@@ -80,7 +80,7 @@ def test_report_prints_rates_defects_guards_stack_tasks_quality_and_tui_coverage
         "  real lint defects                  3 ['E999', 'F821']",
         "  unused imports                     1",
         "  style nits (not scored)            7",
-        "  files left unparseable             1",
+        "  files left unparseable             2",
         "",
         "TUI coverage: 4 event types emitted, 2 the TUI cannot render: ['mystery', 'v3_plan']",
     ]
