@@ -132,6 +132,24 @@ func TestLegitimateNodeContentAndSelectorsAreUntouched(t *testing.T) {
 	}
 }
 
+// A line at column 0 that a single function or class may start with or close
+// on is node content: none of these is module-level code.
+func TestColumnZeroLinesOfOneNodeGetNoModuleLevelNote(t *testing.T) {
+	for _, node := range []string{
+		"async def fetch():\n    return 1\n",
+		"def total():\n    return sum(\n        [1, 2],\n)\n",
+		"def items():\n    return [\n        1,\n]\n",
+		"def items():\r\n    return [\r\n        1,\r\n]\r\n", // a file with Windows line ends
+		"def table():\n    return {\n        1: 2,\n}\n",
+		"def usage():\n    return \"\"\"\n\"\"\"\n",
+		"def usage():\n    return '''\n'''\n",
+	} {
+		if note := moduleLevelContentNote(nil, "solve.py", node); note != "" {
+			t.Errorf("moduleLevelContentNote(%q) = %q, want no note", node, note)
+		}
+	}
+}
+
 // Selectors come from the file: every language structural_edit handles, names
 // defined once only, and a pointer to outline_file when there is nothing to name.
 func TestSelectorsComeFromTheFile(t *testing.T) {
