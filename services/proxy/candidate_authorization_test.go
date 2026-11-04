@@ -407,8 +407,11 @@ func TestNothingIsStagedForACandidateTheRequestCannotBeTiedTo(t *testing.T) {
 			_, evID := w.mustObserve(t)
 			path := change(w, &evID)
 			evidence, unmet, _ := observeCandidateVerification(w.ctx, path, w.code, evID, mutationScope{})
-			if len(evidence) != 0 || len(unmet) != 0 {
-				t.Errorf("staged anyway: %d records, unmet %v", len(evidence), unmet)
+			if len(evidence) != 0 {
+				t.Errorf("staged anyway: %d records", len(evidence))
+			}
+			if len(unmet) != 0 {
+				t.Errorf("staged anyway: unmet %v", unmet)
 			}
 			if w.shellRuns != 0 {
 				t.Errorf("the executor ran %d times", w.shellRuns)
@@ -423,8 +426,11 @@ func TestARelativePathIsStagedAsTheCandidateItNames(t *testing.T) {
 	w := stagedWorld(t, "python3 solve.py")
 	_, evID := w.mustObserve(t)
 	evidence, unmet, _ := observeCandidateVerification(w.ctx, "solve.py", w.code, evID, mutationScope{})
-	if len(evidence) != 1 || evidence[0].Outcome != wire.ValidationPassed {
-		t.Errorf("the relative path staged %v, want one pass", evidence)
+	if len(evidence) != 1 {
+		t.Fatalf("the relative path staged %d records, want one", len(evidence))
+	}
+	if evidence[0].Outcome != wire.ValidationPassed {
+		t.Errorf("the relative path staged %v, want a pass", evidence[0].Outcome)
 	}
 	if len(unmet) != 0 {
 		t.Errorf("unmet %v, want none", unmet)
