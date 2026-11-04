@@ -82,6 +82,43 @@ func TestDenyWritePathAllowsLookalikes(t *testing.T) {
 	}
 }
 
+// Each credential store a read is refused for, and the name the refusal
+// reports: the file's own name, or the folder and file for a store known by
+// its folder. "" is a file that is not a credential store.
+func TestCredentialFileNameNamesEachCredentialStore(t *testing.T) {
+	for path, want := range map[string]string{
+		".env":                      ".env",
+		"app/.env.local":            ".env.local",
+		".env.example":              "",
+		".netrc":                    ".netrc",
+		"_netrc":                    "_netrc",
+		".npmrc":                    ".npmrc",
+		".pypirc":                   ".pypirc",
+		"certs/tls.pem":             "tls.pem",
+		"keys/service.key":          "service.key",
+		"keys/id_rsa":               "id_rsa",
+		"keys/id_ecdsa":             "id_ecdsa",
+		"keys/id_ed25519":           "id_ed25519",
+		"keys/id_dsa":               "id_dsa",
+		"home/.ssh/id_rsa":          "id_rsa", // a key's own name comes first
+		"home/.ssh/config":          ".ssh/config",
+		"home/.ssh/id_rsa.pub":      "",
+		"home/.aws/credentials":     ".aws/credentials", // the folder comes before the word
+		"home/.aws/config":          ".aws/config",
+		"home/.kube/config":         ".kube/config",
+		"home/.docker/config.json":  ".docker/config.json",
+		"secrets/service-token":     "secrets/service-token",
+		"secrets/api-keys.json":     "secrets/api-keys.json",
+		"config/aws_credentials.js": "aws_credentials.js",
+		"app/config":                "",
+		"docs/service-token.md":     "",
+	} {
+		if got := credentialFileName(path); got != want {
+			t.Errorf("credentialFileName(%q) = %q, want %q", path, got, want)
+		}
+	}
+}
+
 // Only destructive root-scoped commands are blocked; in-workspace commands
 // and commands that merely mention a dangerous string are allowed.
 func TestDenyCommandReason(t *testing.T) {
