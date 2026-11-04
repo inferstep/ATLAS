@@ -1,6 +1,13 @@
 import pytest
 
-from stages.llm_client import extract_code, extract_code_for_problem, strip_reasoning_leak
+from stages.llm_client import (
+    _repair_unambiguous_python_syntax,
+    _requested_python_function_contracts,
+    _restore_exact_requested_signatures,
+    extract_code,
+    extract_code_for_problem,
+    strip_reasoning_leak,
+)
 
 
 def test_extract_code_accepts_non_python_language_fence():
@@ -222,3 +229,47 @@ def test_problem_extractor_does_not_rewrite_ambiguous_duplicate_target():
         "def solve(value: int, *, strict=False):\n    return value\n"
     )
     assert extract_code_for_problem(f"```python\n{code}```", problem) == code
+
+
+@pytest.mark.parametrize("problem, names", [
+    pytest.param("Implement exactly:\nasync def fetch(url):", ["fetch"], id="an-async-declaration"),
+    pytest.param("Implement exactly:\n\ndef solve(x):", ["solve"], id="a-blank-line-after-the-heading"),
+    pytest.param("implement EXACTLY:\ndef solve(x):", ["solve"], id="the-heading-in-any-case"),
+    pytest.param("Implement exactly:\ndef broken(:\n\nImplement exactly:\ndef solve(x):", ["solve"],
+                 id="a-declaration-that-does-not-parse-is-passed-over"),
+])
+def test_the_requested_declarations_are_the_ones_under_the_heading(problem, names):
+    assert sorted(_requested_python_function_contracts(problem)) == names
+
+
+@pytest.mark.parametrize("code, repaired", [
+    pytest.param("x = 1)\ny = 2)\n", "x = 1\ny = 2\n", id="two-unmatched-closers"),
+    pytest.param("\tx = 1\n", "x = 1\n", id="a-tab-indent-at-the-top-level"),
+    pytest.param("x = 1)))))\n", "x = 1)))))\n", id="more-than-four-fixes-leaves-it-as-sent"),
+    pytest.param("x = 1)\ny = (\n", "x = 1)\ny = (\n", id="another-error-after-a-fix-leaves-it-as-sent"),
+])
+def test_only_an_unambiguous_syntax_slip_is_repaired(code, repaired):
+    assert _repair_unambiguous_python_syntax(code) == repaired
+
+
+EXACT = "Implement exactly:\ndef solve(value: int) -> int:"
+
+
+@pytest.mark.parametrize("code, problem, restored", [
+    pytest.param("def solve(value):\r\n    return value\r\n", EXACT,
+                 "def solve(value: int) -> int:\r\n    return value\r\n", id="crlf-is-kept"),
+    pytest.param("def solve(\n    value,\n):\n    return value\n", EXACT,
+                 "def solve(value: int) -> int:\n    return value\n", id="a-header-over-three-lines-is-replaced-whole"),
+    pytest.param("def first(a):\n    return a\n\ndef second(b):\n    return b\n",
+                 "Implement exactly:\ndef first(a: int) -> int:\n\nImplement exactly:\ndef second(b: str) -> str:",
+                 "def first(a: int) -> int:\n    return a\n\ndef second(b: str) -> str:\n    return b\n",
+                 id="each-requested-function"),
+    pytest.param("def solve(value):\n    return value\n\ndef solve(value):\n    return value\n", EXACT,
+                 "def solve(value):\n    return value\n\ndef solve(value):\n    return value\n", id="two-targets-are-left"),
+    pytest.param("async def solve(value):\n    return value\n", EXACT,
+                 "async def solve(value):\n    return value\n", id="async-for-sync-is-left"),
+    pytest.param("def solve(value): return value\n", EXACT,
+                 "def solve(value): return value\n", id="a-one-line-body-is-left"),
+])
+def test_an_exact_signature_is_restored_only_where_it_is_safe(code, problem, restored):
+    assert _restore_exact_requested_signatures(code, problem) == restored
