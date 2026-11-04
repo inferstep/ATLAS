@@ -848,13 +848,7 @@ def _print_tier_card(t: TierProfile, p: Optional[Probe], color: bool) -> None:
     _safe_print(bar)
     _safe_print(f"  {DIM if color else ''}{t.description}{RESET if color else ''}")
     _safe_print()
-    if t.tier == "cpu":
-        _safe_print("  VRAM range:    n/a (no GPU detected)")
-    elif t.max_vram_gb is None:
-        _safe_print(f"  VRAM range:    {t.min_vram_gb:.0f} GB and up")
-    else:
-        _safe_print(f"  VRAM range:    {t.min_vram_gb:.0f} GB {DASH} "
-                    f"{t.max_vram_gb:.0f} GB")
+    _safe_print(f"  VRAM range:    {_vram_range(t)}")
     if t.example_gpus:
         _safe_print(f"  Example GPUs:  {', '.join(t.example_gpus)}")
     _safe_print()
@@ -863,15 +857,7 @@ def _print_tier_card(t: TierProfile, p: Optional[Probe], color: bool) -> None:
     # Surfaced here so users see the lens warning before committing to install.
     rec = model_registry.for_tier(t.tier)
     if rec is not None:
-        lens = rec.lens_status
-        if lens == "supported":
-            lens_marker = (f"{GREEN}[Lens supported]{RESET}" if color
-                           else "[Lens supported]")
-        elif lens == "no-artifacts":
-            lens_marker = (f"{YELL}[Lens NO-ARTIFACTS — G(x) will no-op]{RESET}"
-                           if color else "[Lens NO-ARTIFACTS — G(x) will no-op]")
-        else:
-            lens_marker = ""
+        lens_marker = _lens_marker(rec.lens_status, color)
         _safe_print(f"    Model:           {rec.model_display} "
                     f"({rec.model_size_gb:.1f} GB on disk)  {lens_marker}")
         _safe_print(f"    File:            {rec.model_file}")
@@ -890,6 +876,27 @@ def _print_tier_card(t: TierProfile, p: Optional[Probe], color: bool) -> None:
     _safe_print(f"  Notes: {t.notes}")
     if p is not None:
         _print_constraints(p, t, color)
+
+
+def _vram_range(t: TierProfile) -> str:
+    """The VRAM range the card shows for a tier."""
+    if t.tier == "cpu":
+        return "n/a (no GPU detected)"
+    if t.max_vram_gb is None:
+        return f"{t.min_vram_gb:.0f} GB and up"
+    return f"{t.min_vram_gb:.0f} GB {DASH} {t.max_vram_gb:.0f} GB"
+
+
+def _lens_marker(lens_status: str, color: bool) -> str:
+    """The card's mark for the model's lens status: supported, or no
+    artifacts so G(x) does nothing; no mark for another status."""
+    if lens_status == "supported":
+        return (f"{GREEN}[Lens supported]{RESET}" if color
+                else "[Lens supported]")
+    if lens_status == "no-artifacts":
+        return (f"{YELL}[Lens NO-ARTIFACTS — G(x) will no-op]{RESET}"
+                if color else "[Lens NO-ARTIFACTS — G(x) will no-op]")
+    return ""
 
 
 def _constraint_icon(status: str, color: bool) -> str:
