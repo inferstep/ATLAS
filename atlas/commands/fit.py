@@ -412,14 +412,8 @@ def _cwd_deployment_root() -> Optional[str]:
 def emit_fit(args: argparse.Namespace, color: bool) -> int:
     from atlas.commands.tier import detect_gpu, primary_gpu, _safe_print
 
-    explicit = getattr(args, "model", None)
-    if explicit and not os.path.isfile(explicit):
-        _safe_print(f"  Model file not found: {explicit}")
-        return 1
-    model = explicit or _default_model_path()
+    model = _model_to_fit(args)
     if not model:
-        _safe_print("  No model configured. Pass a GGUF path or set "
-                    "ATLAS_MODEL_FILE in .env.")
         return 1
 
     try:
@@ -442,19 +436,51 @@ def emit_fit(args: argparse.Namespace, color: bool) -> int:
         return 2
     result = fit_runtime_knobs(meta, vram_gib, slots=slots)
 
+    write = getattr(args, "write", False)
     if getattr(args, "json", False):
-        payload = {"model": model, "meta": asdict(meta),
-                   "fit": asdict(result),
-                   "env": result.env_vars() if result.fits else {}}
-        if getattr(args, "write", False) and result.fits:
-            payload["wrote"] = _write_env(result.env_vars())
-        print(json.dumps(payload, indent=2))
-        return 0 if result.fits else 1
+        return _emit_fit_json(model, meta, result, write)
+    return _emit_fit_report(model, meta, gpu.name, vram_gib, result, write)
+
+
+def _model_to_fit(args: argparse.Namespace) -> Optional[str]:
+    """The GGUF file to size: the one given, else the one configured in .env.
+    None, after saying why, when there is no such file."""
+    from atlas.commands.tier import _safe_print
+
+    explicit = getattr(args, "model", None)
+    if explicit and not os.path.isfile(explicit):
+        _safe_print(f"  Model file not found: {explicit}")
+        return None
+    model = explicit or _default_model_path()
+    if not model:
+        _safe_print("  No model configured. Pass a GGUF path or set "
+                    "ATLAS_MODEL_FILE in .env.")
+        return None
+    return model
+
+
+def _emit_fit_json(model: str, meta: GGUFMeta, result: FitResult,
+                   write: bool) -> int:
+    """The fit as JSON; with `write`, a fit is also written into .env."""
+    payload = {"model": model, "meta": asdict(meta),
+               "fit": asdict(result),
+               "env": result.env_vars() if result.fits else {}}
+    if write and result.fits:
+        payload["wrote"] = _write_env(result.env_vars())
+    print(json.dumps(payload, indent=2))
+    return 0 if result.fits else 1
+
+
+def _emit_fit_report(model: str, meta: GGUFMeta, gpu_name: str,
+                     vram_gib: float, result: FitResult, write: bool) -> int:
+    """The fit as a report for the operator; with `write`, a fit is also
+    written into .env."""
+    from atlas.commands.tier import _safe_print
 
     _safe_print(f"atlas tier fit — {os.path.basename(model)}")
     _safe_print(f"  arch {meta.architecture} | {meta.n_layers} layers | "
                 f"{meta.n_embd}-dim | head_dim {meta.head_dim} | {meta.swa_note}")
-    _safe_print(f"  GPU: {gpu.name} ({vram_gib:.1f} GiB)")
+    _safe_print(f"  GPU: {gpu_name} ({vram_gib:.1f} GiB)")
     _safe_print(f"  budget: weights {result.weights_gib} + KV {result.kv_gib} "
                 f"+ compute {result.compute_gib} + reserve {result.reserve_gib} "
                 f"GiB of {result.vram_gib} GiB")
@@ -468,7 +494,7 @@ def emit_fit(args: argparse.Namespace, color: bool) -> int:
         _safe_print(f"  note: {result.note}")
     for k, v in result.env_vars().items():
         _safe_print(f"    {k}={v}")
-    if getattr(args, "write", False):
+    if write:
         path = _write_env(result.env_vars())
         _safe_print(f"  wrote {path}")
         cwd_root = _cwd_deployment_root()

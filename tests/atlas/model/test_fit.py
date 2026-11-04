@@ -4,11 +4,12 @@ The GGUF files are built with the standard library: the CI lock has no gguf
 package.
 """
 
+import json
 import struct
 
 import pytest
 
-from atlas import env as cli_env
+from atlas import display, env as cli_env
 from atlas.commands import fit, tier
 from atlas.commands.fit import GIB, GGUFMeta, fit_runtime_knobs, read_gguf_meta
 from atlas.gguf import read_gguf_kv
@@ -199,6 +200,140 @@ def test_tier_fit_write_sizes_the_configured_model_into_the_install_env(monkeypa
     # gets the file's whole training context of 16384.
     assert "ATLAS_CTX_SIZE=32768" in env_lines
     assert "ATLAS_PARALLEL_SLOTS=2" in env_lines
+
+
+# The model the `atlas tier fit` tests below size: 2 small layers with a
+# sliding window but no pattern, so every fit carries the "assumed" note.
+SMALL_MODEL = [
+    ("general.architecture", STRING, "fixture"),
+    ("fixture.block_count", UINT32, 2),
+    ("fixture.embedding_length", UINT32, 256),
+    ("fixture.attention.head_count", UINT32, 4),
+    ("fixture.context_length", UINT32, 16384),
+    ("fixture.attention.sliding_window", UINT32, 1024),
+]
+GPU_24_GIB = [tier.GPUInfo(vendor="nvidia", name="test GPU", vram_gb=24.0)]
+GPU_HALF_GIB = [tier.GPUInfo(vendor="nvidia", name="test GPU", vram_gb=0.5)]
+
+
+def an_install(monkeypatch, tmp_path, gpus):
+    """An ATLAS install at tmp_path whose .env names models/m.gguf (SMALL_MODEL),
+    on a host with these GPUs. `atlas` runs from tmp_path/elsewhere."""
+    (tmp_path / "models").mkdir()
+    write_gguf(tmp_path / "models" / "m.gguf", SMALL_MODEL)
+    (tmp_path / ".env").write_text("ATLAS_MODEL_FILE=m.gguf\n")
+    (tmp_path / "elsewhere").mkdir()
+    monkeypatch.chdir(tmp_path / "elsewhere")
+    monkeypatch.setattr(fit, "_atlas_root", lambda: str(tmp_path))
+    monkeypatch.setattr(cli_env, "MODEL_DIR", "./models")
+    monkeypatch.setattr(cli_env, "MODEL_FILE", "m.gguf")
+    monkeypatch.setattr(tier, "detect_gpu", lambda: gpus)
+
+
+@pytest.mark.parametrize("argv, gpus, exit_code, message", [
+    pytest.param(["fit", "missing.gguf"], GPU_24_GIB, 1, "Model file not found: missing.gguf",
+                 id="a-model-file-that-is-not-there"),
+    pytest.param(["fit", "not-gguf.bin"], GPU_24_GIB, 1, "Could not read GGUF header",
+                 id="a-file-that-is-not-gguf"),
+    pytest.param(["fit"], [], 1, "No GPU with reported VRAM detected", id="no-gpu"),
+    pytest.param(["fit"], [tier.GPUInfo(vendor="nvidia", name="test GPU", vram_gb=0)], 1,
+                 "No GPU with reported VRAM detected", id="a-gpu-without-vram"),
+    pytest.param(["fit", "--slots", "0"], GPU_24_GIB, 2, "--slots must be at least 1.", id="no-slots"),
+    pytest.param(["fit"], GPU_HALF_GIB, 1, "DOES NOT FIT: model does not fit", id="a-gpu-too-small"),
+])
+def test_fit_says_why_it_cannot_size_the_model(monkeypatch, tmp_path, capsys, argv, gpus, exit_code, message):
+    an_install(monkeypatch, tmp_path, gpus)
+    (tmp_path / "elsewhere" / "not-gguf.bin").write_bytes(b"not a GGUF file")
+
+    assert tier.main(argv) == exit_code
+    # The reason it stops is the last thing it says.
+    assert capsys.readouterr().out.splitlines()[-1].strip().startswith(message)
+
+
+def test_fit_without_a_configured_model_says_how_to_name_one(monkeypatch, tmp_path, capsys):
+    an_install(monkeypatch, tmp_path, GPU_24_GIB)
+    monkeypatch.setattr(cli_env, "MODEL_FILE", "gone.gguf")
+
+    assert tier.main(["fit"]) == 1
+    assert "No model configured." in capsys.readouterr().out
+
+
+def test_fit_json_reports_the_model_the_fit_and_its_env(monkeypatch, tmp_path, capsys):
+    an_install(monkeypatch, tmp_path, GPU_24_GIB)
+
+    assert tier.main(["fit", "--json"]) == 0
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["model"] == str(tmp_path / "models" / "m.gguf")
+    assert report["fit"]["parallel"] == 4  # the default slot count
+    assert report["env"]["ATLAS_CTX_SIZE"] == "65536"
+    assert "wrote" not in report
+    assert (tmp_path / ".env").read_text() == "ATLAS_MODEL_FILE=m.gguf\n"
+
+
+def test_fit_json_write_names_the_env_file_it_wrote(monkeypatch, tmp_path, capsys):
+    an_install(monkeypatch, tmp_path, GPU_24_GIB)
+
+    assert tier.main(["fit", "--json", "--write"]) == 0
+
+    assert json.loads(capsys.readouterr().out)["wrote"] == str(tmp_path / ".env")
+    assert "ATLAS_CTX_SIZE=65536" in (tmp_path / ".env").read_text().splitlines()
+
+
+def test_a_json_no_fit_has_no_env_and_writes_nothing(monkeypatch, tmp_path, capsys):
+    an_install(monkeypatch, tmp_path, GPU_HALF_GIB)
+
+    assert tier.main(["fit", "--json", "--write"]) == 1
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["env"] == {}
+    assert "wrote" not in report
+    assert (tmp_path / ".env").read_text() == "ATLAS_MODEL_FILE=m.gguf\n"
+
+
+def test_the_fit_report_shows_the_budget_the_fit_and_how_to_write_it(monkeypatch, tmp_path, capsys):
+    an_install(monkeypatch, tmp_path, GPU_24_GIB)
+    monkeypatch.setattr(display, "UNICODE_OK", True)  # read as a UTF-8 terminal shows it
+
+    assert tier.main(["fit"]) == 0
+
+    note = "window 1024, assumed 1 global per 6 layers (pattern not in GGUF)"
+    assert capsys.readouterr().out.splitlines() == [
+        "atlas tier fit — m.gguf",
+        f"  arch fixture | 2 layers | 256-dim | head_dim 64 | {note}",
+        "  GPU: test GPU (24.0 GiB)",
+        "  budget: weights 0.0 + KV 0.01 + compute 0.4 + reserve 1.9 GiB of 24.0 GiB",
+        "  fit: ctx 65536 (16384/slot × 4), KV f16, ubatch 512",
+        f"  note: {note}",
+        "    ATLAS_CTX_SIZE=65536",
+        "    ATLAS_PARALLEL_SLOTS=4",
+        "    ATLAS_KV_TYPE_K=f16",
+        "    ATLAS_KV_TYPE_V=f16",
+        "    ATLAS_UBATCH=512",
+        "    ATLAS_BATCH=512",
+        "  (re-run with --write to update .env)",
+    ]
+    assert (tmp_path / ".env").read_text() == "ATLAS_MODEL_FILE=m.gguf\n"
+
+
+@pytest.mark.parametrize("run_from, warned", [
+    pytest.param("elsewhere", True, id="another-deployment"),
+    pytest.param(".", False, id="the-install-reached-by-another-path"),
+])
+def test_fit_write_warns_when_atlas_runs_from_another_deployment(monkeypatch, tmp_path, capsys, run_from, warned):
+    an_install(monkeypatch, tmp_path, GPU_24_GIB)
+    (tmp_path / "link").symlink_to(tmp_path)
+    monkeypatch.setattr(fit, "_atlas_root", lambda: str(tmp_path / "link"))
+    (tmp_path / run_from / "docker-compose.yml").write_text("")
+    monkeypatch.chdir(tmp_path / run_from)
+
+    assert tier.main(["fit", "--write"]) == 0
+
+    out = capsys.readouterr().out
+    assert f"  wrote {tmp_path / 'link' / '.env'}" in out
+    assert "  apply: docker compose up -d llama-server --no-deps --force-recreate" in out
+    assert ("docker compose reads the .env next to the docker-compose.yml" in out) == warned
+    assert "ATLAS_CTX_SIZE=65536" in (tmp_path / ".env").read_text().splitlines()
 
 
 # The geometry every header below starts from: 2 layers, 4096-dim, 32 heads.
