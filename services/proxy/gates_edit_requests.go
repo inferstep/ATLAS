@@ -178,9 +178,7 @@ func moduleLevelContentNote(ctx *AgentContext, path, content string) string {
 		if t == "" || line[0] == ' ' || line[0] == '\t' {
 			continue
 		}
-		if strings.HasPrefix(t, "#") || strings.HasPrefix(t, "@") || strings.HasPrefix(t, "def ") ||
-			strings.HasPrefix(t, "async def ") || strings.HasPrefix(t, "class ") ||
-			t == ")" || t == "]" || t == "}" || strings.HasPrefix(t, strings.Repeat("\"", 3)) || strings.HasPrefix(t, strings.Repeat("'", 3)) {
+		if lineOfOneNode(t) {
 			continue
 		}
 		name := filepath.Base(path)
@@ -193,6 +191,15 @@ func moduleLevelContentNote(ctx *AgentContext, path, content string) string {
 			i+1, truncateStr(t, 60), how)
 	}
 	return ""
+}
+
+// lineOfOneNode reports whether a line at column 0 can belong to a single
+// function or class: a comment, a decorator, the def or class line, a lone
+// closing bracket, or the quotes that open or close a string.
+func lineOfOneNode(t string) bool {
+	return strings.HasPrefix(t, "#") || strings.HasPrefix(t, "@") || strings.HasPrefix(t, "def ") ||
+		strings.HasPrefix(t, "async def ") || strings.HasPrefix(t, "class ") ||
+		t == ")" || t == "]" || t == "}" || strings.HasPrefix(t, strings.Repeat("\"", 3)) || strings.HasPrefix(t, strings.Repeat("'", 3))
 }
 
 // reMainGuard matches a top-level `if __name__ == "__main__":` (either quote
