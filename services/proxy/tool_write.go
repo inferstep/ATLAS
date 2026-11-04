@@ -595,10 +595,6 @@ func mentionsFilename(text, base string) bool {
 	if base == "" {
 		return false
 	}
-	isNameChar := func(b byte) bool {
-		return b == '_' || b == '.' || b == '-' ||
-			(b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
-	}
 	for i := 0; ; {
 		j := strings.Index(text[i:], base)
 		if j < 0 {
@@ -606,13 +602,20 @@ func mentionsFilename(text, base string) bool {
 		}
 		start := i + j
 		end := start + len(base)
-		leftOK := start == 0 || !isNameChar(text[start-1])
-		rightOK := end == len(text) || !isNameChar(text[end])
+		leftOK := start == 0 || !isFilenameChar(text[start-1])
+		rightOK := end == len(text) || !isFilenameChar(text[end])
 		if leftOK && rightOK {
 			return true
 		}
 		i = start + 1
 	}
+}
+
+// isFilenameChar reports whether b can be part of a filename: a letter, a
+// digit, _, . or -.
+func isFilenameChar(b byte) bool {
+	return b == '_' || b == '.' || b == '-' ||
+		(b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
 }
 
 // fileIsSourceCode reports whether a path holds code a request might ask to
