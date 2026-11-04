@@ -74,6 +74,36 @@ def test_a_64_bit_value_is_read_whole_and_the_next_key_after_it(tmp_path, value_
         assert list(read_gguf_kv(f)) == [("first", value), ("after", 7)]
 
 
+@pytest.mark.parametrize("array, items", [
+    pytest.param((UINT32, [1, 2, 3]), [1, 2, 3], id="numbers"),
+    pytest.param((STRING, ["a", "b"]), ["a", "b"], id="strings"),
+    # Over 4096 items, an array is passed over unread: a tokenizer table.
+    pytest.param((UINT32, [0] * 4097), [], id="numbers-over-4096-skipped"),
+    pytest.param((STRING, ["x"] * 4097), [], id="strings-over-4096-skipped"),
+    pytest.param((ARRAY, [(UINT32, [1]), (UINT32, [2, 3])]), [[1], [2, 3]], id="arrays"),
+])
+def test_an_array_is_read_or_passed_over_and_the_next_key_after_it(tmp_path, array, items):
+    path = write_gguf(tmp_path / "m.gguf", [
+        ("first", ARRAY, array),
+        ("after", UINT32, 7),
+    ])
+
+    with open(path, "rb") as f:
+        assert list(read_gguf_kv(f)) == [("first", items), ("after", 7)]
+
+
+@pytest.mark.parametrize("header, message", [
+    pytest.param(b"GGML" + struct.pack("<IQQ", 3, 0, 0), "not a GGUF file", id="another-magic"),
+    pytest.param(b"GGUF" + struct.pack("<IQQ", 1, 0, 0), "unsupported GGUF version 1", id="version-1"),
+])
+def test_a_file_that_is_not_gguf_2_or_3_is_refused(tmp_path, header, message):
+    path = tmp_path / "m.gguf"
+    path.write_bytes(header)
+
+    with open(path, "rb") as f, pytest.raises(ValueError, match=message):
+        list(read_gguf_kv(f))
+
+
 @pytest.mark.parametrize("extra_keys, head_dim", [
     pytest.param([("fixture.attention.key_length", UINT32, 256)], 256,
                  id="key-length-from-the-file"),
