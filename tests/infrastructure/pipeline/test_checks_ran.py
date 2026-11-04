@@ -217,6 +217,15 @@ def test_the_jobs_of_one_workflow_share_one_finding(ran, change):
     assert "3 job(s)" in findings[0].message
 
 
+def test_a_job_that_reported_nothing_one_skipped_and_one_cancelled_are_three_findings(ran, change):
+    workflows = {TESTS: workflow(build={}, lint={}, docs={})}
+    reported = [job("lint", "skipped"), job("docs", "cancelled")]
+    findings, _, _, _ = ran.check(workflows, [TESTS], {TESTS: run(TESTS)}, lambda _: reported, [], change)
+    assert [finding.message.split(":")[0] for finding in findings] == [
+        f"1 job(s) in {TESTS} reported nothing", f"1 job(s) in {TESTS} were skipped",
+        f"1 job(s) in {TESTS} were cancelled"]
+
+
 @pytest.mark.parametrize("jobs, reported, required, words", [
     pytest.param({"lint": {"name": "lint", "if": "github.event_name == 'push'"}}, [job("lint", "skipped")], ["lint"],
                  "1 required check(s) were skipped: `lint`. The rules of `dev` count a skipped job as passed",
