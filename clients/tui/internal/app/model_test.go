@@ -7,6 +7,8 @@ package app
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
@@ -32,6 +34,8 @@ func keyMsg(s string) tea.KeyMsg {
 		return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlT})
 	case "ctrl+c":
 		return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlC})
+	case "ctrl+r":
+		return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlR})
 	}
 	// Default: treat as a single rune.
 	return tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune(s)})
@@ -143,6 +147,77 @@ func TestCtrlTCyclesMode(t *testing.T) {
 		if m.mode != w {
 			t.Errorf("cycle %d: mode = %q, want %q", i, m.mode, w)
 		}
+	}
+}
+
+// Ctrl+R sends the last message again with the files in context, and gives
+// it its own row in the chat.
+func TestCtrlRSendsTheLastMessageAgain(t *testing.T) {
+	sent := make(chan string, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]interface{}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		select {
+		case sent <- fmt.Sprint(body["message"]):
+		default:
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	m := sized(80, 30)
+	m.proxyURL = srv.URL
+	m.lastUserMsg = "fix the test"
+	m.contextFiles = map[string]bool{"foo.go": true}
+
+	updated, cmd := m.handleKey(keyMsg("ctrl+r"))
+	mu := updated.(tuiModel)
+	if cmd == nil {
+		t.Fatal("ctrl+r sent nothing")
+	}
+	go cmd()
+	select {
+	case got := <-sent:
+		if got != "fix the test\n\n[atlas-tui context: foo.go]" {
+			t.Errorf("the proxy got %q, want the message and the files in context", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the message never reached the proxy")
+	}
+	if !mu.turnActive {
+		t.Error("ctrl+r did not start a turn")
+	}
+	if len(mu.chat) != 1 {
+		t.Fatalf("the chat has %d rows, want the one row of the message sent again", len(mu.chat))
+	}
+	if mu.chat[0].Role != sessionstore.RoleUser || mu.chat[0].Body != "fix the test" {
+		t.Errorf("the chat row is %+v, want the user's message", mu.chat[0])
+	}
+}
+
+// Ctrl+R does nothing while a turn runs, or before any message was sent.
+func TestCtrlRDoesNothingDuringATurnOrBeforeAMessage(t *testing.T) {
+	cases := []struct {
+		name       string
+		lastMsg    string
+		turnActive bool
+	}{
+		{"a turn running", "fix the test", true},
+		{"no message yet", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := sized(80, 30)
+			m.lastUserMsg = tc.lastMsg
+			m.turnActive = tc.turnActive
+			updated, cmd := m.Update(keyMsg("ctrl+r"))
+			if cmd != nil {
+				t.Error("ctrl+r sent something")
+			}
+			if n := len(updated.(tuiModel).chat); n != 0 {
+				t.Errorf("ctrl+r added %d chat rows", n)
+			}
+		})
 	}
 }
 
