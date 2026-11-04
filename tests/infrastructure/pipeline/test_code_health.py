@@ -197,20 +197,35 @@ def test_ci_installs_the_go_tools_at_the_versions_the_check_pins():
         assert ch.install_command(tool) in workflow
 
 
-def test_go_tests_are_measured_for_complexity_and_the_two_held_files_are_not(monkeypatch):
+def test_tests_are_measured_for_complexity_in_go_and_python_and_the_two_held_files_are_not(monkeypatch):
     measured = []
 
     def record(tool, paths):
         measured.extend(paths)
         return {}
 
+    def record_python(paths):
+        measured.extend(paths)
+        return {}
+
     monkeypatch.setattr(ch, "go_scores", record)
     monkeypatch.setattr(ch, "missing_go_tools", lambda: [])
-    monkeypatch.setattr(ch, "python_cognitive", lambda paths: {})
+    monkeypatch.setattr(ch, "python_cognitive", record_python)
     ch.measure_complexity({}, update=False)
     assert "services/proxy/main_test.go" in measured
+    assert "tests/infrastructure/pipeline/test_code_health.py" in measured
+    assert "tests/replay/recording.py" in measured  # a helper in the test folder
+    assert "services/geometric-lens/tests/test_asa_prompt_templates.py" in measured
     assert "services/proxy/tool_args.go" not in measured
     assert "services/proxy/tool_args_test.go" not in measured
+
+
+def test_sizes_leave_test_files_and_test_folders_out(tmp_path, monkeypatch):
+    for rel in ["scripts/tool.py", "scripts/test_tool.py", "scripts/tests/helpers.py"]:
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text("x = 1\n")
+    monkeypatch.setattr(ch, "ROOT", str(tmp_path))
+    assert list(ch.source_files()) == ["scripts/tool.py"]
 
 
 def test_a_new_or_risen_complexity_fails_and_a_fallen_one_passes():

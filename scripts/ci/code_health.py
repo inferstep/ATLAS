@@ -11,8 +11,9 @@ Complexity works the same way, with COMPLEXITY_MAX for each function: its
 cognitive complexity (how hard it is to follow; SonarQube's rule S3776) for
 Go and Python, and its cyclomatic complexity (how many paths it has) for Go.
 Go is measured with gocognit and gocyclo, at the versions golangci-lint
-bundles, through `go run`; Go's tests are measured too. Python is measured
-with the copy of cognitive_complexity in scripts/ci/cognitive_complexity/.
+bundles, through `go run`. Python is measured with the copy of
+cognitive_complexity in scripts/ci/cognitive_complexity/. Tests are measured
+for complexity too, in Go and in Python.
 Python's cyclomatic complexity is ruff's C901 (pyproject.toml), whose
 markers and RUF100 hold it the same way.
 
@@ -59,7 +60,10 @@ FLAT_BY_NECESSITY = {".github/workflows"}
 
 GO_DIRS = ("services/proxy", "clients/tui")
 PY_DIRS = ("atlas", "services/v3-service", "services/geometric-lens", "services/sandbox", "scripts")
-SKIP_DIRS = {"tests", "test", "node_modules", ".venv", "__pycache__", "vendor"}
+# The repository's own test folder: it holds tests only, so only the complexity measure reads it.
+PY_TEST_DIR = "tests"
+TEST_DIRS = {"tests", "test"}
+SKIP_DIRS = {"node_modules", ".venv", "__pycache__", "vendor"}
 # The Go package that may only shrink: the files directly in this folder.
 MAIN_PACKAGE = "services/proxy"
 GO_FUNC = re.compile(r"^func (?:\(\w+ \*?(\w+)(?:\[[^\]]*\])?\) )?(\w+)")
@@ -81,19 +85,24 @@ class CannotMeasure(Exception):
     """A complexity tool is missing or did not run; the message says what to do."""
 
 
-def is_measured(name: str, ext: str, go_tests: bool) -> bool:
-    """Whether a file of this name is measured: it has the extension, and is no test unless go_tests."""
-    if not name.endswith(ext) or name.startswith("test_"):
+def is_measured(name: str, ext: str, tests: bool) -> bool:
+    """Whether a file of this name is measured: it has the extension, and is no test unless tests."""
+    if not name.endswith(ext):
         return False
-    return go_tests or not name.endswith("_test.go")
+    return tests or not (name.startswith("test_") or name.endswith("_test.go"))
 
 
-def source_files(go_tests: bool = False):
-    for base, ext in [(d, ".go") for d in GO_DIRS] + [(d, ".py") for d in PY_DIRS]:
+def source_files(tests: bool = False):
+    """The Go and Python files measured; with tests, the test files and test folders as well."""
+    bases = [(d, ".go") for d in GO_DIRS] + [(d, ".py") for d in PY_DIRS]
+    if tests:
+        bases.append((PY_TEST_DIR, ".py"))
+    skipped = SKIP_DIRS if tests else SKIP_DIRS | TEST_DIRS
+    for base, ext in bases:
         for dirpath, dirnames, filenames in os.walk(os.path.join(ROOT, base)):
-            dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
+            dirnames[:] = sorted(d for d in dirnames if d not in skipped)
             for name in sorted(filenames):
-                if not is_measured(name, ext, go_tests):
+                if not is_measured(name, ext, tests):
                     continue
                 path = os.path.join(dirpath, name)
                 yield os.path.relpath(path, ROOT).replace(os.sep, "/")
@@ -254,7 +263,7 @@ def measure_complexity(base: dict, update: bool) -> dict:
     listed Go functions as they stand. In CI (GITHUB_ACTIONS), or to write the baseline,
     a missing tool is a failure instead.
     """
-    python = [p for p in source_files() if p.endswith(".py")]
+    python = [p for p in source_files(tests=True) if p.endswith(".py")]
     scores = {"cognitive": python_cognitive(python), "cyclomatic": {}}
     missing = missing_go_tools()
     if missing and (update or os.environ.get("GITHUB_ACTIONS") == "true"):
@@ -264,7 +273,7 @@ def measure_complexity(base: dict, update: bool) -> dict:
         for measure, listed in scores.items():
             listed.update({key: n for key, n in base.get(measure, {}).items() if key.split(":")[0].endswith(".go")})
         return scores
-    go = [p for p in source_files(go_tests=True) if p.endswith(".go") and p not in NOT_MEASURED]
+    go = [p for p in source_files(tests=True) if p.endswith(".go") and p not in NOT_MEASURED]
     scores["cognitive"].update(go_scores(GOCOGNIT, go))
     scores["cyclomatic"].update(go_scores(GOCYCLO, go))
     return scores
