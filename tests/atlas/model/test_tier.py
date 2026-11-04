@@ -133,8 +133,10 @@ def test_rocm_smi_that_times_out_gives_no_gpu(monkeypatch):
 
 def test_rocm_smi_reads_the_index_from_each_card_key(monkeypatch):
     """rocm-smi names a card card0 before 6.x and GPU[0] from 6.x. A key
-    with no digits, such as "system", is not a card."""
-    rocm_smi_json = json.dumps({"card0": {}, "GPU[1]": {}, "system": {"Driver version": "6.7.0"}})
+    with no digits, such as "system", or with a digit int() cannot read,
+    such as a superscript two, is not a card."""
+    rocm_smi_json = json.dumps({"card0": {}, "GPU[1]": {}, "system": {"Driver version": "6.7.0"},
+                                "card\u00b2": {}})
     ran = subprocess.CompletedProcess(args=[], returncode=0, stdout=rocm_smi_json)
     monkeypatch.setattr(tier.shutil, "which", lambda x: "/opt/rocm/bin/rocm-smi")
     monkeypatch.setattr(tier.subprocess, "run", lambda *a, **kw: ran)
