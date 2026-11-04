@@ -218,6 +218,70 @@ func TestAPostWriteValidationFailureNeverClaimsDelivery(t *testing.T) {
 	}
 }
 
+// What landed is read back from disk, not assumed. When the write succeeded
+// but the file holds other bytes, the delivery does not settle and names why.
+func TestOtherBytesOnDiskNeverClaimDelivery(t *testing.T) {
+	w := newDeliveryWorld(t)
+	write := func(path, code string, ctx *AgentContext) (*wire.ToolResult, error) {
+		res, err := writeFileRecorded(path, code, ctx)
+		if err != nil {
+			return res, err
+		}
+		return res, os.WriteFile(path, []byte("x = 2\n"), 0o644)
+	}
+	res, out, err := deliverCandidateBytes(w.ctx, candidateDeliveryRequest{
+		Path: w.path, Code: w.code, Grant: w.grant, Observed: w.check,
+		BaselinePreserved: true, Write: write,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.Delivered {
+		t.Error("other bytes on disk were reported delivered")
+	}
+	if out.Reason != "delivered_bytes_are_not_the_authorized_ones" {
+		t.Errorf("reason %q, want delivered_bytes_are_not_the_authorized_ones", out.Reason)
+	}
+	if res.Success {
+		t.Error("a delivery that did not settle is reported successful")
+	}
+	if res.Error == "" {
+		t.Error("a delivery that did not settle gives no error")
+	}
+}
+
+// When the write succeeded but nothing can be read back, the delivery does not
+// settle and names why.
+func TestBytesThatCannotBeReadBackNeverClaimDelivery(t *testing.T) {
+	w := newDeliveryWorld(t)
+	write := func(path, code string, ctx *AgentContext) (*wire.ToolResult, error) {
+		res, err := writeFileRecorded(path, code, ctx)
+		if err != nil {
+			return res, err
+		}
+		return res, os.Remove(path)
+	}
+	res, out, err := deliverCandidateBytes(w.ctx, candidateDeliveryRequest{
+		Path: w.path, Code: w.code, Grant: w.grant, Observed: w.check,
+		BaselinePreserved: true, Write: write,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.Delivered {
+		t.Error("bytes that cannot be read back were reported delivered")
+	}
+	if out.Reason != "delivered_bytes_unreadable" {
+		t.Errorf("reason %q, want delivered_bytes_unreadable", out.Reason)
+	}
+	if res.Success {
+		t.Error("a delivery that did not settle is reported successful")
+	}
+	if res.Error == "" {
+		t.Error("a delivery that did not settle gives no error")
+	}
+}
+
 func TestRestorationRehashesRatherThanTrustingTheLedger(t *testing.T) {
 	w := newAuthWorld(t,
 		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`,
