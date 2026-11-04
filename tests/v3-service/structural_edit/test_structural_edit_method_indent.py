@@ -101,17 +101,19 @@ def test_a_method_lands_at_its_column_whatever_its_indentation(selector, old_nod
 
 def test_multiline_string_inside_a_method_is_not_reindented():
     """Lines inside a string literal are data. Shifting them would change the
-    value the method returns, so re-basing must leave them byte-for-byte."""
+    value the method returns, so re-basing must leave them byte-for-byte. A tab
+    there is data too, not a mix of tabs and spaces."""
     rel = ["def deposit(self, amount):",
            "    return '''",
            "<b>",
            "  total",
+           "\tby tab",
            "</b>",
            "'''"]
     res = structural_edit("acct.py", SRC, "function:deposit", "\n".join(rel))
     assert res["success"] is True, res.get("error")
     assert ("    def deposit(self, amount):\n"
-            "        return '''\n<b>\n  total\n</b>\n'''") in res["new_content"]
+            "        return '''\n<b>\n  total\n\tby tab\n</b>\n'''") in res["new_content"]
 
 
 @pytest.mark.parametrize("lead", ["\n", "# v2\n"], ids=["blank-line-first", "comment-first"])
@@ -128,9 +130,43 @@ def test_a_method_never_leaves_its_class(lead):
     assert [n.name for n in tree.body[0].body] == ["__init__", "deposit", "doubled", "fetch", "Meta"]
 
 
-def test_top_level_function_is_unchanged():
-    """A column-0 node is spliced as sent."""
-    res = structural_edit("acct.py", SRC, "function:top", "def top(x):\n    return x + 2")
+def test_a_method_added_after_the_last_one_stays_in_its_class():
+    """label is the last method in Account. Spliced as sent, a second method at
+    column 0 would land at the top level, and the file would still compile.
+    Re-based, both stay in Meta."""
+    content = "def label(self): return 'account'\ndef short_label(self): return 'acct'"
+    res = structural_edit("acct.py", SRC, "function:label", content)
+    assert res["success"] is True, res.get("error")
+    tree = ast.parse(res["new_content"])
+    assert [n.name for n in tree.body] == ["Account", "top"]
+    meta = tree.body[0].body[-1]
+    assert [n.name for n in meta.body] == ["label", "short_label"]
+
+
+@pytest.mark.parametrize("content, error", [
+    # Re-basing turns the indentation error into the real one.
+    ("def deposit(self, amount):\n    return amount +", "invalid syntax"),
+    # Re-based, the error is still about indentation: the one as sent is reported.
+    ("def deposit(self, amount):\n    if amount:\n    return amount",
+     "expected an indented block after function definition"),
+    # As sent, the node would land off its column: the re-based error is reported.
+    ("    def deposit(self, amount):\n        return amount +", "invalid syntax"),
+], ids=["in-place-other-error", "in-place-indentation-error", "off-its-column"])
+def test_when_neither_form_compiles_the_error_that_helps_is_reported(content, error):
+    res = structural_edit("acct.py", SRC, "function:deposit", content)
+    assert res["success"] is False
+    assert f"SyntaxError at line 6: {error}" in res["error"]
+
+
+@pytest.mark.parametrize("content", [
+    "def top(x):\n    return x + 2",
+    # Spliced as sent, this would make top a method of Account, and the file
+    # would still compile.
+    "    def top(x):\n        return x + 2",
+], ids=["sent-at-column-0", "sent-indented"])
+def test_top_level_function_lands_at_column_0(content):
+    """A column-0 node is spliced as sent, or re-based onto column 0."""
+    res = structural_edit("acct.py", SRC, "function:top", content)
     assert res["success"] is True, res.get("error")
     assert res["new_content"] == SRC.replace("return x + 1", "return x + 2")
     compile(res["new_content"], "acct.py", "exec")
@@ -144,8 +180,13 @@ def test_tab_indented_file_with_space_indented_replacement_is_refused_not_guesse
     assert "not modified" in res["error"].lower()
 
 
-def test_tab_indented_file_with_tab_indented_replacement_applies():
+@pytest.mark.parametrize("content, new_body", [
+    ("def m(self):\n\treturn 2", "\t\treturn 2\n"),
+    # A blank row's whitespace is not indentation, whatever it is made of.
+    ("def m(self):\n\tx = 2\n    \n\treturn x", "\t\tx = 2\n    \n\t\treturn x\n"),
+], ids=["tabs", "a-blank-row-with-spaces"])
+def test_tab_indented_file_with_tab_indented_replacement_applies(content, new_body):
     src = "class A:\n\tdef m(self):\n\t\treturn 1\n"
-    res = structural_edit("t.py", src, "function:m", "def m(self):\n\treturn 2")
+    res = structural_edit("t.py", src, "function:m", content)
     assert res["success"] is True, res.get("error")
-    assert res["new_content"] == "class A:\n\tdef m(self):\n\t\treturn 2\n"
+    assert res["new_content"] == "class A:\n\tdef m(self):\n" + new_body
