@@ -27,7 +27,15 @@ import (
 // the file body around the JSON channel through one unconstrained sub-call.
 
 func TestFenceTagFollowsExtension(t *testing.T) {
-	for path, want := range map[string]string{"app.html": "html", "main.go": "go", "solve.py": "python"} {
+	for path, want := range map[string]string{
+		"solve.py": "python", "app.js": "javascript", "app.mjs": "javascript", "app.ts": "typescript",
+		"app.html": "html", "app.htm": "html", "app.css": "css", "main.go": "go", "main.rs": "rust",
+		"main.c": "c", "main.h": "c", "main.cpp": "c++", "main.cc": "c++", "main.hpp": "c++",
+		"Main.java": "java", "app.rb": "ruby", "run.sh": "bash", "data.json": "json", "README.md": "markdown",
+		"query.sql": "sql", "conf.yaml": "yaml", "conf.yml": "yaml",
+		// The extension's case does not matter, and one with no tag gets a bare fence.
+		"SOLVE.PY": "python", "notes.txt": "", "Makefile": "",
+	} {
 		if got := fenceTagForPath(path); got != want {
 			t.Errorf("fenceTagForPath(%q) = %q, want %q", path, got, want)
 		}
