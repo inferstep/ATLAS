@@ -9,6 +9,7 @@ inside HTML)."""
 
 import contextlib
 import re
+from typing import Optional
 
 import node_splice
 from edit_checks import _post_splice_refusal, _replacement_dwarfs_node
@@ -262,17 +263,25 @@ def _extract_python_call_targets(source: bytes) -> list:
     while stack:
         node = stack.pop()
         if node.type == "call":
-            # `function:` field is the first non-paren child
-            for child in node.children:
-                if child.type == "identifier":
-                    out.append(source[child.start_byte:child.end_byte].decode("utf-8", errors="replace"))
-                    break
-                # attribute / subscript / lambda → skip silently
-                # so we don't false-positive on `obj.method()`
-                if child.type not in ("(",):
-                    break
+            name = _direct_call_name(node, source)
+            if name is not None:
+                out.append(name)
         stack.extend(node.children)
     return out
+
+
+def _direct_call_name(call, source: bytes) -> Optional[str]:
+    """The name a call node calls when it is a bare identifier, as in
+    `g()`; None for `obj.method()`, `items[0]()` and the like."""
+    # `function:` field is the first non-paren child
+    for child in call.children:
+        if child.type == "identifier":
+            return source[child.start_byte:child.end_byte].decode("utf-8", errors="replace")
+        # attribute / subscript / lambda → skip silently
+        # so we don't false-positive on `obj.method()`
+        if child.type not in ("(",):
+            return None
+    return None
 
 
 def _extract_python_top_level_defs(source: bytes) -> set:
