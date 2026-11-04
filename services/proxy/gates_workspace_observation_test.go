@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -43,6 +45,61 @@ func shell(t *testing.T, ctx *AgentContext, command string) {
 	args, _ := json.Marshal(wire.RunCommandInput{Command: command, Timeout: &timeout})
 	if res := executeToolCall("run_command", args, ctx); res == nil || !res.Success {
 		t.Fatalf("%q did not run: %+v", command, res)
+	}
+}
+
+// One walk records each regular file under the root by its slash path, and
+// leaves out what installs and builds rewrite, by-product files and links. A
+// root named like a skipped folder is still walked.
+func TestASnapshotRecordsTheWorkAndLeavesOutByProducts(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "build")
+	for name, body := range map[string]string{
+		"app.py": "print(1)\n", "pkg/mod.py": "x = 1\n",
+		"node_modules/x/i.js": "1", "pkg/__pycache__/mod.cpython-312.pyc": "b",
+		".DS_Store": "f", "pkg/old.pyc": "b", ".atlas-session": "m",
+	} {
+		p := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink("app.py", filepath.Join(root, "link.py")); err != nil {
+		t.Fatal(err)
+	}
+
+	snap := snapshotWorkspace(root)
+
+	var got []string
+	for rel := range snap.files {
+		got = append(got, rel)
+	}
+	sort.Strings(got)
+	if strings.Join(got, ",") != "app.py,pkg/mod.py" {
+		t.Fatalf("the walk recorded %v, want app.py and pkg/mod.py", got)
+	}
+	if snap.files["app.py"].size != 9 {
+		t.Errorf("app.py recorded at %d bytes, want 9", snap.files["app.py"].size)
+	}
+	// The mtime is what tells a same-size rewrite from an untouched file.
+	info, err := os.Stat(filepath.Join(root, "app.py"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.files["app.py"].mtime != info.ModTime().UnixNano() {
+		t.Errorf("app.py recorded with mtime %d, want %d", snap.files["app.py"].mtime, info.ModTime().UnixNano())
+	}
+	if !snap.taken || snap.truncated {
+		t.Errorf("taken %v truncated %v, want a whole walk taken", snap.taken, snap.truncated)
+	}
+}
+
+func TestASnapshotOfNoRootIsTakenAndEmpty(t *testing.T) {
+	snap := snapshotWorkspace("")
+	if !snap.taken || len(snap.files) != 0 {
+		t.Fatalf("taken %v with %d files, want taken and empty", snap.taken, len(snap.files))
 	}
 }
 
@@ -237,5 +294,46 @@ func TestWhatAReapedJobLeftIsRecorded(t *testing.T) {
 	reapSessionBackgroundJobs(ctx) // the deadline and cancel paths
 	if d := ctx.Ledger[ledgerKey(ctx, "util.py")]; d == nil || d.TombstoneReason != "deleted:shell" {
 		t.Fatalf("the user's file the job removed is not recorded: %+v", d)
+	}
+}
+
+func TestAnEntryTheWalkCannotReadIsSkippedAndTheWalkGoesOn(t *testing.T) {
+	snap := workspaceSnapshot{files: map[string]workspaceFile{}, taken: true}
+	root := t.TempDir()
+
+	next := snap.observe(root, filepath.Join(root, "locked"), nil, os.ErrPermission)
+
+	if next != nil {
+		t.Errorf("an unreadable entry returned %v, want nil so the walk goes on", next)
+	}
+	if len(snap.files) != 0 {
+		t.Errorf("an unreadable entry recorded %v", snap.files)
+	}
+}
+
+func TestAWalkAtTheCapStopsAndSaysItWasCut(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "one.py"), []byte("x = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := workspaceSnapshot{files: map[string]workspaceFile{}, taken: true}
+	for i := 0; i < maxObservedWorkspaceFiles; i++ {
+		snap.files[fmt.Sprintf("f%d.py", i)] = workspaceFile{}
+	}
+
+	next := snap.observe(root, filepath.Join(root, "one.py"), entries[0], nil)
+
+	if next != filepath.SkipAll {
+		t.Errorf("at the cap the walk got %v, want SkipAll", next)
+	}
+	if !snap.truncated {
+		t.Error("at the cap the snapshot is not marked truncated")
+	}
+	if _, ok := snap.files["one.py"]; ok {
+		t.Error("a file past the cap was recorded")
 	}
 }

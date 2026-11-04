@@ -81,34 +81,40 @@ func snapshotWorkspace(root string) workspaceSnapshot {
 		return snap
 	}
 	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil // an unreadable entry: skip it, the walk goes on
-		}
-		if d.IsDir() {
-			if path != root && observeSkipDirs[d.Name()] {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !d.Type().IsRegular() || observeSkipFile(d.Name()) {
-			return nil
-		}
-		if len(snap.files) >= maxObservedWorkspaceFiles {
-			snap.truncated = true
-			return filepath.SkipAll
-		}
-		info, err := d.Info()
-		if err != nil {
-			return nil
-		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return nil
-		}
-		snap.files[filepath.ToSlash(rel)] = workspaceFile{size: info.Size(), mtime: info.ModTime().UnixNano()}
-		return nil
+		return snap.observe(root, path, d, err)
 	})
 	return snap
+}
+
+// observe records one entry of the walk under root, and returns what the
+// walk does next: go on, skip a folder, or stop at the cap.
+func (snap *workspaceSnapshot) observe(root, path string, d os.DirEntry, err error) error {
+	if err != nil {
+		return nil // an unreadable entry: skip it, the walk goes on
+	}
+	if d.IsDir() {
+		if path != root && observeSkipDirs[d.Name()] {
+			return filepath.SkipDir
+		}
+		return nil
+	}
+	if !d.Type().IsRegular() || observeSkipFile(d.Name()) {
+		return nil
+	}
+	if len(snap.files) >= maxObservedWorkspaceFiles {
+		snap.truncated = true
+		return filepath.SkipAll
+	}
+	info, err := d.Info()
+	if err != nil {
+		return nil
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return nil
+	}
+	snap.files[filepath.ToSlash(rel)] = workspaceFile{size: info.Size(), mtime: info.ModTime().UnixNano()}
+	return nil
 }
 
 // shellDeliverable reports a file the completion check can judge: one the
