@@ -66,6 +66,16 @@ def report(sessions: list, known: set[str], guards_of: Callable[[Any], list[str]
 
     `guards_of` is reliability_detectors.py's model_output_guards, which
     e2e-reliability.py passes in, so this module does not import the runner."""
+    print_rates(sessions)
+    print_defects(sessions, guards_of)
+    print_stack_changes(sessions)
+    print_per_task(sessions)
+    print_quality(sessions)
+    print_tui_coverage(sessions, known)
+
+
+def print_rates(sessions: list) -> None:
+    """The harness integrity and task success rates, and how many write calls reached V3."""
     total = len(sessions)
     clean = sum(1 for s in sessions if not s.defects)
     passed = sum(1 for s in sessions if s.task_passed)
@@ -85,6 +95,9 @@ def report(sessions: list, known: set[str], guards_of: Callable[[Any], list[str]
               "agent loop without V3")
     print("=" * 72)
 
+
+def print_defects(sessions: list, guards_of: Callable[[Any], list[str]]) -> None:
+    """The harness defects by class, and the model-output guards that the proxy caught."""
     by_class: dict[str, int] = {}
     for s in sessions:
         for d in s.defects:
@@ -106,13 +119,19 @@ def report(sessions: list, known: set[str], guards_of: Callable[[Any], list[str]
               f"{sum(1 for g in guards if g)} session(s): "
               + ", ".join(f"{k} {n}" for k, n in sorted(kinds.items())))
 
+
+def print_stack_changes(sessions: list) -> None:
+    """The sessions that ran over a change of the stack, if any."""
     unstable = [s for s in sessions if s.stack_changes]
     if unstable:
-        print(f"Stack not stable in {len(unstable)}/{total} session(s): the outcomes "
+        print(f"Stack not stable in {len(unstable)}/{len(sessions)} session(s): the outcomes "
               f"of these ran over a restart, an OOM kill or a missing container:")
         for s in unstable:
             print(f"  {s.task} rep {s.rep}: {'; '.join(s.stack_changes)}")
 
+
+def print_per_task(sessions: list) -> None:
+    """For each task: the clean and passed sessions, and the turns they took."""
     print("\nPer task:")
     for name in sorted({s.task for s in sessions}):
         rows = [s for s in sessions if s.task == name]
@@ -122,6 +141,9 @@ def report(sessions: list, known: set[str], guards_of: Callable[[Any], list[str]
         print(f"  {name:14s} harness {cl}/{len(rows)}  task {pa}/{len(rows)}  "
               f"turns min/med/max {min(turns)}/{sorted(turns)[len(turns)//2]}/{max(turns)}")
 
+
+def print_quality(sessions: list) -> None:
+    """The code quality of what the agent wrote, from the sessions that have a quality result."""
     q = [s.quality for s in sessions if s.quality and "error" not in s.quality]
     if q:
         print("\nCode quality of what the agent wrote:")
@@ -147,6 +169,9 @@ def report(sessions: list, known: set[str], guards_of: Callable[[Any], list[str]
         print(f"  style nits (not scored)            {style}")
         print(f"  files left unparseable             {broken}")
 
+
+def print_tui_coverage(sessions: list, known: set[str]) -> None:
+    """The event types the sessions emitted, and those that the TUI cannot render."""
     observed: set[str] = set()
     for s in sessions:
         observed |= {e.get("type") for e in s.events if e.get("type")}
@@ -154,4 +179,3 @@ def report(sessions: list, known: set[str], guards_of: Callable[[Any], list[str]
     print(f"\nTUI coverage: {len(observed)} event types emitted, "
           f"{len(unrendered)} the TUI cannot render"
           + (f": {unrendered}" if unrendered else ""))
-
