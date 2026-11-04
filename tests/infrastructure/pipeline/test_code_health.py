@@ -220,6 +220,14 @@ def test_tests_are_measured_for_complexity_in_go_and_python_and_the_two_held_fil
     assert "services/proxy/tool_args_test.go" not in measured
 
 
+def test_sizes_leave_test_files_and_test_folders_out(tmp_path, monkeypatch):
+    for rel in ["scripts/tool.py", "scripts/test_tool.py", "scripts/tests/helpers.py"]:
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text("x = 1\n")
+    monkeypatch.setattr(ch, "ROOT", str(tmp_path))
+    assert list(ch.source_files()) == ["scripts/tool.py"]
+
+
 def test_a_new_or_risen_complexity_fails_and_a_fallen_one_passes():
     base = {"cognitive": {"a.go:rises": 20, "a.go:falls": 30}, "cyclomatic": {"b.go:stays": 18}}
     scores = {"cognitive": {"a.go:rises": 21, "a.go:falls": 25, "c.py:new": 16}, "cyclomatic": {"b.go:stays": 18}}
