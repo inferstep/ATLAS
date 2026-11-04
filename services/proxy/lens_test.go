@@ -45,6 +45,12 @@ func TestProbeLensStatusReportsALensThatIsNotReady(t *testing.T) {
 	}{
 		{"not calibrated", map[string]any{"cx_calibrated": false}, "uncalibrated", ""},
 		{"G(x) missing", map[string]any{"gx_loaded": false}, "incomplete-artifacts", ""},
+		{"G(x) not calibrated", map[string]any{"gx_calibrated": false}, "uncalibrated", ""},
+		{"artifacts for another embedding size", map[string]any{"embed_dim": 4096}, "dim-mismatch", ""},
+		// A lens that does not report the model's embedding size is not a mismatch.
+		{"embedding size not reported", map[string]any{"embed_dim": 0}, "supported", ""},
+		{"drifted", map[string]any{"fingerprint_ok": false, "fingerprint_error": "reference scored 40.0"},
+			"drifted", "the lens has drifted from the served model: reference scored 40.0"},
 		{"built for another model", map[string]any{
 			"cost_field_loaded": false,
 			"self_test_error":   "artifacts are for model-a, selected model is model-b",
@@ -320,15 +326,40 @@ func TestProbeLensStatusReadsTheEmbedCapacity(t *testing.T) {
 	}
 }
 
+// A capacity that is not reported, or is 0, is unknown: neither it nor its
+// source is kept.
 func TestProbeLensStatusToleratesAnUnknownCapacity(t *testing.T) {
-	health := compatibleLensHealth()
-	health["embed_capacity_tokens"] = nil
-	srv := lensHealthServer(t, health)
+	for _, capacity := range []any{nil, 0} {
+		health := compatibleLensHealth()
+		health["embed_capacity_tokens"] = capacity
+		health["embed_capacity_source"] = "declared"
+		srv := lensHealthServer(t, health)
+
+		got := probeLensStatus(context.Background(), srv.URL)
+		srv.Close()
+		if got.EmbedCapacityTokens != 0 {
+			t.Errorf("capacity %v must read as 0, got %d", capacity, got.EmbedCapacityTokens)
+		}
+		if got.EmbedCapacitySource != "" {
+			t.Errorf("capacity %v must keep no source, got %q", capacity, got.EmbedCapacitySource)
+		}
+	}
+}
+
+// A /health answer that is not JSON leaves the lens unreachable, with the
+// answer quoted in the hint.
+func TestProbeLensStatusQuotesAnAnswerThatIsNotJSON(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("bad gateway"))
+	}))
 	defer srv.Close()
 
 	got := probeLensStatus(context.Background(), srv.URL)
-	if got.EmbedCapacityTokens != 0 {
-		t.Fatalf("unknown capacity must read as 0, got %d", got.EmbedCapacityTokens)
+	if got.Verdict != "unreachable" {
+		t.Errorf("verdict = %q, want unreachable", got.Verdict)
+	}
+	if got.Hint != "lens /health returned non-JSON: bad gateway" {
+		t.Errorf("hint = %q, want the answer quoted", got.Hint)
 	}
 }
 
