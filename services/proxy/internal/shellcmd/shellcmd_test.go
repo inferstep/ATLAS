@@ -205,15 +205,20 @@ func TestCommandPositionSkipsTheValueOfEachPrefixOption(t *testing.T) {
 	}
 }
 
-// Inside double quotes, $' is a dollar sign and a quote, not the start of an
-// ANSI-C quote, so the word is read as it is.
-func TestADollarQuoteInsideDoubleQuotesIsLiteral(t *testing.T) {
-	words, ok := shellCommandWords(`echo "it$'s"`)
-	if !ok {
-		t.Fatalf("shellCommandWords refused a $' inside double quotes: %q", words)
-	}
-	if !slices.Equal(words, []string{"echo", "it$'s"}) {
-		t.Errorf("shellCommandWords = %q, want [echo it$'s]", words)
+// A $ opens an ANSI-C or locale quote only when a quote follows it outside
+// quotes. Anywhere else it is part of the word, read as it is.
+func TestADollarIsReadAsItIsUnlessItOpensAQuote(t *testing.T) {
+	for in, want := range map[string][]string{
+		`echo "it$'s"`: {"echo", "it$'s"},
+		"echo $HOME":   {"echo", "$HOME"},
+	} {
+		words, ok := shellCommandWords(in)
+		if !ok {
+			t.Fatalf("shellCommandWords(%q) refused it: %q", in, words)
+		}
+		if !slices.Equal(words, want) {
+			t.Errorf("shellCommandWords(%q) = %q, want %q", in, words, want)
+		}
 	}
 }
 

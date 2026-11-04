@@ -3,6 +3,7 @@ package shellcmd
 import (
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 )
@@ -109,7 +110,7 @@ func readShellWord(seg string, i int) (word string, next int, quote byte, suppor
 			break
 		}
 		switch {
-		case c == '$' && quote == 0 && i+1 < len(seg) && (seg[i+1] == '\'' || seg[i+1] == '"'):
+		case c == '$' && quote == 0 && opensAnsiOrLocaleQuote(seg, i):
 			// ANSI-C and locale quotes need expansions this lexer does not model.
 			return b.String(), i, quote, false
 		case c == '\'' && quote != '"':
@@ -128,6 +129,11 @@ func readShellWord(seg string, i int) (word string, next int, quote byte, suppor
 		i++
 	}
 	return b.String(), i, quote, true
+}
+
+// opensAnsiOrLocaleQuote reports whether the $ at i starts $'...' or $"...".
+func opensAnsiOrLocaleQuote(seg string, i int) bool {
+	return i+1 < len(seg) && (seg[i+1] == '\'' || seg[i+1] == '"')
 }
 
 // toggleQuote opens quote q, or closes it when it is the one open.
@@ -430,35 +436,24 @@ var commandPrefixWords = map[string]bool{
 // `timeout 5s`, `env -i`.
 var wrapperArgRe = regexp.MustCompile(`^(-.*|\d+(\.\d+)?[smhd]?)$`)
 
-// Some prefix options take a separate value. Skipping only the option would
-// mistake that value for the executable (for example `sudo -u root bash -c`).
+// wrapperValueOptions lists, for each prefix word, the options that take a
+// separate value. Skipping only the option would mistake that value for the
+// executable (for example `sudo -u root bash -c`).
+var wrapperValueOptions = map[string][]string{
+	"sudo": {"-u", "--user", "-g", "--group", "-h", "--host", "-C", "--close-from", "-p", "--prompt",
+		"-r", "--role", "-t", "--type"},
+	"doas":    {"-u"},
+	"env":     {"-u", "--unset", "-C", "--chdir", "-S", envSplitStringOption},
+	"nice":    {"-n", "--adjustment"},
+	"timeout": {"-s", "--signal", "-k", "--kill-after"},
+	"stdbuf":  {"-i", "-o", "-e"},
+	"time":    {"-f", "--format", "-o", "--output"},
+}
+
+// wrapperOptionTakesValue reports whether option, given to the prefix word
+// wrapper, takes a separate value.
 func wrapperOptionTakesValue(wrapper, option string) bool {
-	switch wrapper {
-	case "sudo":
-		switch option {
-		case "-u", "--user", "-g", "--group", "-h", "--host", "-C", "--close-from", "-p", "--prompt", "-r", "--role", "-t", "--type":
-			return true
-		}
-	case "doas":
-		return option == "-u"
-	case "env":
-		switch option {
-		case "-u", "--unset", "-C", "--chdir", "-S", envSplitStringOption:
-			return true
-		}
-	case "nice":
-		return option == "-n" || option == "--adjustment"
-	case "timeout":
-		switch option {
-		case "-s", "--signal", "-k", "--kill-after":
-			return true
-		}
-	case "stdbuf":
-		return option == "-i" || option == "-o" || option == "-e"
-	case "time":
-		return option == "-f" || option == "--format" || option == "-o" || option == "--output"
-	}
-	return false
+	return slices.Contains(wrapperValueOptions[wrapper], option)
 }
 
 func skipCommandPrefix(words []string, index int) int {
