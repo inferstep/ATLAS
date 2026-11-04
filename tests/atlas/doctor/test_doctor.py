@@ -657,15 +657,23 @@ def test_doctor_json_that_stdout_cannot_encode_is_written_as_escaped_bytes(monke
     assert b"\\u2014" in stdout.buffer.getvalue()
 
 
-@pytest.mark.parametrize("statuses, summary_line, verdict, exit_code", [
-    pytest.param(("pass", "pass"), "  2 passed", "  ATLAS install is healthy.", 0, id="healthy"),
-    pytest.param(("pass", "warn"), "  1 passed, 1 warnings", "  ATLAS install is functional with warnings.", 0,
+@pytest.mark.parametrize("statuses, color, summary_line, verdict, exit_code", [
+    pytest.param(("pass", "pass"), False, "  2 passed", "  ATLAS install is healthy.", 0, id="healthy"),
+    pytest.param(("pass", "warn"), False, "  1 passed, 1 warnings", "  ATLAS install is functional with warnings.", 0,
                  id="warnings"),
-    pytest.param(("pass", "warn", "fail", "skip"), "  1 passed, 1 warnings, 1 failed, 1 skipped",
+    pytest.param(("pass", "warn", "fail", "skip"), False, "  1 passed, 1 warnings, 1 failed, 1 skipped",
                  f"  ATLAS install has failures {doctor.DASH} re-run with -v for detail.", 1, id="a-failure"),
+    pytest.param(("pass", "pass"), True, "  2 passed", f"  {doctor.GREEN}ATLAS install is healthy.{doctor.RESET}", 0,
+                 id="healthy-in-color"),
+    pytest.param(("pass", "warn"), True, f"  1 passed, {doctor.YELL}1 warnings{doctor.RESET}",
+                 f"  {doctor.YELL}ATLAS install is functional with warnings.{doctor.RESET}", 0, id="warnings-in-color"),
+    pytest.param(("pass", "warn", "fail", "skip"), True,
+                 f"  1 passed, {doctor.YELL}1 warnings{doctor.RESET}, {doctor.RED}1 failed{doctor.RESET}, 1 skipped",
+                 f"  {doctor.RED}ATLAS install has failures {doctor.DASH} re-run with -v for detail.{doctor.RESET}", 1,
+                 id="a-failure-in-color"),
 ])
-def test_doctor_summary_names_the_counts_and_the_verdict(capsys, statuses, summary_line, verdict, exit_code):
-    rc = doctor._emit(_results(*statuses), SimpleNamespace(json=False, verbose=False), color=False,
+def test_doctor_summary_names_the_counts_and_the_verdict(capsys, statuses, color, summary_line, verdict, exit_code):
+    rc = doctor._emit(_results(*statuses), SimpleNamespace(json=False, verbose=False), color=color,
                       already_printed=True)
 
     assert capsys.readouterr().out.splitlines()[-2:] == [summary_line, verdict]
