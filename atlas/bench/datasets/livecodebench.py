@@ -14,7 +14,7 @@ import json
 import os
 import urllib.request
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from .base import BaseDataset
 from ..models import BenchmarkTask
@@ -32,6 +32,17 @@ _ROW_FIELDS = ("question_id", "task_id", "question_content", "starter_code",
                "private_test_cases", "public_test_cases")
 
 
+def _case_list(cases) -> Optional[list]:
+    """A test-case field as a list: parsed first when it is JSON text. None
+    when it is not JSON or not a list."""
+    if isinstance(cases, str):
+        try:
+            cases = json.loads(cases)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    return cases if isinstance(cases, list) else None
+
+
 def _slim_row(row: dict) -> dict:
     """Drop row fields the parser never reads; truncate test-case lists to
     MAX_TESTS_PER_PROBLEM (the parser truncates identically at read time).
@@ -43,20 +54,33 @@ def _slim_row(row: dict) -> dict:
             continue
         val = row[k]
         if k.endswith("test_cases"):
-            was_str = isinstance(val, str)
-            cases = val
-            if was_str:
-                try:
-                    cases = json.loads(val)
-                except (json.JSONDecodeError, TypeError):
-                    continue
-            if not isinstance(cases, list):
+            cases = _case_list(val)
+            if cases is None:
                 continue
             cases = cases[:MAX_TESTS_PER_PROBLEM]
-            out[k] = json.dumps(cases) if was_str else cases
+            out[k] = json.dumps(cases) if isinstance(val, str) else cases
         else:
             out[k] = val
     return out
+
+
+def _write_cache(filepath: Path, partial_marker: Path, rows: list, complete: bool) -> None:
+    """Cache the slim rows, and mark the cache partial unless the download
+    was complete. Write via tmp + rename so an interrupted write can't tear
+    the cache."""
+    tmp = filepath.with_name(filepath.name + ".tmp")
+    with open(tmp, 'w', encoding='utf-8') as f:
+        for row in rows:
+            f.write(json.dumps(_slim_row(row.get("row", row)))
+                    + "\n")
+    os.replace(tmp, filepath)
+    if complete:
+        partial_marker.unlink(missing_ok=True)
+        print(f"Downloaded {len(rows)} tasks to {filepath}")
+    else:
+        partial_marker.touch()
+        print(f"Warning: cached an INCOMPLETE set ({len(rows)} "
+              f"tasks); the next run will retry the full fetch.")
 
 
 class LiveCodeBenchDataset(BaseDataset):
@@ -132,49 +156,11 @@ class LiveCodeBenchDataset(BaseDataset):
         # Try each dataset source in order
         for dataset_id in self.DATASET_IDS:
             print(f"Downloading LiveCodeBench (release_v5) from {dataset_id}...")
-            rows = []
-            complete = False
+            rows, complete = self._fetch_rows(dataset_id)
 
-            offset = 0
-            while True:
-                url = (
-                    f"{self.ROWS_API}?dataset={dataset_id}"
-                    f"&config={self.CONFIG}&split=test&offset={offset}&length=100"
-                )
-                req = urllib.request.Request(url)
-                try:
-                    with urllib.request.urlopen(req, timeout=120) as resp:
-                        data = json.loads(resp.read().decode('utf-8'))
-                        batch = data.get("rows", [])
-                        rows.extend(batch)
-                        if len(batch) < 100:
-                            complete = True
-                            break
-                        offset += 100
-                except Exception as e:
-                    if rows:
-                        print(f"Warning: partial download ({len(rows)} rows at offset {offset}): {e}")
-                        break
-                    print(f"  Failed: {e}")
-                    rows = []
-                    break
-
-            # Never overwrite the cache with a smaller partial copy. Write
-            # via tmp + rename so an interrupted write can't tear the cache.
+            # Never overwrite the cache with a smaller partial copy.
             if rows and (complete or len(rows) > _cached_rows()):
-                tmp = filepath.with_name(filepath.name + ".tmp")
-                with open(tmp, 'w', encoding='utf-8') as f:
-                    for row in rows:
-                        f.write(json.dumps(_slim_row(row.get("row", row)))
-                                + "\n")
-                os.replace(tmp, filepath)
-                if complete:
-                    partial_marker.unlink(missing_ok=True)
-                    print(f"Downloaded {len(rows)} tasks to {filepath}")
-                else:
-                    partial_marker.touch()
-                    print(f"Warning: cached an INCOMPLETE set ({len(rows)} "
-                          f"tasks); the next run will retry the full fetch.")
+                _write_cache(filepath, partial_marker, rows, complete)
                 return filepath
 
         # Every source failed outright — an existing cache beats nothing.
@@ -185,6 +171,38 @@ class LiveCodeBenchDataset(BaseDataset):
             return filepath
 
         raise RuntimeError("Failed to download LiveCodeBench from any source")
+
+    def _fetch_rows(self, dataset_id: str) -> Tuple[list, bool]:
+        """The rows one source serves, a page of 100 at a time, and whether
+        that is all of them. A source that fails before its first page gives
+        no rows; one that fails later gives the rows read so far."""
+        rows = []
+        complete = False
+
+        offset = 0
+        while True:
+            url = (
+                f"{self.ROWS_API}?dataset={dataset_id}"
+                f"&config={self.CONFIG}&split=test&offset={offset}&length=100"
+            )
+            req = urllib.request.Request(url)
+            try:
+                with urllib.request.urlopen(req, timeout=120) as resp:
+                    data = json.loads(resp.read().decode('utf-8'))
+                    batch = data.get("rows", [])
+                    rows.extend(batch)
+                    if len(batch) < 100:
+                        complete = True
+                        break
+                    offset += 100
+            except Exception as e:
+                if rows:
+                    print(f"Warning: partial download ({len(rows)} rows at offset {offset}): {e}")
+                    break
+                print(f"  Failed: {e}")
+                rows = []
+                break
+        return rows, complete
 
     def _parse(self, filepath: Path) -> List[BenchmarkTask]:
         """Parse the cached LiveCodeBench JSONL file."""
@@ -303,19 +321,16 @@ class LiveCodeBenchDataset(BaseDataset):
                 continue
 
             # Cases might be a JSON string or already parsed
-            if isinstance(cases, str):
-                try:
-                    cases = json.loads(cases)
-                except (json.JSONDecodeError, TypeError):
-                    continue
+            cases = _case_list(cases)
+            if cases is None:
+                continue
 
-            if isinstance(cases, list):
-                for case in cases[:MAX_TESTS_PER_PROBLEM]:
-                    inp = case.get("input", "")
-                    out = case.get("output", case.get("expected_output", ""))
-                    if inp is not None and out is not None:
-                        test_inputs.append(str(inp))
-                        test_outputs.append(str(out))
+            for case in cases[:MAX_TESTS_PER_PROBLEM]:
+                inp = case.get("input", "")
+                out = case.get("output", case.get("expected_output", ""))
+                if inp is not None and out is not None:
+                    test_inputs.append(str(inp))
+                    test_outputs.append(str(out))
 
             if test_inputs:
                 break
