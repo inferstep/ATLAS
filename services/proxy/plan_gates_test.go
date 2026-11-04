@@ -344,6 +344,20 @@ func TestAVerificationStepIsUnaffectedByFileWarnings(t *testing.T) {
 	}
 }
 
+// Only a write is held back by its file's failed check: reading the broken
+// file finishes a step that says to read it.
+func TestAReadStepIsUnaffectedByItsFilesWarning(t *testing.T) {
+	ctx := planWorld(t)
+	ctx.Plan = &wire.Plan{Steps: []wire.PlanStep{{ID: "s1", Action: "read_file", Target: "app.py"}}}
+	ctx.PlanStepsSatisfied = make([]bool, 1)
+	recordWarnedValidation(t, ctx, "app.py")
+	args, _ := json.Marshal(map[string]string{"path": "app.py"})
+	recordPlanAdherence(ctx, "read_file", args, true)
+	if !ctx.PlanStepsSatisfied[0] {
+		t.Error("a read step was withheld because the file it reads carries a failed check")
+	}
+}
+
 func recordWarnedValidation(t *testing.T, ctx *AgentContext, rel string) {
 	t.Helper()
 	key := ledgerKey(ctx, rel)
