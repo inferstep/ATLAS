@@ -326,15 +326,40 @@ func TestProbeLensStatusReadsTheEmbedCapacity(t *testing.T) {
 	}
 }
 
+// A capacity that is not reported, or is 0, is unknown: neither it nor its
+// source is kept.
 func TestProbeLensStatusToleratesAnUnknownCapacity(t *testing.T) {
-	health := compatibleLensHealth()
-	health["embed_capacity_tokens"] = nil
-	srv := lensHealthServer(t, health)
+	for _, capacity := range []any{nil, 0} {
+		health := compatibleLensHealth()
+		health["embed_capacity_tokens"] = capacity
+		health["embed_capacity_source"] = "declared"
+		srv := lensHealthServer(t, health)
+
+		got := probeLensStatus(context.Background(), srv.URL)
+		srv.Close()
+		if got.EmbedCapacityTokens != 0 {
+			t.Errorf("capacity %v must read as 0, got %d", capacity, got.EmbedCapacityTokens)
+		}
+		if got.EmbedCapacitySource != "" {
+			t.Errorf("capacity %v must keep no source, got %q", capacity, got.EmbedCapacitySource)
+		}
+	}
+}
+
+// A /health answer that is not JSON leaves the lens unreachable, with the
+// answer quoted in the hint.
+func TestProbeLensStatusQuotesAnAnswerThatIsNotJSON(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("bad gateway"))
+	}))
 	defer srv.Close()
 
 	got := probeLensStatus(context.Background(), srv.URL)
-	if got.EmbedCapacityTokens != 0 {
-		t.Fatalf("unknown capacity must read as 0, got %d", got.EmbedCapacityTokens)
+	if got.Verdict != "unreachable" {
+		t.Errorf("verdict = %q, want unreachable", got.Verdict)
+	}
+	if got.Hint != "lens /health returned non-JSON: bad gateway" {
+		t.Errorf("hint = %q, want the answer quoted", got.Hint)
 	}
 }
 
