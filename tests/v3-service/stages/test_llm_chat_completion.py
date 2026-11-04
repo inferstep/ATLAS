@@ -48,9 +48,10 @@ def test_the_request_carries_the_messages_the_settings_and_the_token(monkeypatch
     }]
 
 
-def test_without_a_system_prompt_or_a_user_one_empty_user_message_is_sent(monkeypatch):
+@pytest.mark.parametrize("system", [None, ""], ids=["no-system-prompt", "an-empty-system-prompt"])
+def test_without_a_system_prompt_or_a_user_one_empty_user_message_is_sent(monkeypatch, system):
     sent = _answer(monkeypatch, {})
-    llm_client.chat_completion("http://llm", system=None)
+    llm_client.chat_completion("http://llm", system=system)
     assert sent[0]["body"]["messages"] == [{"role": "user", "content": ""}]
     assert "seed" not in sent[0]["body"]
     assert "logprobs" not in sent[0]["body"]
@@ -67,6 +68,8 @@ def test_an_http_error_is_raised(monkeypatch):
                   "usage": {"completion_tokens": 7}}, "answer", "why", 7, id="content-reasoning-and-tokens"),
     pytest.param({"choices": [{"message": {"content": "", "reasoning_content": "the answer"}}]},
                  "the answer", "the answer", 0, id="the-reasoning-when-there-is-no-content"),
+    pytest.param({"choices": [{"message": {"content": " \n", "reasoning_content": "the answer"}}]},
+                 "the answer", "the answer", 0, id="the-reasoning-when-the-content-is-blank"),
     pytest.param({"choices": [{"message": {"content": "<think>plan</think>answer"}}]},
                  "answer", "", 0, id="leaked-reasoning-is-removed"),
     pytest.param({}, "", "", 0, id="an-answer-without-choices"),
