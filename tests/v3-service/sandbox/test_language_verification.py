@@ -27,14 +27,16 @@ class RecordingSandbox:
 
 
 class RecordingBuildSandbox:
-    """A sandbox where every command succeeds; it records each call."""
+    """A sandbox that gives every command the same answer (by default, it
+    succeeds); it records each call."""
 
-    def __init__(self):
+    def __init__(self, answer=(True, "ok", "", {"exit_code": 0, "elapsed_ms": 25})):
+        self.answer = answer
         self.calls = []
 
     def run_command(self, command, files=None, cwd="/workspace", timeout=60):
-        self.calls.append({"command": command, "files": files or {}})
-        return True, "ok", "", {"exit_code": 0, "elapsed_ms": 25}
+        self.calls.append({"command": command, "files": files or {}, "cwd": cwd, "timeout": timeout})
+        return self.answer
 
 
 def test_javascript_uses_language_aware_syntax_check():
@@ -137,6 +139,69 @@ def test_build_verification_refuses_without_running(build_command, file_path, me
     assert message in err
     assert evidence["status"] == "unavailable"
     assert sandbox.calls == []
+
+
+def test_a_failed_build_fails_verification_with_its_output_as_evidence():
+    sandbox = RecordingBuildSandbox(answer=(False, "compiling", "error: x", {"exit_code": 2, "elapsed_ms": 40}))
+    events = []
+
+    ok, out, err, evidence = v3main.verify_build_command(
+        code="print('candidate')\n",
+        sandbox=sandbox,
+        build_command="make test",
+        file_path="/workspace/project/app.py",
+        project_files={},
+        working_dir="/workspace/project",
+        emit=lambda kind, text, **fields: events.append((kind, text, fields)),
+    )
+
+    assert (ok, out, err) == (False, "compiling", "error: x")
+    assert evidence == {"verifier": "build_command", "command": "make test", "status": "failed",
+                        "exit_code": 2, "duration_ms": 40, "stdout": "compiling", "stderr": "error: x"}
+    assert events == [("build_verify", "make test: FAIL",
+                       {"command": "make test", "status": "failed", "exit_code": 2, "duration_ms": 40})]
+    assert sandbox.calls[0]["cwd"] == "/workspace/project"
+    assert sandbox.calls[0]["timeout"] == 60
+
+
+def test_a_build_that_fails_without_output_names_the_command():
+    sandbox = RecordingBuildSandbox(answer=(False, "", "", {"exit_code": 1}))
+
+    ok, _, err, _ = v3main.verify_build_command(
+        code="print('candidate')\n",
+        sandbox=sandbox,
+        build_command="make test",
+        file_path="/workspace/app.py",
+        project_files={},
+        working_dir="/workspace",
+    )
+
+    assert ok is False
+    assert err == "build command failed: make test"
+
+
+@pytest.mark.parametrize("sandbox, build_command, message", [
+    pytest.param(object(), "make test", "sandbox build command runner is unavailable", id="no-command-runner"),
+    pytest.param(RecordingBuildSandbox(), "pytest > /tmp/out",
+                 "build command is not allowed by verification policy: pytest > /tmp/out", id="not-allowed"),
+])
+def test_a_build_that_cannot_run_says_why_and_records_it(sandbox, build_command, message):
+    events = []
+
+    ok, _, err, evidence = v3main.verify_build_command(
+        code="print('candidate')\n",
+        sandbox=sandbox,
+        build_command=build_command,
+        file_path="/workspace/app.py",
+        project_files={},
+        working_dir="/workspace",
+        emit=lambda kind, text, **fields: events.append((kind, text, fields)),
+    )
+
+    assert ok is False
+    assert err == message
+    assert evidence["status"] == "unavailable"
+    assert events == [("build_verify_unavailable", message, {"command": build_command})]
 
 
 @pytest.mark.parametrize("file_path,working_dir,expected", [
