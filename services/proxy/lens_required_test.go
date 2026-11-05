@@ -231,8 +231,23 @@ func TestAScoreAnswerSaysWhetherItIsAScoreAndWhyTheLensIsDown(t *testing.T) {
 			t.Errorf("%s: down=%q, want %q", c.name, down, c.down)
 		}
 	}
-	if _, _, down := scoreContentForAgent(context.Background(), "http://127.0.0.1:9", "x = 1\n"); down == "" {
-		t.Error("an unreachable lens was not reported down")
+	if _, _, down := scoreContentForAgent(context.Background(), "http://127.0.0.1:9", "x = 1\n"); !strings.HasPrefix(down, "it did not answer: ") {
+		t.Errorf("an unreachable lens: down=%q, want it to say that the lens did not answer", down)
+	}
+}
+
+func TestAScoreAnswerCutShortIsReportedUnread(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "100")
+		w.Write([]byte(`{"enabled":true`))
+	}))
+	defer srv.Close()
+	_, scored, down := scoreContentForAgent(context.Background(), srv.URL, "x = 1\n")
+	if scored {
+		t.Error("an answer cut short was read as a score")
+	}
+	if down != "its answer could not be read" {
+		t.Errorf("down=%q, want %q", down, "its answer could not be read")
 	}
 }
 
