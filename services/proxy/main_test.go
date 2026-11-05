@@ -1680,9 +1680,11 @@ func TestRunServerDrainsAndRunsHooks(t *testing.T) {
 	}}
 	signals := make(chan os.Signal, 2)
 	result := make(chan shutdownResult, 1)
+	runErr := make(chan error, 1)
 	go func() {
-		r, _ := runServer(srv, ln, signals, hooks,
+		r, err := runServer(srv, ln, signals, hooks,
 			shutdownBudgetValues{drain: 10 * time.Second, hookMargin: 2 * time.Second})
+		runErr <- err
 		result <- r
 	}()
 
@@ -1729,6 +1731,12 @@ func TestRunServerDrainsAndRunsHooks(t *testing.T) {
 
 	select {
 	case r := <-result:
+		if err := <-runErr; err != nil {
+			t.Errorf("a clean drain returned an error: %v", err)
+		}
+		if !r.signalled {
+			t.Error("the signal was not recorded")
+		}
 		if r.forced {
 			t.Errorf("a clean drain was reported as forced: %+v", r)
 		}
@@ -1767,7 +1775,11 @@ func TestRunServerForcedCloseIsClassified(t *testing.T) {
 			shutdownBudgetValues{drain: 300 * time.Millisecond, hookMargin: 200 * time.Millisecond})
 		result <- r
 	}()
-	go http.Get("http://" + ln.Addr().String() + "/stuck")
+	stuckErr := make(chan error, 1)
+	go func() {
+		_, err := http.Get("http://" + ln.Addr().String() + "/stuck")
+		stuckErr <- err
+	}()
 	time.Sleep(100 * time.Millisecond)
 	signals <- syscall.SIGTERM
 
@@ -1778,6 +1790,37 @@ func TestRunServerForcedCloseIsClassified(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("runServer never returned")
+	}
+	// The forced close cuts the stuck request off; its handler is still blocked.
+	select {
+	case err := <-stuckErr:
+		if err == nil {
+			t.Error("the stuck request got an answer, want its connection closed")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the forced close left the stuck request open")
+	}
+}
+
+// A server closed before it serves returns at once, and ErrServerClosed is not
+// a failure.
+func TestRunServerAlreadyClosedIsNotAFailure(t *testing.T) {
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	srv := &http.Server{Handler: http.NewServeMux()}
+	srv.Close()
+	done := make(chan error, 1)
+	go func() {
+		_, err := runServer(srv, ln, make(chan os.Signal, 1), nil,
+			shutdownBudgetValues{drain: time.Second, hookMargin: time.Second})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("a closed server was reported as a failure: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("runServer waited for a signal on a closed server")
 	}
 }
 
@@ -1807,7 +1850,8 @@ func TestRunServerStartupFailureReturns(t *testing.T) {
 }
 
 // A hook that hangs is cut off by its own margin, and a failing hook is
-// reported without hanging the process.
+// reported without hanging the process. Each error names its hook, in the
+// order the hooks run, and the hanging hook ends when its margin does.
 func TestCloseHooksAreBounded(t *testing.T) {
 	prev := defaultBroker
 	defaultBroker = &broker{subscribers: map[chan wire.Envelope]struct{}{}}
@@ -1816,9 +1860,10 @@ func TestCloseHooksAreBounded(t *testing.T) {
 	ln, _ := net.Listen("tcp", "127.0.0.1:0")
 	srv := &http.Server{Handler: http.NewServeMux()}
 	signals := make(chan os.Signal, 1)
+	hangsEnded := make(chan struct{})
 	hooks := []closeHook{
-		{name: "hangs", fn: func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }},
 		{name: "fails", fn: func(ctx context.Context) error { return errors.New("boom") }},
+		{name: "hangs", fn: func(ctx context.Context) error { <-ctx.Done(); close(hangsEnded); return ctx.Err() }},
 	}
 	result := make(chan shutdownResult, 1)
 	go func() {
@@ -1830,11 +1875,17 @@ func TestCloseHooksAreBounded(t *testing.T) {
 	signals <- syscall.SIGTERM
 	select {
 	case r := <-result:
-		if len(r.hookErrors) != 2 {
-			t.Errorf("hook errors=%v, want both reported", r.hookErrors)
+		want := []string{"fails: boom", "hangs: context deadline exceeded"}
+		if !reflect.DeepEqual(r.hookErrors, want) {
+			t.Errorf("hook errors=%q, want %q", r.hookErrors, want)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("a blocked hook hung the shutdown")
+	}
+	select {
+	case <-hangsEnded:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the hanging hook was not given the margin, so it never ended")
 	}
 }
 
