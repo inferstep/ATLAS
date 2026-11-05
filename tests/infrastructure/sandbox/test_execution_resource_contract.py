@@ -403,10 +403,15 @@ def test_repeated_memory_failures_stay_bounded(small):
 
 
 def test_the_executor_runs_everything_through_the_owner():
+    with open(os.path.join(SANDBOX, "executor_languages.py")) as fh:
+        runners = fh.read()
+    assert "EXEC_CONTRACT = contract_from_env()" in runners
+    assert "run_bounded(cmd, EXEC_CONTRACT.for_request(timeout)" in runners
     with open(os.path.join(SANDBOX, "executor_server.py")) as fh:
         src = fh.read()
-    assert "EXEC_CONTRACT = contract_from_env()" in src
-    assert "run_bounded(cmd, EXEC_CONTRACT.for_request(timeout)" in src
+    # One contract: the server's background spawner must use the runners' own
+    # object, not build a second one a test or operator could set apart.
+    assert "contract_from_env(" not in src
     # No execution site may spawn around the owner.
     body = "\n".join(line for line in src.splitlines()
                      if not line.strip().startswith("#"))
@@ -433,11 +438,11 @@ def test_the_executor_result_carries_the_outcome(monkeypatch):
 @needs_proc
 def test_the_executor_result_names_a_command_that_took_too_much_memory(monkeypatch, small):
     monkeypatch.syspath_prepend(SANDBOX)
-    import executor_server as ex
+    import executor_languages as el
     # The small contract of this file, not the product's own ceiling: the
     # command's own limit is a multiple of the ceiling it runs under.
-    monkeypatch.setattr(ex, "EXEC_CONTRACT", small)
-    killed = ex._run_cmd(["bash", "-c", allocator(64, small.memory_bytes)], timeout=30)
+    monkeypatch.setattr(el, "EXEC_CONTRACT", small)
+    killed = el._run_cmd(["bash", "-c", allocator(64, small.memory_bytes)], timeout=30)
     assert killed["returncode"] != OWN_LIMIT, REACHED_OWN_LIMIT
     assert killed["outcome"] == rc.OUTCOME_MEMORY_EXHAUSTED
     assert killed["success"] is False

@@ -173,43 +173,22 @@ app.add_middleware(_ServiceTokenMiddleware)
 app.add_middleware(_CorrelationIDMiddleware)
 
 from resource_contract import (
-    OUTCOME_TIMED_OUT, OUTCOME_UNCLASSIFIED,
-    contract_from_env, outcome_is_complete, run_bounded, stopped_words, why_it_failed,
-    EXEC_TOKEN_VAR, _apply_child_limits, check_process_supervision)
+    OUTCOME_UNCLASSIFIED, EXEC_TOKEN_VAR, _apply_child_limits, check_process_supervision)
 
 # The parts of the executor that live in modules beside it (services/sandbox/Dockerfile copies each one).
 from executor_models import (
     ExecuteRequest, ExecuteResponse, ShellObservation, ShellRequest, ShellResponse,
     SyntaxCheckRequest, SyntaxCheckResponse)
 from executor_languages import (
+    EXEC_CONTRACT,
     LANGUAGE_HANDLERS,
     _CheckNotFinished,
-    _classify_error,
-    _contained_path,
     _run_cmd,
     _safe_overlay_path,
     _syntax_check_impl,
-    execute_bash,
-    execute_c,
-    execute_cpp,
-    execute_go,
-    execute_java,
-    execute_javascript,
-    execute_kotlin,
-    execute_php,
-    execute_python,
-    execute_ruby,
-    execute_rust,
-    execute_typescript,
 )
 from start_up import serve
 
-# THE resource contract for every untrusted command, validated here at import.
-# A malformed operator budget stops the executor from starting rather than
-# being clamped into something plausible at the moment a command runs.
-# Untrusted execution in the sandbox runs bounded:
-# run_bounded(cmd, EXEC_CONTRACT.for_request(timeout)
-EXEC_CONTRACT = contract_from_env()
 MAX_EXECUTION_TIME = EXEC_CONTRACT.wall_seconds
 WORKSPACE_BASE = Path(os.getenv("WORKSPACE_BASE", "/tmp/sandbox"))
 

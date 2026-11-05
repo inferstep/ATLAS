@@ -450,7 +450,7 @@ def test_jinja2_is_a_baked_sandbox_verify_dependency():
 def _ended(sandbox, outcome, returncode=-15, stdout="", stderr=""):
     def run(cmd, timeout, cwd=None, env=None, stdin=None, cancelled=None):
         return {"success": False, "stdout": stdout, "stderr": stderr,
-                "returncode": returncode, "timed_out": outcome == sandbox.OUTCOME_TIMED_OUT,
+                "returncode": returncode, "timed_out": outcome == "timed_out",
                 "outcome": outcome, "peak_memory_bytes": 0, "peak_processes": 0,
                 "survivors": 0}
     return run

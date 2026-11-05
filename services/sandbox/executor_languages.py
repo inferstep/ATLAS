@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import re
-import sys
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -27,6 +26,11 @@ from resource_contract import (
 
 logger = logging.getLogger(__name__)
 
+# THE resource contract for every untrusted command, validated here at import
+# and imported by executor_server, so the language runners and the background
+# job spawner share one object. A malformed operator budget stops the executor
+# from starting rather than being clamped into something plausible at the
+# moment a command runs.
 EXEC_CONTRACT = contract_from_env()
 SUPERVISION_AVAILABLE, SUPERVISION_REASON = check_process_supervision()
 
