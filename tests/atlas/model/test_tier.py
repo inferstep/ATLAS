@@ -227,6 +227,39 @@ def test_atlas_tier_exit_code(monkeypatch, host, expected_rc):
     assert tier.main(["--no-color"]) == expected_rc
 
 
+def test_atlas_tier_json_gives_the_probe_the_tier_its_model_one_env_and_the_checks(monkeypatch, capsys):
+    """A vendor tool's VRAM in GB has noisy decimals: the JSON rounds them, in the probe and in the checks.
+    The host is short of RAM, so the overall verdict is a warning."""
+    host = dataclasses.replace(COMFORTABLE_HOST, vram_gb=15.9287109375, system_ram_gb=14.0)
+    monkeypatch.setattr(tier, "probe", lambda install_dir=None: host)
+    assert tier.main(["--json"]) == 0
+    printed = capsys.readouterr().out
+    out = json.loads(printed)
+    medium, model = tier.by_name("medium"), model_registry.for_tier("medium")
+    assert printed.startswith('{\n  "probe": ')
+    assert out["probe"]["vram_gb"] == 15.9
+    assert out["tier"] == dataclasses.asdict(medium)
+    assert out["recommendation"] == model_registry.as_dict(model)
+    assert out["env"] == {**medium.env_vars(), **model.env_vars()}
+    assert out["constraints"][0]["name"] == "gpu_vram"
+    assert out["constraints"][0]["actual"] == 15.9
+    assert out["overall"] == "warn"
+
+
+def test_atlas_tier_json_for_a_host_without_a_gpu_has_no_model_and_skips_the_checks(monkeypatch, capsys):
+    monkeypatch.setattr(tier, "probe", lambda install_dir=None: tier.Probe(has_gpu=False))
+    monkeypatch.setattr(tier, "UNICODE_OK", False)  # the cpu tier's text has a dash that such a console cannot print
+    assert tier.main(["--json"]) == 0
+    printed = capsys.readouterr().out
+    out = json.loads(printed)
+    assert printed.isascii()
+    assert out["tier"]["tier"] == "cpu"
+    assert out["recommendation"] is None
+    assert out["env"] == tier.by_name("cpu").env_vars()
+    assert out["constraints"] == []
+    assert out["overall"] == "skip"
+
+
 def test_tier_card_prints_with_color_and_unicode(monkeypatch, capsys):
     # A terminal that takes color and Unicode.
     monkeypatch.setattr(tier, "UNICODE_OK", True)
