@@ -68,14 +68,27 @@ def test_the_javascript_a_python_string_holds_is_listed(outline):
     assert [(region["kind"], region["symbols"]) for region in answer["embedded_regions"]] == [("javascript", ["draw"])]
 
 
-@pytest.mark.parametrize("path, source, supported", [
-    pytest.param("app.js", PYTHON_FILE, False, id="a file that is not python"),
-    pytest.param(None, None, False, id="no path and no source"),
-    pytest.param("app.py", None, True, id="a python file with no source"),
+@pytest.mark.parametrize("body, supported", [
+    pytest.param(json.dumps({"path": "app.js", "source": PYTHON_FILE}).encode(), False, id="a file that is not python"),
+    pytest.param(b'{"path": null, "source": null}', False, id="no path and no source"),
+    pytest.param(b'{"path": "app.py", "source": null}', True, id="a python file with no source"),
+    pytest.param(b"", False, id="an empty body"),
 ])
-def test_a_file_with_no_definitions_to_read_lists_none(outline, path, source, supported):
-    answer = outline(json.dumps({"path": path, "source": source}).encode())
+def test_a_file_with_no_definitions_to_read_lists_none(outline, body, supported):
+    answer = outline(body)
     assert answer == (200, {"symbols": [], "supported": supported})
+
+
+def test_a_graph_failure_keeps_the_symbol_outline(outline, monkeypatch):
+    def unavailable(file_map):
+        raise RuntimeError("graph unavailable")
+
+    monkeypatch.setattr("graph.build_graph", unavailable)
+    status, answer = outline(json.dumps({"path": "app.py", "source": "def total():\n    pass\n"}).encode())
+    assert status == 200
+    assert answer == {"supported": True, "symbols": [
+        {"name": "total", "kind": "function", "start_line": 1, "end_line": 2},
+    ]}
 
 
 def test_without_tree_sitter_a_python_file_lists_nothing(outline, monkeypatch):
