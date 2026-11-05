@@ -293,18 +293,8 @@ def _step_select_model(profile: tier.TierProfile,
         return None
 
     if selected_gpu is not None:
-        backend_id, backend_name, supported = _backend_for(selected_gpu.vendor)
-        # #115: rocm has no aarch64 release. Strip support on non-x86_64
-        # so the wizard falls through to the Vulkan fallback rather than
-        # writing ATLAS_BACKEND=rocm + failing at image pull. Mesa RADV
-        # under vulkan covers AMD GPUs on arm64 (slower than rocm would
-        # be, but it actually exists).
-        if backend_id == "rocm" and probe.system_arch != "x86_64":
-            supported = False
-            _safe_print(f"  {YELLOW if color else ''}Note: ROCm has no "
-                        f"{probe.system_arch} release.{RESET if color else ''} "
-                        f"Vulkan-via-Mesa-RADV is the path for AMD GPUs on "
-                        f"arm64 hosts (see #115).")
+        backend_id, backend_name, supported = _gpu_backend(selected_gpu, probe,
+                                                           color)
         # #32: Apple Silicon hybrid path — native llama-server (Metal) +
         # Docker for the rest of the stack. This is the FAST path; the
         # docker-only Vulkan-via-MoltenVK path is the slow fallback (kept
@@ -312,14 +302,8 @@ def _step_select_model(profile: tier.TierProfile,
         # prerequisite so users know they need to run it before bringing
         # the stack up.
         if (backend_id == "metal" and probe.platform == "darwin"
-                and not args.backend):
-            _print_apple_silicon_setup(color)
-            if not _confirm("Continue with the recommended setup?",
-                            default_yes=True, args=args):
-                _safe_print("  Refusing rather than writing a .env that won't "
-                            "boot. Re-run with --backend vulkan for the "
-                            "Docker-only path, or run the setup script + retry.")
-                return None
+                and not args.backend and not _apple_silicon_setup_confirmed(args, color)):
+            return None
         # Operator-forced backend (--backend vulkan) short-circuits the
         # vendor probe entirely. Useful for users who want the universal
         # fallback even when their card has native support, or to test
@@ -327,30 +311,74 @@ def _step_select_model(profile: tier.TierProfile,
         if args.backend:
             _safe_print(f"  --backend {args.backend} requested — overriding "
                         f"the vendor-default ({backend_name}).")
-        elif not supported:
-            # PC-114 (#114): when the native backend isn't packaged, offer
-            # Vulkan as the universal fallback before refusing. Vulkan
-            # works on Apple Silicon (via MoltenVK), Intel Arc (Mesa
-            # ANV), Snapdragon Adreno, and CPU lavapipe — covering the
-            # gap left by the cuda/rocm-only matrix.
-            _print_backend_not_packaged(selected_gpu, backend_id, backend_name,
-                                        color)
-            if tier.vulkan_available():
-                _print_vulkan_fallback(color)
-                if _confirm("Use Vulkan?", default_yes=True, args=args):
-                    args.backend = "vulkan"
-                else:
-                    _safe_print("  Refusing rather than writing a .env that "
-                                "won't boot. Re-run with --backend vulkan to "
-                                "skip this prompt next time.")
-                    return None
-            else:
-                _safe_print("  Vulkan fallback isn't available on this host "
-                            "either (no vulkaninfo, no /dev/dri, no detected "
-                            "GPU). Refusing.")
-                return None
+        elif not supported and not _vulkan_fallback_accepted(
+                selected_gpu, backend_id, backend_name, args, color):
+            return None
 
     return _pick_model(profile, args, color)
+
+
+def _gpu_backend(selected_gpu: tier.GPUInfo, probe: tier.Probe,
+                 color: bool) -> Tuple[str, str, bool]:
+    """The selected GPU's (backend_id, display_name, supported), with ROCm
+    not supported off x86_64."""
+    backend_id, backend_name, supported = _backend_for(selected_gpu.vendor)
+    # #115: rocm has no aarch64 release. Strip support on non-x86_64
+    # so the wizard falls through to the Vulkan fallback rather than
+    # writing ATLAS_BACKEND=rocm + failing at image pull. Mesa RADV
+    # under vulkan covers AMD GPUs on arm64 (slower than rocm would
+    # be, but it actually exists).
+    if backend_id == "rocm" and probe.system_arch != "x86_64":
+        supported = False
+        _safe_print(f"  {YELLOW if color else ''}Note: ROCm has no "
+                    f"{probe.system_arch} release.{RESET if color else ''} "
+                    f"Vulkan-via-Mesa-RADV is the path for AMD GPUs on "
+                    f"arm64 hosts (see #115).")
+    return backend_id, backend_name, supported
+
+
+def _apple_silicon_setup_confirmed(args: argparse.Namespace,
+                                   color: bool) -> bool:
+    """Show the native Metal setup and ask to go on; False when the user
+    declines."""
+    _print_apple_silicon_setup(color)
+    if not _confirm("Continue with the recommended setup?",
+                    default_yes=True, args=args):
+        _safe_print("  Refusing rather than writing a .env that won't "
+                    "boot. Re-run with --backend vulkan for the "
+                    "Docker-only path, or run the setup script + retry.")
+        return False
+    return True
+
+
+def _vulkan_fallback_accepted(selected_gpu: tier.GPUInfo, backend_id: str,
+                              backend_name: str, args: argparse.Namespace,
+                              color: bool) -> bool:
+    """Offer Vulkan for a GPU whose native backend is not packaged, and set
+    args.backend to it when accepted; False when the host has no Vulkan or
+    the user declines."""
+    # PC-114 (#114): when the native backend isn't packaged, offer
+    # Vulkan as the universal fallback before refusing. Vulkan
+    # works on Apple Silicon (via MoltenVK), Intel Arc (Mesa
+    # ANV), Snapdragon Adreno, and CPU lavapipe — covering the
+    # gap left by the cuda/rocm-only matrix.
+    _print_backend_not_packaged(selected_gpu, backend_id, backend_name,
+                                color)
+    if tier.vulkan_available():
+        _print_vulkan_fallback(color)
+        if _confirm("Use Vulkan?", default_yes=True, args=args):
+            args.backend = "vulkan"
+        else:
+            _safe_print("  Refusing rather than writing a .env that "
+                        "won't boot. Re-run with --backend vulkan to "
+                        "skip this prompt next time.")
+            return False
+    else:
+        _safe_print("  Vulkan fallback isn't available on this host "
+                    "either (no vulkaninfo, no /dev/dri, no detected "
+                    "GPU). Refusing.")
+        return False
+    return True
 
 
 def _print_apple_silicon_setup(color: bool) -> None:
