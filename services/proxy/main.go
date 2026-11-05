@@ -497,24 +497,8 @@ func runServer(srv *http.Server, ln net.Listener, signals <-chan os.Signal,
 		_ = srv.Close()
 	}
 
-	hookCtx, cancelHooks := context.WithTimeout(context.Background(), budget.hookMargin)
-	defer cancelHooks()
 	res.hooksRan = true
-	for _, h := range hooks {
-		done := make(chan error, 1)
-		go func(h closeHook) { done <- h.fn(hookCtx) }(h)
-		select {
-		case err := <-done:
-			if err != nil {
-				res.hookErrors = append(res.hookErrors, h.name+": "+err.Error())
-			}
-		case <-hookCtx.Done():
-			res.hookErrors = append(res.hookErrors, h.name+": "+hookCtx.Err().Error())
-		}
-	}
-	for _, e := range res.hookErrors {
-		log.Printf("[lifecycle] close hook failed: %s", e)
-	}
+	res.hookErrors = runCloseHooks(hooks, budget.hookMargin)
 	// Drain whatever Serve reports after Shutdown; ErrServerClosed is normal.
 	select {
 	case err := <-serveErr:
@@ -524,6 +508,31 @@ func runServer(srv *http.Server, ln net.Listener, signals <-chan os.Signal,
 	case <-time.After(time.Second):
 	}
 	return res, nil
+}
+
+// runCloseHooks runs the hooks in turn within one shared margin and returns
+// their errors, each with its hook's name. A hook still running when the margin
+// ends is reported and left behind.
+func runCloseHooks(hooks []closeHook, margin time.Duration) []string {
+	hookCtx, cancelHooks := context.WithTimeout(context.Background(), margin)
+	defer cancelHooks()
+	var hookErrors []string
+	for _, h := range hooks {
+		done := make(chan error, 1)
+		go func(h closeHook) { done <- h.fn(hookCtx) }(h)
+		select {
+		case err := <-done:
+			if err != nil {
+				hookErrors = append(hookErrors, h.name+": "+err.Error())
+			}
+		case <-hookCtx.Done():
+			hookErrors = append(hookErrors, h.name+": "+hookCtx.Err().Error())
+		}
+	}
+	for _, e := range hookErrors {
+		log.Printf("[lifecycle] close hook failed: %s", e)
+	}
+	return hookErrors
 }
 
 func main() {
