@@ -953,6 +953,8 @@ def answers(name="", said=None):
                  ["the proxy says that the lens is not ready (it has no C(x) model loaded)"], id="the proxy: the lens"),
     pytest.param(answers("the proxy's /ready", proxy_says(sandbox=False)), ["the proxy says that the sandbox is not ready"],
                  id="the proxy: the sandbox"),
+    pytest.param(answers("the proxy's /ready", proxy_says(sandbox=False, lens_reason="it has no C(x) model loaded")),
+                 ["the proxy says that the sandbox is not ready"], id="the proxy: the lens reason only on the lens"),
     pytest.param(answers("the proxy's /ready", proxy_says(inference=False, v3=False)),
                  ["the proxy says that the model server is not ready", "the proxy says that v3-service is not ready"],
                  id="the proxy: two parts"),
