@@ -98,6 +98,17 @@ def test_project_symbol_credits_cross_file_call():
     assert "shared_util" not in struct["unresolved_calls"], struct
 
 
+def test_project_symbols_are_the_top_level_definitions_of_each_python_file():
+    files = {
+        "broken.py": None,
+        "app.py": "settings = 1\ndel settings\n\n\ndef plain():\n    pass\n\n\nclass Model:\n    def method(self):\n        pass\n",
+        "ROUTES.PY": "@wrap\ndef decorated():\n    pass\n\n\n@wrap\nclass DecoratedModel:\n    pass\n",
+        "notes.txt": "def not_python():\n    pass\n",
+    }
+
+    assert symbols.build_project_symbols(files) == {"plain", "Model", "decorated", "DecoratedModel"}
+
+
 def test_local_variable_call_not_flagged():
     # #147 review #4: fn is a local variable, not a top-level def — must NOT flag.
     code = (
