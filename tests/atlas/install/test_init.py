@@ -469,9 +469,47 @@ def test_apple_silicon_declining_the_metal_setup_writes_nothing(
     monkeypatch.setattr("builtins.input", lambda *a, **kw: "n")
     rc = init.main(["--skip-download", "--no-color"])  # no --yes, so it asks
     assert rc == 1
-    # The refusal names the Docker-only way out.
-    assert "Re-run with --backend vulkan" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    # The refusal names the Docker-only way out, and no model is offered.
+    assert "Re-run with --backend vulkan" in out
+    assert "Recommended:" not in out
     assert not (atlas_root / ".env").exists()
+
+
+@pytest.mark.parametrize("probe", [
+    _single_gpu_probe("apple", "Apple M3 Max 18GB", 18.0, platform="linux", system_arch="aarch64"),
+    _single_gpu_probe("nvidia", "NVIDIA RTX 4090", 24.0, platform="darwin"),
+], ids=["an-apple-gpu-off-macos", "another-gpu-on-macos"])
+def test_only_an_apple_gpu_on_macos_gets_the_metal_setup_banner(atlas_root, monkeypatch, capsys, probe):
+    """The native Metal setup is for an Apple GPU on macOS only."""
+    monkeypatch.setattr(tier, "probe", lambda install_dir=None: probe)
+    rc = init.main(["--yes", "--skip-download", "--no-color"])
+    assert rc == 0
+    assert "Apple Silicon detected" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("vulkan_on_host, answer, written", [
+    (True, "", True),
+    (True, "n", False),
+    (False, "", False),
+], ids=["vulkan-accepted", "vulkan-declined", "no-vulkan-on-the-host"])
+def test_a_gpu_without_a_packaged_backend_is_offered_vulkan(
+        atlas_root, monkeypatch, capsys, vulkan_on_host, answer, written):
+    """Intel Arc's SYCL backend is not packaged yet. The wizard says so and
+    offers Vulkan when the host has it. Without Vulkan, or when the user
+    declines it, the wizard stops before the model prompt and writes nothing."""
+    intel = _single_gpu_probe("intel", "Intel Arc A770", 16.0)
+    monkeypatch.setattr(tier, "probe", lambda install_dir=None: intel)
+    monkeypatch.setattr(tier, "vulkan_available", lambda: vulkan_on_host)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda *a, **kw: answer)
+    rc = init.main(["--skip-download", "--no-color"])
+    out = capsys.readouterr().out
+    assert "which is not yet packaged" in out
+    assert ("Vulkan universal backend is available" in out) is vulkan_on_host
+    assert ("Recommended:" in out) is written
+    assert rc == (0 if written else 1)
+    assert (atlas_root / ".env").exists() is written
 
 
 @pytest.mark.parametrize("probe", [
@@ -487,7 +525,9 @@ def test_backend_vulkan_flag_wins_over_the_gpu_vendor(atlas_root, monkeypatch, c
     monkeypatch.setattr(tier, "probe", lambda install_dir=None: probe)
     rc = init.main(["--yes", "--skip-download", "--no-color", "--backend", "vulkan"])
     assert rc == 0
-    assert "Apple Silicon detected" not in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "--backend vulkan requested" in out
+    assert "Apple Silicon detected" not in out
     body = (atlas_root / ".env").read_text()
     assert "ATLAS_BACKEND=vulkan" in body
     # Without the override file in the header, an operator could start the
