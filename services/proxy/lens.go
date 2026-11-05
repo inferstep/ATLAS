@@ -160,6 +160,14 @@ func scoreContentForAgent(ctx context.Context, lensURL, content string) (lensPer
 	if resp.StatusCode != http.StatusOK {
 		return zero, false, fmt.Sprintf("it answered HTTP %d", resp.StatusCode)
 	}
+	return readLensAnswer(raw)
+}
+
+// readLensAnswer reads the lens's 200 answer to a score request: a score, an
+// input the lens declined (unscored, no reason), or the lens itself unable to
+// score (unscored, with why).
+func readLensAnswer(raw []byte) (lensPerStepResult, bool, string) {
+	var zero lensPerStepResult
 	var r lensPerStepResult
 	if err := json.Unmarshal(raw, &r); err != nil {
 		log.Printf("[agent-lens] score parse failed: %v", err)
