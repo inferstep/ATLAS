@@ -411,21 +411,26 @@ def test_the_gpu_named_in_the_environment_is_picked(monkeypatch, env, picked):
 # Backend choice per GPU (ROCm, Metal #32, Vulkan PC-114, arm64 #115)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("system_arch, expected_backend, rocm_note_shown", [
-    ("x86_64", "rocm", False),
-    ("aarch64", "vulkan", True),
-], ids=["x86_64-gets-rocm", "aarch64-falls-back-to-vulkan"])
+@pytest.mark.parametrize("system_arch, expected_backend, rocm_note_shown, color", [
+    ("x86_64", "rocm", False, False),
+    ("aarch64", "vulkan", True, False),
+    ("aarch64", "vulkan", True, True),
+], ids=["x86_64-gets-rocm", "aarch64-falls-back-to-vulkan", "aarch64-with-color"])
 def test_amd_gpu_backend_depends_on_the_cpu_architecture(
-        atlas_root, monkeypatch, capsys, system_arch, expected_backend, rocm_note_shown):
+        atlas_root, monkeypatch, capsys, system_arch, expected_backend, rocm_note_shown, color):
     """ROCm has no arm64 release, so an AMD GPU on aarch64 gets Vulkan
     (Mesa RADV is multi-arch) and a note that says why."""
     amd_probe = _single_gpu_probe("amd", "AMD Radeon RX 7900 XTX", 24.0,
                                   system_arch=system_arch)
     monkeypatch.setattr(tier, "probe", lambda install_dir=None: amd_probe)
     monkeypatch.setattr(tier, "vulkan_available", lambda: True)
-    rc = init.main(["--yes", "--skip-download", "--no-color"])
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    rc = init.main(["--yes", "--skip-download", *([] if color else ["--no-color"])])
     assert rc == 0
-    assert ("ROCm has no aarch64 release" in capsys.readouterr().out) is rocm_note_shown
+    out = capsys.readouterr().out
+    assert ("ROCm has no aarch64 release" in out) is rocm_note_shown
+    assert (f"{init.YELLOW}Note: ROCm" in out) is color
+    assert (f"aarch64 release.{init.RESET}" in out) is color
     body = (atlas_root / ".env").read_text()
     assert f"ATLAS_BACKEND={expected_backend}" in body
     assert "ATLAS_GPU_VENDOR=amd" in body
@@ -434,22 +439,25 @@ def test_amd_gpu_backend_depends_on_the_cpu_architecture(
     assert f"docker-compose.{expected_backend}.yml" in body
 
 
-@pytest.mark.parametrize("flags, banner_shown", [
-    ([], True),
-    (["--backend", "metal"], False),
-], ids=["auto-detected", "forced-with-backend-metal"])
+@pytest.mark.parametrize("flags, banner_shown, color", [
+    ([], True, False),
+    (["--backend", "metal"], False, False),
+    ([], True, True),
+], ids=["auto-detected", "forced-with-backend-metal", "auto-detected-with-color"])
 def test_apple_silicon_gets_the_hybrid_metal_env(
-        atlas_root, monkeypatch, capsys, flags, banner_shown):
+        atlas_root, monkeypatch, capsys, flags, banner_shown, color):
     """Apple Silicon gets native llama-server (Metal) + Docker for the rest.
     Auto-detection shows a recommendation banner that --yes accepts;
     --backend metal skips the banner and writes the same .env."""
     apple = _single_gpu_probe("apple", "Apple M3 Max 32GB", 32.0,
                               platform="darwin", system_arch="aarch64")
     monkeypatch.setattr(tier, "probe", lambda install_dir=None: apple)
-    rc = init.main(["--yes", "--skip-download", "--no-color", *flags])
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    rc = init.main(["--yes", "--skip-download", *([] if color else ["--no-color"]), *flags])
     assert rc == 0
     out = capsys.readouterr().out
     assert ("Apple Silicon detected" in out) is banner_shown
+    assert (f"{init.GREEN}Apple Silicon detected" in out) is color
     # The setup-script prerequisite and its docs are pointed to.
     assert "scripts/install/atlas-setup-macos.sh" in out
     assert "SETUP_MACOS.md" in out
@@ -488,13 +496,14 @@ def test_only_an_apple_gpu_on_macos_gets_the_metal_setup_banner(atlas_root, monk
     assert "Apple Silicon detected" not in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("vulkan_on_host, answer, written", [
-    (True, "", True),
-    (True, "n", False),
-    (False, "", False),
-], ids=["vulkan-accepted", "vulkan-declined", "no-vulkan-on-the-host"])
+@pytest.mark.parametrize("vulkan_on_host, answer, written, color", [
+    (True, "", True, False),
+    (True, "n", False, False),
+    (False, "", False, False),
+    (True, "", True, True),
+], ids=["vulkan-accepted", "vulkan-declined", "no-vulkan-on-the-host", "vulkan-with-color"])
 def test_a_gpu_without_a_packaged_backend_is_offered_vulkan(
-        atlas_root, monkeypatch, capsys, vulkan_on_host, answer, written):
+        atlas_root, monkeypatch, capsys, vulkan_on_host, answer, written, color):
     """Intel Arc's SYCL backend is not packaged yet. The wizard says so and
     offers Vulkan when the host has it. Without Vulkan, or when the user
     declines it, the wizard stops before the model prompt and writes nothing."""
@@ -503,10 +512,13 @@ def test_a_gpu_without_a_packaged_backend_is_offered_vulkan(
     monkeypatch.setattr(tier, "vulkan_available", lambda: vulkan_on_host)
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     monkeypatch.setattr("builtins.input", lambda *a, **kw: answer)
-    rc = init.main(["--skip-download", "--no-color"])
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    rc = init.main(["--skip-download", *([] if color else ["--no-color"])])
     out = capsys.readouterr().out
     assert "which is not yet packaged" in out
+    assert (f"{init.YELLOW}Selected GPU vendor" in out) is color
     assert ("Vulkan universal backend is available" in out) is vulkan_on_host
+    assert (f"{init.GREEN}Vulkan universal backend" in out) is color
     assert ("Recommended:" in out) is written
     assert rc == (0 if written else 1)
     assert (atlas_root / ".env").exists() is written
