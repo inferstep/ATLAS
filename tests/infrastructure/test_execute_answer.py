@@ -25,6 +25,7 @@ SANDBOX = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.a
 sys.path.insert(0, SANDBOX)
 
 import executor_server as ex
+import executor_languages as el
 import resource_contract as rc
 
 MiB = 1024 * 1024
@@ -73,6 +74,7 @@ def answer(monkeypatch, tmp_path, language, plan):
         ran.append((" ".join(str(part).split("/")[-1] for part in cmd[:2]), timeout))
         return result
 
+    monkeypatch.setattr(el, "_run_cmd", planned)
     monkeypatch.setattr(ex, "_run_cmd", planned)
     got = ex.LANGUAGE_HANDLERS[language](code=CODE.get(language, "print(1)"), test_code=None, workspace=tmp_path, timeout=7,
                                          requirements=["requests"], stdin=None)
@@ -211,6 +213,7 @@ def test_a_program_that_runs_into_its_time_limit(tmp_path):
 
 
 def test_a_program_that_writes_more_than_the_output_limit(monkeypatch, tmp_path, small):
+    monkeypatch.setattr(el, "EXEC_CONTRACT", small)
     monkeypatch.setattr(ex, "EXEC_CONTRACT", small)
     got = stopped_at(bash(tmp_path, flood("ABCDEFGHIJKLMNOP", small.output_bytes)), rc.OUTCOME_OUTPUT_LIMIT)
     assert got.error_message.split("\n")[0] == "Execution stopped at the output limit of 1048576 bytes"
@@ -219,6 +222,7 @@ def test_a_program_that_writes_more_than_the_output_limit(monkeypatch, tmp_path,
 
 @needs_proc
 def test_a_program_that_takes_more_than_the_memory_limit(monkeypatch, tmp_path, small):
+    monkeypatch.setattr(el, "EXEC_CONTRACT", small)
     monkeypatch.setattr(ex, "EXEC_CONTRACT", small)
     got = stopped_at(bash(tmp_path, allocator(64, small.memory_bytes)), rc.OUTCOME_MEMORY_EXHAUSTED)
     assert got.error_message.split("\n")[0] == "Execution stopped at the memory limit of 384 MiB"
@@ -228,6 +232,7 @@ def test_a_program_that_takes_more_than_the_memory_limit(monkeypatch, tmp_path, 
 def test_a_program_that_starts_more_processes_than_the_limit(monkeypatch, tmp_path):
     few = rc.ResourceContract(wall_seconds=15, memory_bytes=384 * MiB, max_processes=8, output_bytes=1 * MiB)
     few.validate()
+    monkeypatch.setattr(el, "EXEC_CONTRACT", few)
     monkeypatch.setattr(ex, "EXEC_CONTRACT", few)
     got = stopped_at(bash(tmp_path, "for i in $(seq 1 40); do sleep 12 & done; wait"), rc.OUTCOME_PROCESS_LIMIT)
     assert got.error_message.split("\n")[0] == "Execution stopped at the limit of 8 processes"

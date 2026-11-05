@@ -490,8 +490,11 @@ def test_health_reports_degraded_state_when_supervision_unavailable(monkeypatch,
     """The /health endpoint and execution results report when resource limits are not enforced."""
     monkeypatch.syspath_prepend(SANDBOX)
     import executor_server as ex
+    import executor_languages as el
 
     monkeypatch.setattr(ex, "WORKSPACE_BASE", tmp_path)
+    monkeypatch.setattr(el, "SUPERVISION_AVAILABLE", False)
+    monkeypatch.setattr(el, "SUPERVISION_REASON", rc.SUPERVISION_UNAVAILABLE_REASON)
     monkeypatch.setattr(ex, "SUPERVISION_AVAILABLE", False)
     monkeypatch.setattr(ex, "SUPERVISION_REASON", rc.SUPERVISION_UNAVAILABLE_REASON)
 
@@ -518,8 +521,11 @@ def test_health_reports_enforced_state_when_supervision_available(monkeypatch, t
     """The /health endpoint and execution results report when resource limits are enforced."""
     monkeypatch.syspath_prepend(SANDBOX)
     import executor_server as ex
+    import executor_languages as el
 
     monkeypatch.setattr(ex, "WORKSPACE_BASE", tmp_path)
+    monkeypatch.setattr(el, "SUPERVISION_AVAILABLE", True)
+    monkeypatch.setattr(el, "SUPERVISION_REASON", "enforced")
     monkeypatch.setattr(ex, "SUPERVISION_AVAILABLE", True)
     monkeypatch.setattr(ex, "SUPERVISION_REASON", "enforced")
 
