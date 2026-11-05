@@ -476,11 +476,13 @@ def test_apple_silicon_declining_the_metal_setup_writes_nothing(
     assert not (atlas_root / ".env").exists()
 
 
-def test_an_apple_gpu_off_macos_gets_no_metal_setup_banner(atlas_root, monkeypatch, capsys):
-    """The native Metal setup runs only on macOS, so only darwin shows it."""
-    apple_on_linux = _single_gpu_probe("apple", "Apple M3 Max 18GB", 18.0,
-                                       platform="linux", system_arch="aarch64")
-    monkeypatch.setattr(tier, "probe", lambda install_dir=None: apple_on_linux)
+@pytest.mark.parametrize("probe", [
+    _single_gpu_probe("apple", "Apple M3 Max 18GB", 18.0, platform="linux", system_arch="aarch64"),
+    _single_gpu_probe("nvidia", "NVIDIA RTX 4090", 24.0, platform="darwin"),
+], ids=["an-apple-gpu-off-macos", "another-gpu-on-macos"])
+def test_only_an_apple_gpu_on_macos_gets_the_metal_setup_banner(atlas_root, monkeypatch, capsys, probe):
+    """The native Metal setup is for an Apple GPU on macOS only."""
+    monkeypatch.setattr(tier, "probe", lambda install_dir=None: probe)
     rc = init.main(["--yes", "--skip-download", "--no-color"])
     assert rc == 0
     assert "Apple Silicon detected" not in capsys.readouterr().out
