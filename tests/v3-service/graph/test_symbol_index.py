@@ -33,7 +33,8 @@ def test_a_long_definition_is_cut_to_its_first_lines(lines, snippet, truncated):
 
 
 def test_only_python_files_are_read():
-    index = symbols.symbol_index({"app.js": "function target() {\n  return 1;\n}\n"}, ["target"])
+    index = symbols.symbol_index({"app.js": "function target() {\n  return 1;\n}\n",
+                                  "notes.txt": "def target():\n    return 1\n"}, ["target"])
 
     assert index == {"matched": [], "skipped": [{"name": "target", "reason": "not defined in scanned project files"}]}
 
