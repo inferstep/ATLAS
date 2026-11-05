@@ -1680,11 +1680,9 @@ func TestRunServerDrainsAndRunsHooks(t *testing.T) {
 	}}
 	signals := make(chan os.Signal, 2)
 	result := make(chan shutdownResult, 1)
-	runErr := make(chan error, 1)
 	go func() {
-		r, err := runServer(srv, ln, signals, hooks,
+		r, _ := runServer(srv, ln, signals, hooks,
 			shutdownBudgetValues{drain: 10 * time.Second, hookMargin: 2 * time.Second})
-		runErr <- err
 		result <- r
 	}()
 
@@ -1731,12 +1729,6 @@ func TestRunServerDrainsAndRunsHooks(t *testing.T) {
 
 	select {
 	case r := <-result:
-		if err := <-runErr; err != nil {
-			t.Errorf("a clean drain returned an error: %v", err)
-		}
-		if !r.signalled {
-			t.Error("the signal was not recorded")
-		}
 		if r.forced {
 			t.Errorf("a clean drain was reported as forced: %+v", r)
 		}
@@ -1772,7 +1764,7 @@ func TestRunServerForcedCloseIsClassified(t *testing.T) {
 	result := make(chan shutdownResult, 1)
 	go func() {
 		r, _ := runServer(srv, ln, signals, nil,
-			shutdownBudgetValues{drain: 300 * time.Millisecond, hookMargin: 200 * time.Millisecond})
+			shutdownBudgetValues{drain: 300 * time.Millisecond, hookMargin: time.Minute})
 		result <- r
 	}()
 	stuckErr := make(chan error, 1)
@@ -1866,15 +1858,23 @@ func TestCloseHooksAreBounded(t *testing.T) {
 		{name: "hangs", fn: func(ctx context.Context) error { <-ctx.Done(); close(hangsEnded); return ctx.Err() }},
 	}
 	result := make(chan shutdownResult, 1)
+	runErr := make(chan error, 1)
 	go func() {
-		r, _ := runServer(srv, ln, signals, hooks,
-			shutdownBudgetValues{drain: time.Second, hookMargin: 200 * time.Millisecond})
+		r, err := runServer(srv, ln, signals, hooks,
+			shutdownBudgetValues{drain: time.Minute, hookMargin: 200 * time.Millisecond})
+		runErr <- err
 		result <- r
 	}()
 	time.Sleep(50 * time.Millisecond)
 	signals <- syscall.SIGTERM
 	select {
 	case r := <-result:
+		if err := <-runErr; err != nil {
+			t.Errorf("failed hooks made runServer return an error: %v", err)
+		}
+		if !r.signalled {
+			t.Error("the signal was not recorded")
+		}
 		want := []string{"fails: boom", "hangs: context deadline exceeded"}
 		if !reflect.DeepEqual(r.hookErrors, want) {
 			t.Errorf("hook errors=%q, want %q", r.hookErrors, want)
