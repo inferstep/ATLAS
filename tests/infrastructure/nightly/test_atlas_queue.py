@@ -20,7 +20,9 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts" / "server"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
 import atlas_queue
+import nightly_run
 
 QUEUE = Path(atlas_queue.__file__)
 # A command that writes "started", and "stopped" when SIGTERM comes, and otherwise runs on.
@@ -233,3 +235,23 @@ def test_a_run_that_cannot_start_runs_nothing_and_ends_with_status_75(tmp_path, 
     assert "not started" in run.stdout.read()
     assert not (tmp_path / "ran").exists()
     held.close()
+
+
+def test_the_nightly_run_and_a_queued_job_never_hold_the_lock_of_the_card_at_once(tmp_path, monkeypatch):
+    # Each takes its lock at its default place in the home folder, as on the server. A queued job may use the card.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    the_nightlys_lock = nightly_run.parse(["--dir", str(tmp_path)]).lock
+
+    job = subprocess.Popen([sys.executable, str(QUEUE), "dev", "--poll-seconds", "0.1", "--", "sh", "-c",
+                            "touch started; sleep 3"], cwd=tmp_path)
+    wait_for(tmp_path / "started")
+    with nightly_run.lock(the_nightlys_lock) as held:
+        assert held is None
+    assert job.wait(timeout=20) == 0
+
+    with nightly_run.lock(the_nightlys_lock) as held:
+        assert held is not None
+        smoke = subprocess.run([sys.executable, str(QUEUE), "smoke", "--wait-minutes", "0", "--", "touch", "ran"],
+                               cwd=tmp_path, timeout=20)
+    assert smoke.returncode == atlas_queue.NOT_STARTED
+    assert not (tmp_path / "ran").exists()

@@ -31,9 +31,11 @@ Steps 1 to 3 need no card. They come before the lock, and the time limit of
 the run does not count them: each of their commands has a limit of its own.
 
 When another run holds the lock of the card, or a process holds the card
-itself, the report says "not run: the card was in use" and the run ends. A
-run of another kind that uses the card takes the same lock:
-`flock <lock file> <command>`.
+itself, the report says "not run: the card was in use" and the run ends. The
+lock is the one of the server's queue of heavy runs, ~/atlas-queue/lock
+(scripts/server/atlas_queue.py), so a queued job and the run never hold it at
+once. A run of another kind that uses the card goes through that queue, or
+takes the same lock: `flock ~/atlas-queue/lock <command>`.
 
 The run is best effort. A night with no run (the card was in use, the images
 were not of the head yet, or the server was off) is not a failure: no check
@@ -1241,7 +1243,8 @@ def full_id(given: str) -> str:
 def parse(argv: list) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--dir", type=Path, required=True, help="the folder of the nightly run; it writes nowhere else")
-    parser.add_argument("--lock", type=Path, default=Path.home() / ".atlas-card.lock", help="the lock file of the graphics card")
+    parser.add_argument("--lock", type=Path, default=Path.home() / "atlas-queue" / "lock",
+                        help="the lock file of the graphics card: the lock of the server's queue (scripts/server/atlas_queue.py)")
     parser.add_argument("--python", default=sys.executable, help="a Python that has pytest and httpx")
     parser.add_argument("--limit-minutes", type=float, default=30, help="the time limit of the stack, the sessions and the tests")
     parser.add_argument("--image-wait-minutes", type=float, default=20, help="how long the run looks again for the images of the head")

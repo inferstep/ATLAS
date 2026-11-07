@@ -861,9 +861,13 @@ The first line of the report is its result:
   its container. The lens's `/health` goes into the report for the reader:
   whether its self test passed and whether it has its calibration. A lens
   with no calibration scores, and does not fail the run.
-- The run takes a lock file before it uses the graphics card. A run of
-  another kind that needs the card takes the same file:
-  `flock <lock file> <command>`. A stack that simply runs takes no lock, so
+- The run takes a lock file before it uses the graphics card: the lock of
+  the server's queue of heavy runs, `~/atlas-queue/lock`
+  (`scripts/server/atlas_queue.py`). So a queued job and the run never hold
+  it at once. A run of another kind that needs the card goes through that
+  queue, or takes the same file: `flock ~/atlas-queue/lock <command>`. The
+  queue does not start the run: the run would find the lock held by the
+  queue itself. A stack that simply runs takes no lock, so
   the run also asks `nvidia-smi` which processes compute on the card. Where
   that tool is missing, the report says that the card was not read.
 - Only one run of a folder goes at a time.

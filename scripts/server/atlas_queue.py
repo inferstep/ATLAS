@@ -7,6 +7,10 @@ writes a note beside it, <queue>/holder.json: what runs, its command, its proces
 expects to end, and whether it yields. The nightly signals a holder's group only when that group's leader still
 runs the noted command, and never a group of 1 or less or its own: a wrong note cannot stop another process.
 
+The lock is also the lock of the graphics card: scripts/nightly_run.py takes <queue>/lock itself (its --lock) before
+it uses the card, so a queued job never holds the card beside a nightly or smoke run. Its timer starts it directly,
+not through this queue: run through the queue, it would find the lock held by the queue itself and run nothing.
+
 The order is the nightly, then the smoke, then development jobs:
   - The nightly: when the lock is held, it asks for the queue (it writes <queue>/yield, with the time), so
     that no job takes the lock before it. A job that yields and holds the lock gets up to 20 minutes; then
