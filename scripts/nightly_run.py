@@ -5,15 +5,18 @@ One run, started by a timer on the development server, in a folder of its own
 (--dir). Only one run of a folder goes at a time. It:
 
   1. takes the head of `dev` into <dir>/tree. When that changes this very
-     file or one of the three beside it (the judge, the images and the
-     statuses; the run was started from the tree), the new copy does the run;
+     file or one of the four it loads (the judge, the images, the statuses
+     and the queue; the run was started from the tree), the new copy does
+     the run;
   2. stops a stack of its own name that an earlier run left;
   3. takes the `dev` images of the registry under names of its own, so that
      no tag of the server moves (scripts/nightly_images.py), and compares
      the commit each was built from with the head. The images of a push
      come some minutes after it, so the run looks again for a while. When
      one still differs, the night is "not run" and nothing more is done;
-  4. takes the lock of the graphics card, and reads what the card holds;
+  4. takes the lock of the graphics card, and reads what the card holds. A
+     night asks a queued job that holds the lock to give way, and waits for
+     it (--yield-wait-minutes);
   5. starts a stack under a name of its own, on loopback ports of its own,
      and asks the services whether they are whole;
   6. runs the driver of the repository (scripts/eval/e2e-reliability.py) with three
@@ -31,11 +34,16 @@ Steps 1 to 3 need no card. They come before the lock, and the time limit of
 the run does not count them: each of their commands has a limit of its own.
 
 When another run holds the lock of the card, or a process holds the card
-itself, the report says "not run: the card was in use" and the run ends. The
-lock is the one of the server's queue of heavy runs, ~/atlas-queue/lock
+itself, the report says "not run: the card was in use" and the run ends; for
+a lock that stayed held it names the run that held it, and a later look of
+the night's hour starts the night again. The lock is the one of
+the server's queue of heavy runs, ~/atlas-queue/lock
 (scripts/server/atlas_queue.py), so a queued job and the run never hold it at
-once. A run of another kind that uses the card goes through that queue, or
-takes the same lock: `flock ~/atlas-queue/lock <command>`.
+once. A night asks for the lock as the queue's own nightly does: a job that
+yields stops, and no queued job takes the lock before the night. Unlike the
+queue's nightly, it never stops a job itself. A run of another kind that uses
+the card goes through that queue, or takes the same lock:
+`flock ~/atlas-queue/lock <command>`.
 
 The run is best effort. A night with no run (the card was in use, the images
 were not of the head yet, or the server was off) is not a failure: no check
@@ -113,6 +121,7 @@ import datetime as dt
 import fcntl
 import importlib.util
 import json
+import math
 import os
 import re
 import signal
@@ -193,10 +202,11 @@ NEW_COPY_LEFT_NO_REPORT = ("failed: taking the head changed the script of the ru
                            "place, and that copy left no report")
 # The judge of a run of tests that must all run, and the list of such tests: a file beside this one. And the file
 # of the images of a run: the run's own names for them, and the room that they need. And the file that keeps and
-# sends the statuses of a run on GitHub.
+# sends the statuses of a run on GitHub. And the server's queue of heavy runs, whose lock is the lock of the card.
 JUDGE = Path(__file__).resolve().with_name("tests_counted.py")
 IMAGES_FILE = JUDGE.with_name("nightly_images.py")
 STATUSES_FILE = JUDGE.with_name("nightly_statuses.py")
+QUEUE_FILE = JUDGE.parent / "server" / "atlas_queue.py"
 
 
 def load_beside(path: Path, name: str):
@@ -210,11 +220,12 @@ def load_beside(path: Path, name: str):
 counted, images = load_beside(JUDGE, "atlas_tests_counted"), load_beside(IMAGES_FILE, "atlas_nightly_images")
 IMAGES, REGISTRY, TAG, REVISION, OWN_IMAGES = images.IMAGES, images.REGISTRY, images.TAG, images.REVISION, images.OWN
 statuses = load_beside(STATUSES_FILE, "atlas_nightly_statuses")
+queue = load_beside(QUEUE_FILE, "atlas_server_queue")
 REPOSITORY, STATUS, NotSent, github = statuses.REPOSITORY, statuses.STATUS, statuses.NotSent, statuses.github
 # The tests of the run: the group that needs a real model.
 TESTS = counted.GROUPS["model"]
-# This file and the three beside it as Python read them when the run started.
-AS_STARTED = {path: path.read_bytes() for path in (Path(__file__).resolve(), JUDGE, IMAGES_FILE, STATUSES_FILE)}
+# This file and the four it loads as Python read them when the run started.
+AS_STARTED = {path: path.read_bytes() for path in (Path(__file__).resolve(), JUDGE, IMAGES_FILE, STATUSES_FILE, QUEUE_FILE)}
 # What the run asks the services about themselves. Each is asked inside its own container, with the tool and at the
 # port of its health check. The health check of the lens asks /health, which says that the process serves; /ready
 # says whether the lens can score. The proxy's /ready asks the model server, the lens, the sandbox and v3-service.
@@ -349,8 +360,8 @@ def take_head(args) -> str:
 
 
 def script_changed(args) -> bool:
-    """Whether taking the head changed this very file or one of the three beside it: the run was started from the
-    tree, and one of the four holds other bytes now."""
+    """Whether taking the head changed this very file or one of the four it loads: the run was started from the
+    tree, and one of the five holds other bytes now."""
     own = Path(__file__).resolve()
     try:
         return (own == (args.dir / "tree" / "scripts" / "nightly_run.py").resolve()
@@ -961,13 +972,33 @@ def one_night(args, report: dict, folder: Path, first_start: bool) -> None:
         on_the_card(args, report, folder)
 
 
+def take_the_card(args, report: dict):
+    """The open lock file of the card, or None when the lock stayed held.
+
+    A night asks the queue for the lock, as the queue's own nightly does, and waits up to --yield-wait-minutes for a
+    job to give way. Any other run tries only once: its look found the lock free a moment ago.
+    """
+    folder = args.lock.parent
+    folder.mkdir(parents=True, exist_ok=True)
+    wait = args.yield_wait_minutes if report["mode"] == "night" else 0
+    try:
+        # The infinite waits keep the queue's nightly from stopping the job: the run skips the night instead.
+        return queue.wait_for_the_lock(folder, "nightly", queue.now() + dt.timedelta(minutes=wait), poll_s=1,
+                                       yield_wait_s=math.inf, stop_wait_s=math.inf)
+    finally:
+        # Once the run holds the lock no job takes it, so the request ends with the wait.
+        (folder / "yield").unlink(missing_ok=True)
+
+
 def on_the_card(args, report: dict, folder: Path) -> None:
     """Take the lock of the card, do the steps that need it under the time limit, and stop the stack."""
     now_in(report, "take the lock of the card")
-    with lock(args.lock) as held:
-        if not held:
-            report["result"] = NOT_RUN
-            return
+    held = take_the_card(args, report)
+    if held is None:
+        report["held_by"] = queue.read_note(args.lock.parent).get("what") or "a run that wrote no note in the queue"
+        report["result"] = f"{NOT_RUN} (held by {report['held_by']})"
+        return
+    with held:
         now_in(report, "read what the card holds")
         in_use, report["card"] = card_use()
         if in_use:
@@ -1191,7 +1222,8 @@ def card_is_free(args, now: dt.datetime) -> bool:
 def what_is_due(args, now: dt.datetime) -> tuple:
     """What this look of the timer runs, and why, in one line: ("night", None, why), ("one commit", <its id>, why) or
     (None, None, why not). A look that finds the card in use starts nothing, so it uses up no try of the day. The
-    same holds for a look that finds too little room on Docker's disk: the usual stack is then not stopped."""
+    same holds for a look that finds too little room on Docker's disk: the usual stack is then not stopped. A night
+    is started also when the lock of the card is held: its run asks the holder to give way (`take_the_card`)."""
     mode, commit, why = run_that_is_due(args, now)
     if not mode:
         return mode, commit, why
@@ -1203,15 +1235,17 @@ def what_is_due(args, now: dt.datetime) -> tuple:
 def run_that_is_due(args, now: dt.datetime) -> tuple:
     """What a look would run if Docker's disk has the room, as `what_is_due` gives it."""
     today = [report for report in reports_of(args) if str(report.get("started", "")).startswith(now.strftime("%Y-%m-%d"))]
-    night_is_due = now.hour == args.night_hour and not [report for report in today if report.get("mode") == "night"]
+    # A night whose lock stayed held through its wait does not count: a later look of its hour starts it again.
+    night_is_due = now.hour == args.night_hour and not [report for report in today
+                                                        if report.get("mode") == "night" and "held_by" not in report]
     lately = held_lately(args, now)
     if lately:
         return None, None, (f"nothing is started: at {lately} a process held the card with no lock, and the looks of the "
                             f"{QUIET_MINUTES} minutes after that start nothing")
-    if not card_is_free(args, now):
-        return None, None, "nothing is started: the card is in use"
     if night_is_due:
         return "night", None, "the night is due"
+    if not card_is_free(args, now):
+        return None, None, "nothing is started: the card is in use"
     try:
         commit, why = smoke_that_is_due(args, today, now.hour)
     except (StepFailed, NotSent) as reason:
@@ -1246,6 +1280,8 @@ def parse(argv: list) -> argparse.Namespace:
     parser.add_argument("--lock", type=Path, default=Path.home() / "atlas-queue" / "lock",
                         help="the lock file of the graphics card: the lock of the server's queue (scripts/server/atlas_queue.py)")
     parser.add_argument("--python", default=sys.executable, help="a Python that has pytest and httpx")
+    parser.add_argument("--yield-wait-minutes", type=float, default=20,
+                        help="how long a night waits for a queued job that holds the lock to give way (the queue's own wait)")
     parser.add_argument("--limit-minutes", type=float, default=30, help="the time limit of the stack, the sessions and the tests")
     parser.add_argument("--image-wait-minutes", type=float, default=20, help="how long the run looks again for the images of the head")
     parser.add_argument("--start-seconds", type=int, default=600, help="how long the stack may take to be healthy")

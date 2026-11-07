@@ -834,7 +834,7 @@ The first line of the report is its result:
 |---|---|
 | `passed` | No fault below was found |
 | `failed: ...` | A step did not end, the time limit was reached, a service was not whole after the start or at the end, the driver found a defect of the harness, a test failed, a test was skipped, the tests collected were not 32 (a missing package skips whole files without another sign), or the stack could not be stopped |
-| `not run: the card was in use` | Another run held the lock of the graphics card, or a process computed on the card; then the result gives how many processes and how much memory |
+| `not run: the card was in use` | Another run held the lock of the graphics card, for a night also after the wait for it to give way; then the result names that run, and a later look of the night's hour starts the night again. Or a process computed on the card; then the result gives how many processes and how much memory |
 | `not run: the images are not of the head of the branch yet` | After the wait an image was still not built from the head of `dev`. Nothing more is done: the numbers would be those of another commit |
 | `not run: too little room for ...` | Before a pull or a build, Docker's disk had less free room than that step needs with the reserve after it. Nothing more is pulled or built, and no stack is started |
 
@@ -864,8 +864,15 @@ The first line of the report is its result:
 - The run takes a lock file before it uses the graphics card: the lock of
   the server's queue of heavy runs, `~/atlas-queue/lock`
   (`scripts/server/atlas_queue.py`). So a queued job and the run never hold
-  it at once. A run of another kind that needs the card goes through that
-  queue, or takes the same file: `flock ~/atlas-queue/lock <command>`. The
+  it at once. A night that finds the lock held asks the queue for it, as the
+  queue's own nightly does: a job that yields stops, and no queued job takes
+  the lock first. The night waits up to 20 minutes for that
+  (`--yield-wait-minutes`) and never stops a job itself; after the wait it is
+  not run, and the result names the holder from the queue's note. The next
+  look of the night's hour starts the night again. A smoke run of one
+  commit does not wait. A run of another kind that needs the card goes
+  through that queue, or takes the same file:
+  `flock ~/atlas-queue/lock <command>`. The
   queue does not start the run: the run would find the lock held by the
   queue itself. A stack that simply runs takes no lock, so
   the run also asks `nvidia-smi` which processes compute on the card. Where
@@ -952,10 +959,11 @@ The server only calls out: it has no open port, no tunnel and no runner for
 this. One look:
 
 1. sends each status that waits;
-2. starts nothing when the graphics card is in use, and nothing when
-   Docker's disk has too little free room;
+2. starts nothing when Docker's disk has too little free room, and no
+   smoke run when the graphics card is in use;
 3. runs the night, when the hour of the night has come (`--night-hour`, in
-   UTC) and no night was started that day;
+   UTC) and no night was started that day. A night whose lock of the card
+   stayed held does not count: a later look of the hour starts it again;
 4. or else runs the tip of one branch `smoke/<name>` that has no result
    yet;
 5. or else does nothing, and leaves no report.
@@ -1029,10 +1037,14 @@ this. One look:
   in UTC, so against a local clock they move by one hour when that clock
   changes between summer time and winter time; the setting is one argument
   of the unit.
+- A look that finds the lock of the card held starts no smoke run. It
+  starts a night all the same: the night's run asks the holder to give way.
 - A look that finds a process on the card that holds no lock starts
   nothing, and the looks of the 60 minutes after it start nothing either.
   So the usual stack is not stopped and started at every look while
-  something else holds the card.
+  something else holds the card. A look for a night does not read the
+  card: the night's run does, after the images, and a process there leaves
+  the night not run.
 - The name after `smoke/` is one part of letters, digits, `.`, `_` and `-`.
 - `--smokes-a-day` bounds how many smoke runs the looks start in one day.
   Without it the bound is 6.

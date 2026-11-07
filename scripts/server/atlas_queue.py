@@ -10,6 +10,8 @@ runs the noted command, and never a group of 1 or less or its own: a wrong note 
 The lock is also the lock of the graphics card: scripts/nightly_run.py takes <queue>/lock itself (its --lock) before
 it uses the card, so a queued job never holds the card beside a nightly or smoke run. Its timer starts it directly,
 not through this queue: run through the queue, it would find the lock held by the queue itself and run nothing.
+A night of nightly_run.py waits for the lock with wait_for_the_lock below, so it asks a job to yield as the nightly
+does here; it never stops a job itself, and when the job has not yielded in its wait it skips the night.
 
 The order is the nightly, then the smoke, then development jobs:
   - The nightly: when the lock is held, it asks for the queue (it writes <queue>/yield, with the time), so

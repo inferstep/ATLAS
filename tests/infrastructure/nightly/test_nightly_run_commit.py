@@ -100,9 +100,9 @@ class Repository:
         subprocess.run(["git", "init", "--quiet", "--initial-branch", "dev", str(self.work)], check=True, timeout=60,
                        env={**os.environ, **GIT_ENV})
         git(self.work, "remote", "add", "origin", str(self.bare))
-        # The real script loads the three files that lie beside it, so a tree that runs it has all four.
+        # The real script loads four files of scripts/, so a tree that runs it has all five.
         judge = {f"scripts/{name}": (ROOT / "scripts" / name).read_text(encoding="utf-8")
-                 for name in ("tests_counted.py", "nightly_images.py", "nightly_statuses.py")} if script else {}
+                 for name in ("tests_counted.py", "nightly_images.py", "nightly_statuses.py", "server/atlas_queue.py")} if script else {}
         self.head = self.commit({**ON_DEV, "scripts/nightly_run.py": script or "# the script of dev\n", **judge}, "refs/heads/dev")
 
     def commit(self, files, to, on="dev"):
@@ -663,7 +663,7 @@ def test_when_another_run_holds_the_card_the_built_images_are_removed_and_no_sta
         fcntl.flock(held, fcntl.LOCK_EX)
         run.run(repository.on_a_branch({"services/proxy/prompt.go": "a change\n"}))
     assert run.done.returncode == 0
-    assert run.report["result"] == "not run: the card was in use"
+    assert run.report["result"] == "not run: the card was in use (held by a run that wrote no note in the queue)"
     assert run.report["built_removed"] == {run.name_of("atlas-proxy"): "yes"}
     assert "stack up" not in run.did()
 
@@ -836,7 +836,7 @@ def test_the_run_for_a_commit_writes_only_inside_its_own_folder(tmp_path, reposi
 
     before = outside()
     run.run(commit)
-    assert sorted(set(outside()) - set(before)) == ["built.log", "calls.log", "card.lock", "mark.log"]
+    assert sorted(set(outside()) - set(before)) == ["built.log", "calls.log", "lock", "mark.log"]
 
 
 def test_when_taking_the_head_changes_the_script_the_copy_of_dev_does_the_run_for_the_commit(tmp_path):
@@ -906,9 +906,10 @@ def test_every_file_that_the_run_starts_or_loads_on_the_server_itself_is_one_tha
     assert len(loaded) >= 3
     held = {path.relative_to(ROOT.resolve()).as_posix() for path in nightly.AS_STARTED}
     assert held == {"scripts/nightly_run.py", "scripts/tests_counted.py", "scripts/nightly_images.py",
-                    "scripts/nightly_statuses.py"}, held
+                    "scripts/nightly_statuses.py", "scripts/server/atlas_queue.py"}, held
     for name in started | {f"scripts/{file}" for file in loaded} | held:
-        assert name in nightly.FROM_DEV, f"the run uses dev's copy of {name}; a commit that changes it has to be refused"
+        assert any(nightly.under(name, path) for path in nightly.FROM_DEV), \
+            f"the run uses dev's copy of {name}; a commit that changes it has to be refused"
 
 
 def test_every_file_of_the_repository_that_the_stack_reads_through_a_mount_is_one_that_the_run_takes_from_dev():
