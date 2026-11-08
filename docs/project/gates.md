@@ -957,13 +957,17 @@ stays counts.
   over a turn, and each task is one turn. The tokens of v3-service are not
   in this count.
 - The nights are counted as "Counting nights" above says. A task whose
-  session had a harness defect gives no value for that night.
+  session had a harness defect gives no value for that night. A value of 0
+  counts: a session with no call of the model has 0 tokens.
 - For each task and each measure, the run takes the median of the 7
   counted nights before the last 3 nights. Then it divides the value of
   each of the last 3 nights by that median, to 2 decimals.
-- A change stayed when all 3 ratios are more than 1.5, or all 3 are less
-  than 1/1.5. A median needs the values of at least 5 nights. With fewer,
-  the report says `too few nights` for that task and measure.
+- A change stayed when all 3 values are more than 1.5 times the median,
+  or all 3 are less than the median divided by 1.5. This rule uses the
+  values, not the rounded ratios. With a median of 0, each value above 0 is
+  a rise, and the report gives no ratios.
+- A median needs the values of at least 5 nights. With fewer, the report
+  says `too few nights` for that task and measure.
 - The report of each night has a part `trend` with the median and the
   ratios of each task and measure. These limits are a start: the reports
   keep the ratios, so that the limits can be set from the data later.
@@ -981,7 +985,8 @@ The night puts its trend on its commit as a second status, `server/trend`:
 - The text of the status has fixed words, the start time of the night,
   and the first change that stayed with the ratio of this night, as in
   `a change stayed; started 2026-10-08T08:00:03Z; offbyone seconds: 3 times
-  the median`. The report has the others.
+  the median`. After a median of 0, the text says `more than a median of
+  0` in place of the ratio. The report has the others.
 - The trend changes neither the result of the night, nor its exit status,
   nor its `server/nightly` status. A smoke run gets no trend.
 - The status is kept and sent as the other statuses are.

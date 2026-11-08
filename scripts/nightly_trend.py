@@ -34,10 +34,11 @@ def counted_nights(reports: list) -> list:
 
 def value_of(report: dict, task: str, measure: str):
     """The number of one task in one night, or None: the task did not run, its session had a harness defect, or the
-    report has no such number (a report from before the run kept the tokens)."""
+    report has no such number (a report from before the run kept the tokens). A 0 is a value: a session with no
+    call of the model has 0 tokens."""
     rows = [row for row in report.get("tasks") or [] if isinstance(row, dict) and row.get("task") == task]
     value = rows[0].get(measure) if rows and not rows[0].get("defects") else None
-    return value if isinstance(value, (int, float)) and value > 0 else None
+    return value if isinstance(value, (int, float)) and value >= 0 else None
 
 
 def compared(nights: list, task: str, measure: str) -> dict:
@@ -46,9 +47,13 @@ def compared(nights: list, task: str, measure: str) -> dict:
     if len(before) < AT_LEAST:
         return {"judged": TOO_FEW, "nights_with_a_value": len(before)}
     median = statistics.median(before)
-    ratios = [None if value is None else round(value / median, 2) for value in (value_of(night, task, measure) for night in nights[-LAST:])]
-    stayed = all(ratio is not None and ratio > RATIO for ratio in ratios) or all(ratio is not None and ratio < 1 / RATIO for ratio in ratios)
-    return {"median": median, "ratios": ratios, "stayed": stayed}
+    last = [value_of(night, task, measure) for night in nights[-LAST:]]
+    # The rule compares the values themselves, not the rounded ratios. With a median of 0, each value above 0 is a
+    # rise, and the ratios are null.
+    rose = all(value is not None and value > median * RATIO for value in last)
+    fell = all(value is not None and value < median / RATIO for value in last)
+    ratios = [None if value is None or median == 0 else round(value / median, 2) for value in last]
+    return {"median": median, "ratios": ratios, "stayed": rose or fell}
 
 
 def of(earlier: list, report: dict, tasks) -> dict:
@@ -77,8 +82,12 @@ def status_of(report: dict, name: str) -> tuple:
         return None, f"no status: {trend.get('judged')}"
     if not re.fullmatch(r"[0-9a-f]{40}", commit):
         return None, "no status: the report does not say which commit ran"
-    changed = [f"{task} {measure}: {entry['ratios'][-1]:g} times the median" for task, measures in trend["tasks"].items()
-               for measure, entry in measures.items() if entry.get("stayed")]
+    changed = []
+    for task, measures in trend["tasks"].items():
+        for measure, entry in measures.items():
+            if entry.get("stayed"):
+                how = f"{entry['ratios'][-1]:g} times the median" if entry["median"] else "more than a median of 0"
+                changed.append(f"{task} {measure}: {how}")
     said = [trend["judged"], f"started {report['started']}", *changed[:1]]
     said += [f"{len(changed) - 1} more in the report"] if len(changed) > 1 else []
     return {"context": name, "sha": commit, "state": "failure" if changed else "success", "description": "; ".join(said)}, ""

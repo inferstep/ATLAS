@@ -63,6 +63,17 @@ def test_a_change_in_each_of_the_last_three_nights_is_a_change_that_stayed(tmp_p
     assert status["description"] == f"a change stayed; started {ON.format(10)}; {said}"
 
 
+@pytest.mark.parametrize("usual, changed, ratio, stayed", [
+    pytest.param(1000, 1500, 1.5, False, id="1.5 times: no change"),
+    pytest.param(1000, 1501, 1.5, True, id="a little more than 1.5 times"),
+    pytest.param(1500, 1000, 0.67, False, id="1/1.5 times: no change"),
+    pytest.param(1000, 666, 0.67, True, id="a little less than 1/1.5 times"),
+])
+def test_the_rule_compares_the_values_and_not_the_rounded_ratios(usual, changed, ratio, stayed):
+    nights = [a_report(ON.format(day), tokens=usual) for day in range(1, 8)] + [a_report(ON.format(day), tokens=changed) for day in (8, 9, 10)]
+    assert nightly.trend.compared(nights, "offbyone", "tokens") == {"median": usual, "ratios": [ratio] * 3, "stayed": stayed}
+
+
 def test_a_night_that_was_not_run_a_smoke_run_and_a_second_run_of_a_night_do_not_count(tmp_path):
     usual = [a_report(ON.format(day)) for day in range(1, 8)]
     slow = [a_report(ON.format(day), seconds=30.0) for day in (8, 9)]
@@ -98,6 +109,27 @@ def test_a_task_with_a_harness_defect_gives_no_value_for_that_night(tmp_path):
     assert tonight["trend"]["tasks"]["offbyone"]["seconds"]["stayed"] is True
     assert status["description"] == (f"a change stayed; started {ON.format(10)}; offbyone seconds: 3 times the median; "
                                      "1 more in the report")
+
+
+@pytest.mark.parametrize("before, last_three, judged", [
+    pytest.param([2000] * 7, [0] * 3, {"median": 2000, "ratios": [0.0] * 3, "stayed": True}, id="0 tokens in the last three nights: a fall"),
+    pytest.param([0, 2000, 2000, 2000, 2000], [2000] * 3, {"median": 2000, "ratios": [1.0] * 3, "stayed": False},
+                 id="a 0 before is one of the five nights with a value"),
+    pytest.param([0] * 7, [0] * 3, {"median": 0, "ratios": [None] * 3, "stayed": False}, id="0 each night: no change"),
+])
+def test_a_value_of_0_is_a_value(before, last_three, judged):
+    nights = [a_report(ON.format(day), tokens=tokens) for day, tokens in enumerate([*before, *last_three], start=1)]
+    assert nightly.trend.compared(nights, "offbyone", "tokens") == judged
+
+
+def test_a_rise_after_a_median_of_0_is_a_change_that_stayed_with_no_ratio(tmp_path):
+    keep(tmp_path, *[a_report(ON.format(day), tokens=0) for day in range(1, 8)], *[a_report(ON.format(day)) for day in (8, 9)])
+    tonight = a_report(ON.format(10))
+    status = nightly.with_the_trend(SimpleNamespace(dir=tmp_path), tonight)
+    assert tonight["trend"]["tasks"]["add_function"]["tokens"] == {"median": 0, "ratios": [None] * 3, "stayed": True}
+    assert status["state"] == "failure"
+    assert status["description"] == (f"a change stayed; started {ON.format(10)}; add_function tokens: more than a median of 0; "
+                                     "2 more in the report")
 
 
 def test_with_fewer_than_five_counted_nights_before_the_last_three_the_trend_judges_nothing(tmp_path):
