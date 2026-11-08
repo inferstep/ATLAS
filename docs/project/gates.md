@@ -215,7 +215,7 @@ It cannot judge these, and says so when it meets one:
 | CodeScene | on CodeScene | Analyses `dev` |
 | Dockerfile lint | `.github/workflows/hadolint.yml`, `scripts/ci/dockerfile_lint.py` | hadolint v2.15.1, its release binary held against the checksum the workflow records. Dependabot does not update this version; a maintainer moves it. Every rule is on. The findings in a Dockerfile a change touches are annotations; all counts are in the job summary |
 | Hashed installs | `.github/requirements/ci.in`, `ci.txt`, `lens.in`, `lens.txt`, `scripts/ci/ci-lock.sh` | The pytest jobs, the lint jobs and the e2e job install from one lock that has a hash for every file, with `pip install --require-hashes`: pip refuses a file whose hash is not in the lock. The lock holds the tools and the packages of the product that the tests need. It is made by pip-compile under Python 3.12, and its header says so; Dependabot reads the header and makes the lock again the same way. Thirteen pins of `ci.in` are copies of pins in `services/sandbox/requirements-runtime.txt`, `services/sandbox/requirements-verify.txt` and `services/v3-service/requirements.txt`; a contract test holds each copy the same as its product file, and every line of `ci.in` against the lock. The lens job and the `tests/atlas` job also install a second lock, `lens.txt` (the CPU-only torch, the lens packages, and huggingface_hub for the CLI's publish commands, made by the same script with uv for the Linux runners), and a contract test holds it to `services/geometric-lens/requirements.txt`. The extension's job runs `npm ci --ignore-scripts`. |
-| Image scan | `.github/workflows/container-scan.yml` | Trivy, weekly and by hand, on the six images CI publishes with the tag `dev`: proxy, v3, lens, sandbox, llama (CUDA) and llama-vulkan. Critical and high findings that have a fix. It reports and does not fail. The ROCm image is built on the user's machine and is not scanned |
+| Image scan | `.github/workflows/container-scan.yml` | Trivy scans images weekly and by hand. It scans six published images: proxy, v3, lens, sandbox, llama (CUDA) and llama-vulkan, each with `dev` and the newest release tag. The job also builds and scans the ROCm image for AMD graphics processors without publishing it. A CRITICAL finding that has a fix turns the run red and opens or updates one issue. HIGH findings that have a fix appear in the scan log |
 | Integrity check | `scripts/integrity_check.py` | Suppression markers are read by kind of file: Go, Python, TypeScript and JavaScript, shell, workflow files, Dockerfiles. In a workflow file `continue-on-error: true` and `persist-credentials: true` are named. The script holds the lists of files that need a maintainer's approval: the files that decide what a check accepts, and the scripts a workflow runs with a credential that can write. A skip with its reason asks for approval; a size baseline that only goes down and a test renamed in place are listed for information. The forms by which a test stops running are one table for each runner (pytest, unittest, Go, vitest). A form that stops more than one test says how far it reaches: the class, the group, the file, every other test of the file, whole test files, or the number of uses of a skip marker that has a name of its own. Such a name is one that the file sets at its top level or takes from a module by an import; a reason that is given by a name is shown as the text of that name |
 
 ## Baselines on `dev`
@@ -726,9 +726,9 @@ in one place.
 
 ## Docker Hub and the checks
 
-10 jobs build or run an image of Docker Hub: the five of the install matrix,
-`sandbox tests (containerized)` and the four
-`PR build check` jobs. When Docker Hub refuses a pull for its limit, or its
+11 jobs build or run an image of Docker Hub.
+They are the five install jobs, `sandbox tests (containerized)`, the four
+`PR build check` jobs, and `rocm` in `container-scan.yml`. When Docker Hub refuses a pull for its limit, or its
 token service does not answer, such a job is red and the change is not at
 fault. Five of them are required checks, so that red also takes a pull
 request out of the merge queue.
@@ -767,9 +767,8 @@ What follows from it:
 - A test reads the workflow files: every job that builds or runs an image for
   a pull request or in the merge queue has the step after its checkout and
   before its first docker command, and the step is given the very images
-  that the job runs. The jobs that publish images or start on a schedule are
-  listed in that test, each with the condition that keeps it from a pull
-  request.
+  that the job runs. The test lists jobs without the step and checks why
+  each cannot run for a pull request.
 - The step does not help on a day when the mirror and Docker Hub both give no
   answer.
 
