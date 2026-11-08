@@ -1,7 +1,7 @@
 """The two install scripts take HTTPS only, and they check each installer before it runs.
 
 scripts/atlas-bootstrap.sh and scripts/install/install.sh run as root. One test
-reads both scripts. The others run a function of the bootstrap in bash, with
+reads both scripts. The others run a function of one script in bash, with
 stand-ins for curl, sudo and the other commands that the function looks up.
 So nothing is downloaded, installed or unpacked, and each run has a time limit.
 """
@@ -47,13 +47,15 @@ def stand_in(folder, name, text):
     path.chmod(0o755)
 
 
-def curl_stand_in(folder):
-    """A curl that writes down its arguments and writes DOWNLOADED to the file after -o."""
+def curl_stand_in(folder, served=DOWNLOADED, status=0):
+    """A curl that writes down its arguments, writes `served` to the file after -o and exits with `status`."""
+    (folder / "served.txt").write_text(served, encoding="utf-8")
     stand_in(folder, "curl", f'echo "$*" >> "{folder}/curl.calls"\n'
                              'while [ $# -gt 0 ]; do\n'
-                             f'  if [ "$1" = -o ]; then printf "{DOWNLOADED}" > "$2"; fi\n'
+                             f'  if [ "$1" = -o ]; then cp "{folder}/served.txt" "$2"; fi\n'
                              '  shift\n'
-                             'done\n')
+                             'done\n'
+                             f'exit {status}\n')
 
 
 def run(folder, body, **settings):
@@ -117,3 +119,110 @@ def test_another_go_version_is_unpacked_when_it_matches_atlas_go_sha256(tmp_path
     assert "https://go.dev/dl/go1.27.3.linux-amd64.tar.gz" in (tmp_path / "curl.calls").read_text()
     archive = tmp_path / "run" / "atlas-go.tar.gz"
     assert (tmp_path / "sudo.calls").read_text().splitlines() == ["rm -rf /usr/local/go", f"tar -C /usr/local -xzf {archive}"]
+
+
+INSTALL_SH_TEXT = SCRIPTS[1].read_text(encoding="utf-8")
+INSTALL_SH_PINS = ["K3S_VERSION", "K3S_INSTALLER_SHA256", "HELM_VERSION", "HELM_INSTALLER_SHA256", "GPU_OPERATOR_VERSION"]
+# The installers that the curl stand-in serves in the K3s and Helm tests. Each one writes down how it ran.
+K3S_INSTALLER = 'echo "INSTALL_K3S_VERSION=$INSTALL_K3S_VERSION $*" > installer.ran\n'
+HELM_INSTALLER = """echo "DESIRED_VERSION=$DESIRED_VERSION" > installer.ran
+# Like get-helm-3, it puts helm on the path. This helm only writes down its arguments.
+cat > helm <<'END'
+#!/bin/bash
+echo "$*" >> helm.calls
+END
+chmod +x helm
+"""
+
+
+def install_sh_pin(name):
+    found = re.search(rf"^{name}='([^'\n]*)'$", INSTALL_SH_TEXT, re.M)
+    assert found, f"{name} is not set in scripts/install/install.sh"
+    return found.group(1)
+
+
+def install_sh_function(name):
+    found = re.search(rf"^{name}\(\) \{{\n.*?^\}}\n", INSTALL_SH_TEXT, re.M | re.S)
+    assert found, f"{name}() is not in scripts/install/install.sh"
+    return found.group(0)
+
+
+def run_install_sh(folder, body):
+    """Run `body` in bash after install.sh's pins. The run finds only the commands in `folder`."""
+    # k3s and helm are not on this path, so the functions install them.
+    for name in ["bash", "sh", "cat", "chmod", "cp", "grep", "mktemp", "rm", "sha256sum"]:
+        (folder / name).symlink_to(shutil.which(name))
+    (folder / "tmp").mkdir()
+    script = ("set -euo pipefail\n" + 'log_info() { echo "INFO $*"; }\nlog_error() { echo "ERROR $*"; }\n'
+              + "".join(f"{name}='{install_sh_pin(name)}'\n" for name in INSTALL_SH_PINS) + body)
+    # mktemp makes the installer's file in folder/tmp, so a test can see that the function removed it.
+    env = {"PATH": str(folder), "TMPDIR": str(folder / "tmp")}
+    return subprocess.run(["bash", "-c", script], cwd=folder, env=env, capture_output=True, text=True, timeout=20)
+
+
+@pytest.mark.parametrize(("curl_status", "sha256"), [
+    # curl writes a matching file and then fails, so only the failed download can stop the step.
+    pytest.param(22, hashlib.sha256(K3S_INSTALLER.encode()).hexdigest(), id="a-failed-download"),
+    pytest.param(0, "0" * 64, id="a-sha256-mismatch"),
+])
+def test_a_k3s_installer_that_did_not_download_or_does_not_match_its_sha256_does_not_run(tmp_path, curl_status, sha256):
+    curl_stand_in(tmp_path, served=K3S_INSTALLER, status=curl_status)
+    done = run_install_sh(tmp_path, install_sh_function("install_k3s")
+                          + f"SKIP_K3S=false\nK3S_INSTALLER_SHA256='{sha256}'\ninstall_k3s\n")
+    assert done.returncode == 1, done.stdout + done.stderr
+    assert done.stdout.splitlines()[-1] == ("ERROR The K3s installer did not download, or it does not match "
+                                            "K3S_INSTALLER_SHA256. It did not run.")
+    assert not (tmp_path / "installer.ran").exists()
+    assert list((tmp_path / "tmp").iterdir()) == []
+
+
+def test_a_k3s_installer_that_matches_its_sha256_runs_with_the_pinned_version(tmp_path):
+    curl_stand_in(tmp_path, served=K3S_INSTALLER)
+    stand_in(tmp_path, "kubectl", "exit 0\n")
+    stand_in(tmp_path, "sleep", "exit 0\n")
+    sha256 = hashlib.sha256(K3S_INSTALLER.encode()).hexdigest()
+    done = run_install_sh(tmp_path, install_sh_function("install_k3s")
+                          + f"SKIP_K3S=false\nK3S_INSTALLER_SHA256='{sha256}'\ninstall_k3s\n")
+    assert done.returncode == 0, done.stdout + done.stderr
+    k3s_version = install_sh_pin("K3S_VERSION")
+    assert (f"https://raw.githubusercontent.com/k3s-io/k3s/{k3s_version}/install.sh"
+            in (tmp_path / "curl.calls").read_text())
+    assert (tmp_path / "installer.ran").read_text() == f"INSTALL_K3S_VERSION={k3s_version} --write-kubeconfig-mode 644\n"
+    assert list((tmp_path / "tmp").iterdir()) == []
+
+
+@pytest.mark.parametrize(("curl_status", "sha256"), [
+    # curl writes a matching file and then fails, so only the failed download can stop the step.
+    pytest.param(22, hashlib.sha256(HELM_INSTALLER.encode()).hexdigest(), id="a-failed-download"),
+    pytest.param(0, "0" * 64, id="a-sha256-mismatch"),
+])
+def test_a_helm_installer_that_did_not_download_or_does_not_match_its_sha256_does_not_run(tmp_path, curl_status,
+                                                                                           sha256):
+    curl_stand_in(tmp_path, served=HELM_INSTALLER, status=curl_status)
+    # The cluster has a GPU only after helm has run.
+    stand_in(tmp_path, "kubectl", "[ -e helm.calls ] && echo '\"nvidia.com/gpu\"'\n")
+    done = run_install_sh(tmp_path, install_sh_function("check_gpu_available") + install_sh_function("install_gpu_operator")
+                          + f"SKIP_GPU=false\nHELM_INSTALLER_SHA256='{sha256}'\ninstall_gpu_operator\n")
+    assert done.returncode == 1, done.stdout + done.stderr
+    assert done.stdout.splitlines()[-1] == ("ERROR The Helm installer did not download, or it does not match "
+                                            "HELM_INSTALLER_SHA256. It did not run.")
+    assert not (tmp_path / "installer.ran").exists()
+    assert not (tmp_path / "helm").exists()
+    assert list((tmp_path / "tmp").iterdir()) == []
+
+
+def test_a_helm_installer_that_matches_its_sha256_runs_with_the_pinned_version(tmp_path):
+    curl_stand_in(tmp_path, served=HELM_INSTALLER)
+    # The cluster has a GPU only after helm has run.
+    stand_in(tmp_path, "kubectl", "[ -e helm.calls ] && echo '\"nvidia.com/gpu\"'\n")
+    sha256 = hashlib.sha256(HELM_INSTALLER.encode()).hexdigest()
+    done = run_install_sh(tmp_path, install_sh_function("check_gpu_available") + install_sh_function("install_gpu_operator")
+                          + f"SKIP_GPU=false\nHELM_INSTALLER_SHA256='{sha256}'\ninstall_gpu_operator\n")
+    assert done.returncode == 0, done.stdout + done.stderr
+    helm_version = install_sh_pin("HELM_VERSION")
+    assert (f"https://raw.githubusercontent.com/helm/helm/{helm_version}/scripts/get-helm-3"
+            in (tmp_path / "curl.calls").read_text())
+    assert (tmp_path / "installer.ran").read_text() == f"DESIRED_VERSION={helm_version}\n"
+    assert (f"install gpu-operator nvidia/gpu-operator --version {install_sh_pin('GPU_OPERATOR_VERSION')} "
+            in (tmp_path / "helm.calls").read_text())
+    assert list((tmp_path / "tmp").iterdir()) == []
