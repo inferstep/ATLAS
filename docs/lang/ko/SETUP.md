@@ -83,6 +83,7 @@ curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-
 <a id="cpu-only"></a>
 
 **내부 인증:** 부트스트랩은 설치한 사용자만 읽을 수 있는 `secrets/service-token`을 만들고, 기존 설정이 없는 경우 해당 사용자 ID를 `.env`의 `ATLAS_PROXY_UID`, `ATLAS_PROXY_GID`, `ATLAS_SANDBOX_UID`, `ATLAS_SANDBOX_GID`에 기록합니다. 재실행하면 기존 토큰을 유지합니다. 이전 설치에는 토큰을 추가하고, Docker가 root로 만든 `secrets/`의 소유권을 가져온 뒤 서비스를 다시 생성해 토큰을 읽게 합니다. 이후 서비스 직접 호출에는 `Authorization: Bearer <token>` 헤더가 필요하며 없으면 401을 반환합니다. `atlas`와 TUI는 설치한 사용자의 토큰을 보냅니다. 같은 머신의 다른 사용자는 토큰을 읽을 수 없어 호출이 거부됩니다.
+
 **CPU 전용 / GPU 없는 호스트 (프리뷰(Preview) — 스모크 테스트 전용).** ATLAS는 Vulkan 이미지의 lavapipe CPU 래스터라이저를 통해 GPU 없이도 부팅되지만, 추론이 매우 느립니다. 스택이 동작하는지 확인하는 용도로 쓰고, 실제 코딩 세션 용도로는 쓰지 마세요.
 
 1. **부트스트랩은 옵트인하지 않는 한 GPU 없는 호스트를 거부합니다:**

@@ -728,7 +728,7 @@ except curses.error:
 
 **发生了什么：** agent 循环的 tier 分类器（`services/proxy/task_tier.go:classifyAgentTier`）只回答一个问题：这是对话，还是工作？默认是工作，T0 需要正面证据，因为两类错误的代价相差很大。把对话读成工作，只是为一条模型一轮就能收尾的消息浪费一次 planner 调用；把工作读成对话，则会把该轮次上限压到 12 并跳过 planning，直接让请求失败。
 
-只有当消息少于 12 个字符（`hi`、`thanks`、`ok`），或呈现为疑问句时才算对话式 —— 以结束一个子句的 `?` 结尾，或以整词匹配的疑问词开头（`why`、`what`、`how`、`is`、`can` 等）。但表示任务的措辞优先于二者，因此 `can you fix the login bug?` 尽管带问号仍是工作。声明了 `task_mode: work` 的客户端（TUI 即如此）永远不会被分类为对话。其余一律视为工作：`still doesn't work, try again` 和 `the snake is moving way too fast, slow it down` 都不指名文件、也不匹配任务动词列表，但两者都会走 pipeline。
+只有当消息少于 12 个字符（`hi`、`thanks`、`ok`），或呈现为疑问句时才算对话式 —— 包含一个结束子句的 `?`，或以整词匹配的疑问词开头（`why`、`what`、`how`、`is`、`can` 等）。但表示任务的措辞优先于二者，因此 `can you fix the login bug?` 尽管带问号仍是工作。声明了 `task_mode: work` 的客户端（TUI 即如此）永远不会被分类为对话。其余一律视为工作：`still doesn't work, try again` 和 `the snake is moving way too fast, slow it down` 都不指名文件、也不匹配任务动词列表，但两者都会走 pipeline。
 
 **怎么做：** 把你想要的说出来，哪怕很简短 —— "yes, fix it" 就能越过 T0 门控。如果一个跟进跑了 agent 循环但 V3 保持沉默，那么门控不在请求 tier —— 而在文件自身的 tier。见 [V3 Pipeline 未对功能文件触发](#v3-pipeline-未对功能文件触发)，并检查 `docker compose logs atlas-proxy | grep -E "write_file|edit_file"` 中的文件 tier 行（例如 `[write_file] app.py → T1:simple (8 lines)`）。
 
@@ -794,7 +794,7 @@ docker compose logs geometric-lens
 
 **现象：** 一切都报告健康 —— Pod `Ready`、`/health` 返回 200、`gx-score` 返回看起来在区间内的 `gx_score` 和 `likely_correct` 判定 —— 但 `cx_energy` 与其校准区间相差若干数量级（例如模型的通过/失败均值在 20–30 时却出现 ~600）。在这种状态下启动的门控基准测试会产出一份完整、合理、却完全无效的结果。
 
-**原因：** 嵌入服务器提供的 `/embedding` 约定与 Geometric Lens 的 `C(x)`/`G(x)` 工件训练时不同：池化方式不同，或返回 L2 归一化向量而非原始向量（‖v‖≈1 而非 ≈137）。维度相同但分布不同，cost-field MLP 会外推出巨大的能量，`cx_normalized` 随之饱和。例如，`ATLAS_EMBED_POOLING` 被设为 `none`（默认）或 `mean` 之外的 `cls`、`last`；或服务器无视 `embd_normalize: -1` 仍做池化和归一化，返回 ‖v‖≈1 的扁平向量（如果返回的是归一化的逐 token 行，lens 会以错误拒绝）。llama-server 没有 `--embd-normalize` 服务端标志；lens 通过 `/embedding` 请求体中的 `embd_normalize: -1` 逐次请求原始向量，并自行对逐 token 行做平均池化。
+**原因：** 嵌入服务器提供的 `/embedding` 约定与 Geometric Lens 的 `C(x)`/`G(x)` 工件训练时不同：池化方式不同，或返回 L2 归一化向量而非原始向量（‖v‖≈1 而非 ≈137）。维度相同但分布不同，cost-field MLP 会外推出巨大的能量，`cx_normalized` 随之饱和。服务栈的约定变更后会出现这种情况：`ATLAS_EMBED_POOLING` 被设为 `none`（默认）或 `mean` 之外的池化方式，例如 `cls` 或 `last`；或服务器无视 `embd_normalize: -1` 仍做池化和归一化，返回 ‖v‖≈1 的扁平向量（如果返回的是归一化的逐 token 行，lens 会以错误拒绝）。llama-server 没有 `--embd-normalize` 服务端标志；lens 通过 `/embedding` 请求体中的 `embd_normalize: -1` 逐次请求原始向量，并自行对逐 token 行做平均池化。
 
 **验证：** 在工件旁放有 `drift_fingerprint.json` 的场合（见下文第 3 步），lens 会在自检中（启动时，以及可重试的失败之后由 `/ready` 重新运行时）对它重新打分。检查 `/ready` 和 `/health`：
 ```bash
@@ -930,7 +930,7 @@ atlas bench --run-id <your-run-id> --tasks 200
 
 **现象：** 系统变得卡顿或服务被 OOMKill。
 
-最小 GPU 层级需要 12 GB 系统内存，medium 层级需要 16 GB，更高层级需要更多。这些主机要求包括容器、主机 OS、沙箱 tmpfs 和流水线的突发负载，并非服务空闲时的用量测量值。独立 GPU 的显存预算与系统内存分开，Apple Silicon 则共享系统内存。见[主机要求](../../guides/SETUP.md#hardware-sizing)。
+最小 GPU 层级需要 12 GB 系统内存，medium 层级需要 16 GB，更高层级需要更多。这些主机要求包括容器、主机 OS、沙箱 tmpfs 和流水线的突发负载，并非服务空闲时的用量测量值。独立 GPU 的显存预算与系统内存分开，Apple Silicon 则共享系统内存。见[主机要求](SETUP.md#硬件规格)。
 
 运行 `atlas tier` 查看硬件层级，运行 `docker stats` 查看当前容器用量。编译和安装依赖可能增加沙箱内存使用量；写入 tmpfs 的文件也计入容器内存限制。
 

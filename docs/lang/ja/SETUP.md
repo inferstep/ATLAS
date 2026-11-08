@@ -79,6 +79,7 @@ curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-
 <a id="cpu-only"></a>
 
 **内部認証:** ブートストラップはインストールしたユーザーだけが読める `secrets/service-token` を作成し、そのユーザーの ID を `.env` の `ATLAS_PROXY_UID`、`ATLAS_PROXY_GID`、`ATLAS_SANDBOX_UID`、`ATLAS_SANDBOX_GID` に記録します（設定済みの値は維持）。再実行時は既存のトークンを保持します。古いインストールにはトークンを追加し、Docker が root として作成した `secrets/` の所有権を引き継ぎ、サービスを再作成して読み込ませます。以後、サービスへの直接呼び出しには `Authorization: Bearer <token>` ヘッダーが必要で、ない場合は 401 になります。`atlas` と TUI はインストールしたユーザーのトークンを送信します。同じマシンの別ユーザーは読めないため、その呼び出しは拒否されます。
+
 **CPU のみ / GPU なしのホスト（プレビュー (Preview) — スモークテスト専用）。** ATLAS は Vulkan イメージの lavapipe CPU ラスタライザ経由で GPU なしでも起動しますが、推論は非常に低速です。スタックが動くことの確認に使い、実際のコーディングセッションには使わないでください。
 
 1. **ブートストラップは、明示的にオプトインしない限り GPU なしのホストを拒否します:**
@@ -142,7 +143,7 @@ bash atlas-bootstrap.sh
 | `ATLAS_BOOTSTRAP_REF=vX.Y.Z` | `main` を追跡する代わりに git タグ/SHA にインストールを固定。`vX.Y.Z` 形式の値なら `ATLAS_IMAGE_TAG` も対応するイメージに固定されます |
 | `ATLAS_INSTALL_DIR=/path` | クローン先（デフォルト `/opt/atlas` — 下記参照） |
 | `ATLAS_REPO_URL=https://...` | 別のリポジトリ URL |
-| `ATLAS_GO_VERSION=1.26.10` | TUI ビルド用にインストールされる Go ツールチェーンのバージョン（TUI には 1.26.10+ が必要。より古いインストール済みツールチェーンは自動で取得します） |
+| `ATLAS_GO_VERSION=1.26.10` | TUI ビルド用にインストールされる Go ツールチェーンのバージョン（TUI には 1.26.10+ が必要。インストール済みのツールチェーンが古い場合は、必要なバージョンを自動で取得します） |
 | `ATLAS_DOWNLOAD_TRIES=3` | 失敗したダウンロードを、インストール中止までに試す回数（pip のダウンロードと Go モジュールのダウンロード） |
 | `ATLAS_DOWNLOAD_WAIT_SECONDS=5` | ダウンロードの再試行間の待ち時間 |
 
@@ -514,7 +515,7 @@ K3s インストールでは `scripts/install/uninstall.sh` を使い、マニ�
 
 | 要件 | 詳細 |
 |-------------|---------|
-| **Go 1.26.10+** | atlas-proxy と atlas-tui クライアントのビルド用（より古い Go ツールチェーンは自動で取得します） |
+| **Go 1.26.10+** | atlas-proxy と atlas-tui クライアントのビルド用（Go ツールチェーンが古い場合は、必要なバージョンを自動で取得します） |
 | **llama.cpp** | CUDA 付きでソースからビルド（[llama.cpp ビルド手順](https://github.com/ggml-org/llama.cpp?tab=readme-ov-file#build) を参照） |
 | **Node.js 20+** | サンドボックスの JavaScript/TypeScript 実行に必要 |
 | **Rust** | サンドボックスの Rust 実行に必要 |

@@ -82,6 +82,7 @@ bootstrap 会处理 EPEL、缺少 libnvidia-ml.so.1（RHEL 最小安装）以及
 <a id="cpu-only"></a>
 
 **内部认证：** bootstrap 创建仅安装用户可读的 `secrets/service-token`，并将该用户的 ID 写入 `.env` 的 `ATLAS_PROXY_UID`、`ATLAS_PROXY_GID`、`ATLAS_SANDBOX_UID` 和 `ATLAS_SANDBOX_GID`（已设置的值保持不变）。重新运行会保留现有令牌。对于旧安装，它会添加令牌、接管 Docker 以 root 创建的 `secrets/`，并重建服务以读取令牌。此后直接调用服务需带 `Authorization: Bearer <token>` 请求头，否则返回 401。`atlas` 和 TUI 会为安装用户发送令牌；同机其他用户无法读取令牌，其调用会被拒绝。
+
 **仅 CPU / 无 GPU 主机（预览 (Preview) —— 仅用于冒烟测试）。** ATLAS 可以在没有 GPU 的情况下通过 Vulkan 镜像的 lavapipe CPU 光栅化器启动，但推理非常慢；请把它用来验证栈能否工作，而不是用于真实的编码会话。
 
 1. **bootstrap 会拒绝无 GPU 的主机，除非你显式选择加入：**
@@ -90,7 +91,7 @@ bootstrap 会处理 EPEL、缺少 libnvidia-ml.so.1（RHEL 最小安装）以及
    `deploy/compose/docker-compose.cpu.yml`），自行把模型选择和
    `ATLAS_BACKEND=vulkan|cpu` 写入 `.env`，并跳过 ASA 构建。
 2. **不要在无 GPU 的主机上运行 `atlas init`** —— 向导会有意拒绝（退出码 1），
-   而不是写出一份它无法定容的 `.env`。模型选择由 bootstrap 处理；之后可通过
+   而不是在无法确定硬件容量的情况下写入 `.env`。模型选择由 bootstrap 处理；之后可通过
    `atlas model install` 更换模型。
 
 手动等价操作：
@@ -852,7 +853,7 @@ atlas lens build --force --from-results benchmark/results/mymodel_lens/v3_lcb/pe
 
 ### 自带 llama-server
 
-要使用自己运行的推理服务（主机原生构建、远程机器或 llama.cpp router 模式），请将三个消费服务指向它，并把自带容器替换为占位。创建 `docker-compose.override.yml`：
+要使用自己运行的推理服务（主机原生构建、远程机器或 llama.cpp router 模式），请将三个消费服务指向它，并把随 ATLAS 提供的容器替换为占位。创建 `docker-compose.override.yml`：
 
 ```yaml
 services:
