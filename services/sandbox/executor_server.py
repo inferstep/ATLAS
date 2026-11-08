@@ -26,6 +26,9 @@ Security / trust model (load-bearing — read before "fixing" CodeQL alerts):
     validation that would break the sandbox's purpose; dismiss the
     alerts with rationale instead.
 
+    sonar-project.properties ignores Sonar's pythonsecurity:S6350 and
+    pythonsecurity:S6549 for this file, for the same reason.
+
     `py/path-injection` is handled differently: every workspace path
     derived from request data goes through _contained_path(), whose
     normpath + prefix check is the sanitizer form CodeQL recognizes.
