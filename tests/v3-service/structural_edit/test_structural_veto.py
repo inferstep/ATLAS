@@ -109,6 +109,12 @@ def test_project_symbols_are_the_top_level_definitions_of_each_python_file():
     assert symbols.build_project_symbols(files) == {"plain", "Model", "decorated", "DecoratedModel"}
 
 
+def test_project_symbols_are_empty_without_tree_sitter(monkeypatch):
+    monkeypatch.setattr(symbols, "_STRUCTURAL_EDIT_AVAILABLE", False)
+
+    assert symbols.build_project_symbols({"app.py": "def target():\n    pass\n"}) == set()
+
+
 def test_local_variable_call_not_flagged():
     # #147 review #4: fn is a local variable, not a top-level def — must NOT flag.
     code = (
