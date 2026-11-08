@@ -123,7 +123,7 @@
     "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
     "package": "npm run check-types && npm run lint && node esbuild.js --production",
     "check-types": "tsc --noEmit",
-    "lint": "eslint src",
+    "lint": "eslint src test media",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage --coverage.include=src/** --coverage.reporter=lcov --coverage.reporter=text-summary --reporter=default --reporter=junit --outputFile.junit=coverage/junit.xml",
     "test:watch": "vitest"
@@ -134,6 +134,7 @@
     "@vitest/coverage-v8": "^3.2.7",
     "esbuild": "^0.28.1",
     "eslint": "^10.5.0",
+    "eslint-plugin-sonarjs": "^4.2.2",
     "npm-run-all": "^4.1.5",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.61.1",
