@@ -274,8 +274,8 @@ func (m *tuiModel) showToast(body string) {
 // accumulate state that requires equal-and-opposite PgDns to clear.
 func (m *tuiModel) scrollChat(delta int) {
 	m.chatScroll += delta
-	if max := lastChatTotalRendered; m.chatScroll > max {
-		m.chatScroll = max
+	if limit := lastChatTotalRendered; m.chatScroll > limit {
+		m.chatScroll = limit
 	}
 	if m.chatScroll < 0 {
 		m.chatScroll = 0
@@ -1054,24 +1054,24 @@ func (m *tuiModel) scrollPaneAt(x, y, delta int) {
 		// windowLines clamps high end to total-height anyway, but
 		// also cap here so consecutive wheel-ups don't grow the
 		// counter unboundedly.
-		if max := len(pane.lines); m.eventsScroll > max {
-			m.eventsScroll = max
+		if limit := len(pane.lines); m.eventsScroll > limit {
+			m.eventsScroll = limit
 		}
 	case "pipeline":
 		m.pipelineScroll += delta
 		if m.pipelineScroll < 0 {
 			m.pipelineScroll = 0
 		}
-		if max := len(pane.lines); m.pipelineScroll > max {
-			m.pipelineScroll = max
+		if limit := len(pane.lines); m.pipelineScroll > limit {
+			m.pipelineScroll = limit
 		}
 	case "files":
 		m.fileScanScroll += delta
 		if m.fileScanScroll < 0 {
 			m.fileScanScroll = 0
 		}
-		if max := len(pane.lines); m.fileScanScroll > max {
-			m.fileScanScroll = max
+		if limit := len(pane.lines); m.fileScanScroll > limit {
+			m.fileScanScroll = limit
 		}
 	}
 }
@@ -1179,11 +1179,11 @@ func overlayToast(rendered, body string, width int) string {
 	styled := toastStyle.Render(body)
 	tw := lipgloss.Width(styled)
 	if tw > width-4 {
-		max := width - 6
-		if max < 8 {
+		limit := width - 6
+		if limit < 8 {
 			return rendered
 		}
-		styled = toastStyle.Render(termtext.Truncate(body, max))
+		styled = toastStyle.Render(termtext.Truncate(body, limit))
 		tw = lipgloss.Width(styled)
 	}
 	headW := lipgloss.Width(head)
