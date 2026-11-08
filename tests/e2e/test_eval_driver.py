@@ -336,11 +336,13 @@ def test_the_report_gives_pass_rates_by_kind():
 
 
 def test_the_arms_are_compared_with_an_interval():
-    a = [_rec(f"t{i}", 1, "completed", G.PASS if i < 8 else G.FAIL) for i in range(10)]
-    b = [_rec(f"t{i}", 1, "completed", G.PASS if i < 4 else G.FAIL) for i in range(10)]
+    # Newcombe (1998), Statistics in Medicine 17:873, example (a), method 10:
+    # 56/70 against 48/80 has the interval 0.0524 to 0.3339.
+    a = [_rec(f"t{i}", 1, "completed", G.PASS if i < 56 else G.FAIL) for i in range(70)]
+    b = [_rec(f"t{i}", 1, "completed", G.PASS if i < 48 else G.FAIL) for i in range(80)]
     d = R.compare(a, b)["pass_rate_difference"]
-    assert d["estimate"] == 0.4
-    assert d["ci95"][0] < 0.4 < d["ci95"][1]
+    assert d["estimate"] == 0.2
+    assert d["ci95"] == [0.0524, 0.3339]
 
 
 # --- the driver ------------------------------------------------------------------
