@@ -65,7 +65,7 @@ PY_TEST_DIR = "tests"
 TEST_DIRS = {"tests", "test"}
 SKIP_DIRS = {"node_modules", ".venv", "__pycache__", "vendor"}
 # The Go package that may only shrink: the files directly in this folder.
-MAIN_PACKAGE = "services/proxy"
+MAIN_PACKAGE = "services/proxy/internal/app"
 GO_FUNC = re.compile(r"^func (?:\(\w+ \*?(\w+)(?:\[[^\]]*\])?\) )?(\w+)")
 
 # (command, module, version): the versions golangci-lint v2.14.0 bundles, so this check and
@@ -78,7 +78,7 @@ GO_SCORE = re.compile(r"^(\d+) \S+ (\S+) (.+):\d+:\d+$")
 GO_RECEIVER = re.compile(r"^\(\*?(\w+)(?:\[[^\]]*\])?\)\.")
 # Not measured for complexity. These two are not edited until their rework lands, so they
 # cannot rise, and the baseline names none of their functions.
-NOT_MEASURED = {"services/proxy/tool_args.go", "services/proxy/tool_args_test.go"}
+NOT_MEASURED = {"services/proxy/internal/app/tool_args.go", "services/proxy/internal/app/tool_args_test.go"}
 
 
 class CannotMeasure(Exception):
@@ -306,7 +306,7 @@ def main_package_problems(size: dict, base: dict) -> list:
     if size["files"] <= pinned:
         return []
     return [f"{MAIN_PACKAGE}'s main package grew: files {pinned} -> {size['files']}; "
-            f"a new subject goes into its own package under {MAIN_PACKAGE}/internal/"]
+            f"a new subject goes into its own package under services/proxy/internal/"]
 
 
 def tracked_paths() -> list:

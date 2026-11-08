@@ -85,11 +85,11 @@ The K3s deployment path (`scripts/install/install.sh`, manifests in `deploy/k3s/
 
 The proxy is the entry point for chat front-ends. It accepts user messages on `/v1/agent` (typed event stream — what the TUI uses) and runs an internal agent loop that calls llama-server, parses tool calls, executes them, and streams events back. The `/v1/chat/completions` endpoint is a transparent passthrough to llama-server; it is kept for SDK compatibility and does not run the agent loop. See [API.md](API.md) for the full event-type catalogue.
 
-Every non-test Go file of `services/proxy/`, sub-folders included, with its area of ownership:
+Every non-test Go file of `services/proxy/`, sub-folders included, with its area of ownership. `main.go` only starts the program: it calls `app.Run`. A name with no folder is a file in `internal/app/`:
 
 | File | Owns |
 |---|---|
-| `main.go` | HTTP server, routes, auth, passthrough, error envelope, private-value log filter |
+| `server.go` | HTTP server, routes, auth, passthrough, error envelope, private-value log filter |
 | `loop.go` | `runAgentLoop`, the fenced fetch and toolchain detection |
 | `model_call.go`, `model_reply.go` | One call to llama-server, and reading what the model sent back. `model_reply.go` decodes a JSON escape in model text, a UTF-16 surrogate pair as one character; `\b` and `\f` stay letters, so no backspace or form feed reaches a terminal |
 | `model_prompt.go`, `task_tier.go` | The system prompt and context budget; the tier a message earns |
@@ -205,7 +205,7 @@ Every model output is constrained toward one of three valid JSON shapes:
 
 In the default `strict` mode the proxy sends a full JSON schema — `oneOf` with `additionalProperties: false`, tool names enumerated from the registry — which llama-server enforces as a grammar during token generation. Grammar constraints make malformed output rare, not impossible: `ATLAS_GRAMMAR_MODE=loose` sends `{"type":"json_object"}` only (valid JSON, no shape enforcement — some models require it), and the response token cap can truncate mid-JSON. The proxy treats parsing as fallible — it recovers JSON from prose/`reasoning_content`, detects truncated tool args before execution, feeds targeted parse-failure descriptions back, and breaks the loop after three consecutive failures.
 
-**The fenced-content channel (`@fenced`).** Whole-file bodies do not ride the JSON channel. Code inside a JSON string pays escaping pressure on every dense line, and a served 12B measurably cannot sustain it: the same solution parses 6/6 emitted in a fenced markdown block and 0/6 emitted as a JSON string (lost close-parens, literal `\n` fusing statements into comments, joins losing their spaces). The system prompt instructs the model to set `write_file`'s `content` to exactly `@fenced`; the proxy then makes one *unconstrained* sub-call (no grammar, no `response_format`) whose reply is the file in a single fenced block, tagged for the target extension (` ```python `, ` ```html `, …). The envelope stays under the JSON constraint; only the file body moves to plain text. Details of the mechanism (`services/proxy/loop.go::fetchFencedContent`): the sub-call is ephemeral (never appended to the conversation — from the main thread's view the model wrote `@fenced` and the write happened); a reply whose file itself contains ` ``` ` is extracted by a trailing-fence anchor so interior fences don't cut it; a model that puts the sentinel *and* the file in one string has the sentinel stripped and the inline content used; two attempts, then a bounce asking for inline content. Every attempt is a real generation and is accounted in the run totals (`fenced_calls` / `fenced_tokens` on the final `done` payload, one `fenced_fetch` stage event per attempt).
+**The fenced-content channel (`@fenced`).** Whole-file bodies do not ride the JSON channel. Code inside a JSON string pays escaping pressure on every dense line, and a served 12B measurably cannot sustain it: the same solution parses 6/6 emitted in a fenced markdown block and 0/6 emitted as a JSON string (lost close-parens, literal `\n` fusing statements into comments, joins losing their spaces). The system prompt instructs the model to set `write_file`'s `content` to exactly `@fenced`; the proxy then makes one *unconstrained* sub-call (no grammar, no `response_format`) whose reply is the file in a single fenced block, tagged for the target extension (` ```python `, ` ```html `, …). The envelope stays under the JSON constraint; only the file body moves to plain text. Details of the mechanism (`services/proxy/internal/app/loop.go::fetchFencedContent`): the sub-call is ephemeral (never appended to the conversation — from the main thread's view the model wrote `@fenced` and the write happened); a reply whose file itself contains ` ``` ` is extracted by a trailing-fence anchor so interior fences don't cut it; a model that puts the sentinel *and* the file in one string has the sentinel stripped and the inline content used; two attempts, then a bounce asking for inline content. Every attempt is a real generation and is accounted in the run totals (`fenced_calls` / `fenced_tokens` on the final `done` payload, one `fenced_fetch` stage event per attempt).
 
 The repetition detector fingerprints the call the **model** sent, snapshotted at the top of the tool-call branch before fenced resolution rewrites `parsed.Args` with the fetched body. Without that snapshot the detector reads bytes that differ on every attempt while the call itself is byte-identical, which is why the seven-turn `@fenced` loops in the frozen run reached the harness cap with the detector silent. The fetched bytes are unaffected: they still drive the mutation, the gates, the ledger and the write. Target paths are cleaned for the signature so `solve.py` and `./solve.py` cannot buy separate budgets.
 
@@ -231,7 +231,7 @@ Three checks keep a broken file from landing as a clean write. Each names the re
 
 ### Tools
 
-16 tools are registered in `services/proxy/tools.go`. What each does, its limits, and which are read-only: [API.md § Tools available to the agent loop](API.md#tools-available-to-the-agent-loop).
+16 tools are registered in `services/proxy/internal/app/tools.go`. What each does, its limits, and which are read-only: [API.md § Tools available to the agent loop](API.md#tools-available-to-the-agent-loop).
 
 ### Deliverable ledger (observational)
 
@@ -283,8 +283,8 @@ it. The full struct still marshals with every field for internal use; the
 projection is an allowlist, so a field added to `ToolResult` stays out of the
 conversation until someone decides otherwise.
 
-Three tests hold the boundary in `services/proxy/tool_result_contract_test.go` and
-`services/proxy/tool_effect_test.go`: `TestEveryModelFacingSerializationSiteIsInventoried`
+Three tests hold the boundary in `services/proxy/internal/app/tool_result_contract_test.go` and
+`services/proxy/internal/app/tool_effect_test.go`: `TestEveryModelFacingSerializationSiteIsInventoried`
 fails on a new direct marshal or a tool message built by an uninventoried
 route, `TestModelFacingTextCarriesNoClassification` pins the projected bytes
 per outcome, and `TestModelPromptBytesAreUnchangedByClassification` runs the
@@ -392,11 +392,11 @@ against `ctx.Ctx`'s deadline.
 For the later reproducibility pass, not fixed here: the system prompt renders
 tool descriptions in Go map order, so two runs of identical code produce
 different prompt bytes. It affects prompt reproducibility only, not behaviour;
-`conversationBytes` in `services/proxy/tool_effect_test.go` elides the system message
+`conversationBytes` in `services/proxy/internal/app/tool_effect_test.go` elides the system message
 for exactly this reason.
 
 `SessionWrites` is a separate, older map keyed on the raw model-supplied path;
-`services/proxy/loop_state.go` documents the aliasing that follows from that. Its readers are
+`services/proxy/internal/app/loop_state.go` documents the aliasing that follows from that. Its readers are
 the write_file overwrite guard's notion of the model's own draft, the active
 debug fast path, the session manifest note, V3 project context, the artifact
 gate's drift check and the edit-tool leniency gates; none of that changes here.
@@ -405,7 +405,7 @@ The work contract's verification demand (`decideVerificationDemand`) takes the
 code deliverables it asks about from the ledger, where every mutation tool's
 landing is recorded canonically by `recordLedgerEffect`. The coverage that
 answers it -- which paths a passing run named, and the bytes they held -- is
-computed by `changedPathsForCoverage` in `services/proxy/guardrails.go`: the session
+computed by `changedPathsForCoverage` in `services/proxy/internal/app/guardrails.go`: the session
 writes plus the ledger's canonical code deliverables, so the demand and its
 coverage read one identity. Before that, coverage read only the session-write
 map, which `edit_file` and `structural_edit` never wrote to and no edit tool
@@ -436,12 +436,12 @@ A measured reference deployment showed a bias toward `edit_file` over
 embeddings of nearby tool names compete; descriptions matter more than names).
 Four model-independent defenses compose in the proxy:
 
-1. **Description rewrite** (`services/proxy/tool_edit.go`, `services/proxy/tool_structural_edit.go`). edit_file's description
+1. **Description rewrite** (`services/proxy/internal/app/tool_edit.go`, `services/proxy/internal/app/tool_structural_edit.go`). edit_file's description
    warns against whole-file/whole-function use; structural_edit's description
    says REQUIRED for >10-line / whole-node swaps; write_file's says
    NEW files only.
-2. **Conditional GBNF grammar** (`services/proxy/tool_schema.go`,
-   `services/proxy/model_call.go:stepExclusions`). When a write_file is rejected on
+2. **Conditional GBNF grammar** (`services/proxy/internal/app/tool_schema.go`,
+   `services/proxy/internal/app/model_call.go:stepExclusions`). When a write_file is rejected on
    an existing .py/.html/.htm file >5 lines, the next LLM call is
    constrained by a GBNF grammar that bans edit_file and write_file
    from the tool-name production. The model physically cannot emit
@@ -478,7 +478,7 @@ Each `write_file`/`edit_file` call is classified independently:
 | T2 (Feature) | 0 (uncapped) | V3 pipeline fires |
 | T3 (Hard) | 0 (uncapped) | V3 pipeline fires |
 
-The two columns above belong to two different classifiers, and the table reads as one only by coincidence. **Turns** comes from the message tier (`services/proxy/task_tier.go:classifyAgentTier`), which scores what the user typed. **Behavior** comes from the file tier (`services/proxy/tools.go:classifyFileTier`), which scores the file being edited and is what actually gates V3 — the message tier is forwarded to v3-service but only lands in a log line.
+The two columns above belong to two different classifiers, and the table reads as one only by coincidence. **Turns** comes from the message tier (`services/proxy/internal/app/task_tier.go:classifyAgentTier`), which scores what the user typed. **Behavior** comes from the file tier (`services/proxy/internal/app/tools.go:classifyFileTier`), which scores the file being edited and is what actually gates V3 — the message tier is forwarded to v3-service but only lands in a log line.
 
 Because the turn cap is the same for T1/T2/T3, the message tier has exactly one decision to make: conversational or not. T0 caps the run and skips Plan Mode; every other value behaves identically. It therefore requires positive evidence to call something conversational — a sub-12-character greeting or a question shape — and treats everything else as work. The asymmetry is deliberate: misreading conversation as work costs one wasted planner call, while misreading work as conversation caps a real request and skips its plan, which fails it.
 
@@ -486,12 +486,12 @@ A client that declares `task_mode: work` is never tiered as conversational (`dec
 
 That asymmetry also governs the question-shape test (`isQuestionMessage`). A `?` that ends a clause (followed by the end, a space or a quote, and outside brackets and backticks) is a question; a `?` in a URL query or a regex is not. An interrogative opener is a question when the wh-word is a whole word — "Whole-number…", "Whenever…" and "However…" are not — and "when"/"where" openers must be inverted ("when does"), because "When the timer hits zero, …" opens a request. An opening "do" needs a pronoun ("do you"), so "Do the same for the /users route" is work, and a mid-message auxiliary needs a subject, so ". Do not hardcode the answer." is not a question. A wh-word opening a mid-message clause is a question only when the clause is INVERTED — the auxiliary follows the wh-word, as in "what DOES x do". A relative clause keeps subject-verb order ("what it is", "where it was found") and is descriptive, so a field list like "post an item (what it is, where it was found)" is not read as a question. Past-tense auxiliaries are left out of the inverted set on the same asymmetry: a build request must not be capped, and missing a rare past-tense mid-clause question with no `?` costs only a planner call. A build request that reads as a question was the failure this closed: a lost-and-found web app was classified conversational, capped, and unplanned, on the words "where it was found".
 
-Tier caps are 0 (uncapped); the detector stack inside the loop decides when to break: lens regression (`agent_lens_intervention`), reasoning repetition (`agent_reasoning_intervention`), tool-call repetition (`agent_repeat_intervention`), path-aware error breaker, done-without-action gate, claim-check gate, evidence gate, plan adherence threshold, and the empty-response fallback. Operators can override with `ATLAS_MAX_TURNS=<n>` for one-off "fix the entire app" prompts — see `services/proxy/loop_state.go::envOverrideMaxTurns`.
+Tier caps are 0 (uncapped); the detector stack inside the loop decides when to break: lens regression (`agent_lens_intervention`), reasoning repetition (`agent_reasoning_intervention`), tool-call repetition (`agent_repeat_intervention`), path-aware error breaker, done-without-action gate, claim-check gate, evidence gate, plan adherence threshold, and the empty-response fallback. Operators can override with `ATLAS_MAX_TURNS=<n>` for one-off "fix the entire app" prompts — see `services/proxy/internal/app/loop_state.go::envOverrideMaxTurns`.
 
 Three of those gates decide whether to fire from what the run observed rather than from how the request was worded, because request wording is an open vocabulary that no list completes:
 
 - **Verification gate** — blocks `done` when the user asked for a repair, *or* when a run, test or check actually exited non-zero and nothing has passed since. The second condition catches a failing test the model introduced on its own, which no reading of the user's message could have predicted. A later failure takes back an earlier pass; a failed lint or parse is cleared by that same check passing again, or by a passing run, and a lint never clears a failed test. Only a run that executed the program or its tests, or fetched a page in a way an HTTP error would fail (`curl -f`, or the body piped into `grep`), counts as verification, and only when the command line reports that part's exit status (`services/proxy/internal/shellcmd/command_evidence.go`). A parse, a lint, a build or a `--version` is not verification, and neither is `pytest | tail`, `pytest || true`, `app.py; echo` or `app.py &`; the gate names such a command back to the model with the reason. Its ledger is artifact-bound, not boolean. Every verification run appends a `VerificationRecord` — the command line, its evidence kind, whether it failed, its stdin contract, and the sha256 of each session-written file its verifying segments named — and the exit re-hashes those files, bouncing `done` when the bytes on disk are no longer the bytes a run vouched for. A green run that printed nothing on a task whose prompt demands printed output *latches as a failed verification* rather than counting. A program only ever run as `prog < file` (the redirect is recognized anywhere in a segment, as is `cat file | prog`) is verified under a contract the caller may not use, and the exit demands one standalone run. A write that landed with a parse warning marks its path pending-execution: further writes and edits to that path bounce until a command actually *attempts to execute* it — an interpreter invocation or `./file`; `cat`/`grep`/`ls` naming the file prove nothing and discharge nothing, and neither does a parse such as `python -m py_compile`. And when the red-run streak crosses two, the loop injects fresh-rewrite advice immediately (stop patching, rewrite from a clean sheet) instead of waiting for the model to attempt `done` into the same text.
-- **Done-without-action gate** — blocks `done` when the request demands a state change and nothing landed on disk. **When the client sends a validated `task_contract`, its `task_mode` decides that question**: `work` means a state change is required, `question` means it is not, and the wording of the message no longer overrides either. When no contract is sent, the legacy heuristic decides exactly as before — it blocks on explicit action wording, *or* when the model opened the project on a non-conversational message and nothing changed. One helper owns this choice (`services/proxy/guardrails.go::decideActionDemand`) and both action-demand call sites consume it; the heuristic is evaluated once, there, and is recorded for comparison even when a contract decides. That covers verbs absent from the intent list (`remove the debug logging` matches none of them), while questions stay exempt: they are conversational, and answering one by reading files and writing nothing is correct.
+- **Done-without-action gate** — blocks `done` when the request demands a state change and nothing landed on disk. **When the client sends a validated `task_contract`, its `task_mode` decides that question**: `work` means a state change is required, `question` means it is not, and the wording of the message no longer overrides either. When no contract is sent, the legacy heuristic decides exactly as before — it blocks on explicit action wording, *or* when the model opened the project on a non-conversational message and nothing changed. One helper owns this choice (`services/proxy/internal/app/guardrails.go::decideActionDemand`) and both action-demand call sites consume it; the heuristic is evaluated once, there, and is recorded for comparison even when a contract decides. That covers verbs absent from the intent list (`remove the debug logging` matches none of them), while questions stay exempt: they are conversational, and answering one by reading files and writing nothing is correct.
 - **Evidence gate** — blocks an exit whose reply names a workspace file the run was never shown the contents of. The write tools already refuse to edit a path that was not read first; this applies the same rule to answers, where the reply itself is the deliverable. It keys on `AgentContext.BodySeen`, which records the files actually put in front of the model — deliberately narrower than `FilesRead`, because `outline_file` caches a file's whole source for staleness tracking while showing the model only signatures and line ranges. Reading the file, or having authored it, clears the gate.
 
 #### Client task mode
@@ -540,7 +540,7 @@ old way.
 
 The evidence gate exists because the exemption in the done-without-action gate above — questions are conversational, so they are never gated — left the answer path with no completion check at all. Measured on a diagnostic question spanning three modules: across 12 sessions the model ran `list_directory`, outlined exactly one file, and answered, never once reading a body. The outcome tracked which filename it guessed rather than anything it inspected (`scoring.py` wrong 11/11, `planning.py` right 1/1), because the prompt contained the word "scored". One reply cited "lines 134-142" of a file it had never seen.
 
-Classifier in `services/proxy/tools.go` (`classifyFileTier`); logic-pattern matcher in the same file (`hasLogicIndicators`).
+Classifier in `services/proxy/internal/app/tools.go` (`classifyFileTier`); logic-pattern matcher in the same file (`hasLogicIndicators`).
 
 **Always T1 (direct write):**
 - Config files matched by name (e.g. `package.json`, `go.mod`, `pyproject.toml`, `dockerfile`, `docker-compose.*`)
@@ -550,12 +550,12 @@ Classifier in `services/proxy/tools.go` (`classifyFileTier`); logic-pattern matc
 - Trivially-tiny files under **10 lines** (V3 has nothing to meaningfully diversify on at that size)
 - Unknown extensions with no logic indicators
 
-The exact config-file list and extension sets live in `services/proxy/tools.go:classifyFileTier`.
+The exact config-file list and extension sets live in `services/proxy/internal/app/tools.go:classifyFileTier`.
 
-`edit_file`, `insert_after` and `replace_lines` enter the pipeline through `runEditPipeline` (`services/proxy/tool_write_v3.go`), which ends in `deliverEditCandidate`. `write_file` enters it through `writeFileWithV3`, which calls the V3 service's generation stream itself. `structural_edit` first sends its splice to the V3 service's `/internal/structural_edit`, then makes the same tier decision itself and hands the result to `deliverEditCandidate`, where `runEditPipeline` also ends. In `runEditPipeline` and in `structural_edit`, tier classification uses `max(oldTier, newTier)`, so a destructive edit that shrinks a T2+ file into a T1 stub still qualifies. An edit tool that skips the pipeline gets no candidate generation, whatever the tier, which is the thing the tier system exists to prevent. `tests/contracts/api/test_write_gate_coverage.py` asserts that each of the five write tools enters the pipeline and runs the same gates: the unresolved-call check, the embedded-script gate and the duplicate-main guard.
+`edit_file`, `insert_after` and `replace_lines` enter the pipeline through `runEditPipeline` (`services/proxy/internal/app/tool_write_v3.go`), which ends in `deliverEditCandidate`. `write_file` enters it through `writeFileWithV3`, which calls the V3 service's generation stream itself. `structural_edit` first sends its splice to the V3 service's `/internal/structural_edit`, then makes the same tier decision itself and hands the result to `deliverEditCandidate`, where `runEditPipeline` also ends. In `runEditPipeline` and in `structural_edit`, tier classification uses `max(oldTier, newTier)`, so a destructive edit that shrinks a T2+ file into a T1 stub still qualifies. An edit tool that skips the pipeline gets no candidate generation, whatever the tier, which is the thing the tier system exists to prevent. `tests/contracts/api/test_write_gate_coverage.py` asserts that each of the five write tools enters the pipeline and runs the same gates: the unresolved-call check, the embedded-script gate and the duplicate-main guard.
 
 **T2 (V3 pipeline)** — file qualifies if it's ≥10 lines AND either:
-- `hasLogicIndicators(content)` returns true — **2+ matches** across pattern families covering function/method definitions, control flow, error handling, Flask/FastAPI/Django routing, Express/Node API, React state/data, validation, database calls, JSX/React component patterns, and imports (the literal token list is in `services/proxy/tools.go:hasLogicIndicators`)
+- `hasLogicIndicators(content)` returns true — **2+ matches** across pattern families covering function/method definitions, control flow, error handling, Flask/FastAPI/Django routing, Express/Node API, React state/data, validation, database calls, JSX/React component patterns, and imports (the literal token list is in `services/proxy/internal/app/tools.go:hasLogicIndicators`)
 - OR the file has a recognized source-code / markup extension (`.py`, `.go`, `.rs`, `.ts`, `.tsx`, `.js`, `.jsx`, `.html`, `.htm`, …) and no logic indicators fired — gets the benefit of the doubt at T2 (covers minimal-but-real files like a 12-line component shell)
 
 **T3 (Hard)** — currently classifier never emits T3 by itself; the cyclomatic-complexity refiner (`refineTierWithCC` via GH #39 point 2's `/internal/cyclomatic_complexity`) *escalates* on McCabe CC: to T2 at CC ≥ 8 (including from T1) and to T3 at CC ≥ 16. Never downgrades.
@@ -623,9 +623,9 @@ API contract documented in [API.md § POST /v3/plan](API.md#post-v3plan).
 |---|---|
 | `services/proxy/internal/v3client/client.go` | `PlanStreaming(reqCtx, v3URL, requestID, req, onProgress)` — opens the SSE stream, forwards progress events to the callback, returns the final `Plan` from the `event: result` frame. `reqCtx` binds the agent's request context so `/cancel` aborts an in-flight plan. Mirrors `GenerateStreaming` for V3-pipeline runs. |
 | `services/proxy/internal/wire/` | `V3PlanRequest` (in `v3.go`), `Plan` and `PlanStep` (in `messages.go`) types. |
-| `services/proxy/loop_state.go` | `AgentContext` gains `Plan`, `PlanStepsSatisfied[]`, `PlanOffStreak`, `PlanRevisions`. |
-| `services/proxy/plan_generation.go`, `services/proxy/internal/projectcontext/sample.go` | `projectcontext.Sample()` walks priority files (app.py, templates/index.html, package.json, …) for the planner. `shouldGeneratePlan()` gates on tier, message length and read-only requests. `generatePlan()` runs the bridge, drops per-token noise, emits `plan_loaded` with the full step list. |
-| `services/proxy/plan_gates.go` | `matchPlanStep()` (loose tool-name + path-suffix match), `recordPlanAdherence()` (per-tool-call accounting; a recon call — `read_file`/`list_directory`/`find_file`/`search_files` — that matches no step is neutral: it never extends `off_streak`), `revisePlan()` (regenerate with `FilesRead` carried forward as extra context). |
+| `services/proxy/internal/app/loop_state.go` | `AgentContext` gains `Plan`, `PlanStepsSatisfied[]`, `PlanOffStreak`, `PlanRevisions`. |
+| `services/proxy/internal/app/plan_generation.go`, `services/proxy/internal/projectcontext/sample.go` | `projectcontext.Sample()` walks priority files (app.py, templates/index.html, package.json, …) for the planner. `shouldGeneratePlan()` gates on tier, message length and read-only requests. `generatePlan()` runs the bridge, drops per-token noise, emits `plan_loaded` with the full step list. |
+| `services/proxy/internal/app/plan_gates.go` | `matchPlanStep()` (loose tool-name + path-suffix match), `recordPlanAdherence()` (per-tool-call accounting; a recon call — `read_file`/`list_directory`/`find_file`/`search_files` — that matches no step is neutral: it never extends `off_streak`), `revisePlan()` (regenerate with `FilesRead` carried forward as extra context). |
 
 The system prompt rendering happens in `buildSystemPrompt`. Plan steps are rendered as a numbered list with a `✓` marker on the verify step only, and the verify step is called out as the "evidence-of-fix" step that the verification gate guards against `done`. (The ☐/✓/⚐ per-step glyphs belong to the TUI rendering — see below.)
 
@@ -643,7 +643,7 @@ The system prompt rendering happens in `buildSystemPrompt`. Plan steps are rende
 
 #### Tunables
 
-Defined in `services/proxy/plan_gates.go`:
+Defined in `services/proxy/internal/app/plan_gates.go`:
 
 | Constant | Default | Rationale |
 |---|---|---|
@@ -678,14 +678,14 @@ Both are paid up front before the agent's first tool call. The investment is rec
 | Layer | File | What's covered |
 |---|---|---|
 | v3-service plan endpoint | `tests/v3-service/pipeline/test_plan_scoring.py` (scorer); parser smoke-tested via `curl /v3/plan` | scorer credits a verify step that runs the program, its tests or a probe, and credits neither a static check (build, parse, linter) nor a recon call; parser tolerance (fences, prose preamble, brace-depth nesting) is exercised by the 3-candidate sampler |
-| proxy bridge | `services/proxy/internal/v3client/client_test.go`; `services/proxy/tool_write_v3_bridge_test.go` for stage routing | SSE parse, missing-result error, stage routing |
-| proxy hook | `services/proxy/loop_test.go` | priority-file pickup, truncation thresholds, fallback walk, tier/length gating |
-| proxy adherence | `services/proxy/plan_gates_test.go`; `services/proxy/gates_test.go` for the system prompt | match logic (tool name + path suffix), failed-call exclusion, revision cap, system-prompt rendering |
+| proxy bridge | `services/proxy/internal/v3client/client_test.go`; `services/proxy/internal/app/tool_write_v3_bridge_test.go` for stage routing | SSE parse, missing-result error, stage routing |
+| proxy hook | `services/proxy/internal/app/loop_test.go` | priority-file pickup, truncation thresholds, fallback walk, tier/length gating |
+| proxy adherence | `services/proxy/internal/app/plan_gates_test.go`; `services/proxy/internal/app/gates_test.go` for the system prompt | match logic (tool name + path suffix), failed-call exclusion, revision cap, system-prompt rendering |
 | TUI rendering | `clients/tui/internal/pipelinestate/plan_test.go`; `clients/tui/internal/app/state_plan_test.go` for the handlers | `PlanView` state transitions, plan_loaded replacement on revise, off-plan silence |
 
 ### Safety Limits
 
-Operator-facing limits and the knobs that tune them. Internal steering guards (traceback localization, missing-module/missing-command/broken-inline-script/case-mismatch steers, symbol grounding, no-op/empty-content/syntax gates, doctype strip) live in `services/proxy/guardrails*.go` and `services/proxy/loop_*.go`; the structural gate (refuses a `.py` write that introduces an unresolved direct call — a would-be `NameError` — on `edit_file`, `structural_edit`, and every `write_file` branch; it runs on every request; no request field turns it off) lives in `services/proxy/gates.go`. The embedded-script gate lives there too: it parses the JavaScript (and brace-balances the CSS) inside `<script>`/`<style>` blocks — in `.html`/`.htm`/`.jinja`/`.jinja2` files **and inside Python string literals**, the `render_template_string` shape — through v3-service `POST /internal/embedded_script_check`, and refuses a change that newly breaks it. It exists because every other gate is structurally blind to that code: the 2026-08-01 dogfooding session left a stray `)` in a Flask app's inline `<script>`, and the Python compiled, the server started and `curl /` returned 200, so the verification gate passed and `done` was accepted while the page was dead in the browser. Same healthy→broken rule as the syntax gate (a still-broken repair-in-progress is allowed) and the same fail-soft posture: an unreachable service, a missing grammar or an ambiguous block (template statement tags, `<script src>`, a non-JS `type`, an escaped Python string) yields no finding, never a blocked write. The missing-command steer fires on `command not found` shell errors: the sandbox is non-root on a read-only base, so absent binaries can never be apt-installed at runtime — the steer says so and points at pip-installable equivalents or the preinstalled toolchains instead of letting the model re-run into the repetition breaker. The broken-inline-script steer fires when a `python -c` verification one-liner fails with a SyntaxError in the `-c` argument itself (a multi-statement `def`/`for` body jammed onto one line): the solution file may be correct while only the verify command is malformed, so it directs the model to move the test into a `.py` file rather than re-run the unparseable one-liner.
+Operator-facing limits and the knobs that tune them. Internal steering guards (traceback localization, missing-module/missing-command/broken-inline-script/case-mismatch steers, symbol grounding, no-op/empty-content/syntax gates, doctype strip) live in `services/proxy/guardrails*.go` and `services/proxy/loop_*.go`; the structural gate (refuses a `.py` write that introduces an unresolved direct call — a would-be `NameError` — on `edit_file`, `structural_edit`, and every `write_file` branch; it runs on every request; no request field turns it off) lives in `services/proxy/internal/app/gates.go`. The embedded-script gate lives there too: it parses the JavaScript (and brace-balances the CSS) inside `<script>`/`<style>` blocks — in `.html`/`.htm`/`.jinja`/`.jinja2` files **and inside Python string literals**, the `render_template_string` shape — through v3-service `POST /internal/embedded_script_check`, and refuses a change that newly breaks it. It exists because every other gate is structurally blind to that code: the 2026-08-01 dogfooding session left a stray `)` in a Flask app's inline `<script>`, and the Python compiled, the server started and `curl /` returned 200, so the verification gate passed and `done` was accepted while the page was dead in the browser. Same healthy→broken rule as the syntax gate (a still-broken repair-in-progress is allowed) and the same fail-soft posture: an unreachable service, a missing grammar or an ambiguous block (template statement tags, `<script src>`, a non-JS `type`, an escaped Python string) yields no finding, never a blocked write. The missing-command steer fires on `command not found` shell errors: the sandbox is non-root on a read-only base, so absent binaries can never be apt-installed at runtime — the steer says so and points at pip-installable equivalents or the preinstalled toolchains instead of letting the model re-run into the repetition breaker. The broken-inline-script steer fires when a `python -c` verification one-liner fails with a SyntaxError in the `-c` argument itself (a multi-statement `def`/`for` body jammed onto one line): the solution file may be correct while only the verify command is malformed, so it directs the model to move the test into a `.py` file rather than re-run the unparseable one-liner.
 
 **Fast-path writes during active iteration.** V3 fires on the *first* write of a T2+ file (baseline generation). But once the model has written a file and just saw it fail a run, the next write is a targeted fix in an edit-test-fix loop — it skips V3 (still syntax- and structural-gated) and writes directly. V3's full pipeline is multi-minute per call and, on a file mid-debug, frequently completes without a usable result and falls back anyway; paying that latency per iteration throttles the loop to a handful of cycles. The fast-path keys off `SessionWrites[path]` plus a failed most-recent run referencing the file.
 
@@ -698,16 +698,16 @@ Operator-facing limits and the knobs that tune them. Internal steering guards (t
 | V3 interactive wall-clock cap | Single V3 pipeline call capped at `ATLAS_V3_TIMEOUT` (default 300s); on timeout the proxy falls back to the model's syntax- and structural-gated content, and the run's final summary names the file (`0` disables) | Keep an interactive session responsive under a long repair stall |
 | Per-turn reasoning budget | Cut the stream after ~6144 reasoning tokens (`ATLAS_REASONING_BUDGET`, 0 disables); recovery extracts an embedded tool_call or re-prompts | Bound reasoning spirals |
 | write_file for existing files | Reject if file > 5 lines; on .py/.html/.htm the per-step grammar gate steers to `structural_edit` | Force surgical (`edit_file`) or whole-node (`structural_edit`) edits |
-| Suspicious-shrinkage guard | Reject `structural_edit`/`edit_file` when `oldSize >= 100B` and `newSize < 64B` (`services/proxy/guardrails_write.go::validateNotSuspiciouslyShrunk`) | Catch destructive stub rewrites before they hit disk |
+| Suspicious-shrinkage guard | Reject `structural_edit`/`edit_file` when `oldSize >= 100B` and `newSize < 64B` (`services/proxy/internal/app/guardrails_write.go::validateNotSuspiciouslyShrunk`) | Catch destructive stub rewrites before they hit disk |
 | structural_edit runaway-content guard | Reject when `content` > 8 KB AND > 4× the file size | Catch reasoning-leak blobs emitted as the replacement node |
 | structural_edit node-size precondition | Reject a replacement ≥5× the node and ≥30 lines larger, when it either duplicates content already in the file or the file holds a ≥20-line module-level string constant (`v3-service` `_replacement_dwarfs_node`) | A blob spliced through a small selector deletes whatever the node held; an observed session left a Flask app with no `@app.route` at all, still parsing |
-| Duplicate-entrypoint guard | Reject a `.py` write that leaves more than one top-level `if __name__ == "__main__":` when it had at most one before (`services/proxy/gates_edit_requests.go::duplicateMainGuard`) | The signature of a whole-file blob spliced through a node selector; it parses and runs, with everything after the first blocking `app.run()` dead |
+| Duplicate-entrypoint guard | Reject a `.py` write that leaves more than one top-level `if __name__ == "__main__":` when it had at most one before (`services/proxy/internal/app/gates_edit_requests.go::duplicateMainGuard`) | The signature of a whole-file blob spliced through a node selector; it parses and runs, with everything after the first blocking `app.run()` dead |
 | Duplicate-lexical-binding guard | Reject an edit that leaves `let`/`const` declaring the same name twice in one scope (`v3-service` `embedded_script_check`) | An early SyntaxError: the browser refuses the whole script, so every handler on the page dies while the server still returns 200. tree-sitter parses it, so the syntax check cannot see it |
-| Stopped-render-loop guard | Reject an edit that leaves a function a repeating timer used to drive scheduled exactly once and never re-armed (`v3-service` `embedded_script_check` with the pre-edit file; `services/proxy/gates.go::embeddedScriptGate`) | The JavaScript parses, the server starts and the page returns 200, so every other check passes while the page freezes after one frame |
-| V3 out-of-scope-rewrite guard | Discard a V3 candidate that drops a line the caller's edit had left alone, keeping the caller's content (`services/proxy/gates.go::v3RewroteBeyondTheEdit`) | V3 improves a whole *file*, so on a small file it retypes everything the edit never touched; a live session came back with `#e94562` as `#e94162` and `id="msg"` as `id=" msg"`, neither of which is a syntax error |
+| Stopped-render-loop guard | Reject an edit that leaves a function a repeating timer used to drive scheduled exactly once and never re-armed (`v3-service` `embedded_script_check` with the pre-edit file; `services/proxy/internal/app/gates.go::embeddedScriptGate`) | The JavaScript parses, the server starts and the page returns 200, so every other check passes while the page freezes after one frame |
+| V3 out-of-scope-rewrite guard | Discard a V3 candidate that drops a line the caller's edit had left alone, keeping the caller's content (`services/proxy/internal/app/gates.go::v3RewroteBeyondTheEdit`) | V3 improves a whole *file*, so on a small file it retypes everything the edit never touched; a live session came back with `#e94562` as `#e94162` and `id="msg"` as `id=" msg"`, neither of which is a syntax error |
 | Error loop breaker | 3 consecutive failures **of the same kind** (message skeleton: digits, quoted spans and paths stripped) **on the same path**; a rejection that differs resets the streak, since three distinct refusals is a model converging, not looping | Stop runaway failure cycles without killing legitimate iteration |
 | Failed-call ceiling | 12 failed tool calls per run (`maxTotalFailures`) | Bounds a run that cycles through failure modes, now that the streak resets on a changed rejection |
-| Plan-completion gate | Refuse `done` while a planned step has no matching tool call, when the planner scored the plan ≥0.6, it has ≥2 steps, and at least one matched (`services/proxy/guardrails.go::planIncompleteMessage`) | A multi-part task delivered in part and declared done; the per-turn progress note was already there and was ignored |
+| Plan-completion gate | Refuse `done` while a planned step has no matching tool call, when the planner scored the plan ≥0.6, it has ≥2 steps, and at least one matched (`services/proxy/internal/app/guardrails.go::planIncompleteMessage`) | A multi-part task delivered in part and declared done; the per-turn progress note was already there and was ignored |
 | Exploration budget | Nudge at 4 consecutive read-only calls; escalated nudge at 5+. Reads always execute — the nudge steers the *next* turn toward a write | Push the model to write instead of exploring indefinitely |
 | Command output truncation | stdout 8,000 chars, stderr 4,000 chars | Prevent context flooding |
 | Search results | 200 matches max; file search skips files > 1 MB | Bound search cost |
@@ -920,7 +920,7 @@ reads these headers, and no candidate bytes or user content enter them.
 **The proxy's direct Lens calls carry their own invocation.** The proxy talks
 to the Lens directly on one model-bound path, per-write scoring
 (`/internal/lens/score-per-step`), which is not a V3 candidate invocation. One owner,
-`services/proxy/lens_identity.go`, builds those requests and stamps the bound
+`services/proxy/internal/app/lens_identity.go`, builds those requests and stamps the bound
 `X-ATLAS-Request-ID` together with a proxy-owned Lens invocation derived from
 that request id alone: `proxy-lens:` followed by the first 32 hex digits of
 `sha256("atlas/proxy-lens-invocation/v1\n" + request_id)`. It is deterministic
@@ -935,7 +935,7 @@ authorise a mutation, permission, candidate or completion, and it never appears
 in SSE events, tool results, prompts or logs. A request id that is absent or
 outside the closed format (`[A-Za-z0-9._:-]{1,128}`) derives no invocation. The
 closed specification and vectors are in
-`services/proxy/testdata/lens_invocation_vectors.json`.
+`services/proxy/internal/app/testdata/lens_invocation_vectors.json`.
 
 **The embedding capacity boundary.** llama-server processes one `/embedding`
 request in a single physical batch (`-ub`, `ATLAS_UBATCH`) and refuses a

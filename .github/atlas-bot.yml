@@ -53,23 +53,23 @@ pull_requests:
   # the integrity check names a change to one on the pull request, for a
   # maintainer's approval.
   core_paths:
-    services/proxy/loop.go: the agent loop
-    services/proxy/server_agent.go: the agent loop
-    services/proxy/model_fenced_channel.go: the agent loop
-    services/proxy/model_call.go: the agent loop
-    services/proxy/loop_*: the agent loop
-    services/proxy/model_reply.go: the agent loop
-    services/proxy/plan_generation.go: the agent loop
+    services/proxy/internal/app/loop.go: the agent loop
+    services/proxy/internal/app/server_agent.go: the agent loop
+    services/proxy/internal/app/model_fenced_channel.go: the agent loop
+    services/proxy/internal/app/model_call.go: the agent loop
+    services/proxy/internal/app/loop_*: the agent loop
+    services/proxy/internal/app/model_reply.go: the agent loop
+    services/proxy/internal/app/plan_generation.go: the agent loop
     services/proxy/internal/projectcontext/*: the agent loop
-    services/proxy/model_prompt.go: the agent loop
-    services/proxy/task_intake.go: the agent loop
-    services/proxy/task_tier.go: the agent loop
-    services/proxy/tool*: the tool handlers
-    services/proxy/gates*: the guards
-    services/proxy/plan_gates*: the guards
-    services/proxy/guardrails*: the guards
-    services/proxy/candidate_authorization*: the guards
-    services/proxy/candidate_grant*: the guards
+    services/proxy/internal/app/model_prompt.go: the agent loop
+    services/proxy/internal/app/task_intake.go: the agent loop
+    services/proxy/internal/app/task_tier.go: the agent loop
+    services/proxy/internal/app/tool*: the tool handlers
+    services/proxy/internal/app/gates*: the guards
+    services/proxy/internal/app/plan_gates*: the guards
+    services/proxy/internal/app/guardrails*: the guards
+    services/proxy/internal/app/candidate_authorization*: the guards
+    services/proxy/internal/app/candidate_grant*: the guards
     services/proxy/internal/shellcmd/*: the guards
     services/proxy/internal/workspacefs/*: the guards
     services/proxy/internal/logsafe/*: the guards

@@ -86,11 +86,11 @@ K3s デプロイパス（`scripts/install/install.sh`、`deploy/k3s/` 内のマ�
 
 プロキシはチャットフロントエンドのエントリーポイントです。`/v1/agent`（型付きイベントストリーム — TUI が使うもの）でユーザーメッセージを受け取り、llama-server を呼び出し、ツールコールをパースし、それらを実行し、イベントをストリームバックする内部エージェントループを実行します。`/v1/chat/completions` エンドポイントは llama-server への透過パススルーです。SDK 互換性のために残してあり、エージェントループは実行しません。イベントタイプの完全なカタログは [API.md](../../reference/API.md) を参照してください。
 
-`services/proxy/` とそのサブフォルダーの非テスト Go ファイルすべてと、それぞれの担当領域:
+`services/proxy/` とそのサブフォルダーの非テスト Go ファイルすべてと、それぞれの担当領域。`main.go` はプログラムを起動するだけで、`app.Run` を呼び出します。フォルダーのない名前は `internal/app/` のファイルです:
 
 | ファイル | 担当 |
 |---|---|
-| `main.go` | HTTP サーバー、ルーティング、認証、パススルー、エラーエンベロープ、秘匿値のログフィルタ |
+| `server.go` | HTTP サーバー、ルーティング、認証、パススルー、エラーエンベロープ、秘匿値のログフィルタ |
 | `model_call.go`, `model_reply.go` | llama-server への 1 回の呼び出しと、モデルの応答の読み取り |
 | `model_prompt.go`, `task_tier.go` | システムプロンプトとコンテキスト予算、メッセージのティア |
 | `server_agent.go` | `/v1/agent` と `/cancel` エンドポイント |
@@ -200,7 +200,7 @@ flowchart LR
 
 デフォルトの `strict` モードでは、プロキシは完全な JSON スキーマ — `oneOf` と `additionalProperties: false` を用い、ツール名をレジストリから列挙したもの — を送信し、llama-server がそれをトークン生成中の文法として強制します。文法制約は不正な出力を稀にしますが、不可能にはしません: `ATLAS_GRAMMAR_MODE=loose` は `{"type":"json_object"}` のみを送信し（有効な JSON にはなるが形状は強制されない — 一部のモデルはこれを必要とします）、応答トークンの上限が JSON の途中で切り詰めることもあります。プロキシはパースを失敗し得るものとして扱います — 散文や `reasoning_content` から JSON を回復し、切り詰められたツール引数を実行前に検出し、的を絞ったパース失敗の説明をフィードバックし、3連続失敗でループを打ち切ります。
 
-**フェンスされたコンテンツのチャネル（`@fenced`）。** ファイル全体の本体は JSON チャネルには載りません。JSON 文字列内のコードは密度の高いすべての行でエスケープの圧力を支払い、サーブされる 12B はそれを持続できないことが計測されています: 同じ解答が、フェンスされた markdown ブロックとして出力された場合は 6/6 でパースされ、JSON 文字列として出力された場合は 0/6 でした（閉じ括弧の欠落、リテラルの `\n` が文をコメントへ融合、join が空白を失う）。システムプロンプトはモデルに `write_file` の `content` を正確に `@fenced` に設定するよう指示します。プロキシは次に、*制約なしの*サブコール（文法なし、`response_format` なし）を1回行い、その応答はターゲット拡張子のタグが付いた単一のフェンスブロック内のファイルです。エンベロープは JSON 制約の下に留まり、ファイル本体だけがプレーンテキストへ移ります。メカニズムの詳細（`services/proxy/loop.go::fetchFencedContent`）: サブコールはエフェメラルです（会話には決して追加されない — メインスレッドから見れば、モデルは `@fenced` と書き、書き込みが起こったように見えます）。ファイル自体が ` ``` ` を含む応答は、末尾フェンスアンカーによって抽出され、内部のフェンスで切断されることはありません。センチネル*と*ファイルを1つの文字列に入れたモデルには、センチネルが剥がされ、インラインの内容が使われます。2回試行した後は、インラインでの提出を求めるバウンスが返ります。すべての試行は実際の生成であり、実行の合計に計上されます（最終 `done` ペイロード上の `fenced_calls` / `fenced_tokens`、試行ごとに1つの `fenced_fetch` ステージイベント）。
+**フェンスされたコンテンツのチャネル（`@fenced`）。** ファイル全体の本体は JSON チャネルには載りません。JSON 文字列内のコードは密度の高いすべての行でエスケープの圧力を支払い、サーブされる 12B はそれを持続できないことが計測されています: 同じ解答が、フェンスされた markdown ブロックとして出力された場合は 6/6 でパースされ、JSON 文字列として出力された場合は 0/6 でした（閉じ括弧の欠落、リテラルの `\n` が文をコメントへ融合、join が空白を失う）。システムプロンプトはモデルに `write_file` の `content` を正確に `@fenced` に設定するよう指示します。プロキシは次に、*制約なしの*サブコール（文法なし、`response_format` なし）を1回行い、その応答はターゲット拡張子のタグが付いた単一のフェンスブロック内のファイルです。エンベロープは JSON 制約の下に留まり、ファイル本体だけがプレーンテキストへ移ります。メカニズムの詳細（`services/proxy/internal/app/loop.go::fetchFencedContent`）: サブコールはエフェメラルです（会話には決して追加されない — メインスレッドから見れば、モデルは `@fenced` と書き、書き込みが起こったように見えます）。ファイル自体が ` ``` ` を含む応答は、末尾フェンスアンカーによって抽出され、内部のフェンスで切断されることはありません。センチネル*と*ファイルを1つの文字列に入れたモデルには、センチネルが剥がされ、インラインの内容が使われます。2回試行した後は、インラインでの提出を求めるバウンスが返ります。すべての試行は実際の生成であり、実行の合計に計上されます（最終 `done` ペイロード上の `fenced_calls` / `fenced_tokens`、試行ごとに1つの `fenced_fetch` ステージイベント）。
 
 繰り返し検出器は、フェンス解決が `parsed.Args` を取得済みの本体で書き換える前の、ツールコールブランチの先頭でスナップショットされた、**モデルが送信した**コールをフィンガープリントします。このスナップショットがなければ、検出器は、コール自体はバイト同一であるにもかかわらず、試行ごとに異なるバイトを読むことになります。凍結された実行で7ターンの `@fenced` ループが、検出器を沈黙させたままハーネスの上限に到達したのはこのためです。取得されたバイトには影響ありません: それらは引き続き、ミューテーション、ゲート、台帳、書き込みを駆動します。ターゲットパスはシグネチャのために正規化されるため、`solve.py` と `./solve.py` が別々の予算を得ることはありません。
 
@@ -227,7 +227,7 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 
 ### ツール
 
-`services/proxy/tools.go` に 16 個のツールが登録されています。各ツールの内容、制限、読み取り専用かどうかは [API.md § Tools available to the agent loop](../../reference/API.md#tools-available-to-the-agent-loop) をご覧ください。
+`services/proxy/internal/app/tools.go` に 16 個のツールが登録されています。各ツールの内容、制限、読み取り専用かどうかは [API.md § Tools available to the agent loop](../../reference/API.md#tools-available-to-the-agent-loop) をご覧ください。
 
 ### 成果物台帳（観測的）
 
@@ -257,7 +257,7 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 
 分類はサーバー側の事実です。`ToolResult.ModelFacing()` は結果を `success` / `data` / `error` と V3 出自フィールドへ投影し、`MarshalText` — 結果から `ctx.Messages` への唯一の経路 — はそれを通ります。完全な構造体は内部利用のためにすべてのフィールドでマーシャルされ続けます。投影は許可リストであるため、`ToolResult` に追加されたフィールドは、誰かが別の決定をしない限り会話には入りません。
 
-3つのテストが `services/proxy/tool_result_contract_test.go` と `services/proxy/tool_effect_test.go` でこの境界を保持します: `TestEveryModelFacingSerializationSiteIsInventoried` は、新しい直接マーシャルや、目録化されていないルートで構築されたツールメッセージに対して失敗します。`TestModelFacingTextCarriesNoClassification` は結果ごとの投影バイトを固定し、`TestModelPromptBytesAreUnchangedByClassification` は、分類が変わった2つのブランチに対してエージェントループを実行し、リクエストボディを親コミットと比較します。
+3つのテストが `services/proxy/internal/app/tool_result_contract_test.go` と `services/proxy/internal/app/tool_effect_test.go` でこの境界を保持します: `TestEveryModelFacingSerializationSiteIsInventoried` は、新しい直接マーシャルや、目録化されていないルートで構築されたツールメッセージに対して失敗します。`TestModelFacingTextCarriesNoClassification` は結果ごとの投影バイトを固定し、`TestModelPromptBytesAreUnchangedByClassification` は、分類が変わった2つのブランチに対してエージェントループを実行し、リクエストボディを親コミットと比較します。
 
 1つの制限は抱えているものであり、推論で回避されるものではありません。`move_file` のクロスファイルシステムのコピーパスは本番で到達可能ですが、1つの一時ディレクトリは2つのファイルシステムにまたがれないため、本番パスのテストがありません。
 
@@ -302,18 +302,18 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 
 セッション予算はサーバーが所有します: 合計 600 秒、リザーブ 30 秒、したがって作業は 570 秒で停止します。`ATLAS_AGENT_SESSION_TIMEOUT_SEC` が合計を [120, 3600] の範囲で上書きします。不正形式・ゼロ・負・範囲外の値は、ログ付きでデフォルトにフォールバックします。2つの寿命は別々に保たれます — 応答コンテキストはファイナライズのために生き延び、作業コンテキスト（LLM、ツール、ゲート、V3、サンドボックス）はリザーブ1つ分早く終わります — そのため作業を止めるデッドラインが、それを説明するチャネルを殺すことはありません。デッドラインでサーバーは作業をキャンセルし、このセッションのバックグラウンドジョブだけを刈り取り、追跡対象パスを再ハッシュし、フェーズ 3B の復元決定を変更なく走らせ、リザーブ内に1つの `timed_out` ターミナルを発行します。クライアント切断はタイムアウトではありません: 作業は停止しジョブは刈り取られますが、閉じた応答の中に何も主張されません。フェーズ 2 のフェンスされたアドミッションは、`ctx.Ctx` のデッドラインに対して既に予約しているため、作業デッドラインを自動的に観察します。
 
-後の再現性パスのため、ここでは修正されないこと: システムプロンプトはツールの説明を Go のマップ順でレンダリングするため、同一コードの2回の実行は異なるプロンプトバイトを生成します。これはプロンプトの再現性にのみ影響し、挙動には影響しません。`services/proxy/tool_effect_test.go` の `conversationBytes` が、まさにこの理由でシステムメッセージを省略しています。
+後の再現性パスのため、ここでは修正されないこと: システムプロンプトはツールの説明を Go のマップ順でレンダリングするため、同一コードの2回の実行は異なるプロンプトバイトを生成します。これはプロンプトの再現性にのみ影響し、挙動には影響しません。`services/proxy/internal/app/tool_effect_test.go` の `conversationBytes` が、まさにこの理由でシステムメッセージを省略しています。
 
-`SessionWrites` は、モデルが供給した生のパスをキーとした別の古いマップです。そこから生じるエイリアシングについては `services/proxy/loop_state.go` が文書化しています。その読み手は、write_file の上書きガードにおけるモデル自身のドラフトの概念、アクティブなデバッグのファストパス、セッションマニフェストのノート、V3 のプロジェクトコンテキスト、アーティファクトゲートのドリフトチェック、そして編集ツールのレニエンシーゲートです。ここでそのいずれも変わりません。
+`SessionWrites` は、モデルが供給した生のパスをキーとした別の古いマップです。そこから生じるエイリアシングについては `services/proxy/internal/app/loop_state.go` が文書化しています。その読み手は、write_file の上書きガードにおけるモデル自身のドラフトの概念、アクティブなデバッグのファストパス、セッションマニフェストのノート、V3 のプロジェクトコンテキスト、アーティファクトゲートのドリフトチェック、そして編集ツールのレニエンシーゲートです。ここでそのいずれも変わりません。
 
-作業契約の検証要求（`decideVerificationDemand`）は、その問い合わせ対象のコード成果物をレジャーから取ります。そこではすべてのミューテーションツールの着地が `recordLedgerEffect` によって正規の形で記録されています。それに答えるカバレッジ — 合格した実行がどのパスを名指ししたか、そしてそのバイトが何だったか — は `services/proxy/guardrails.go` の `changedPathsForCoverage` によって計算されます: セッションの書き込みとレジャーの正規のコード成果物の和集合であり、要求とそのカバレッジは1つの同一性を読みます。それ以前は、カバレッジはセッション書き込みマップだけを読んでいました。`edit_file` と `structural_edit` はそこに書き込まず、納品済み候補についてはどの編集ツールも書き込まなかったため、`task_mode: work` の下のすべての編集タスクは、モデルが何を実行しても `verification_demanded_unmet` で終わっていました。カバレッジは、実行が現在のバイトの上の変更されたパスを名指ししたと述べるのみです。完了には依然としてその実行が必要であり、後のミューテーションは依然として要求を再武装させ、レジャー自身の検証は依然としてミューテーション債務を決着させます。プログラムかそのテストを実行した、またはページを取得したセグメントだけがカバレッジを結び付けます。そしてそれは、コマンドラインがそのセグメントの終了ステータスを報告するときに限ります（`shellcmd.ClassifyCommandEvidence`）: パースやリントやビルドは何も結び付けず、`tail` にパイプされたテストも同様です。ファイルを名指ししないランナーは、それが発見するセッションのファイルを結び付けます（`shellcmd.RunnerEntries`）: 裸の `pytest` や `pytest tests/` はそのテストファイル、`python -m unittest` はその `test*.py`、`go run .` はそのパッケージ、`go test ./...` はテストを含むパッケージ（テストがなければコンパイルのみ）、そして `npm test`、`jest`、`vitest` はそのデフォルトパターンに一致するファイルです。インポートは、名指しされたエントリポイントからと同様に、そこから辿られます。失敗した実行も記録され、同じバイトの上の失敗は以前の合格を取り消すため、最新の結果が決定します。出口で要求が未充足のとき、検証ゲートは、ファイナライザーが出口を拒否する前に、そのファイルを実行するであろうコマンドとともにその旨を述べます。キャンセルされた編集はミューテーションを報告せず、レジャーはそれについて何も観察しません。
+作業契約の検証要求（`decideVerificationDemand`）は、その問い合わせ対象のコード成果物をレジャーから取ります。そこではすべてのミューテーションツールの着地が `recordLedgerEffect` によって正規の形で記録されています。それに答えるカバレッジ — 合格した実行がどのパスを名指ししたか、そしてそのバイトが何だったか — は `services/proxy/internal/app/guardrails.go` の `changedPathsForCoverage` によって計算されます: セッションの書き込みとレジャーの正規のコード成果物の和集合であり、要求とそのカバレッジは1つの同一性を読みます。それ以前は、カバレッジはセッション書き込みマップだけを読んでいました。`edit_file` と `structural_edit` はそこに書き込まず、納品済み候補についてはどの編集ツールも書き込まなかったため、`task_mode: work` の下のすべての編集タスクは、モデルが何を実行しても `verification_demanded_unmet` で終わっていました。カバレッジは、実行が現在のバイトの上の変更されたパスを名指ししたと述べるのみです。完了には依然としてその実行が必要であり、後のミューテーションは依然として要求を再武装させ、レジャー自身の検証は依然としてミューテーション債務を決着させます。プログラムかそのテストを実行した、またはページを取得したセグメントだけがカバレッジを結び付けます。そしてそれは、コマンドラインがそのセグメントの終了ステータスを報告するときに限ります（`shellcmd.ClassifyCommandEvidence`）: パースやリントやビルドは何も結び付けず、`tail` にパイプされたテストも同様です。ファイルを名指ししないランナーは、それが発見するセッションのファイルを結び付けます（`shellcmd.RunnerEntries`）: 裸の `pytest` や `pytest tests/` はそのテストファイル、`python -m unittest` はその `test*.py`、`go run .` はそのパッケージ、`go test ./...` はテストを含むパッケージ（テストがなければコンパイルのみ）、そして `npm test`、`jest`、`vitest` はそのデフォルトパターンに一致するファイルです。インポートは、名指しされたエントリポイントからと同様に、そこから辿られます。失敗した実行も記録され、同じバイトの上の失敗は以前の合格を取り消すため、最新の結果が決定します。出口で要求が未充足のとき、検証ゲートは、ファイナライザーが出口を拒否する前に、そのファイルを実行するであろうコマンドとともにその旨を述べます。キャンセルされた編集はミューテーションを報告せず、レジャーはそれについて何も観察しません。
 
 ### ツール選択バイアスの緩和策
 
 計測を行ったリファレンスデプロイでは、`structural_edit` が正しい場合でも `structural_edit` より `edit_file` を優先するバイアスが観測されました（BiasBusters arxiv 2510.00307 — 近接するツール名の埋め込みが競合する; 名前よりも説明文の方が重要）。プロキシでは、モデルに依存しない4つの防御策を組み合わせます:
 
-1. **説明文の書き換え**（`services/proxy/tool_edit.go`、`services/proxy/tool_structural_edit.go`）。edit_file の説明はファイル全体/関数全体での使用を警告し、structural_edit の説明は >10 行 / ノード全体の差し替えには必須と述べ、write_file の説明は新規ファイル専用と述べる。
-2. **条件付き GBNF 文法**（`services/proxy/tool_schema.go`、`services/proxy/model_call.go:stepExclusions`）。既存の5行超 .py/.html/.htm ファイルに対する write_file が拒否されると、次の LLM 呼び出しはツール名のプロダクションから edit_file と write_file を禁止する GBNF 文法で制約される。モデルは物理的にそれらを発行できない。この制限は1回の判断後に失効する。
+1. **説明文の書き換え**（`services/proxy/internal/app/tool_edit.go`、`services/proxy/internal/app/tool_structural_edit.go`）。edit_file の説明はファイル全体/関数全体での使用を警告し、structural_edit の説明は >10 行 / ノード全体の差し替えには必須と述べ、write_file の説明は新規ファイル専用と述べる。
+2. **条件付き GBNF 文法**（`services/proxy/internal/app/tool_schema.go`、`services/proxy/internal/app/model_call.go:stepExclusions`）。既存の5行超 .py/.html/.htm ファイルに対する write_file が拒否されると、次の LLM 呼び出しはツール名のプロダクションから edit_file と write_file を禁止する GBNF 文法で制約される。モデルは物理的にそれらを発行できない。この制限は1回の判断後に失効する。
 3. **ステップごとのツールリストフィルタ**（同じトリガー）。一時的な `[system note]` のユーザーメッセージが注入され、このステップでは structural_edit が唯一の構造的編集ツールであることをモデルに思い出させる。
 4. **ASA ステアリングベクトル**（`services/geometric-lens/asa_calibration/`）。活性化ステアリングが残差ストリームの分布を上流でシフトさせ、いかなる拒否が発火する前の初回の判断でも structural_edit が優先される。`services/inference/entrypoint-v3.1.sh` が `/models/ast_edit_steering.gguf` から自動ロードするのは、その `.model` サイドカーが選択中のモデルと一致する場合のみ — `services/geometric-lens/asa_calibration/README.md` のワークフローで互換性のあるビルドを行えば、以降は常時オン。パス/スケール/レイヤー範囲は `ATLAS_CONTROL_VECTOR*` 環境変数でオーバーライドする。
 
@@ -330,7 +330,7 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 | T2（機能） | 0（無制限） | V3 パイプラインが発火 |
 | T3（高難度） | 0（無制限） | V3 パイプラインが発火 |
 
-上の2つの列は異なる分類器に属し、この表が1つに見えるのは偶然です。**ターン数**はメッセージティア（`services/proxy/task_tier.go:classifyAgentTier`）から来て、ユーザーが入力したものをスコアします。**動作**はファイルティア（`services/proxy/tools.go:classifyFileTier`）から来て、編集対象のファイルをスコアし、実際に V3 をゲートしているのはこちらです — メッセージティアは v3-service に転送されますが、ログ行に記録されるだけです。
+上の2つの列は異なる分類器に属し、この表が1つに見えるのは偶然です。**ターン数**はメッセージティア（`services/proxy/internal/app/task_tier.go:classifyAgentTier`）から来て、ユーザーが入力したものをスコアします。**動作**はファイルティア（`services/proxy/internal/app/tools.go:classifyFileTier`）から来て、編集対象のファイルをスコアし、実際に V3 をゲートしているのはこちらです — メッセージティアは v3-service に転送されますが、ログ行に記録されるだけです。
 
 ターン上限が T1/T2/T3 で同じであるため、メッセージティアが判断できることは1つだけです: 会話か否か。T0 は実行を上限で打ち切り、プランモードをスキップします。それ以外の値はすべて同一に振る舞います。したがって、何かを会話と呼ぶには積極的な証拠が必要です — 12文字未満の挨拶か疑問形 — で、それ以外はすべて作業として扱われます。この非対称は意図的です: 会話を作業と読み違えるコストは無駄なプラン呼び出し1回ですが、作業を会話と読み違えると実際のリクエストが打ち切られ、そのプランがスキップされ、失敗します。
 
@@ -338,12 +338,12 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 
 この非対称は、疑問形テスト（`isQuestionMessage`）にも及びます。節を終える `?`（後に終端・空白・引用符が続き、括弧とバッククォートの外にあるもの）は質問です。URL クエリや正規表現の中の `?` は違います。疑問詞による開始は、wh 語が語として独立している場合にのみ質問です — "Whole-number…"、"Whenever…"、"However…" は違います — で、"when"/"where" 開始は倒置されていなければなりません（"when does"）。"When the timer hits zero, …" はリクエストを開始するためです。開始の "do" は代名詞を必要とするため（"do you"）、"Do the same for the /users route" は作業です。文中の助動詞は主語を必要とするため、". Do not hardcode the answer." は質問ではありません。文中の節を開く wh 語は、その節が倒置されている場合にのみ質問です — 助動詞が wh 語の後に続く、"what DOES x do" のように。関係詞節は主語動詞語順を保ち（"what it is"、"where it was found"）記述的であるため、"post an item (what it is, where it was found)" のようなフィールド列挙は質問として読まれません。過去形の助動詞は同じ非対称により倒置集合から外されます: ビルドリクエストが打ち切られてはならず、`?` のない稀な過去形の文中質問を見逃すコストはプラン呼び出し1回だけです。質問に読めるビルドリクエストが、これが閉じた失敗でした: �とし物探しの Web アプリが "where it was found" という言葉で会話と分類され、打ち切られ、プランなしになりました。
 
-ティア上限は 0（無制限）で、ループ内の検出スタックが打ち切るタイミングを決めます: レンズの退行（`agent_lens_intervention`）、推論の繰り返し（`agent_reasoning_intervention`）、ツール呼び出しの繰り返し（`agent_repeat_intervention`）、パスを認識するエラーブレーカー、行動なき done ゲート、クレームチェックゲート、証拠ゲート、プラン遵守しきい値、空応答フォールバック。オペレーターは `ATLAS_MAX_TURNS=<n>` で1回限りの「アプリ全体を直して」プロンプトに対して上書きできます — `services/proxy/loop_state.go::envOverrideMaxTurns` を参照。
+ティア上限は 0（無制限）で、ループ内の検出スタックが打ち切るタイミングを決めます: レンズの退行（`agent_lens_intervention`）、推論の繰り返し（`agent_reasoning_intervention`）、ツール呼び出しの繰り返し（`agent_repeat_intervention`）、パスを認識するエラーブレーカー、行動なき done ゲート、クレームチェックゲート、証拠ゲート、プラン遵守しきい値、空応答フォールバック。オペレーターは `ATLAS_MAX_TURNS=<n>` で1回限りの「アプリ全体を直して」プロンプトに対して上書きできます — `services/proxy/internal/app/loop_state.go::envOverrideMaxTurns` を参照。
 
 これらのゲートのうち3つは、リクエストの言い回しではなく、実行が観測したものから発火するかどうかを決めます。リクエストの言い回しは、どんなリストも完結できない開放語彙だからです:
 
 - **検証ゲート** — ユーザーが修復を求めた場合、*または*実行・テスト・チェックが実際に非ゼロで終了し、その後何も合格していない場合に `done` をブロックします。2番目の条件は、ユーザーのメッセージのどんな読みからも予測できなかった、モデルが自ら持ち込んだ失敗テストを捕捉します。後の失敗は以前の合格を取り消します。失敗した lint やパースは、同じチェックが再び合格するか、実行が合格することで解消され、lint は失敗したテストを解消しません。プログラムまたはそのテストを実行した実行、または HTTP エラーなら失敗する形でページを取得した実行（`curl -f`、または本文を `grep` にパイプ）のみが検証として数えられ、コマンドラインがその部位の終了ステータスを報告している場合に限ります（`services/proxy/internal/shellcmd/command_evidence.go`）。パース、lint、ビルド、`--version` は検証ではなく、`pytest | tail`、`pytest || true`、`app.py; echo`、`app.py &` も同様です。ゲートはそのようなコマンドを理由付きでモデルに名指しして返します。その台帳はブール値ではなく成果物に束ねられています。すべての検証実行は `VerificationRecord` — コマンドライン、その証拠種別、失敗したかどうか、その stdin 契約、検証セグメントが名指ししたセッション書き込みファイルごとの sha256 — を追記し、終了時にそれらのファイルを再ハッシュし、ディスク上のバイトが実行が保証したバイトでなくなった時点で `done` を弾きます。出力を要求するプロンプトのタスクで何も表示しなかったグリーンの実行は、数えられる代わりに*失敗した検証としてラッチ*します。`prog < file` としてしか実行されなかったプログラム（リダイレクトはセグメント内のどこで認識され、`cat file | prog` も同様）は、呼び出し元が使わないかもしれない契約の下で検証されたとみなされ、終了時にスタンドアロン実行を1回要求します。パース警告付きで着地した書き込みは、そのパスを保留中実行としてマークします: そのパスへの以後の書き込みと編集は、コマンドが実際にそれの*実行を試みる*まで弾かれます — インタープリタ起動または `./file`。ファイルを名指しする `cat`/`grep`/`ls` は何も証明せず何も解消せず、`python -m py_compile` のようなパースも同様です。そして赤実行の連続が2を超えると、ループはモデルが同じテキストに `done` を試みるのを待つ代わりに、即座に書き直しの助言（パッチをやめて、白紙から書き直す）を注入します。
-- **行動なき done ゲート** — リクエストが状態変更を要求し、ディスクに何も着地していない場合に `done` をブロックします。**クライアントが検証済みの `task_contract` を送る場合、その `task_mode` がその問いを決めます**: `work` は状態変更が必要、`question` は不要で、メッセージの言い回しはどちらも上書きしません。契約が送られない場合、レガシーヒューリスティックが従来どおり決めます — 明示的な動作の言い回しでブロックするか、*または*モデルが非会話メッセージでプロジェクトを開き、何も変わらなかった場合にブロックします。1つのヘルパーがこの選択を所有し（`services/proxy/guardrails.go::decideActionDemand`）、両方の action-demand 呼び出しサイトがそれを消費します。ヒューリスティックはそこで一度評価され、契約が決める場合でも比較のために記録されます。これにより、インテントリストにない動詞（"remove the debug logging" はどれにも一致しない）もカバーされます。一方で質問は免除されたままです: それらは会話であり、ファイルを読んで何も書かずに1つに答えるのは正しい動作です。
+- **行動なき done ゲート** — リクエストが状態変更を要求し、ディスクに何も着地していない場合に `done` をブロックします。**クライアントが検証済みの `task_contract` を送る場合、その `task_mode` がその問いを決めます**: `work` は状態変更が必要、`question` は不要で、メッセージの言い回しはどちらも上書きしません。契約が送られない場合、レガシーヒューリスティックが従来どおり決めます — 明示的な動作の言い回しでブロックするか、*または*モデルが非会話メッセージでプロジェクトを開き、何も変わらなかった場合にブロックします。1つのヘルパーがこの選択を所有し（`services/proxy/internal/app/guardrails.go::decideActionDemand`）、両方の action-demand 呼び出しサイトがそれを消費します。ヒューリスティックはそこで一度評価され、契約が決める場合でも比較のために記録されます。これにより、インテントリストにない動詞（"remove the debug logging" はどれにも一致しない）もカバーされます。一方で質問は免除されたままです: それらは会話であり、ファイルを読んで何も書かずに1つに答えるのは正しい動作です。
 - **証拠ゲート** — 実行が内容を一度も見せられていないワークスペースファイルを応答が名指しする終了をブロックします。書き込みツールは既に、最初に読まれていないパスの編集を拒否します。これは同じルールを、応答そのものが成果物である回答に適用します。`AgentContext.BodySeen` — モデルの前に実際に置かれたファイルを記録する、`FilesRead` より意図的に狭い集合（`outline_file` は最新性追跡のためにファイルのソース全体をキャッシュするが、モデルにはシグネチャと行範囲しか見せないため）— をキーとします。ファイルを読むか、それを自分で書いていれば、ゲートは解消されます。
 
 #### クライアントタスクモード
@@ -371,7 +371,7 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 
 証拠ゲートが存在するのは、上の行動なき done ゲートの免除 — 質問は会話であるため決してゲートされない — が、回答パスに完了チェックを1つも残さなかったためです。3つのモジュールにまたがる診断的な質問で計測しました: 12セッションにわたり、モデルは `list_directory` を実行し、ちょうど1つのファイルをアウトラインし、応答しました。本体を1度も読まずに。結果は、検査したものではなく当てたファイル名を追跡しました（`scoring.py` は 11/11 で誤り、`planning.py` は 1/1 で正解。プロンプトに "scored" という語が含まれていたためです）。ある応答は、一度も見ていないファイルの「134-142行」を引用しました。
 
-分類器は `services/proxy/tools.go`（`classifyFileTier`）、ロジックパターンマッチャーは同じファイル（`hasLogicIndicators`）にあります。
+分類器は `services/proxy/internal/app/tools.go`（`classifyFileTier`）、ロジックパターンマッチャーは同じファイル（`hasLogicIndicators`）にあります。
 
 **常に T1（直接書き込み）:**
 - 名前で一致する設定ファイル（例: `package.json`、`go.mod`、`pyproject.toml`、`dockerfile`、`docker-compose.*`）
@@ -381,12 +381,12 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 - **10行未満**の自明に小さいファイル（そのサイズでは V3 が多様化できるものが何もないため）
 - ロジック指標のない未知の拡張子
 
-設定ファイルの正確なリストと拡張子集合は `services/proxy/tools.go:classifyFileTier` にあります。
+設定ファイルの正確なリストと拡張子集合は `services/proxy/internal/app/tools.go:classifyFileTier` にあります。
 
-すべてのコンテンツ編集ツールは `runEditPipeline`（`services/proxy/tool_write_v3.go`）を通じてパイプラインに入ります — `edit_file`、`insert_after`、`replace_lines` は直接、`structural_edit` と `write_file` はそれぞれの V3 パス経由。ティア分類は `max(oldTier, newTier)` を使うため、T2+ ファイルを T1 のスタブへ縮小する破壊的な編集も依然として対象になります。これをスキップするツールは、ティアにかかわらず候補生成もレンズスコアリングもない貪欲サンプルを1つだけ生成します。ティアシステムが防ぐために存在するのはまさにそれです。`tests/contracts/api/test_write_gate_coverage.py` が、すべての書き込みパスがそこに到達することを表明します。
+すべてのコンテンツ編集ツールは `runEditPipeline`（`services/proxy/internal/app/tool_write_v3.go`）を通じてパイプラインに入ります — `edit_file`、`insert_after`、`replace_lines` は直接、`structural_edit` と `write_file` はそれぞれの V3 パス経由。ティア分類は `max(oldTier, newTier)` を使うため、T2+ ファイルを T1 のスタブへ縮小する破壊的な編集も依然として対象になります。これをスキップするツールは、ティアにかかわらず候補生成もレンズスコアリングもない貪欲サンプルを1つだけ生成します。ティアシステムが防ぐために存在するのはまさにそれです。`tests/contracts/api/test_write_gate_coverage.py` が、すべての書き込みパスがそこに到達することを表明します。
 
 **T2（V3 パイプライン）** — ファイルが以下の場合に該当:
-- `hasLogicIndicators(content)` が true を返す — 関数/メソッド定義、制御フロー、エラー処理、Flask/FastAPI/Django ルーティング、Express/Node API、React の状態/データ、バリデーション、データベース呼び出し、JSX/React コンポーネントパターン、インポートをカバーするパターンファミリーにわたる **2+ 一致**（リテラルトークンリストは `services/proxy/tools.go:hasLogicIndicators`）
+- `hasLogicIndicators(content)` が true を返す — 関数/メソッド定義、制御フロー、エラー処理、Flask/FastAPI/Django ルーティング、Express/Node API、React の状態/データ、バリデーション、データベース呼び出し、JSX/React コンポーネントパターン、インポートをカバーするパターンファミリーにわたる **2+ 一致**（リテラルトークンリストは `services/proxy/internal/app/tools.go:hasLogicIndicators`）
 - またはファイルが認識されたソースコード/マークアップ拡張子（`.py`、`.go`、`.rs`、`.ts`、`.tsx`、`.js`、`.jsx`、`.html`、`.htm`、…）を持ち、ロジック指標が発火しなかった — T2 として疑いの利益を得る（12行のコンポーネントシェルのような最小だが本物のファイルをカバー）
 
 **T3（高難度）** — 現在、分類器は単独では T3 を出力しません。サイクロマティック複雑度の精緻化器（`refineTierWithCC`。GH #39 ポイント2の `/internal/cyclomatic_complexity` 経由）が、McCabe CC で*引き上げ*ます: CC ≥ 8 で T2 へ（T1 からも）、CC ≥ 16 で T3 へ。引き下げは決してしません。
@@ -454,9 +454,9 @@ API の契約は [API.md § POST /v3/plan](../../reference/API.md#post-v3plan) �
 |---|---|
 | `services/proxy/internal/v3client/client.go` | `PlanStreaming(reqCtx, v3URL, requestID, req, onProgress)` — SSE ストリームを開き、進捗イベントをコールバックに転送し、`event: result` フレームから最終的な `Plan` を返します。`reqCtx` がエージェントのリクエストコンテキストを結び付けるので、`/cancel` は実行中のプランを中止します。V3 パイプライン実行用の `GenerateStreaming` と同じ形です。 |
 | `services/proxy/internal/wire/` | `V3PlanRequest`（`v3.go`）、`Plan` と `PlanStep`（`messages.go`）の型。 |
-| `services/proxy/loop_state.go` | `AgentContext` に `Plan`、`PlanStepsSatisfied[]`、`PlanOffStreak`、`PlanRevisions` が加わります。 |
-| `services/proxy/plan_generation.go`, `services/proxy/internal/projectcontext/sample.go` | `projectcontext.Sample()` はプランナーのために優先ファイル（app.py、templates/index.html、package.json など）をたどります。`shouldGeneratePlan()` はティア、メッセージ長、読み取り専用のリクエストかどうかで判定します。`generatePlan()` はブリッジを実行し、トークンごとのノイズを捨て、全ステップのリストを付けて `plan_loaded` を発行します。 |
-| `services/proxy/plan_gates.go` | `matchPlanStep()`（ツール名とパス末尾の緩い一致）、`recordPlanAdherence()`（ツールコールごとの集計。どのステップにも一致しない偵察コール — `read_file`/`list_directory`/`find_file`/`search_files` — は中立で、`off_streak` を延ばしません）、`revisePlan()`（`FilesRead` を追加コンテキストとして引き継いで再生成）。 |
+| `services/proxy/internal/app/loop_state.go` | `AgentContext` に `Plan`、`PlanStepsSatisfied[]`、`PlanOffStreak`、`PlanRevisions` が加わります。 |
+| `services/proxy/internal/app/plan_generation.go`, `services/proxy/internal/projectcontext/sample.go` | `projectcontext.Sample()` はプランナーのために優先ファイル（app.py、templates/index.html、package.json など）をたどります。`shouldGeneratePlan()` はティア、メッセージ長、読み取り専用のリクエストかどうかで判定します。`generatePlan()` はブリッジを実行し、トークンごとのノイズを捨て、全ステップのリストを付けて `plan_loaded` を発行します。 |
+| `services/proxy/internal/app/plan_gates.go` | `matchPlanStep()`（ツール名とパス末尾の緩い一致）、`recordPlanAdherence()`（ツールコールごとの集計。どのステップにも一致しない偵察コール — `read_file`/`list_directory`/`find_file`/`search_files` — は中立で、`off_streak` を延ばしません）、`revisePlan()`（`FilesRead` を追加コンテキストとして引き継いで再生成）。 |
 
 システムプロンプトのレンダリングは `buildSystemPrompt` で行われます。プランのステップは番号付きリストとしてレンダリングされ、`✓` マーカーは検証ステップにのみ付きます。検証ステップは、検証ゲートが `done` に対して守る「修正の証拠」のステップとして明示されます。（ステップごとの ☐/✓/⚐ グリフは TUI のレンダリングのものです。下記を参照してください。）
 
@@ -474,7 +474,7 @@ API の契約は [API.md § POST /v3/plan](../../reference/API.md#post-v3plan) �
 
 #### 調整可能な値
 
-`services/proxy/plan_gates.go` で定義:
+`services/proxy/internal/app/plan_gates.go` で定義:
 
 | 定数 | デフォルト | 理由 |
 |---|---|---|
@@ -509,14 +509,14 @@ API の契約は [API.md § POST /v3/plan](../../reference/API.md#post-v3plan) �
 | レイヤー | ファイル | カバー範囲 |
 |---|---|---|
 | v3-service のプランエンドポイント | `tests/v3-service/pipeline/test_plan_scoring.py`（スコアラー）。パーサーは `curl /v3/plan` でスモークテスト | スコアラーは、プログラムやそのテスト、プローブを実行する検証ステップに加点し、静的チェック（ビルド、解析、リンター）にも偵察コールにも加点しません。パーサーの許容範囲（フェンス、散文の前置き、波括弧のネスト）は 3 候補のサンプラーで確かめます |
-| プロキシのブリッジ | `services/proxy/internal/v3client/client_test.go`。ステージのルーティングは `services/proxy/tool_write_v3_bridge_test.go` | SSE の解析、結果が欠けたときのエラー、ステージのルーティング |
-| プロキシのフック | `services/proxy/loop_test.go` | 優先ファイルの取得、切り詰めのしきい値、フォールバックの走査、ティアと長さの判定 |
-| プロキシの遵守 | `services/proxy/plan_gates_test.go`。システムプロンプトは `services/proxy/gates_test.go` | 一致ロジック（ツール名 + パス末尾）、失敗したコールの除外、修正回数の上限、システムプロンプトのレンダリング |
+| プロキシのブリッジ | `services/proxy/internal/v3client/client_test.go`。ステージのルーティングは `services/proxy/internal/app/tool_write_v3_bridge_test.go` | SSE の解析、結果が欠けたときのエラー、ステージのルーティング |
+| プロキシのフック | `services/proxy/internal/app/loop_test.go` | 優先ファイルの取得、切り詰めのしきい値、フォールバックの走査、ティアと長さの判定 |
+| プロキシの遵守 | `services/proxy/internal/app/plan_gates_test.go`。システムプロンプトは `services/proxy/internal/app/gates_test.go` | 一致ロジック（ツール名 + パス末尾）、失敗したコールの除外、修正回数の上限、システムプロンプトのレンダリング |
 | TUI のレンダリング | `clients/tui/internal/pipelinestate/plan_test.go`。ハンドラーは `clients/tui/internal/app/state_plan_test.go` | `PlanView` の状態遷移、修正時の plan_loaded による置き換え、プラン外での無言 |
 
 ### 安全制限
 
-オペレーター向けの制限と、それを調整するノブです。内部のステアリングガード（トレースバックの局所化、モジュール欠落/コマンド欠落/壊れたインラインスクリプト/大文字小文字不一致のステア、シンボルグラウンディング、no-op/空コンテンツ/構文ゲート、doctype ストリップ）は `services/proxy/guardrails*.go` と `services/proxy/loop_*.go` にあります。構造ゲート（`edit_file`、`structural_edit`、すべての `write_file` ブランチにおいて、未解決の直接呼び出し — いわゆる `NameError` — を導入する `.py` の書き込みを拒否します。すべてのリクエストで走り、どのリクエストフィールドもオフにできません）は `services/proxy/gates.go` にあります。埋め込みスクリプトゲートもそこにあります: `.html`/`.htm`/`.jinja`/`.jinja2` ファイル内 **および Python 文字列リテラル内**（`render_template_string` の形）の `<script>`/`<style>` ブロック内の JavaScript をパースし（CSS は括弧のバランスを取る）— これは v3-service の `POST /internal/embedded_script_check` を通じて行われ — 新しく壊す変更を拒否します。他のすべてのゲートがそのコードに構造的に盲目であるため、このゲートが存在します: 2026-08-01 のドッグフーディングセッションでは、Flask アプリのインライン `<script>` に stray な `)` が残り、Python はコンパイルされ、サーバーは起動し `curl /` は 200 を返したため、検証ゲートが通過しページがブラウザで死んでいるのに `done` が受理されました。構文ゲートと同じ健全→破損のルール（進行中のまだ壊れている修復は許可）と同じフェイルソフトの姿勢です: 到達不能なサービス、欠落した文法、あいまいなブロック（テンプレートの文タグ、`<script src>`、JS でない `type`、エスケープされた Python 文字列）は何の所見も返さず、書き込みをブロックすることは決してありません。コマンド欠落ステアは `command not found` シェルエラーで発火します: サンドボックスは読み取り専用ベース上で非 root のため、存在しないバイナリを実行時に apt インストールすることは決してできません — ステアはその旨を述べ、モデルが反復ブレーカーに再突入する代わりに、pip でインストール可能な同等物やプリインストールされたツールチェーンを指し示します。壊れたインラインスクリプトステアは、`python -c` 検証ワンライナーが `-c` 引数自体の中で SyntaxError で失敗したとき（複数文の `def`/`for` ボディが1行に詰め込まれた場合）に発火します: 検証コマンドだけが不正な形で、ソリューションファイルは正しい場合があるため、モデルをパース不能なワンライナーの再実行ではなく、テストを `.py` ファイルに移すよう導きます。
+オペレーター向けの制限と、それを調整するノブです。内部のステアリングガード（トレースバックの局所化、モジュール欠落/コマンド欠落/壊れたインラインスクリプト/大文字小文字不一致のステア、シンボルグラウンディング、no-op/空コンテンツ/構文ゲート、doctype ストリップ）は `services/proxy/guardrails*.go` と `services/proxy/loop_*.go` にあります。構造ゲート（`edit_file`、`structural_edit`、すべての `write_file` ブランチにおいて、未解決の直接呼び出し — いわゆる `NameError` — を導入する `.py` の書き込みを拒否します。すべてのリクエストで走り、どのリクエストフィールドもオフにできません）は `services/proxy/internal/app/gates.go` にあります。埋め込みスクリプトゲートもそこにあります: `.html`/`.htm`/`.jinja`/`.jinja2` ファイル内 **および Python 文字列リテラル内**（`render_template_string` の形）の `<script>`/`<style>` ブロック内の JavaScript をパースし（CSS は括弧のバランスを取る）— これは v3-service の `POST /internal/embedded_script_check` を通じて行われ — 新しく壊す変更を拒否します。他のすべてのゲートがそのコードに構造的に盲目であるため、このゲートが存在します: 2026-08-01 のドッグフーディングセッションでは、Flask アプリのインライン `<script>` に stray な `)` が残り、Python はコンパイルされ、サーバーは起動し `curl /` は 200 を返したため、検証ゲートが通過しページがブラウザで死んでいるのに `done` が受理されました。構文ゲートと同じ健全→破損のルール（進行中のまだ壊れている修復は許可）と同じフェイルソフトの姿勢です: 到達不能なサービス、欠落した文法、あいまいなブロック（テンプレートの文タグ、`<script src>`、JS でない `type`、エスケープされた Python 文字列）は何の所見も返さず、書き込みをブロックすることは決してありません。コマンド欠落ステアは `command not found` シェルエラーで発火します: サンドボックスは読み取り専用ベース上で非 root のため、存在しないバイナリを実行時に apt インストールすることは決してできません — ステアはその旨を述べ、モデルが反復ブレーカーに再突入する代わりに、pip でインストール可能な同等物やプリインストールされたツールチェーンを指し示します。壊れたインラインスクリプトステアは、`python -c` 検証ワンライナーが `-c` 引数自体の中で SyntaxError で失敗したとき（複数文の `def`/`for` ボディが1行に詰め込まれた場合）に発火します: 検証コマンドだけが不正な形で、ソリューションファイルは正しい場合があるため、モデルをパース不能なワンライナーの再実行ではなく、テストを `.py` ファイルに移すよう導きます。
 
 **アクティブな反復中のファストパス書き込み。** V3 は T2+ ファイルの*最初の*書き込み（ベースライン生成）で発火します。しかしいったんモデルがファイルを書き込み、それが実行に失敗したのを見たなら、次の書き込みは編集-テスト-修正ループでの的を絞った修正です — V3 をスキップし（構文ゲートと構造ゲートは依然として通ります）直接書き込みます。V3 のフルパイプラインは呼び出しごとに数分かかり、デバッグ中のファイルではしばしば使える結果なしに完了し、結局フォールバックします。反復ごとにそのレイテンシを払うと、ループは数サイクルに絞り込まれます。ファストパスは `SessionWrites[path]` と、そのファイルを参照する直近の失敗した実行をキーとします。
 
@@ -529,16 +529,16 @@ API の契約は [API.md § POST /v3/plan](../../reference/API.md#post-v3plan) �
 | V3 インタラクティブの実時間上限 | 単一の V3 パイプライン呼び出しは `ATLAS_V3_TIMEOUT`（デフォルト 300s）で上限。タイムアウト時、プロキシはモデルの構文・構造ゲートされた内容にフォールバックし、実行の最終サマリはそのファイルを名指しします（`0` で無効化） | 長い修復の停滞の下でもインタラクティブセッションの応答性を保つ |
 | ターンごとの推論予算 | 約 6144 推論トークンでストリームを打ち切る（`ATLAS_REASONING_BUDGET`、0 で無効）; 回復は埋め込まれた tool_call を抽出するか再プロンプトする | 推論のスパイラルを抑える |
 | 既存ファイルへの write_file | ファイルが5行超なら拒否; .py/.html/.htm ではステップごとの文法ゲートが `structural_edit` へステアする | 外科的編集（`edit_file`）またはノード全体の編集（`structural_edit`）を強制する |
-| 疑わしい縮小ガード | `oldSize >= 100B` かつ `newSize < 64B` のとき `structural_edit`/`edit_file` を拒否（`services/proxy/guardrails_write.go::validateNotSuspiciouslyShrunk`） | 破壊的なスタブ書き換えがディスクに到達する前に捕捉する |
+| 疑わしい縮小ガード | `oldSize >= 100B` かつ `newSize < 64B` のとき `structural_edit`/`edit_file` を拒否（`services/proxy/internal/app/guardrails_write.go::validateNotSuspiciouslyShrunk`） | 破壊的なスタブ書き換えがディスクに到達する前に捕捉する |
 | structural_edit の暴走コンテンツガード | `content` > 8 KB かつファイルサイズの > 4倍のとき拒否 | 置換ノードとして発行された推論リーク blob を捕捉する |
 | structural_edit のノードサイズ事前条件 | 置換後のノードが元のノードの 5 倍以上かつ 30 行以上大きく、それがファイル内の既存コンテンツを重複させるか、ファイルが 20 行以上のモジュールレベル文字列定数を持つ場合に拒否（`v3-service` `_replacement_dwarfs_node`） | 小さいセレクタを通じてスプライスされた blob は、ノードが持っていたものすべてを削除します。観測されたセッションでは、`@app.route` が1つもないのにパースだけは通る Flask アプリが残りました |
-| 重複エントリポイントガード | 以前は高々1つだったのに、複数のトップレベル `if __name__ == "__main__":` を残す `.py` の書き込みを拒否（`services/proxy/gates_edit_requests.go::duplicateMainGuard`） | ノードセレクタを通じてスプライスされたファイル全体の blob の署名。パースされ実行されますが、最初のブロッキング `app.run()` 以降はすべて死んだ状態です |
+| 重複エントリポイントガード | 以前は高々1つだったのに、複数のトップレベル `if __name__ == "__main__":` を残す `.py` の書き込みを拒否（`services/proxy/internal/app/gates_edit_requests.go::duplicateMainGuard`） | ノードセレクタを通じてスプライスされたファイル全体の blob の署名。パースされ実行されますが、最初のブロッキング `app.run()` 以降はすべて死んだ状態です |
 | 重複レキシカルバインディングガード | 1つのスコープ内で同じ名前を2回宣言する `let`/`const` を残す編集を拒否（`v3-service` `embedded_script_check`） | 早期の SyntaxError: ブラウザはスクリプト全体を拒否するため、サーバーが 200 を返し続ける間にページ上のすべてのハンドラーが死にます。tree-sitter はこれをパースするため、構文チェックでは見えません |
-| 停止したレンダーループガード | 繰り返しタイマーを再武装せず1回きりのスケジュールに使ったままにする関数を残す編集を拒否（`v3-service` `embedded_script_check`、編集前のファイル付き。`services/proxy/gates.go::embeddedScriptGate`） | JavaScript はパースされ、サーバーは起動し、ページは 200 を返すため、他のすべてのチェックが通る間にページは1フレーム後に凍結します |
-| V3 のスコープ外書き換えガード | 呼び出し元の編集がそのまま残していた行を落とす V3 候補を破棄し、呼び出し元のコンテンツを保持（`services/proxy/gates.go::v3RewroteBeyondTheEdit`） | V3 はファイル*全体*を改善するため、小さいファイルでは編集が触れなかったすべてを打ち直します。あるライブセッションでは `#e94562` が `#e94162` に、`id="msg"` が `id=" msg"` になって戻ってきました — どちらも構文エラーではありません |
+| 停止したレンダーループガード | 繰り返しタイマーを再武装せず1回きりのスケジュールに使ったままにする関数を残す編集を拒否（`v3-service` `embedded_script_check`、編集前のファイル付き。`services/proxy/internal/app/gates.go::embeddedScriptGate`） | JavaScript はパースされ、サーバーは起動し、ページは 200 を返すため、他のすべてのチェックが通る間にページは1フレーム後に凍結します |
+| V3 のスコープ外書き換えガード | 呼び出し元の編集がそのまま残していた行を落とす V3 候補を破棄し、呼び出し元のコンテンツを保持（`services/proxy/internal/app/gates.go::v3RewroteBeyondTheEdit`） | V3 はファイル*全体*を改善するため、小さいファイルでは編集が触れなかったすべてを打ち直します。あるライブセッションでは `#e94562` が `#e94162` に、`id="msg"` が `id=" msg"` になって戻ってきました — どちらも構文エラーではありません |
 | エラーループブレーカー | **同種で同じパスの**3連続失敗（メッセージスケルトン: 数字・引用区間・パスを除去）。異なる拒否はストリークをリセットします — 3つの異なる拒否は、ループしているのではなく収束しつつあるモデルです | 正規の反復を殺さずに暴走する失敗サイクルを止める |
 | 失敗呼び出しの上限 | 実行あたり12回の失敗したツール呼び出し（`maxTotalFailures`） | 拒否が変わるとストリークがリセットされるようになった今、失敗モードを循環する実行に上限を課す |
-| プラン完了ゲート | プランナーがプランを 0.6 以上と採点し、ステップが2つ以上あり、少なくとも1つが一致しているとき、一致するツール呼び出しのない計画済みステップがある限り `done` を拒否（`services/proxy/guardrails.go::planIncompleteMessage`） | 部分的に納品されて完了と宣言された複数パートのタスク。ターンごとの進捗ノートは既にそこにあり、無視されました |
+| プラン完了ゲート | プランナーがプランを 0.6 以上と採点し、ステップが2つ以上あり、少なくとも1つが一致しているとき、一致するツール呼び出しのない計画済みステップがある限り `done` を拒否（`services/proxy/internal/app/guardrails.go::planIncompleteMessage`） | 部分的に納品されて完了と宣言された複数パートのタスク。ターンごとの進捗ノートは既にそこにあり、無視されました |
 | 探索予算 | 4連続の読み取り専用呼び出しでナッジ; 5回以上でより強いナッジ。読み取りは常に実行されます — ナッジは*次の*ターンを書き込みへ誘導します | 際限なく探索する代わりに書くようモデルを押す |
 | コマンド出力の切り詰め | stdout 8,000 文字、stderr 4,000 文字 | コンテキストの氾濫を防ぐ |
 | 検索結果 | 最大200件; ファイル検索は 1 MB 超のファイルをスキップ | 検索コストを抑える |
@@ -730,7 +730,7 @@ C(x) の正規化は `sigmoid(steepness × (energy - midpoint))` です。両方
 
 **モデルバインド呼び出しのアトリビューション。** Lens がモデルサーバーに発するすべてのリクエスト（`/embedding`、`/v1/models` の識別プローブ）は、1つのトランスポート — `geometric_lens/model_transport.py` — を通ります。これは、ATLAS の他の部分が既に使っている2つの相関ヘッダー `X-ATLAS-Request-ID` と `X-ATLAS-V3-Invocation-ID` を転送します。それらの値は、Lens ミドルウェアが現在のリクエストにバインドした識別子からのみ来ます（すべての ATLAS Python サービスが使うのと同じ ContextVars）。V3 は、そのスコアリング呼び出しで両方を送ります。バインドされた識別子がない場合ヘッダーは不在で、部分的なペアは部分的なまま、バインディングはリクエスト終了時にクリアされるため、並行リクエストとバックグラウンド作業が識別子を交換・継承することはできません。スタートアップとレディネス作業（ブート自己テスト、`/ready` の再実行）は、`ATLAS_LENS_STARTUP_REQUEST_ID` と `ATLAS_LENS_STARTUP_INVOCATION_ID` が両方設定されている場合にのみ識別子を運びます。アトリビューション付きの埋め込みトラフィックを必要とする取得はそのペアを宣言してリレーに登録し、通常のデプロイはどちらも設定しません。アトリビューションのみ: スコアリング・選択・認可・完了のロジックはこれらのヘッダーを読まず、候補バイトやユーザー内容は入りません。
 
-**プロキシの直接 Lens 呼び出しは独自の呼び出し識別子を運びます。** プロキシが Lens と直接話すのは、書き込みごとのスコアリング（`/internal/lens/score-per-step`）という1つのモデルバインドパスで、これは V3 候補の呼び出しではありません。単一の所有者 `services/proxy/lens_identity.go` がそれらのリクエストを構築し、バインドされた `X-ATLAS-Request-ID` と、そのリクエスト id のみから導出されるプロキシ所有の Lens 呼び出し識別子をスタンプします: `proxy-lens:` に続く、`sha256("atlas/proxy-lens-invocation/v1\n" + request_id)` の最初の32桁の16進数。これは決定的で（リレーはどんなモデルバインドトラフィックより前にペアを登録できる）、1リクエスト内のすべての直接 Lens 呼び出しで同じで、リクエスト間では、また V3 の UUID 呼び出しとは区別され、型付きリクエスト id 以外の何からも — 散文・パス・候補バイト・ツール引数・モデル出力からは決して — 導出されず、モデルによって設定可能でもありません。それは既存の `X-ATLAS-V3-Invocation-ID` チャネルで運ばれます（ヘッダー名は歴史的なもので、値は一般的なモデルバインド呼び出し識別子です）。それはスコープラベルであり資格情報ではありません: ミューテーション・パーミッション・候補・完了を認可するためにそれを読むものはなく、SSE イベント・ツール結果・プロンプト・ログに現れることもありません。不在の、または閉じた形式（`[A-Za-z0-9._:-]{1,128}`）の外にあるリクエスト id は、呼び出し識別子を導出しません。閉じた仕様とベクトルは `services/proxy/testdata/lens_invocation_vectors.json` にあります。
+**プロキシの直接 Lens 呼び出しは独自の呼び出し識別子を運びます。** プロキシが Lens と直接話すのは、書き込みごとのスコアリング（`/internal/lens/score-per-step`）という1つのモデルバインドパスで、これは V3 候補の呼び出しではありません。単一の所有者 `services/proxy/internal/app/lens_identity.go` がそれらのリクエストを構築し、バインドされた `X-ATLAS-Request-ID` と、そのリクエスト id のみから導出されるプロキシ所有の Lens 呼び出し識別子をスタンプします: `proxy-lens:` に続く、`sha256("atlas/proxy-lens-invocation/v1\n" + request_id)` の最初の32桁の16進数。これは決定的で（リレーはどんなモデルバインドトラフィックより前にペアを登録できる）、1リクエスト内のすべての直接 Lens 呼び出しで同じで、リクエスト間では、また V3 の UUID 呼び出しとは区別され、型付きリクエスト id 以外の何からも — 散文・パス・候補バイト・ツール引数・モデル出力からは決して — 導出されず、モデルによって設定可能でもありません。それは既存の `X-ATLAS-V3-Invocation-ID` チャネルで運ばれます（ヘッダー名は歴史的なもので、値は一般的なモデルバインド呼び出し識別子です）。それはスコープラベルであり資格情報ではありません: ミューテーション・パーミッション・候補・完了を認可するためにそれを読むものはなく、SSE イベント・ツール結果・プロンプト・ログに現れることもありません。不在の、または閉じた形式（`[A-Za-z0-9._:-]{1,128}`）の外にあるリクエスト id は、呼び出し識別子を導出しません。閉じた仕様とベクトルは `services/proxy/internal/app/testdata/lens_invocation_vectors.json` にあります。
 
 **埋め込み容量境界。** llama-server は1つの `/embedding` リクエストを単一の物理バッチ（`-ub`、`ATLAS_UBATCH`）で処理し、より長い入力は拒否します。すべての Lens スコアはシーケンス全体に対する1回のフォワードです。この拒否はテキストについての判断ではなく、デプロイのトランスポート上限であり、すべてのスコアから切り離して扱われます: 応答は、すべてのスコアフィールドに `null` を伴う `scored: false` と、型付きの `failure`（サーバーの `input_tokens` と `capacity_tokens` を伴う `embed_capacity`、`model_server_error`、`model_server_unreachable`、`embedding_contract`、NaN や無限値に対する `nonfinite_score`、`internal`）を返します。分割された入力はアーティファクトがフィッティングされたベクトルではないため、サービングパスでは何も切り詰めも分割もされません。v3-service はその失敗を候補に記録し、スコア済みのすべての候補の後ろにランクし、残った最後の検証済み候補としてのみ配信します。プロキシは、スコアなしの書き込みに閾値を適用しません。レンズが知っている容量（`LLAMA_EMBED_CAPACITY_TOKENS` で宣言されるか、拒否から観測される）は `/health` と `/ready` で報告され、プロキシの生成上限を下回る場合はステータスディメンションに `lens_scoring: partial` として現れます。決定記録: [ADR 0010](../../adr/0010-lens-capacity-boundary-is-typed.md)。
 

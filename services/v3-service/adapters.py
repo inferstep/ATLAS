@@ -714,7 +714,7 @@ def _sandbox_safe_filename(filename: str) -> Optional[str]:
     would come back "syntax verification unavailable: HTTP Error 400", a
     verification that never ran reported as a candidate that failed. The
     proxy relativises at its own sandbox boundary for the same reason
-    (services/proxy/gates.go, workspaceRelativeName).
+    (services/proxy/internal/app/gates.go, workspaceRelativeName).
 
     Relativised here, at the one boundary that talks to the sandbox, so every
     caller is covered at once. When no safe relative form exists the filename

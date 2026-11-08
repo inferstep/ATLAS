@@ -351,7 +351,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 			case 'v3_phase':
 			case 'v3_sandbox':
 			case 'v3_repair':
-			// The long V3 stages (services/proxy/tools.go v3StageToEvent) share the same
+			// The long V3 stages (services/proxy/internal/app/tools.go v3StageToEvent) share the same
 			// {stage, detail} shape — without these the progress line goes
 			// stale exactly where V3 is slowest.
 			case 'v3_plansearch':
@@ -375,7 +375,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 			case 'done':
 				// The run's outcome (status and reason) and, on a tool-shaped
 				// turn, the model's final answer, which arrives ONLY in this
-				// summary (services/proxy/loop_turn.go). Posted even with no summary: whether
+				// summary (services/proxy/internal/app/loop_turn.go). Posted even with no summary: whether
 				// the run completed, stopped or failed is the point (#236).
 				this.post({ type: 'doneSummary', ...doneOutcome(data as DoneEventData) });
 				break;
@@ -465,7 +465,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		// path renders NO row to avoid duplicating this event).
 		this.permissions.handleDenied(payload.tool);
 		// The proxy answers a denial with permission_denied and then a
-		// tool_result whose success is false (services/proxy/loop_checks.go), so that
+		// tool_result whose success is false (services/proxy/internal/app/loop_checks.go), so that
 		// result consumes the snapshot, the pre-op state and the chip,
 		// as for any failed call. A stream that ends before it leaves
 		// nothing behind: the turn's end clears all three.

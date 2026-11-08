@@ -33,9 +33,9 @@ def verify():
 # paths it runs, and whether the lens suite runs in its own process.
 @pytest.mark.parametrize("changed, full, gates, suites, lens", [
     pytest.param(["README.md"], False, [], [], False, id="a document runs only the checks of the whole tree"),
-    pytest.param(["services/proxy/loop.go"], False, ["go-proxy-vet", "go-proxy-staticcheck"], ["tests/replay"], False,
+    pytest.param(["services/proxy/internal/app/loop.go"], False, ["go-proxy-vet", "go-proxy-staticcheck"], ["tests/replay"], False,
                  id="a proxy change runs the Go gates and leaves the slow suite to --full"),
-    pytest.param(["services/proxy/loop.go"], True, ["go-proxy-vet", "go-proxy-staticcheck", "go-proxy-test"],
+    pytest.param(["services/proxy/internal/app/loop.go"], True, ["go-proxy-vet", "go-proxy-staticcheck", "go-proxy-test"],
                  ["tests/replay", "tests/e2e"], False,
                  id="a proxy change with --full runs the proxy tests and the slow suite"),
     pytest.param(["clients/tui/chat.go"], False, ["go-tui-vet", "go-tui-staticcheck", "go-tui-test"], [], False,
@@ -77,10 +77,10 @@ def test_every_gate_it_can_pick_exists_and_has_a_fix(verify):
 
 
 def test_changed_go_test_files_give_a_run_pattern(verify):
-    pattern = verify.changed_go_tests(["services/proxy/loop_project_test.go", "services/proxy/loop.go", "clients/tui/chat_test.go"])
+    pattern = verify.changed_go_tests(["services/proxy/internal/app/loop_project_test.go", "services/proxy/internal/app/loop.go", "clients/tui/chat_test.go"])
     assert pattern.startswith("^(Test")
     assert pattern.endswith(")$")
-    assert verify.changed_go_tests(["services/proxy/loop.go"]) == ""
+    assert verify.changed_go_tests(["services/proxy/internal/app/loop.go"]) == ""
 
 
 def test_a_short_output_is_shown_whole_and_a_long_one_by_its_failing_lines(verify):
@@ -125,5 +125,5 @@ def test_a_dockerfile_change_shows_the_findings_of_its_own_files(verify, monkeyp
 
 
 def test_a_change_with_no_dockerfile_does_not_run_hadolint(verify):
-    assert verify.hadolint_notes(["services/proxy/loop.go", "scripts/ci/check_dockerfile_sources.py"]) == []
+    assert verify.hadolint_notes(["services/proxy/internal/app/loop.go", "scripts/ci/check_dockerfile_sources.py"]) == []
 

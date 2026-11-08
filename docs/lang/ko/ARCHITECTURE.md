@@ -86,11 +86,11 @@ K3s 배포 경로(`scripts/install/install.sh`, `deploy/k3s/`의 매니페스트
 
 프록시는 채팅 프론트엔드의 진입점입니다. `/v1/agent`(타입 이벤트 스트림 — TUI가 사용하는 것)에서 사용자 메시지를 받아들이고, llama-server를 호출하고 도구 호출을 파싱·실행해 이벤트를 다시 스트리밍하는 내부 에이전트 루프를 실행합니다. `/v1/chat/completions` 엔드포인트는 llama-server로의 투명한 패스스루입니다. SDK 호환성을 위해 유지되며 에이전트 루프를 실행하지 않습니다. 전체 이벤트 타입 카탈로그는 [API.md](../../reference/API.md)를 참고하세요.
 
-프록시는 12개의 Go 파일로 구성되며, 각 파일이 하나의 관심사를 담당합니다:
+프록시는 12개의 Go 파일로 구성되며, 각 파일이 하나의 관심사를 담당합니다. `main.go`는 프로그램을 시작하기만 하며 `app.Run`을 호출합니다. 폴더가 없는 이름은 `internal/app/`에 있는 파일입니다:
 
 | 파일 | 담당 |
 |---|---|
-| `main.go` | HTTP 서버, 라우팅, 인증, 패스스루, 오류 엔벨로프, 비공개 값 로그 필터 |
+| `server.go` | HTTP 서버, 라우팅, 인증, 패스스루, 오류 엔벨로프, 비공개 값 로그 필터 |
 | `model_call.go`, `model_reply.go` | llama-server 호출 1회와 모델 응답 읽기 |
 | `model_prompt.go`, `task_tier.go` | 시스템 프롬프트와 컨텍스트 예산, 메시지 티어 |
 | `server_agent.go` | `/v1/agent` 및 `/cancel` 엔드포인트 |
@@ -172,7 +172,7 @@ flowchart LR
 
 ### 도구
 
-`services/proxy/tools.go`에 16개의 도구가 등록되어 있습니다. 각 도구의 내용과 제한, 읽기 전용 여부는 [API.md § Tools available to the agent loop](../../reference/API.md#tools-available-to-the-agent-loop)를 참고하세요.
+`services/proxy/internal/app/tools.go`에 16개의 도구가 등록되어 있습니다. 각 도구의 내용과 제한, 읽기 전용 여부는 [API.md § Tools available to the agent loop](../../reference/API.md#tools-available-to-the-agent-loop)를 참고하세요.
 
 ### 도구 선택 편향 완화
 
@@ -181,12 +181,12 @@ flowchart LR
 인접한 도구 이름의 임베딩이 경쟁하며, 설명이 이름보다 더 중요함).
 프록시에서 모델 독립적인 네 가지 방어책이 결합됩니다:
 
-1. **설명 재작성**(`services/proxy/tool_edit.go`, `services/proxy/tool_structural_edit.go`). edit_file의 설명은 파일 전체/함수
+1. **설명 재작성**(`services/proxy/internal/app/tool_edit.go`, `services/proxy/internal/app/tool_structural_edit.go`). edit_file의 설명은 파일 전체/함수
    전체 용도에 대해 경고하고, structural_edit의 설명은 >10줄 / 노드 전체 교체에
    필수(REQUIRED)라고 명시하며, write_file의 설명은 새(NEW) 파일 전용임을
    명시합니다.
-2. **조건부 GBNF 문법**(`services/proxy/tool_schema.go`,
-   `services/proxy/model_call.go:stepExclusions`). 5줄 초과의 기존 .py/.html/.htm
+2. **조건부 GBNF 문법**(`services/proxy/internal/app/tool_schema.go`,
+   `services/proxy/internal/app/model_call.go:stepExclusions`). 5줄 초과의 기존 .py/.html/.htm
    파일에 대한 write_file가 거부되면, 다음 LLM 호출은 도구 이름 생성
    규칙에서 edit_file와 write_file를 금지하는 GBNF 문법으로 제약됩니다.
    모델은 물리적으로 그것들을 내보낼 수 없습니다. 제한은 한 번의
@@ -223,9 +223,9 @@ flowchart LR
 | T2 (기능) | 0 (무제한) | V3 파이프라인 실행 |
 | T3 (난이도 높음) | 0 (무제한) | V3 파이프라인 실행 |
 
-등급 상한은 0(무제한)입니다. 언제 중단할지는 루프 내부의 디텍터 스택이 결정합니다: lens 회귀(`agent_lens_intervention`), 추론 반복(`agent_reasoning_intervention`), 도구 호출 반복(`agent_repeat_intervention`), 경로 인식 에러 브레이커, 동작 없는 done 게이트, 주장 검증 게이트, 계획 준수 임계값, 빈 응답 폴백. 운영자는 일회성 "앱 전체 수정" 프롬프트를 위해 `ATLAS_MAX_TURNS=<n>`으로 재정의할 수 있습니다 — `services/proxy/loop_state.go::envOverrideMaxTurns` 참고.
+등급 상한은 0(무제한)입니다. 언제 중단할지는 루프 내부의 디텍터 스택이 결정합니다: lens 회귀(`agent_lens_intervention`), 추론 반복(`agent_reasoning_intervention`), 도구 호출 반복(`agent_repeat_intervention`), 경로 인식 에러 브레이커, 동작 없는 done 게이트, 주장 검증 게이트, 계획 준수 임계값, 빈 응답 폴백. 운영자는 일회성 "앱 전체 수정" 프롬프트를 위해 `ATLAS_MAX_TURNS=<n>`으로 재정의할 수 있습니다 — `services/proxy/internal/app/loop_state.go::envOverrideMaxTurns` 참고.
 
-분류기는 `services/proxy/tools.go`(`classifyFileTier`)에 있고, 로직 패턴 매처는 같은 파일(`hasLogicIndicators`)에 있습니다.
+분류기는 `services/proxy/internal/app/tools.go`(`classifyFileTier`)에 있고, 로직 패턴 매처는 같은 파일(`hasLogicIndicators`)에 있습니다.
 
 **항상 T1 (직접 쓰기):**
 - 이름으로 식별되는 설정 파일(예: `package.json`, `go.mod`, `pyproject.toml`, `dockerfile`, `docker-compose.*`)
@@ -235,10 +235,10 @@ flowchart LR
 - **10줄** 미만의 사소하게 작은 파일(그 크기에서는 V3가 의미 있게 다양화할 것이 없음)
 - 로직 지표가 없는 미지의 확장자
 
-정확한 설정 파일 목록과 확장자 집합은 `services/proxy/tools.go:classifyFileTier`에 있습니다.
+정확한 설정 파일 목록과 확장자 집합은 `services/proxy/internal/app/tools.go:classifyFileTier`에 있습니다.
 
 **T2 (V3 파이프라인)** — 파일이 ≥10줄이고 다음 중 하나에 해당하면 자격을 충족합니다:
-- `hasLogicIndicators(content)`가 true 반환 — 함수/메서드 정의, 제어 흐름, 에러 처리, Flask/FastAPI/Django 라우팅, Express/Node API, React 상태/데이터, 검증, 데이터베이스 호출, JSX/React 컴포넌트 패턴, 임포트를 포괄하는 패턴 패밀리 전반에서 **2개 이상 일치**(리터럴 토큰 목록은 `services/proxy/tools.go:hasLogicIndicators`에 있음)
+- `hasLogicIndicators(content)`가 true 반환 — 함수/메서드 정의, 제어 흐름, 에러 처리, Flask/FastAPI/Django 라우팅, Express/Node API, React 상태/데이터, 검증, 데이터베이스 호출, JSX/React 컴포넌트 패턴, 임포트를 포괄하는 패턴 패밀리 전반에서 **2개 이상 일치**(리터럴 토큰 목록은 `services/proxy/internal/app/tools.go:hasLogicIndicators`에 있음)
 - 또는 파일이 인식되는 소스 코드/마크업 확장자(`.py`, `.go`, `.rs`, `.ts`, `.tsx`, `.js`, `.jsx`, `.html`, `.htm`, …)를 가지고 있고 로직 지표가 발동하지 않은 경우 — T2에서 의심의 혜택을 받습니다(12줄짜리 컴포넌트 셸 같은 최소하지만 실제인 파일을 포괄)
 
 **T3 (난이도 높음)** — 현재 분류기는 단독으로 T3를 내보내지 않습니다. 순환 복잡도(cyclomatic-complexity) 리파이너(`refineTierWithCC`, GH #39 항목 2의 `/internal/cyclomatic_complexity` 경유)가 McCabe CC를 기준으로 *상향*합니다: CC ≥ 8이면 T2로(T1에서 올라오는 경우 포함), CC ≥ 16이면 T3로. 절대 하향하지 않습니다.
@@ -306,9 +306,9 @@ API 계약은 [API.md § POST /v3/plan](../../reference/API.md#post-v3plan)에 �
 |---|---|
 | `services/proxy/internal/v3client/client.go` | `PlanStreaming(reqCtx, v3URL, requestID, req, onProgress)` — SSE 스트림을 열고, 진행 이벤트를 콜백으로 전달하며, `event: result` 프레임에서 최종 `Plan`을 반환합니다. `reqCtx`가 에이전트의 요청 컨텍스트를 묶으므로 `/cancel`은 진행 중인 계획을 중단합니다. V3 파이프라인 실행용 `GenerateStreaming`과 같은 구조입니다. |
 | `services/proxy/internal/wire/` | `V3PlanRequest`(`v3.go`), `Plan`, `PlanStep`(`messages.go`) 타입. |
-| `services/proxy/loop_state.go` | `AgentContext`에 `Plan`, `PlanStepsSatisfied[]`, `PlanOffStreak`, `PlanRevisions`가 추가됩니다. |
-| `services/proxy/plan_generation.go`, `services/proxy/internal/projectcontext/sample.go` | `projectcontext.Sample()`는 플래너를 위해 우선 파일(app.py, templates/index.html, package.json, …)을 순회합니다. `shouldGeneratePlan()`은 티어, 메시지 길이, 읽기 전용 요청 여부로 판단합니다. `generatePlan()`은 브리지를 실행하고, 토큰별 잡음을 버리며, 전체 단계 목록과 함께 `plan_loaded`를 내보냅니다. |
-| `services/proxy/plan_gates.go` | `matchPlanStep()`(도구 이름과 경로 접미사의 느슨한 일치), `recordPlanAdherence()`(도구 호출별 집계. 어떤 단계와도 일치하지 않는 정찰 호출 — `read_file`/`list_directory`/`find_file`/`search_files` — 은 중립이며 `off_streak`를 늘리지 않습니다), `revisePlan()`(`FilesRead`를 추가 컨텍스트로 넘겨 다시 생성). |
+| `services/proxy/internal/app/loop_state.go` | `AgentContext`에 `Plan`, `PlanStepsSatisfied[]`, `PlanOffStreak`, `PlanRevisions`가 추가됩니다. |
+| `services/proxy/internal/app/plan_generation.go`, `services/proxy/internal/projectcontext/sample.go` | `projectcontext.Sample()`는 플래너를 위해 우선 파일(app.py, templates/index.html, package.json, …)을 순회합니다. `shouldGeneratePlan()`은 티어, 메시지 길이, 읽기 전용 요청 여부로 판단합니다. `generatePlan()`은 브리지를 실행하고, 토큰별 잡음을 버리며, 전체 단계 목록과 함께 `plan_loaded`를 내보냅니다. |
+| `services/proxy/internal/app/plan_gates.go` | `matchPlanStep()`(도구 이름과 경로 접미사의 느슨한 일치), `recordPlanAdherence()`(도구 호출별 집계. 어떤 단계와도 일치하지 않는 정찰 호출 — `read_file`/`list_directory`/`find_file`/`search_files` — 은 중립이며 `off_streak`를 늘리지 않습니다), `revisePlan()`(`FilesRead`를 추가 컨텍스트로 넘겨 다시 생성). |
 
 시스템 프롬프트 렌더링은 `buildSystemPrompt`에서 이루어집니다. 계획 단계는 번호 목록으로 렌더링되고 `✓` 표시는 verify 단계에만 붙으며, verify 단계는 검증 게이트가 `done`에 대해 지키는 "수정 증거" 단계로 명시됩니다. (단계별 ☐/✓/⚐ 글리프는 TUI 렌더링에 속합니다. 아래를 참고하세요.)
 
@@ -326,7 +326,7 @@ API 계약은 [API.md § POST /v3/plan](../../reference/API.md#post-v3plan)에 �
 
 #### 튜닝 항목
 
-`services/proxy/plan_gates.go`에 정의:
+`services/proxy/internal/app/plan_gates.go`에 정의:
 
 | 상수 | 기본값 | 이유 |
 |---|---|---|
@@ -361,9 +361,9 @@ API 계약은 [API.md § POST /v3/plan](../../reference/API.md#post-v3plan)에 �
 | 계층 | 파일 | 다루는 내용 |
 |---|---|---|
 | v3-service 계획 엔드포인트 | `tests/v3-service/pipeline/test_plan_scoring.py`(채점기). 파서는 `curl /v3/plan`으로 스모크 테스트 | 채점기는 프로그램, 그 테스트 또는 프로브를 실행하는 verify 단계에 점수를 주고, 정적 검사(빌드, 파싱, 린터)와 정찰 호출에는 주지 않습니다. 파서의 허용 범위(펜스, 산문 머리말, 중괄호 중첩)는 후보 3개 샘플러로 확인합니다 |
-| 프록시 브리지 | `services/proxy/internal/v3client/client_test.go`, 스테이지 라우팅은 `services/proxy/tool_write_v3_bridge_test.go` | SSE 파싱, 결과 누락 오류, 스테이지 라우팅 |
-| 프록시 훅 | `services/proxy/loop_test.go` | 우선 파일 선택, 잘라내기 임계값, 폴백 순회, 티어와 길이 판단 |
-| 프록시 준수 | `services/proxy/plan_gates_test.go`, 시스템 프롬프트는 `services/proxy/gates_test.go` | 일치 로직(도구 이름 + 경로 접미사), 실패한 호출 제외, 수정 횟수 상한, 시스템 프롬프트 렌더링 |
+| 프록시 브리지 | `services/proxy/internal/v3client/client_test.go`, 스테이지 라우팅은 `services/proxy/internal/app/tool_write_v3_bridge_test.go` | SSE 파싱, 결과 누락 오류, 스테이지 라우팅 |
+| 프록시 훅 | `services/proxy/internal/app/loop_test.go` | 우선 파일 선택, 잘라내기 임계값, 폴백 순회, 티어와 길이 판단 |
+| 프록시 준수 | `services/proxy/internal/app/plan_gates_test.go`, 시스템 프롬프트는 `services/proxy/internal/app/gates_test.go` | 일치 로직(도구 이름 + 경로 접미사), 실패한 호출 제외, 수정 횟수 상한, 시스템 프롬프트 렌더링 |
 | TUI 렌더링 | `clients/tui/internal/pipelinestate/plan_test.go`, 핸들러는 `clients/tui/internal/app/state_plan_test.go` | `PlanView` 상태 전이, 수정 시 plan_loaded 교체, 계획 외 호출의 무음 처리 |
 
 ### 안전 제한
@@ -377,7 +377,7 @@ API 계약은 [API.md § POST /v3/plan](../../reference/API.md#post-v3plan)에 �
 | V3 대화형 벽시계 상한 | 단일 V3 파이프라인 호출은 `ATLAS_V3_TIMEOUT`(기본 180초)으로 상한; 타임아웃 시 프록시는 모델의 구문 게이트를 통과한 내용으로 폴백(`0`은 비활성화) | 긴 수리 정체 상황에서도 대화형 세션의 응답성 유지 |
 | 턴별 추론 예산 | ~6144 추론 토큰 후 스트림을 끊음(`ATLAS_REASONING_BUDGET`, 0은 비활성화); 복구는 내장된 tool_call을 추출하거나 다시 프롬프트함 | 추론 나선을 제한 |
 | 기존 파일에 대한 write_file | 파일이 5줄 초과면 거부; .py/.html/.htm에서는 단계별 문법 게이트가 `structural_edit`로 스티어 | 정밀 편집(`edit_file`) 또는 노드 전체 편집(`structural_edit`)을 강제 |
-| 의심스러운 축소 가드 | `oldSize >= 100B`이고 `newSize < 64B`일 때 `structural_edit`/`edit_file` 거부(`services/proxy/guardrails_write.go::validateNotSuspiciouslyShrunk`) | 파괴적 스텁 재작성이 디스크에 닿기 전에 포착 |
+| 의심스러운 축소 가드 | `oldSize >= 100B`이고 `newSize < 64B`일 때 `structural_edit`/`edit_file` 거부(`services/proxy/internal/app/guardrails_write.go::validateNotSuspiciouslyShrunk`) | 파괴적 스텁 재작성이 디스크에 닿기 전에 포착 |
 | structural_edit 폭주 콘텐츠 가드 | `content` > 8 KB AND > 파일 크기의 4배일 때 거부 | 교체 노드로 방출된 추론 누출 덩어리를 포착 |
 | 에러 루프 브레이커 | 같은 경로에서 같은 종류로 연속 3회 실패 | 폭주하는 실패 사이클 중단 |
 | 탐색 예산 | 연속 4회 읽기 전용 호출에서 넛지; 5회 이상에서 강화된 넛지. 읽기는 항상 실행됩니다 — 넛지는 *다음* 턴을 쓰기 쪽으로 유도할 뿐입니다 | 무한정 탐색하는 대신 쓰도록 모델을 유도 |

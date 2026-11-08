@@ -416,7 +416,7 @@ def test_the_mutation_gates_depend_on_no_switch():
     sources = {str(p.relative_to(REPO / "services" / "proxy")): p.read_text()
                for p in (REPO / "services" / "proxy").rglob("*.go")
                if not p.name.endswith("_test.go")}
-    gates = _go_funcs(sources["gates.go"])
+    gates = _go_funcs(sources["internal/app/gates.go"])
     for fn, route in _MUTATION_GATES.items():
         body = gates.get(fn)
         assert body, f"{fn} is gone; repoint this test at its replacement"

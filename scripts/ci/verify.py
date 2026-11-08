@@ -56,9 +56,9 @@ FIXES = {
     "go-tui-vet": "Fix the line `go vet` names (run it in clients/tui/).",
     "go-proxy-staticcheck": "Fix the finding at the line shown. Its code (for example SA4006) is explained by `staticcheck -explain <code>`.",
     "go-tui-staticcheck": "Fix the finding at the line shown. Its code (for example SA4006) is explained by `staticcheck -explain <code>`.",
-    "go-proxy-test": "Run `go test -run '<TestName>' .` in services/proxy/ for a test that failed, then fix the code or the test.",
+    "go-proxy-test": "Run `go test -run '<TestName>' ./...` in services/proxy/ for a test that failed, then fix the code or the test.",
     "go-tui-test": "Run `go test -run '<TestName>' ./...` in clients/tui/ for a test that failed, then fix the code or the test.",
-    "go-proxy-changed-tests": "Run `go test -run '<TestName>' .` in services/proxy/ for a test that failed, then fix the code or the test.",
+    "go-proxy-changed-tests": "Run `go test -run '<TestName>' ./...` in services/proxy/ for a test that failed, then fix the code or the test.",
     "python-compile": "A file does not compile. Fix the syntax error at the line shown.",
     "min-python": "The code uses a form Python 3.9 cannot run. Write it in a form 3.9 accepts.",
     "ruff": (
@@ -193,7 +193,7 @@ def gates_to_run(pr, changed: list[str], full: bool) -> list:
         run.append(gates["python-tests-lens"])
     pattern = changed_go_tests(changed)
     if pattern and "go-proxy-test" not in names:
-        run.append(pr.Gate("go-proxy-changed-tests", ("go", "test", "-count=1", "-run", pattern, "."),
+        run.append(pr.Gate("go-proxy-changed-tests", ("go", "test", "-count=1", "-run", pattern, "./..."),
                            cwd=ROOT / "services" / "proxy", available=lambda: shutil.which("go") is not None,
                            unavailable_reason="Go is not installed", env=gates["go-proxy-vet"].env))
     if any(p.endswith((".go", ".py")) for p in changed):

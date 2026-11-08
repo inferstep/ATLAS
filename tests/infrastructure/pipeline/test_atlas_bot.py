@@ -573,7 +573,7 @@ def test_area_labels_from_changed_paths(api, cfg):
     api.cards.clear()
     api.pulls = [{"number": 40, "labels": [{"name": "area/tui"}], "author_association": "CONTRIBUTOR",
                   "created_at": stamp(1), "user": {"login": "bob"}}]
-    api.files[40] = ["services/proxy/loop.go", "clients/tui/main.go", "docs/SETUP.md", "deploy/compose/docker-compose.rocm.yml"]
+    api.files[40] = ["services/proxy/internal/app/loop.go", "clients/tui/main.go", "docs/SETUP.md", "deploy/compose/docker-compose.rocm.yml"]
     run(api, cfg).sync()
     assert api.log[0] == ("add_labels", 40, ("area/docs", "area/install", "area/proxy"))
 
@@ -597,7 +597,7 @@ def label_calls(api, number):
     pytest.param([("services/proxy/x.go", 9, 0), ("services/proxy/x_test.go", 900, 0), ("docs/a.md", 900, 0)], ("size/S",),
                  id="tests-and-documents-do-not-count-and-are-not-high-risk"),
     pytest.param([(".github/workflows/test.yml", 30, 30)], ("size/S",), id="a-workflow-is-not-high-risk"),
-    pytest.param([("services/proxy/loop.go", 2, 1)], ("risk:high", "size/S"), id="a-core-path-is-high-risk"),
+    pytest.param([("services/proxy/internal/app/loop.go", 2, 1)], ("risk:high", "size/S"), id="a-core-path-is-high-risk"),
     pytest.param([("services/proxy/x.go", 300, 100)], ("risk:high", "size/L"), id="400-lines-are-L-and-high-risk"),
 ])
 def test_the_size_label_and_the_risk_label_follow_the_changed_lines_and_paths(api, cfg, files, labels):
@@ -629,7 +629,7 @@ def test_labels_that_no_longer_hold_are_taken_off_and_the_right_ones_are_left_al
     api.pulls = [pull(54, labels=["area/docs", "size/L", "risk:high", "status/ready"]),
                  pull(55, labels=["area/proxy", "size/S", "risk:high"])]
     api.files[54] = [("docs/a.md", 10, 0)]
-    api.files[55] = [("services/proxy/loop.go", 10, 0)]
+    api.files[55] = [("services/proxy/internal/app/loop.go", 10, 0)]
     api.counts["is:pr is:merged author:bob"] = 2
     run(api, cfg).sync()
     assert label_calls(api, 54) == [("add_labels", 54, ("size/S",)), ("remove_label", 54, "risk:high"), ("remove_label", 54, "size/L")]
@@ -639,7 +639,7 @@ def test_labels_that_no_longer_hold_are_taken_off_and_the_right_ones_are_left_al
 def test_without_the_settings_of_the_labels_the_bot_sets_none(api, cfg):
     api.cards.clear()
     api.pulls = [pull(56, labels=["area/proxy"])]
-    api.files[56] = [("services/proxy/loop.go", 900, 0)]
+    api.files[56] = [("services/proxy/internal/app/loop.go", 900, 0)]
     del cfg["pull_requests"]
     run(api, cfg).sync()
     assert label_calls(api, 56) == []

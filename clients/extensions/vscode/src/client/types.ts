@@ -38,7 +38,7 @@ export interface TaskContract {
 }
 
 /** POST /v1/agent request body. Field names MUST match the anonymous
- * struct in services/proxy/server_agent.go's handleAgent (see clients/tui/internal/proxyclient/chat.go agentRequest). */
+ * struct in services/proxy/internal/app/server_agent.go's handleAgent (see clients/tui/internal/proxyclient/chat.go agentRequest). */
 export interface AgentRequest {
 	message: string;
 	working_dir: string;
