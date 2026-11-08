@@ -100,9 +100,9 @@ class Repository:
         subprocess.run(["git", "init", "--quiet", "--initial-branch", "dev", str(self.work)], check=True, timeout=60,
                        env={**os.environ, **GIT_ENV})
         git(self.work, "remote", "add", "origin", str(self.bare))
-        # The real script loads the three files that lie beside it, so a tree that runs it has all four.
+        # The real script loads the four files that lie beside it, so a tree that runs it has all five.
         judge = {f"scripts/{name}": (ROOT / "scripts" / name).read_text(encoding="utf-8")
-                 for name in ("tests_counted.py", "nightly_images.py", "nightly_statuses.py")} if script else {}
+                 for name in ("tests_counted.py", "nightly_images.py", "nightly_statuses.py", "nightly_trend.py")} if script else {}
         self.head = self.commit({**ON_DEV, "scripts/nightly_run.py": script or "# the script of dev\n", **judge}, "refs/heads/dev")
 
     def commit(self, files, to, on="dev"):
@@ -512,6 +512,7 @@ TAKEN_FROM_DEV = [
     ("scripts/tests_counted.py", "the judge of the tests, which the script loads on the server itself"),
     ("scripts/nightly_images.py", "the images of a run, which the script loads on the server itself"),
     ("scripts/nightly_statuses.py", "the sending of the statuses, which the script loads on the server itself"),
+    ("scripts/nightly_trend.py", "the comparison of the nights, which the script loads on the server itself"),
     ("scripts/eval/e2e-reliability.py", "the driver of the sessions, which runs on the server itself"),
     ("scripts/code_quality.py", "a module of the driver, which runs on the server itself"),
     ("scripts/eval/reliability_report.py", "a module of the driver, which runs on the server itself"),
@@ -906,7 +907,7 @@ def test_every_file_that_the_run_starts_or_loads_on_the_server_itself_is_one_tha
     assert len(loaded) >= 3
     held = {path.relative_to(ROOT.resolve()).as_posix() for path in nightly.AS_STARTED}
     assert held == {"scripts/nightly_run.py", "scripts/tests_counted.py", "scripts/nightly_images.py",
-                    "scripts/nightly_statuses.py"}, held
+                    "scripts/nightly_statuses.py", "scripts/nightly_trend.py"}, held
     for name in started | {f"scripts/{file}" for file in loaded} | held:
         assert name in nightly.FROM_DEV, f"the run uses dev's copy of {name}; a commit that changes it has to be refused"
 

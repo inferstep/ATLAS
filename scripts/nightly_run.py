@@ -5,8 +5,9 @@ One run, started by a timer on the development server, in a folder of its own
 (--dir). Only one run of a folder goes at a time. It:
 
   1. takes the head of `dev` into <dir>/tree. When that changes this very
-     file or one of the three beside it (the judge, the images and the
-     statuses; the run was started from the tree), the new copy does the run;
+     file or one of the four beside it (the judge, the images, the
+     statuses and the trend; the run was started from the tree), the new copy
+     does the run;
   2. stops a stack of its own name that an earlier run left;
   3. takes the `dev` images of the registry under names of its own, so that
      no tag of the server moves (scripts/nightly_images.py), and compares
@@ -17,12 +18,13 @@ One run, started by a timer on the development server, in a folder of its own
   5. starts a stack under a name of its own, on loopback ports of its own,
      and asks the services whether they are whole;
   6. runs the driver of the repository (scripts/eval/e2e-reliability.py) with three
-     fixed tasks, once each, and keeps the seconds of each;
+     fixed tasks, once each, and keeps the seconds and the tokens of each;
   7. runs the tests that need a real model, and judges the result file with
      the judge of such runs (scripts/tests_counted.py): every one of them is
      to be collected, to pass, and not to be skipped;
-  8. asks the services again, and writes one report file,
-     <dir>/reports/<start time>/report.json;
+  8. asks the services again, compares the seconds and the tokens of each
+     task with the nights before (scripts/nightly_trend.py), and writes one
+     report file, <dir>/reports/<start time>/report.json;
   9. keeps the last 200 lines of each service's log in the report folder,
      and stops its stack. Always: also when a step failed or the time ran
      out. A log that cannot be had changes nothing but a line of the report.
@@ -49,6 +51,9 @@ none. The run does not start beside a token file in its folder.
 The result of a run goes to GitHub as a status on the commit that ran:
 `server/nightly` for a night, `server/smoke` for the smoke run of one commit.
 Green for passed, red for failed, none for a run that did not take place.
+A night also gets `server/trend`: red when a change of the seconds or the
+tokens stayed for the last nights, green when none did, and none when there
+are too few nights to compare.
 The status is written with the key of an app that can only write statuses.
 The key is a file of the server (--status-key), outside the folder of the
 run. openssl signs with it and gets it as the path of that file: this
@@ -138,6 +143,7 @@ FROM_DEV = {"scripts/nightly_run.py": "the script of this run",
             "scripts/tests_counted.py": "the judge of the tests, which the script loads on the server itself",
             "scripts/nightly_images.py": "the images of a run, which the script loads on the server itself",
             "scripts/nightly_statuses.py": "the sending of the statuses, which the script loads on the server itself",
+            "scripts/nightly_trend.py": "the comparison of the nights, which the script loads on the server itself",
             "scripts/eval/e2e-reliability.py": "the driver of the sessions, which runs on the server itself",
             "scripts/code_quality.py": "a module of the driver, which runs on the server itself",
             "scripts/eval/reliability_report.py": "a module of the driver, which runs on the server itself",
@@ -191,10 +197,11 @@ NEW_COPY_LEFT_NO_REPORT = ("failed: taking the head changed the script of the ru
                            "place, and that copy left no report")
 # The judge of a run of tests that must all run, and the list of such tests: a file beside this one. And the file
 # of the images of a run: the run's own names for them, and the room that they need. And the file that keeps and
-# sends the statuses of a run on GitHub.
+# sends the statuses of a run on GitHub. And the file that compares a night with the nights before it.
 JUDGE = Path(__file__).resolve().with_name("tests_counted.py")
 IMAGES_FILE = JUDGE.with_name("nightly_images.py")
 STATUSES_FILE = JUDGE.with_name("nightly_statuses.py")
+TREND_FILE = JUDGE.with_name("nightly_trend.py")
 
 
 def load_beside(path: Path, name: str):
@@ -209,10 +216,11 @@ counted, images = load_beside(JUDGE, "atlas_tests_counted"), load_beside(IMAGES_
 IMAGES, REGISTRY, TAG, REVISION, OWN_IMAGES = images.IMAGES, images.REGISTRY, images.TAG, images.REVISION, images.OWN
 statuses = load_beside(STATUSES_FILE, "atlas_nightly_statuses")
 REPOSITORY, STATUS, NotSent, github = statuses.REPOSITORY, statuses.STATUS, statuses.NotSent, statuses.github
+trend, TREND = load_beside(TREND_FILE, "atlas_nightly_trend"), statuses.TREND
 # The tests of the run: the group that needs a real model.
 TESTS = counted.GROUPS["model"]
-# This file and the three beside it as Python read them when the run started.
-AS_STARTED = {path: path.read_bytes() for path in (Path(__file__).resolve(), JUDGE, IMAGES_FILE, STATUSES_FILE)}
+# This file and the four beside it as Python read them when the run started.
+AS_STARTED = {path: path.read_bytes() for path in (Path(__file__).resolve(), JUDGE, IMAGES_FILE, STATUSES_FILE, TREND_FILE)}
 # What the run asks the services about themselves. Each is asked inside its own container, with the tool and at the
 # port of its health check. The health check of the lens asks /health, which says that the process serves; /ready
 # says whether the lens can score. The proxy's /ready asks the model server, the lens, the sandbox and v3-service.
@@ -347,8 +355,8 @@ def take_head(args) -> str:
 
 
 def script_changed(args) -> bool:
-    """Whether taking the head changed this very file or one of the three beside it: the run was started from the
-    tree, and one of the four holds other bytes now."""
+    """Whether taking the head changed this very file or one of the four beside it: the run was started from the
+    tree, and one of the five holds other bytes now."""
     own = Path(__file__).resolve()
     try:
         return (own == (args.dir / "tree" / "scripts" / "nightly_run.py").resolve()
@@ -676,7 +684,7 @@ def smoke(args, head: str, folder: Path) -> list:
         rows = json.loads(result.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         raise StepFailed(f"the driver left no result (status {done.returncode}): {done.stdout.strip()[-400:]}") from None
-    tasks = [{"task": row["task"], "seconds": row["wall_s"], "passed": bool(row["task_passed"]),
+    tasks = [{"task": row["task"], "seconds": row["wall_s"], "tokens": row["tokens"], "passed": bool(row["task_passed"]),
               "defects": len(row.get("defects") or [])} for row in rows]
     missing = [name for name in TASKS if name not in {row["task"] for row in tasks}]
     if missing:
@@ -1059,7 +1067,7 @@ def numbers_of(report: dict) -> list:
 
 
 def to_github(args, report: dict, folder: Path, stamp: str) -> None:
-    """Write the report, and send the status of the run. Sending never changes the result of the run or stops its
+    """Write the report, and send the statuses of the run. Sending never changes the result of the run or stops its
     report: the report is written first, and a status that cannot go out now waits."""
     report["sent"] = "not tried"
     try:
@@ -1067,9 +1075,27 @@ def to_github(args, report: dict, folder: Path, stamp: str) -> None:
         report["status"] = status or why_none
     except Exception as error:  # a report of another shape gets no status, and is written all the same
         status, report["status"] = None, f"no status: an error of the run itself ({type(error).__name__})"
+    trend_status = with_the_trend(args, report)
     (folder / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    report["sent"] = statuses.send_what_waits(args, status, stamp)
+    report["sent"] = statuses.send_what_waits(args, (status, trend_status), stamp)
     (folder / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+
+
+def with_the_trend(args, report: dict) -> dict | None:
+    """Add the trend part to the report of a night, and give its status, or None. The trend changes neither the
+    result of the night nor its own status: a fault of the comparison is a line of the trend part."""
+    if report.get("mode") != "night":
+        return None
+    try:
+        # The folder of this run can hold the report that the run left when it started the new copy in its place.
+        earlier = [other for other in reports_of(args) if other.get("started") != report["started"]]
+        report["trend"] = trend.of(earlier, report, TASKS)
+        status, why_none = trend.status_of(report, TREND)
+        report["trend"]["status"] = status or why_none
+        return status
+    except Exception as error:  # the night is written and sent all the same
+        report["trend"] = {"judged": f"not judged: an error of the comparison itself ({type(error).__name__})"}
+        return None
 
 
 # --- one look of the timer ----------------------------------------------------------------------------------------

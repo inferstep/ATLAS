@@ -411,9 +411,9 @@ def test_each_path_that_the_script_makes_is_one_that_it_takes(path):
 
 
 def test_the_script_has_one_address_of_github_and_no_way_to_give_it_another():
-    # The script and the module beside it that sends the statuses, taken together.
+    # The script, the module beside it that sends the statuses and the one that compares the nights, taken together.
     script = SCRIPT.read_text(encoding="utf-8")
-    sources = [script, SCRIPT.with_name("nightly_statuses.py").read_text(encoding="utf-8")]
+    sources = [script, *(SCRIPT.with_name(name).read_text(encoding="utf-8") for name in ("nightly_statuses.py", "nightly_trend.py"))]
     nodes = [node for text in sources for node in ast.walk(ast.parse(text))]
     texts = [node.value for node in nodes if isinstance(node, ast.Constant) and isinstance(node.value, str)]
     assert [text for text in texts if "api.github" in text] == ["https://api.github.com"]
@@ -1476,7 +1476,7 @@ def test_no_required_check_has_a_name_that_starts_with_server():
         "is a status of the development server, which is one machine that is not always on: a rule that waits for it stops every "
         "merge while that machine is off. Fix: take the check out of the required checks of the ruleset and out of "
         "that table.")
-    for name in nightly.STATUS.values():
+    for name in (*nightly.STATUS.values(), nightly.TREND):
         assert name not in names
 
 
@@ -1495,7 +1495,7 @@ def test_the_gates_page_says_what_the_script_does_with_its_own_names_and_numbers
     script = SCRIPT.read_text(encoding="utf-8")
     result = page.split("### The result on GitHub", 1)[1].split("### The timer", 1)[0]
     timer = page.split("### The timer", 1)[1].split("### The smoke run of one commit", 1)[0]
-    for name in nightly.STATUS.values():
+    for name in (*nightly.STATUS.values(), nightly.TREND):
         assert f"`{name}`" in result
     for folder in (statuses.WAITING, statuses.SENT, statuses.GIVEN_UP):
         assert f"`{folder}`" in result

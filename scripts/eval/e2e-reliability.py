@@ -1231,6 +1231,8 @@ def result_row(s: Session, evaluator, stack) -> dict:
         "task_mode": task_contract(TASKS[s.task])["task_mode"] if s.task in TASKS else None,
         "turns": len(s.of_type("turn_start")),
         "tools": len(s.of_type("tool_call")), "wall_s": round(s.wall_s, 1),
+        # total_tokens grows over a turn, and each task is one turn: the largest is the count of the session.
+        "tokens": max([int((e.get("data") or {}).get("total_tokens") or 0) for e in s.of_type("llm_call_end")] or [0]),
         "v3": s.v3,
         "quality": s.quality,
         "stack_changes": s.stack_changes,
