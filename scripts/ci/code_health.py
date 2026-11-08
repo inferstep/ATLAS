@@ -2,7 +2,10 @@
 """Code-health check: function and file size, and function complexity, against a baseline.
 
 docs/project/CODE_STYLE.md sets the limits: a function over FUNC_MAX lines, or a
-file over FILE_MAX lines, fails. Code that was already over the limit is
+file over FILE_MAX lines, fails. Function length is read for Go, Python and
+shell. File length is read for those and for Kotlin (the JetBrains plugin),
+TypeScript and JavaScript (the VS Code extension). The extension's ESLint
+settings hold its functions. Code that was already over the limit is
 listed in .github/code-health-baseline.json with its size then. It may
 shrink but not grow. So the check stops new oversized code and keeps the
 old from getting worse while it is refactored.
@@ -33,8 +36,9 @@ Usage:
   scripts/ci/code_health.py --report  list the largest items and the totals
 
 Go functions are found in gofmt-formatted source: `func` and the closing
-`}` at column 0. Python functions come from the ast module. Tests are not
-measured for size.
+`}` at column 0. Shell functions are found the same way: `name() {` and the
+closing `}` at column 0. Python functions come from the ast module. Tests are
+not measured for size.
 """
 
 from __future__ import annotations
@@ -60,6 +64,10 @@ FLAT_BY_NECESSITY = {".github/workflows"}
 
 GO_DIRS = ("services/proxy", "clients/tui")
 PY_DIRS = ("atlas", "services/v3-service", "services/geometric-lens", "services/sandbox", "scripts")
+SH_DIRS = ("scripts", "services/inference", "clients/extensions/jetbrains/scripts")
+# Measured for file length only: ESLint holds the extension's functions, and Kotlin's functions are not read yet.
+FILE_LENGTH_ONLY = (("clients/extensions/jetbrains/src", ".kt"), ("clients/extensions/vscode/src", ".ts"),
+                    ("clients/extensions/vscode/media", ".js"))
 # The repository's own test folder: it holds tests only, so only the complexity measure reads it.
 PY_TEST_DIR = "tests"
 TEST_DIRS = {"tests", "test"}
@@ -67,6 +75,7 @@ SKIP_DIRS = {"node_modules", ".venv", "__pycache__", "vendor"}
 # The Go package that may only shrink: the files directly in this folder.
 MAIN_PACKAGE = "services/proxy"
 GO_FUNC = re.compile(r"^func (?:\(\w+ \*?(\w+)(?:\[[^\]]*\])?\) )?(\w+)")
+SH_FUNC = re.compile(r"^([A-Za-z_][\w:.-]*)\s*\(\)\s*\{")
 
 # (command, module, version): the versions golangci-lint v2.14.0 bundles, so this check and
 # the lint judge alike. CI installs both in a step of its own, so the check fetches nothing.
@@ -93,8 +102,9 @@ def is_measured(name: str, ext: str, tests: bool) -> bool:
 
 
 def source_files(tests: bool = False):
-    """The Go and Python files measured; with tests, the test files and test folders as well."""
-    bases = [(d, ".go") for d in GO_DIRS] + [(d, ".py") for d in PY_DIRS]
+    """The files measured for size; with tests, the test files and test folders as well."""
+    bases = [(d, ".go") for d in GO_DIRS] + [(d, ".py") for d in PY_DIRS] + [(d, ".sh") for d in SH_DIRS]
+    bases += FILE_LENGTH_ONLY
     if tests:
         bases.append((PY_TEST_DIR, ".py"))
     skipped = SKIP_DIRS if tests else SKIP_DIRS | TEST_DIRS
@@ -108,20 +118,31 @@ def source_files(tests: bool = False):
                 yield os.path.relpath(path, ROOT).replace(os.sep, "/")
 
 
-def go_functions(text: str):
-    """(name, lines) for each top-level function or method."""
+def column_zero_functions(text: str, pattern, name_of):
+    """(name, lines) for each function that pattern matches at column 0, to the next "}" at column 0."""
     start = name = None
     for i, line in enumerate(text.split("\n")):
-        m = GO_FUNC.match(line)
+        m = pattern.match(line)
         if m:
-            recv, fn = m.group(1), m.group(2)
-            start, name = i, f"{recv}.{fn}" if recv else fn
+            start, name = i, name_of(m)
             if line.rstrip().endswith("}"):  # one-line function
                 yield name, 1
                 start = None
         elif start is not None and line == "}":
             yield name, i - start + 1
             start = None
+
+
+def go_functions(text: str):
+    """(name, lines) for each top-level function or method."""
+    return column_zero_functions(text, GO_FUNC, lambda m: f"{m.group(1)}.{m.group(2)}" if m.group(1) else m.group(2))
+
+
+def shell_functions(text: str):
+    """(name, lines) for each shell function."""
+    # shortcut: an indented definition is not found, and a heredoc line "}" ends a function early;
+    # read the scripts with a shell parser when a script has either.
+    return column_zero_functions(text, SH_FUNC, lambda m: m.group(1))
 
 
 def py_function_nodes(node, prefix=""):
@@ -145,6 +166,17 @@ def py_functions(text: str, path: str):
         yield qual, node.end_lineno - node.lineno + 1
 
 
+def functions_in(path: str, text: str):
+    """(name, lines) for each function of a Go, Python or shell file; none for the other files."""
+    if path.endswith(".go"):
+        return go_functions(text)
+    if path.endswith(".py"):
+        return py_functions(text, path)
+    if path.endswith(".sh"):
+        return shell_functions(text)
+    return ()
+
+
 def function_key(path: str, name: str, seen: dict) -> str:
     """path:name, with #2, #3... for a name the file holds more than once (seen counts them)."""
     seen[name] = seen.get(name, 0) + 1
@@ -163,9 +195,8 @@ def measure() -> tuple:
         totals["lines"] += n
         if n > FILE_MAX:
             files[path] = n
-        found = go_functions(text) if path.endswith(".go") else py_functions(text, path)
         seen: dict = {}
-        for name, length in found:
+        for name, length in functions_in(path, text):
             totals["functions"] += 1
             key = function_key(path, name, seen)
             if length > FUNC_MAX:

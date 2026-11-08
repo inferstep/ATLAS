@@ -5,12 +5,16 @@
   "complexity": 15
  },
  "functions": {
+  "scripts/atlas-bootstrap.sh:build_asa_steering_vector": 159,
+  "scripts/atlas-bootstrap.sh:ensure_repo_and_env": 122,
+  "scripts/install/verify-install.sh:main": 115,
   "services/geometric-lens/geometric_lens/training.py:train_gx": 132,
   "services/proxy/delivery.go:deliverCandidateBytes": 105,
   "services/proxy/loop.go:runAgentLoop": 151,
   "services/sandbox/executor_server.py:_syntax_check_impl": 123
  },
  "files": {
+  "scripts/atlas-bootstrap.sh": 1908,
   "services/sandbox/executor_server.py": 1988,
   "services/v3-service/pipeline.py": 2700
  },
