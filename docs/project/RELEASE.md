@@ -156,6 +156,188 @@ AMD or a Vulkan GPU or on K3s. Before 3.2.0, on a host of each kind:
 - On K3s, llama-server starts as uid 1001 from the template's `securityContext`
   and reaches the GPU.
 
+### Rollback check for 3.2.0
+
+`atlas rollback` is the way back from a failed upgrade. It has not run on a
+real install since the images moved to `ghcr.io/inferstep` in 3.1.4, and its
+tests mock every Docker step. The code leaves three things that only a real
+run shows:
+
+- When the previous images are gone, the rollback pulls them inside
+  `docker compose up -d`, which has a 600 s timeout. The upgrade's own pull
+  has 3600 s.
+- Every service has a `build:` section, so when that pull fails, Compose may
+  build the images from the checkout under the previous release's tag.
+- The rollback moves neither the checkout nor the CLI, so the previous images
+  run under the new compose file. The 3.2.0 one changes the embedding pooling
+  default and the users the services run as.
+
+Run the check twice, on a Linux CUDA host:
+
+| Run | When | `PREV` | `PREV_OWNER` | `NEXT` |
+|---|---|---|---|---|
+| 1 | Now | `3.1.3` | `itigges22` | `3.1.7` |
+| 2 | Once the candidate is tagged (release process, step 2) | `3.1.7` | `inferstep` | `3.2.0-rc.N` |
+
+Each run has two cases:
+
+- **Case A:** the previous images stay on the host.
+- **Case B:** the previous images are removed before the upgrade, so the
+  restore point holds no image (`previous_digests` in
+  `.atlas-upgrade/restore-point.json` is `{}`) and the rollback has to pull
+  them.
+
+Each upgrade names its target with `atlas upgrade --to <release>`, not the
+default `latest`. After a refresh of a mutable tag, `atlas rollback` cannot
+return to the earlier images
+([OPERATIONS.md](../guides/OPERATIONS.md#automated-upgrade-atlas-upgrade)),
+and `latest` never points at a candidate.
+
+The host needs git, Python 3.9 or newer with `venv`, Docker with the Compose
+and Buildx plugins, `jq`, `curl` and cosign 3. The upgrade checks the image
+signatures with cosign 3; without it, set `ATLAS_UPGRADE_SKIP_VERIFY=1` and say
+so in the record. Stop any other ATLAS stack on the host first, since this one
+uses the same ports. Keep one shell for the whole run: every step reads its
+variables.
+
+**1. Install the previous release**, once per run. The folder name
+`atlas-rollback` is also the Compose project name, so this stack cannot touch
+the containers of another install:
+
+```bash
+PREV=3.1.3 PREV_OWNER=itigges22 NEXT=3.1.7   # run 2: PREV=3.1.7 PREV_OWNER=inferstep NEXT=3.2.0-rc.N
+CHECK=~/rollback-check/$NEXT
+export PYTHONUNBUFFERED=1   # keeps the CLI's lines in order with Docker's in the logs
+git clone https://github.com/inferstep/ATLAS.git "$CHECK/atlas-rollback"
+cd "$CHECK/atlas-rollback"
+python3 -m venv "$CHECK/venv" && . "$CHECK/venv/bin/activate"
+git checkout "v$PREV" && pip install -e .
+atlas init --yes --image-tag "$PREV" --ghcr-owner "$PREV_OWNER"
+grep -E '^ATLAS_(GHCR_OWNER|IMAGE_TAG)=' .env
+```
+
+The `grep` shows `ATLAS_GHCR_OWNER=$PREV_OWNER` and `ATLAS_IMAGE_TAG=$PREV`.
+`atlas init --models-dir <dir>` reuses a models folder you already have.
+
+**2. Start each case on the previous release**, case A first. The CLI comes
+from the checkout, so `pip install -e .` follows every `git checkout`. If case
+A failed, copy `$CHECK/case-A/env-before` back to `.env` before case B.
+
+```bash
+CASE=A   # then CASE=B
+OUT=$CHECK/case-$CASE && mkdir -p "$OUT"
+git checkout "v$PREV" && pip install -e .
+docker compose pull && docker compose up -d
+until curl -fsS -o /dev/null http://localhost:${ATLAS_PROXY_PORT:-8090}/ready; do sleep 5; done
+docker compose images | tee "$OUT/images-before.txt"
+```
+
+**3. Move the checkout to the new release and take the baseline.** An
+operator updates the checkout before `atlas upgrade`
+([OPERATIONS.md](../guides/OPERATIONS.md#what-an-upgrade-can-and-cannot-touch)). The baseline runs
+`atlas doctor` from the same checkout as the check after the rollback:
+
+```bash
+git checkout "v$NEXT" && pip install -e .
+atlas doctor --json > "$OUT/doctor-before.json"
+cp .env "$OUT/env-before"
+```
+
+**4. Case B only: remove the previous images.** Removing them by ID removes
+every tag they have, so the rollback has to download them again:
+
+```bash
+docker compose images --format json | jq -r '.[].ID' | sort -u > "$OUT/prev-image-ids.txt"
+docker compose down
+xargs docker image rm -f < "$OUT/prev-image-ids.txt"
+```
+
+**5. Upgrade:**
+
+```bash
+atlas upgrade --to "$NEXT" --yes 2>&1 | tee "$OUT/upgrade.txt"
+cp .atlas-upgrade/restore-point.json "$OUT/"
+jq '{previous_tag, target_tag, previous_digests, env_backup}' "$OUT/restore-point.json"
+```
+
+The upgrade ends with `Upgraded to $NEXT.` In the restore point,
+`previous_tag` is `$PREV`, `target_tag` is `$NEXT`, `env_backup` names a file
+in `.atlas-upgrade/`, and `previous_digests` holds the five image IDs in case
+A and `{}` in case B. An upgrade that fails restores the previous release by
+itself; that is a failure of the run, and the rollback was not tested.
+
+**6. Roll back:**
+
+```bash
+git describe | tee "$OUT/git-describe.txt"
+time atlas rollback --yes 2>&1 | tee "$OUT/rollback.txt"
+echo "exit ${PIPESTATUS[0]}"
+```
+
+`git describe` prints `v$NEXT`: the rollback runs from the new release's
+checkout and does not move it.
+
+**7. Check:**
+
+```bash
+cmp "$OUT/env-before" .env && echo ".env is as before the upgrade"
+docker compose ps --format '{{.Service}} {{.Image}}'
+curl -fsS -o /dev/null -w '%{http_code}\n' http://localhost:${ATLAS_PROXY_PORT:-8090}/ready
+docker compose images | tee "$OUT/images-after.txt"
+atlas doctor --json > "$OUT/doctor-after.json"
+diff <(jq -r '.checks[] | "\(.name): \(.status)"' "$OUT/doctor-before.json") \
+     <(jq -r '.checks[] | "\(.name): \(.status)"' "$OUT/doctor-after.json")
+```
+
+Case A, the images are the ones the restore point recorded:
+
+```bash
+jq -r '.previous_digests[]' "$OUT/restore-point.json" | sort -u > "$OUT/ids-before.txt"
+docker compose images --format json | jq -r '.[].ID' | sort -u > "$OUT/ids-after.txt"
+diff "$OUT/ids-before.txt" "$OUT/ids-after.txt" && echo "same images as before the upgrade"
+```
+
+Case B, each image came from the registry and was not built from the
+checkout:
+
+```bash
+for image in atlas-llama atlas-lens atlas-v3 atlas-sandbox atlas-proxy; do
+  ref=ghcr.io/$PREV_OWNER/$image
+  pulled=$ref@$(docker buildx imagetools inspect "$ref:$PREV" --format '{{.Manifest.Digest}}')
+  if docker image inspect "$ref:$PREV" --format '{{join .RepoDigests "\n"}}' | grep -qxF "$pulled"
+  then echo "pulled: $image"; else echo "NOT the registry's image: $image"; fi
+done
+```
+
+The case passes when all of these hold:
+
+- `atlas rollback --yes` prints `Rolled back to $PREV.` and `exit 0`.
+- `cmp` finds no difference: `.env` is byte-identical to the copy taken before
+  the upgrade, so the owner and the tag are back.
+- Each container runs `ghcr.io/$PREV_OWNER/atlas-<name>:$PREV`.
+- Case A: the image IDs are the restore point's `previous_digests`.
+- Case B: every image prints `pulled:`, so it has a `RepoDigests` entry equal
+  to the registry's digest for the tag. An image built on the host has none.
+- `/ready` returns `200`.
+- The doctor `diff` prints nothing, or only checks that got better (from fail
+  to warn or pass, from warn to pass). A check that got worse, or that skips,
+  appears or is missing only after the rollback, fails the case.
+
+Record for each case, besides pass or fail:
+
+- The rollback's wall time, the `real` line of `time`.
+- Case B: the size of the pulled images, the `SIZE` column of
+  `images-after.txt`. The pull runs under the 600 s timeout of `up -d`.
+- `git describe` of the checkout during the rollback.
+- The GPU, the model (`ATLAS_MODEL_FILE` in `.env`), `docker compose version`,
+  and whether the signatures were checked or skipped.
+
+Post the record of each run on
+[#211](https://github.com/inferstep/ATLAS/issues/211). Each failure gets its
+own GitHub issue that links #211 and includes the command output (the files in
+`$OUT`). #211 closes only when both runs pass, or when every problem has its
+own issue.
+
 ## Branches and versions
 
 | Branch | Job | Gets code by | Artifacts |
