@@ -221,7 +221,7 @@ of both kinds.
 |---|---|---|
 | `pr title` is red | The title is not in the form of [section 7](#7-branches-commits-and-pull-request-titles), or its summary has more than 100 characters | Edit the title. The check starts again by itself |
 | A test job is red | A test failed with your change | Open the job and read the first failure. `make verify` ([section 4](#4-run-the-quality-gate)) runs the same gates on your machine |
-| `code health (size)` is red | A function has more than 100 lines or a complexity over 15, or a file more than 1,500 lines, and is not on the baseline; or one on the baseline grew | Split it into named steps |
+| `code health (size)` is red | A Go, Python or shell function has more than 100 lines, a Go or Python function has a complexity over 15, or a Go, Python, shell, Kotlin, TypeScript or JavaScript file has more than 1,500 lines, and is not on the baseline; or one on the baseline grew | Split it into named steps |
 | `checks ran` is red | What the paragraph above says. On a pull request from a fork it can say "waiting for a maintainer's approval" | Nothing for that one: a maintainer approves the run. For the rest, its output says what to do |
 | `integrity check` has a report | It is the check that reads your change, not the code ([Testing](#testing)) | Give each skip its reason. A maintainer reads the rest |
 | There is no Sonar result | On a pull request from a fork the Sonar check does not run; the change is analysed after the merge. | Nothing |
@@ -355,7 +355,10 @@ why in the pull request and do not switch the rule off in the file.
 
 **Bash.** Must pass `shellcheck`. Start with `set -euo pipefail`, quote
 variables (`"$var"`), use `[[` for conditionals, and comment non-obvious
-logic.
+logic. `scripts/ci/code_health.py` fails a new shell function over 100
+lines and a new script over 1,500 lines. It reads a function from
+`name() {` at column 0 to the `}` at column 0, so write functions in that
+form. Shell has no complexity limit.
 
 **Workflows.** [zizmor](https://docs.zizmor.sh) and
 [actionlint](https://github.com/rhysd/actionlint) read every file in
@@ -371,8 +374,10 @@ the reason beside it, and say so in the pull request.
 gate, and `clients/extensions/jetbrains/.editorconfig` is the single source of the
 rules it applies — no baseline and no rule configuration in the Gradle
 build. Lines up to 100 characters. Run `./gradlew ktlintCheck` from
-`clients/extensions/jetbrains/`, or `ktlintFormat` to apply the same rules. Kotlin
-is not covered by `scripts/ci/code_health.py`.
+`clients/extensions/jetbrains/`, or `ktlintFormat` to apply the same rules.
+`scripts/ci/code_health.py` fails a new Kotlin file over 1,500 lines, and
+it does not read the files in `src/test/`. Kotlin function length and
+complexity are not measured yet (#981).
 
 **YAML and Kubernetes.** 2-space indentation, resource limits on every
 container, meaningful names and labels.
