@@ -79,6 +79,8 @@ def _bind_identity(identity) -> None:
         from structured_log import bind_identity
         bind_identity(identity[0], identity[1])
     except ImportError:
+        # Without structured_log there is no log context to bind. The
+        # adapter, not this context, gives each model call its identity.
         pass
 
 
@@ -105,6 +107,8 @@ def _is_infrastructure_failure(exc: BaseException) -> bool:
         if isinstance(exc, RequestIdentityMissing):
             return True
     except ImportError:
+        # Only adapters raises RequestIdentityMissing. Without adapters, the
+        # status check below is the only test that is left.
         pass
     code = getattr(exc, "code", None)
     return isinstance(code, int) and code in _AUTH_STATUSES
