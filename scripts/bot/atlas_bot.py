@@ -530,29 +530,43 @@ class Bot:
                 self.api.add_labels(it["number"], sorted(want - have))
             for label in sorted(have - want):
                 self.api.remove_label(it["number"], label)
-        self._sync_pulls()
+        failures = self._sync_pulls()
         self._close_fixed()
+        if failures:
+            raise RuntimeError("\n".join(failures))
 
-    def _sync_pulls(self) -> None:
-        configs = {}
+    def _sync_pulls(self) -> list[str]:
+        configs: dict[str, dict | RuntimeError] = {}
+        failures = []
         for pr in self.api.open_pulls():
             n = pr["number"]
             commit = pr["base"]["sha"]
             if commit not in configs:
-                configs[commit] = self.api.config_at(commit)
+                try:
+                    configs[commit] = self.api.config_at(commit)
+                except RuntimeError as error:
+                    configs[commit] = error
             cfg = configs[commit]
-            areas = cfg.get("areas", {})
-            changes = self.api.pull_changes(n)
-            files = [change["filename"] for change in changes]
-            want = {label for prefix, label in areas.items() if any(f.startswith(prefix) for f in files)}
-            have = {x["name"] for x in pr.get("labels") or []}
-            if want - have:
-                self.api.add_labels(n, sorted(want - have))
-            self._size_and_risk(pr, changes, have, cfg.get("pull_requests"))
+            if isinstance(cfg, RuntimeError):
+                failures.append(f"Pull request #{n}: {cfg}")
+            else:
+                self._label_pull(pr, cfg)
             if self._first_pr(pr):
                 if not any(self._mine(x) and marker("welcome") in x.get("body", "")
                            for x in self.api.comments(n)):
                     self.api.comment(n, self._welcome_pr(pr["user"]["login"]))
+        return failures
+
+    def _label_pull(self, pr: dict, cfg: dict) -> None:
+        n = pr["number"]
+        areas = cfg.get("areas", {})
+        changes = self.api.pull_changes(n)
+        files = [change["filename"] for change in changes]
+        want = {label for prefix, label in areas.items() if any(f.startswith(prefix) for f in files)}
+        have = {x["name"] for x in pr.get("labels") or []}
+        if want - have:
+            self.api.add_labels(n, sorted(want - have))
+        self._size_and_risk(pr, changes, have, cfg.get("pull_requests"))
 
     def _size_and_risk(self, pr: dict, changes: list, have: set, settings: dict | None) -> None:
         """Give an open pull request its size label and, when the rules say so, the risk label (pr_labels.py).

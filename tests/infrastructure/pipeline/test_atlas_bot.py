@@ -643,23 +643,43 @@ def test_labels_use_each_target_commit_once_and_never_the_contribution_head(api,
                  "cannot read line", id="invalid-settings"),
     pytest.param({"encoding": "none", "content": ""}, "expected base64", id="missing-file-content"),
 ])
-def test_a_target_settings_failure_stops_labeling_and_names_the_commit(
+def test_a_target_settings_failure_is_reported_after_the_other_sync_work_finishes(
     api, cfg, monkeypatch, answer, reason,
 ):
     api.cards.clear()
-    api.pulls = [pull(64)]
-    api.files[64] = [("services/proxy/loop.go", 2, 1)]
-    commit = "d" * 40
-    path = f"/repos/inferstep/ATLAS/contents/.github/atlas-bot.yml?ref={commit}"
-    recorded = Recorded({path: answer})
+    commit, dev_commit = "a" * 40, "d" * 40
+    api.pulls = [pull(64, assoc="FIRST_TIME_CONTRIBUTOR"), pull(66), pull(65)]
+    api.pulls[0]["base"] = {"ref": "main", "sha": commit}
+    api.pulls[0]["created_at"] = stamp(1)
+    api.pulls[2]["base"] = {"ref": "main", "sha": commit}
+    api.files = {64: [("services/proxy/loop.go", 2, 1)],
+                 65: [("services/proxy/loop.go", 2, 1)],
+                 66: [("services/proxy/loop.go", 2, 1)]}
+    api.counts["is:pr is:merged author:bob"] = 2
+    api.commits = [{"sha": "c" * 40, "message": "Closes #7"}]
+    path = "/repos/inferstep/ATLAS/contents/.github/atlas-bot.yml"
+    with open(bot_mod.CONFIG_PATH, encoding="utf-8") as fh:
+        dev_text = fh.read()
+    recorded = Recorded({
+        f"{path}?ref={commit}": answer,
+        f"{path}?ref={dev_commit}": {
+            "encoding": "base64", "content": base64.b64encode(dev_text.encode()).decode()},
+    })
     monkeypatch.setattr(api, "config_at", recorded.config_at)
 
     with pytest.raises(RuntimeError, match=reason) as error:
         run(api, cfg).sync()
 
-    assert f"Cannot read .github/atlas-bot.yml at inferstep/ATLAS@{commit}:" in str(error.value)
-    assert recorded.paths == [("GET", path)]
+    report = str(error.value)
+    assert f"Pull request #64: Cannot read .github/atlas-bot.yml at inferstep/ATLAS@{commit}:" in report
+    assert f"Pull request #65: Cannot read .github/atlas-bot.yml at inferstep/ATLAS@{commit}:" in report
+    assert recorded.paths == [("GET", f"{path}?ref={commit}"), ("GET", f"{path}?ref={dev_commit}")]
     assert label_calls(api, 64) == []
+    assert label_calls(api, 65) == []
+    assert label_calls(api, 66) == [
+        ("add_labels", 66, ("area/proxy",)), ("add_labels", 66, ("risk:high", "size/S"))]
+    assert api.issues[7]["state"] == "closed"
+    assert "first pull request" in api.said(64)[0]
 
 
 @pytest.mark.parametrize("files, labels", [

@@ -280,9 +280,11 @@ of those files of v3-service are in
 [.github/atlas-bot.yml](atlas-bot.yml). The bot reads the label settings from
 each pull request's target commit in this repository. This keeps the labels
 aligned with that branch's file layout. It never reads settings from the
-contribution branch or a fork. A settings read failure stops the sync and
-reports the repository and commit. The bot reads each distinct target commit
-once per sync.
+contribution branch or a fork. A settings read failure skips labels only for
+the affected pull requests. The bot finishes other work, including issue
+closure, before it reports failure. Each error names the pull request,
+repository, and commit. The bot reads each distinct target commit once per
+sync, including commits whose settings cannot be read.
 
 ## 10. After your change merges
 
