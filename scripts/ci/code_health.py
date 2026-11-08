@@ -140,8 +140,8 @@ def go_functions(text: str):
 
 def shell_functions(text: str):
     """(name, lines) for each shell function."""
-    # shortcut: an indented definition is not found, and a heredoc line "}" ends a function early;
-    # read the scripts with a shell parser when a script has either.
+    # shortcut: an indented definition and a function that ends in "} >&2" are not found, and a heredoc
+    # line "}" ends a function early; read the scripts with a shell parser when a script has one of these.
     return column_zero_functions(text, SH_FUNC, lambda m: m.group(1))
 
 
