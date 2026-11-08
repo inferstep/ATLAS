@@ -26,7 +26,7 @@ import re
 import sys
 from pathlib import Path
 
-SETTINGS = Path(__file__).resolve().parents[1] / ".github" / "dependency-review-config.yml"
+SETTINGS = Path(__file__).resolve().parents[2] / ".github" / "dependency-review-config.yml"
 # GitHub's data names no licence for any action, and an action is run by a workflow, not shipped.
 ACTIONS = "pkg:githubactions/"
 

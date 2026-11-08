@@ -62,7 +62,7 @@ LISTS = [
                  id="production-readiness.py PYTHON_TARGETS"),
     pytest.param(lambda: [path for path, _ in load("scripts/ci/verify.py").SUITES_BY_PATH],
                  id="verify.py SUITES_BY_PATH"),
-    pytest.param(lambda: load("scripts/integrity_check.py").PRODUCT_DIRS, id="integrity_check.py PRODUCT_DIRS"),
+    pytest.param(lambda: load("scripts/ci/integrity_check.py").PRODUCT_DIRS, id="integrity_check.py PRODUCT_DIRS"),
     pytest.param(lambda: tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["coverage"]["run"]["source"],
                  id="pyproject.toml coverage source"),
     pytest.param(codecov_paths, id="codecov.yml flag paths"),

@@ -37,7 +37,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 TASK_SOURCE = Path("scripts") / "eval" / "e2e-reliability.py"
 
 CODE_EXTENSIONS = (".go", ".py", ".ts", ".js", ".mjs", ".sh")
@@ -58,13 +58,14 @@ GATE_FILES = (
     "clients/extensions/vscode/eslint.config.mjs", "clients/extensions/jetbrains/scripts/check-distribution.sh",
     "tests/perf/budgets.json", "tests/replay/recordings/",
     "tests/infrastructure/gradle_wrapper_jar_sums.txt",
-    "scripts/integrity_check.py", "scripts/ci/code_health.py", "scripts/ci/production-readiness.py", "scripts/fix_tests.py",
+    "scripts/ci/integrity_check.py", "scripts/ci/code_health.py", "scripts/ci/production-readiness.py",
+    "scripts/ci/fix_tests.py",
     # The runner the evaluation task names are read from.
     str(TASK_SOURCE),
-    "scripts/checks_ran.py", "scripts/change_base.py", "scripts/ci/queue_run.py", "scripts/ci/go_test_build.py",
-    "scripts/ci/verify.py", "scripts/canary.py", "scripts/smoke_result.py",
+    "scripts/ci/checks_ran.py", "scripts/ci/change_base.py", "scripts/ci/queue_run.py", "scripts/ci/go_test_build.py",
+    "scripts/ci/verify.py", "scripts/canary.py", "scripts/ci/smoke_result.py",
     "scripts/ci/dockerfile_lint.py", "scripts/ci/check_dockerfile_sources.py", "scripts/ci/check_min_python.py",
-    "scripts/ci/staging-integration.py", "scripts/licence_names.py",
+    "scripts/ci/staging-integration.py", "scripts/ci/licence_names.py",
     "scripts/ci/ci-lock.sh", "scripts/release/release-tag.sh", "scripts/setup/environments.sh", "scripts/setup/rulesets.sh",
     # The settings file of each linter of the pipeline, should one appear.
     ".hadolint.yaml", ".hadolint.yml", ".github/zizmor.yml", "zizmor.yml", ".github/actionlint.yaml",

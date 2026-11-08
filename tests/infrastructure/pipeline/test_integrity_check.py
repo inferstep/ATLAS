@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "integrity_check.py"
+SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "ci" / "integrity_check.py"
 TASKS = {"flask_pause", "offbyone"}
 # Comment markers are built here, so that this file has no line that looks
 # like the comments it describes.
@@ -194,7 +194,7 @@ def test_every_finding_says_why_and_how_to_fix(ic):
 
 
 def test_the_task_names_come_from_the_runner(ic):
-    names = ic.task_names(SCRIPT.parents[1], "HEAD")
+    names = ic.task_names(SCRIPT.parents[2], "HEAD")
     assert {"flask_pause", "aoc_sonar", "multifile_cli"} <= names
 
 
@@ -573,8 +573,8 @@ def test_a_size_baseline_that_cannot_be_read_needs_approval(ic):
 @pytest.mark.parametrize("path, what", [
     (".github/workflows/test.yml", CONFIGURES),
     (".github/code-health-baseline.json", CONFIGURES),
-    ("scripts/integrity_check.py", CONFIGURES),
-    ("scripts/checks_ran.py", CONFIGURES),
+    ("scripts/ci/integrity_check.py", CONFIGURES),
+    ("scripts/ci/checks_ran.py", CONFIGURES),
     (".github/codecov.yml", CONFIGURES),
     ("codecov.yml", CONFIGURES),
     ("dev/.codecov.yaml", CONFIGURES),
@@ -582,11 +582,11 @@ def test_a_size_baseline_that_cannot_be_read_needs_approval(ic):
     ("tests/infrastructure/gradle_wrapper_jar_sums.txt", CONFIGURES),
     (".github/canary.json", CONFIGURES),
     ("scripts/ci/verify.py", CONFIGURES),
-    ("scripts/change_base.py", CONFIGURES),
+    ("scripts/ci/change_base.py", CONFIGURES),
     ("scripts/ci/queue_run.py", CONFIGURES),
     ("scripts/ci/go_test_build.py", CONFIGURES),
     (".github/actions/upload-coverage/action.yml", CONFIGURES),
-    ("scripts/fix_tests.py", CONFIGURES),
+    ("scripts/ci/fix_tests.py", CONFIGURES),
     ("scripts/ci/dockerfile_lint.py", CONFIGURES),
     ("scripts/setup/rulesets.sh", CONFIGURES),
     (".hadolint.yaml", CONFIGURES),
@@ -672,7 +672,7 @@ def test_every_script_a_workflow_names_is_on_one_of_the_lists(ic):
     a gate script (one level). A script that only another script calls from
     deeper down is not seen.
     """
-    root = SCRIPT.parents[1]
+    root = SCRIPT.parents[2]
     named = {name for workflow in sorted((root / ".github" / "workflows").glob("*.yml"))
              for name in scripts_a_workflow_names(workflow.read_text(encoding="utf-8"))}
     gate_scripts = [name for name in sorted(named) if name.startswith(ic.GATE_FILES) and (root / name).is_file()]
@@ -681,7 +681,7 @@ def test_every_script_a_workflow_names_is_on_one_of_the_lists(ic):
     undecided = sorted(name for name in named if not name.startswith(ic.GATE_FILES + ic.WRITE_CREDENTIAL_SCRIPTS)
                        and name not in ic.RUN_NOT_GATE)
     assert undecided == [], (
-        f"{undecided} are named in a workflow or in a gate script and are on no list in scripts/integrity_check.py. "
+        f"{undecided} are named in a workflow or in a gate script and are on no list in scripts/ci/integrity_check.py. "
         "Fix: add each to GATE_FILES when its result decides a check, to WRITE_CREDENTIAL_SCRIPTS when a workflow "
         "runs it with a credential that can write, or to RUN_NOT_GATE with its reason when it is only the thing "
         "under test in a job that cannot write.")
@@ -690,7 +690,7 @@ def test_every_script_a_workflow_names_is_on_one_of_the_lists(ic):
 
 def test_every_script_on_the_third_list_says_why(ic):
     for name, reason in ic.RUN_NOT_GATE.items():
-        assert (SCRIPT.parents[1] / name).is_file(), name
+        assert (SCRIPT.parents[2] / name).is_file(), name
         assert len(reason.split()) >= 5, name
 
 
@@ -709,7 +709,7 @@ def test_every_tool_of_the_gates_page_has_its_markers_decided(ic):
     What this sees: the first cell of each row of the "Tool settings" table. A
     linter that the page names only in running text is not seen.
     """
-    page = (SCRIPT.parents[1] / "docs" / "project" / "gates.md").read_text(encoding="utf-8")
+    page = (SCRIPT.parents[2] / "docs" / "project" / "gates.md").read_text(encoding="utf-8")
     table = page.split("## Tool settings", 1)[1].split("\n## ", 1)[0]
     rows = [line.split("|")[1].strip().split(",")[0] for line in table.splitlines()
             if line.startswith("| ") and not line.startswith(("| Tool", "|---"))]
@@ -717,7 +717,7 @@ def test_every_tool_of_the_gates_page_has_its_markers_decided(ic):
     for row in rows:
         assert row in SETTINGS_ROWS, (
             f"the gates page has a settings row {row!r} that this test does not know. Fix: add it to SETTINGS_ROWS "
-            "with its linters, and give each linter a row in LINTER_MARKERS of scripts/integrity_check.py: the kinds "
+            "with its linters, and give each linter a row in LINTER_MARKERS of scripts/ci/integrity_check.py: the kinds "
             "of file its markers are read in, or \"none\".")
         for linter in SETTINGS_ROWS[row]:
             assert linter in ic.LINTER_MARKERS, f"{linter} (row {row!r}) has no row in LINTER_MARKERS"
@@ -1295,7 +1295,7 @@ def test_a_test_file_moved_under_a_folder_the_hook_names_leaves_the_plain_jobs(i
 
 
 def test_the_check_reads_this_repositorys_own_settings_and_hook(ic):
-    root = SCRIPT.parents[1]
+    root = SCRIPT.parents[2]
     marks = ic.left_out_marks((root / "pyproject.toml").read_text(encoding="utf-8"))
     assert marks == ("integration",)
     targets = ic.hook_targets((root / "tests" / "conftest.py").read_text(encoding="utf-8"), marks)

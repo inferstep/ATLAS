@@ -143,7 +143,7 @@ def failing_lines(output: str, limit: int = 40) -> list[str]:
 def advisory(changed: list[str], base: str) -> list[str]:
     """Output of the checks that report and do not fail, as CI runs them."""
     out = []
-    script = ROOT / "scripts" / "integrity_check.py"
+    script = ROOT / "scripts" / "ci" / "integrity_check.py"
     if script.is_file():
         done = subprocess.run([sys.executable, str(script), "--base", base], cwd=ROOT, capture_output=True, text=True, check=False)
         if "nothing found" not in done.stdout:

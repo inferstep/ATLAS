@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
-SCRIPT = ROOT / "scripts" / "checks_ran.py"
+SCRIPT = ROOT / "scripts" / "ci" / "checks_ran.py"
 TESTS = ".github/workflows/tests.yml"
 TITLE = ".github/workflows/pr-title.yml"
 
@@ -112,7 +112,7 @@ def test_every_workflow_of_this_repository_can_be_judged(ran, change):
     workflows = ran.read_workflows(ROOT)
     assert workflows, "no workflow files were read"
     expected, unread = ran.expected_workflows(workflows, change, ["README.md"], own="")
-    assert unread == [], f"`on:` filters in a form scripts/checks_ran.py does not read: {unread}"
+    assert unread == [], f"`on:` filters in a form scripts/ci/checks_ran.py does not read: {unread}"
     assert ".github/workflows/test.yml" in expected
     # A workflow with a path filter starts only for its own files.
     assert ".github/workflows/vscode-extension.yml" not in expected

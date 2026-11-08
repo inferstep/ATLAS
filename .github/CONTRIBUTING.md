@@ -428,8 +428,8 @@ its report short:
   body becomes a helper that your tests call.
 
 ```bash
-python scripts/integrity_check.py                 # your branch against origin/dev
-python scripts/integrity_check.py --base <commit>
+python scripts/ci/integrity_check.py                 # your branch against origin/dev
+python scripts/ci/integrity_check.py --base <commit>
 ```
 
 ## Development workflow

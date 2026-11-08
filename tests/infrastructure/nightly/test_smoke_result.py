@@ -21,7 +21,7 @@ import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[3]
-SCRIPT = ROOT / "scripts" / "smoke_result.py"
+SCRIPT = ROOT / "scripts" / "ci" / "smoke_result.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "smoke-result.yml"
 _spec = importlib.util.spec_from_file_location("smoke_result", SCRIPT)
 smoke = importlib.util.module_from_spec(_spec)
@@ -420,7 +420,7 @@ def test_while_no_account_is_set_as_the_writer_no_status_is_counted_and_the_outp
     status, printed = changed.judged(monkeypatch, capsys, changed.base, changed.head, writer=0)
     assert status == 1
     assert NO_STATUS in printed
-    assert "No account is set as the writer of the server's statuses (WRITER in scripts/smoke_result.py), so no status is counted." in printed
+    assert "No account is set as the writer of the server's statuses (WRITER in scripts/ci/smoke_result.py), so no status is counted." in printed
     assert isinstance(smoke.WRITER, int)
     assert not isinstance(smoke.WRITER, bool)
 
@@ -610,7 +610,7 @@ def test_every_recording_of_this_repository_has_the_parts_that_the_check_reads()
         for part in ("the system prompt", "the schema of the reply"):
             assert parts[part], (
                 f"{path.name}: the first request to the model has no value for {part}, so the check would not see a "
-                "change of it. Fix: PARTS and `carried_by_every_request` in scripts/smoke_result.py.")
+                "change of it. Fix: PARTS and `carried_by_every_request` in scripts/ci/smoke_result.py.")
 
 
 def step(name):
@@ -658,12 +658,12 @@ def test_the_job_runs_the_base_branchs_copy_of_the_script_and_the_changes_copy_o
         tmp_path, on_the_base, status, printed, not_printed):
     # The change alters the text of every request and brings a script that passes everything.
     repo = Repo(tmp_path / "repo")
-    (repo.root / "scripts").mkdir()
+    (repo.root / "scripts" / "ci").mkdir(parents=True)
     if on_the_base is not None:
-        (repo.root / "scripts" / "smoke_result.py").write_text(on_the_base, encoding="utf-8")
+        (repo.root / "scripts" / "ci" / "smoke_result.py").write_text(on_the_base, encoding="utf-8")
     base = repo.commit(**two_recordings())
     repo.git("checkout", "-q", "-b", "work")
-    (repo.root / "scripts" / "smoke_result.py").write_text('print("the copy of the change ran")\n', encoding="utf-8")
+    (repo.root / "scripts" / "ci" / "smoke_result.py").write_text('print("the copy of the change ran")\n', encoding="utf-8")
     repo.commit(**two_recordings(system=NEW))
     repo.git("checkout", "-q", "--detach", "dev")
     repo.git("merge", "-q", "--no-ff", "--no-edit", "work")
@@ -676,8 +676,8 @@ def test_the_job_runs_the_base_branchs_copy_of_the_script_and_the_changes_copy_o
 def test_a_branch_made_before_the_recordings_is_judged_by_what_its_merge_would_bring(tmp_path):
     # The branch was made on a base with no recording yet (as `main` has none), and its change touches no recording.
     repo = Repo(tmp_path / "repo")
-    (repo.root / "scripts").mkdir()
-    (repo.root / "scripts" / "smoke_result.py").write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+    (repo.root / "scripts" / "ci").mkdir(parents=True)
+    (repo.root / "scripts" / "ci" / "smoke_result.py").write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
     repo.commit()
     repo.git("checkout", "-q", "-b", "work")
     (repo.root / "a change.txt").write_text("a change that touches no recording\n", encoding="utf-8")
@@ -695,8 +695,8 @@ def test_a_branch_made_before_the_recordings_is_judged_by_what_its_merge_would_b
 def test_a_change_of_the_text_with_a_green_smoke_run_on_its_head_passes_in_its_merge(tmp_path):
     # The server writes its status on the head commit of the pull request, not on the merge that the job checks out.
     repo = Repo(tmp_path / "repo")
-    (repo.root / "scripts").mkdir()
-    (repo.root / "scripts" / "smoke_result.py").write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+    (repo.root / "scripts" / "ci").mkdir(parents=True)
+    (repo.root / "scripts" / "ci" / "smoke_result.py").write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
     base = repo.commit(**two_recordings())
     repo.git("checkout", "-q", "-b", "work")
     head = repo.commit(**two_recordings(system=NEW))
@@ -712,8 +712,8 @@ def test_a_change_of_the_text_with_a_green_smoke_run_on_its_head_passes_in_its_m
 def test_a_base_that_changed_the_text_after_the_merge_was_made_asks_nothing_of_the_branch(tmp_path):
     # GitHub made the merge on the base as it was; the base got a new text before the job started.
     repo = Repo(tmp_path / "repo")
-    (repo.root / "scripts").mkdir()
-    (repo.root / "scripts" / "smoke_result.py").write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+    (repo.root / "scripts" / "ci").mkdir(parents=True)
+    (repo.root / "scripts" / "ci" / "smoke_result.py").write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
     repo.commit(**two_recordings())
     repo.git("checkout", "-q", "-b", "work")
     (repo.root / "a change.txt").write_text("a change that touches no recording\n", encoding="utf-8")

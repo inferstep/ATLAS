@@ -1139,7 +1139,7 @@ def test_no_call_changes_a_state_a_title_a_label_or_writes_a_comment():
 
 
 def test_the_script_is_on_the_list_of_scripts_that_run_with_a_credential_that_can_write():
-    spec = importlib.util.spec_from_file_location("atlas_integrity_for_weekly", ROOT / "scripts" / "integrity_check.py")
+    spec = importlib.util.spec_from_file_location("atlas_integrity_for_weekly", ROOT / "scripts" / "ci" / "integrity_check.py")
     integrity = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = integrity
     spec.loader.exec_module(integrity)

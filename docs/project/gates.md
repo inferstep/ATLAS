@@ -145,7 +145,7 @@ job on this list that does not start gives no red:
 
 A check that compares a change with its base compares with the base branch
 as it is now: the first parent of the merge commit that the job checks out.
-`scripts/change_base.py` gives that commit to the integrity check, `checks
+`scripts/ci/change_base.py` gives that commit to the integrity check, `checks
 ran`, golangci-lint and hadolint, and each takes its script from there. The
 base commit that the event names is the branch as it was when the event was
 made; compared with that one, everything the base branch got since would read
@@ -216,7 +216,7 @@ It cannot judge these, and says so when it meets one:
 | Dockerfile lint | `.github/workflows/hadolint.yml`, `scripts/ci/dockerfile_lint.py` | hadolint v2.15.1, its release binary held against the checksum the workflow records. Dependabot does not update this version; a maintainer moves it. Every rule is on. The findings in a Dockerfile a change touches are annotations; all counts are in the job summary |
 | Hashed installs | `.github/requirements/ci.in`, `ci.txt`, `lens.in`, `lens.txt`, `scripts/ci/ci-lock.sh` | The pytest jobs, the lint jobs and the e2e job install from one lock that has a hash for every file, with `pip install --require-hashes`: pip refuses a file whose hash is not in the lock. The lock holds the tools and the packages of the product that the tests need. It is made by pip-compile under Python 3.12, and its header says so; Dependabot reads the header and makes the lock again the same way. Thirteen pins of `ci.in` are copies of pins in `services/sandbox/requirements-runtime.txt`, `services/sandbox/requirements-verify.txt` and `services/v3-service/requirements.txt`; a contract test holds each copy the same as its product file, and every line of `ci.in` against the lock. The lens job and the `tests/atlas` job also install a second lock, `lens.txt` (the CPU-only torch, the lens packages, and huggingface_hub for the CLI's publish commands, made by the same script with uv for the Linux runners), and a contract test holds it to `services/geometric-lens/requirements.txt`. The extension's job runs `npm ci --ignore-scripts`. |
 | Image scan | `.github/workflows/container-scan.yml` | Trivy, weekly and by hand, on the six images CI publishes with the tag `dev`: proxy, v3, lens, sandbox, llama (CUDA) and llama-vulkan. Critical and high findings that have a fix. It reports and does not fail. The ROCm image is built on the user's machine and is not scanned |
-| Integrity check | `scripts/integrity_check.py` | Suppression markers are read by kind of file: Go, Python, TypeScript and JavaScript, shell, workflow files, Dockerfiles. In a workflow file `continue-on-error: true` and `persist-credentials: true` are named. The script holds the lists of files that need a maintainer's approval: the files that decide what a check accepts, and the scripts a workflow runs with a credential that can write. A skip with its reason asks for approval; a size baseline that only goes down and a test renamed in place are listed for information. The forms by which a test stops running are one table for each runner (pytest, unittest, Go, vitest). A form that stops more than one test says how far it reaches: the class, the group, the file, every other test of the file, whole test files, or the number of uses of a skip marker that has a name of its own. Such a name is one that the file sets at its top level or takes from a module by an import; a reason that is given by a name is shown as the text of that name |
+| Integrity check | `scripts/ci/integrity_check.py` | Suppression markers are read by kind of file: Go, Python, TypeScript and JavaScript, shell, workflow files, Dockerfiles. In a workflow file `continue-on-error: true` and `persist-credentials: true` are named. The script holds the lists of files that need a maintainer's approval: the files that decide what a check accepts, and the scripts a workflow runs with a credential that can write. A skip with its reason asks for approval; a size baseline that only goes down and a test renamed in place are listed for information. The forms by which a test stops running are one table for each runner (pytest, unittest, Go, vitest). A form that stops more than one test says how far it reaches: the class, the group, the file, every other test of the file, whole test files, or the number of uses of a skip marker that has a name of its own. Such a name is one that the file sets at its top level or takes from a module by an import; a reason that is given by a name is shown as the text of that name |
 
 ## Baselines on `dev`
 
@@ -442,7 +442,7 @@ made twice.
 | A change whose checks did not run fails. A job that was skipped behind a failed job is not counted twice | #303, #403 | `checks ran` |
 | The script that judges a change is the base branch's copy, so a change cannot rewrite its own judge | #390 | review |
 | The evaluation task names that judge reads come from the base branch's runner, run in a child process in a copy of the base's tree, so nothing in a change runs while it is judged, except while the base has no runner. The runner is a file that configures the checks | #864 | `tests/infrastructure/pipeline/test_integrity_check.py` |
-| A check that compares with the base uses the base branch as it is now, and stops when the base is not in the checkout | #390, #392 | `scripts/change_base.py`, `tests/infrastructure/pipeline/test_change_base.py` |
+| A check that compares with the base uses the base branch as it is now, and stops when the base is not in the checkout | #390, #392 | `scripts/ci/change_base.py`, `tests/infrastructure/pipeline/test_change_base.py` |
 | Every job names its runner image, so the image changes in a pull request and not on the day the label moves | #299 | review |
 | The guide's rule for a checkout step and for a value from the event ([Code style](../../.github/CONTRIBUTING.md#code-style), Workflows). The one exception has its reason on its line | #377 | `workflow lint` (zizmor), `tests/infrastructure/pipeline/test_workflow_lint.py` |
 | A workflow that starts on a push to `dev` or `main` is on a list that says whether a newer push may cancel its run | #394 | `tests/infrastructure/pipeline/test_workflow_concurrency.py` |
@@ -636,7 +636,7 @@ What the result says, and what it does not say:
   new text, so they pass. The line, with the mark of the text:
   `No smoke run: the server is not available. Not tried with a real model; the first nightly run after the server is back covers this text (text <mark>).`
   The mark is made from the text that every request carries
-  (`scripts/smoke_result.py --mark <commit>` prints it). The line counts
+  (`scripts/ci/smoke_result.py --mark <commit>` prints it). The line counts
   only while the server wrote no status for the head commit.
 
 The limits of the job:

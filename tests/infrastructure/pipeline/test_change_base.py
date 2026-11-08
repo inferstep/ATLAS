@@ -21,7 +21,7 @@ USERS = ("integrity.yml", "checks-ran.yml", "golangci-lint.yml", "hadolint.yml",
 
 
 def load(name):
-    spec = importlib.util.spec_from_file_location(f"atlas_{name}", ROOT / "scripts" / f"{name}.py")
+    spec = importlib.util.spec_from_file_location(f"atlas_{name}", ROOT / "scripts" / "ci" / f"{name}.py")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -115,7 +115,7 @@ def test_checks_ran_takes_its_base_from_the_rule_and_from_nowhere_else(monkeypat
     monkeypatch.delenv("CHANGE_BASE")
     with pytest.raises(RuntimeError, match="CHANGE_BASE is not set"):
         ran.comparison_base()
-    source = (ROOT / "scripts" / "checks_ran.py").read_text(encoding="utf-8")
+    source = (ROOT / "scripts" / "ci" / "checks_ran.py").read_text(encoding="utf-8")
     assert "changed_files(root, comparison_base())" in source
     assert "changed_files(root, change.base_sha)" not in source
 
@@ -155,7 +155,7 @@ def test_the_command_prints_the_base_or_ends_with_a_status_that_stops_the_step(m
 
     def run(payload):
         event.write_text(json.dumps(payload), encoding="utf-8")
-        return subprocess.run([sys.executable, str(ROOT / "scripts" / "change_base.py")], cwd=root, capture_output=True,
+        return subprocess.run([sys.executable, str(ROOT / "scripts" / "ci" / "change_base.py")], cwd=root, capture_output=True,
                               text=True, check=False, env={"PATH": "/usr/bin:/bin", "GITHUB_EVENT_NAME": "pull_request",
                                                            "GITHUB_EVENT_PATH": str(event)})
     good = run(pull_request(head, began))
@@ -185,7 +185,7 @@ def run_base_step(root, payload, tmp_path):
 
 
 # The rule as this change has it, and a copy of it that a change could write to choose its own base.
-RULE = (ROOT / "scripts" / "change_base.py").read_text(encoding="utf-8")
+RULE = (ROOT / "scripts" / "ci" / "change_base.py").read_text(encoding="utf-8")
 A_RULE_THAT_GIVES_ANOTHER_BASE = "print('0' * 40)\n"
 
 
@@ -194,7 +194,7 @@ def with_the_rule(tmp_path, on_the_base, on_the_branch):
     root = tmp_path / "repo"
     root.mkdir()
     git(root, "init", "-q", "-b", "dev")
-    rule_path = "scripts/change_base.py"
+    rule_path = "scripts/ci/change_base.py"
     began = commit(root, {"docs/API.md": "api\n", **({rule_path: on_the_base} if on_the_base else {})}, "base")
     git(root, "checkout", "-q", "-b", "work")
     head = commit(root, {rule_path: on_the_branch}, "the branch's copy of the rule")
@@ -236,7 +236,7 @@ def test_the_checkout_that_the_base_step_reads_from_has_the_parent_commits(name)
     workflow = yaml.safe_load((WORKFLOWS / name).read_text(encoding="utf-8"))
     reading = {job_name: job["steps"] for job_name, job in workflow["jobs"].items()
                if any(step.get("id") == "base" for step in job["steps"])}
-    assert reading, (f"{name} runs scripts/change_base.py, and no job of it has a step with the id `base`, so this test "
+    assert reading, (f"{name} runs scripts/ci/change_base.py, and no job of it has a step with the id `base`, so this test "
                      "holds nothing of it. Fix: give the step that reads the base the id `base`.")
     for job_name, steps in reading.items():
         settings = next(step for step in steps if str(step.get("uses", "")).startswith("actions/checkout@")).get("with") or {}
@@ -253,7 +253,7 @@ def test_the_checkout_that_the_base_step_reads_from_has_the_parent_commits(name)
 def test_each_workflow_that_compares_with_the_base_takes_it_from_the_one_rule(name):
     workflow = yaml.safe_load((WORKFLOWS / name).read_text(encoding="utf-8"))
     comparing = [job["steps"] for job in workflow["jobs"].values() if "steps.base.outputs.sha" in json.dumps(job["steps"])]
-    assert comparing, (f"{name} runs scripts/change_base.py, and no step of it uses `steps.base.outputs.sha`, so this test "
+    assert comparing, (f"{name} runs scripts/ci/change_base.py, and no step of it uses `steps.base.outputs.sha`, so this test "
                        "holds nothing of it. Fix: give the comparison the output of the step `base`.")
     for steps in comparing:
         using = [n for n, step in enumerate(steps) if "steps.base.outputs.sha" in json.dumps(step)]
@@ -267,5 +267,5 @@ def test_no_workflow_takes_the_base_of_a_comparison_from_the_event():
              if re.search(r"pull_request\.base\.sha|merge_group\.base_sha", path.read_text(encoding="utf-8"))]
     assert users == []
     with_rule = [path.name for path in sorted(WORKFLOWS.glob("*.yml"))
-                 if "scripts/change_base.py" in path.read_text(encoding="utf-8")]
+                 if "scripts/ci/change_base.py" in path.read_text(encoding="utf-8")]
     assert with_rule == sorted(USERS)

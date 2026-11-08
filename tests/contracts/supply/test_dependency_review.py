@@ -1,7 +1,7 @@
 """The dependency review judges a new dependency's licence against one list, and a licence with no name fails.
 
 The list is in .github/dependency-review-config.yml. The review action reads
-it; a step after the action (scripts/licence_names.py) fails for a new
+it; a step after the action (scripts/ci/licence_names.py) fails for a new
 dependency whose licence GitHub cannot name.
 """
 import importlib.util
@@ -17,7 +17,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[3]
 SETTINGS = ROOT / ".github" / "dependency-review-config.yml"
-SCRIPT = ROOT / "scripts" / "licence_names.py"
+SCRIPT = ROOT / "scripts" / "ci" / "licence_names.py"
 _spec = importlib.util.spec_from_file_location("licence_names", SCRIPT)
 names = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(names)
@@ -88,17 +88,17 @@ def the_step_in_a_merge(tmp_path, on_the_base, on_the_branch, unlicensed):
     workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "dependency-review.yml").read_text(encoding="utf-8"))
     step = next(step for step in workflow["jobs"]["dependency-review"]["steps"] if "licence_names.py" in str(step.get("run")))
     root = tmp_path / "repo"
-    (root / "scripts").mkdir(parents=True)
+    (root / "scripts" / "ci").mkdir(parents=True)
     (root / ".github").mkdir()
     git(root, "init", "-q", "-b", "dev")
     (root / ".github" / "dependency-review-config.yml").write_text(SETTINGS.read_text(encoding="utf-8"), encoding="utf-8")
     if on_the_base is not None:
-        (root / "scripts" / "licence_names.py").write_text(on_the_base, encoding="utf-8")
+        (root / "scripts" / "ci" / "licence_names.py").write_text(on_the_base, encoding="utf-8")
     git(root, "add", "-A")
     git(root, "commit", "-q", "-m", "base")
     base = git(root, "rev-parse", "HEAD")
     git(root, "checkout", "-q", "-b", "work")
-    (root / "scripts" / "licence_names.py").write_text(on_the_branch, encoding="utf-8")
+    (root / "scripts" / "ci" / "licence_names.py").write_text(on_the_branch, encoding="utf-8")
     git(root, "add", "-A")
     git(root, "commit", "-q", "-m", "the branch's copy of the script")
     git(root, "checkout", "-q", "--detach", "dev")
@@ -162,7 +162,7 @@ def test_a_new_package_with_no_named_licence_is_named_unless_it_was_read_by_hand
 
 
 def run_the_script(*args, **env):
-    """Run scripts/licence_names.py with PATH and the given variables only."""
+    """Run scripts/ci/licence_names.py with PATH and the given variables only."""
     return subprocess.run([sys.executable, str(SCRIPT), *args], env={"PATH": os.environ["PATH"], **env},
                           capture_output=True, text=True, timeout=30)
 

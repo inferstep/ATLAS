@@ -37,7 +37,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 # The parts that every request carries, and the mark of their text, as the check of a smoke run reads them.
-_smoke_spec = importlib.util.spec_from_file_location("smoke_result", REPO / "scripts" / "smoke_result.py")
+_smoke_spec = importlib.util.spec_from_file_location("smoke_result", REPO / "scripts" / "ci" / "smoke_result.py")
 smoke = importlib.util.module_from_spec(_smoke_spec)
 _smoke_spec.loader.exec_module(smoke)
 SERVICES = ("model", "sandbox", "v3", "lens")
@@ -218,14 +218,14 @@ def is_a_model_request(exchange: dict) -> bool:
 
 
 def text_mark(exchange: dict) -> str:
-    """The mark of the text that one request to the model carries, made as scripts/smoke_result.py makes it."""
+    """The mark of the text that one request to the model carries, made as scripts/ci/smoke_result.py makes it."""
     parts = smoke.carried_by_every_request({"exchanges": [exchange]})
     return smoke.mark_of({part: [json.dumps(value, sort_keys=True, ensure_ascii=False)] if value is not None else []
                           for part, value in parts.items()})
 
 
 def without_the_carried_parts(body: str) -> str:
-    """A request to the model without the parts that every request carries, as scripts/smoke_result.py reads them."""
+    """A request to the model without the parts that every request carries, as scripts/ci/smoke_result.py reads them."""
     request = json.loads(body)
     messages = request.get("messages") or []
     if messages and messages[0].get("role") == "system":

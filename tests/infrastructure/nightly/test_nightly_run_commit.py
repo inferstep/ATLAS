@@ -24,7 +24,7 @@ from tests.infrastructure.nightly import test_nightly_run as base
 from tests.infrastructure.nightly.test_nightly_run import ROOT, SCRIPT, nightly
 
 MARK = "0123456789ab"
-# The line as the check of a pull request reads it (scripts/smoke_result.py).
+# The line as the check of a pull request reads it (scripts/ci/smoke_result.py).
 READ_BY_THE_CHECK = re.compile(r"^Smoke run on ([0-9a-f]{7,40}): ([0-3]) of 3 sessions with no harness defect, (\d+) s; "
                                r"the changed text is part of every request \(text ([0-9a-f]{12})\)\.[ \t]*$", re.MULTILINE)
 # What the stand-in of docker does for an image of the run's own: a build writes down what it was given, and an
@@ -51,9 +51,9 @@ if args[:2] == ["image", "rm"]:
     sys.exit(0)
 '''
 THE_MARK = '''
-if args[:2] == ["scripts/smoke_result.py", "--mark"]:
+if args[:2] == ["scripts/ci/smoke_result.py", "--mark"]:
     with open(home + "/mark.log", "a") as log:
-        log.write(json.dumps({"from": os.getcwd(), "holds": open("scripts/smoke_result.py").read()}) + "\\n")
+        log.write(json.dumps({"from": os.getcwd(), "holds": open("scripts/ci/smoke_result.py").read()}) + "\\n")
     print(plan.get("marks", {}).get(args[2], plan.get("mark", "0123456789ab")))
     sys.exit(plan.get("mark_status", 0))
 '''
@@ -68,7 +68,7 @@ ON_DEV = {
     "scripts/eval/reliability_report.py": "# of dev\n", "scripts/eval/reliability_stream.py": "# of dev\n",
     "scripts/eval/reliability_detectors.py": "# of dev\n", "scripts/eval/reliability_records.py": "# of dev\n",
     "scripts/eval/reliability_sandbox.py": "# of dev\n",
-    "scripts/smoke_result.py": "# the mark script of dev\n",
+    "scripts/ci/smoke_result.py": "# the mark script of dev\n",
     "services/proxy/Dockerfile": "FROM scratch\n# the proxy of dev\n", "services/proxy/prompt.go": "package main\n",
     "services/v3-service/Dockerfile": "FROM scratch\n# v3 of dev\n", "services/v3-service/main.py": "# of dev\n",
     "services/geometric-lens/Dockerfile": "FROM scratch\n# the lens of dev\n", "services/geometric-lens/main.py": "# of dev\n",
@@ -181,7 +181,7 @@ class OneCommit(base.Night):
             elif call["tool"] == "nvidia-smi":
                 step = "card"
             else:
-                step = {"scripts/eval/e2e-reliability.py": "driver", "scripts/smoke_result.py": "mark"}.get(args[0], "tests")
+                step = {"scripts/eval/e2e-reliability.py": "driver", "scripts/ci/smoke_result.py": "mark"}.get(args[0], "tests")
             if not (step in ("ask", "logs") and short and short[-1] == step):
                 short.append(step)
         return short
@@ -519,7 +519,7 @@ TAKEN_FROM_DEV = [
     ("scripts/eval/reliability_detectors.py", "a module of the driver, which runs on the server itself"),
     ("scripts/eval/reliability_records.py", "a module of the driver, which runs on the server itself"),
     ("scripts/eval/reliability_sandbox.py", "a module of the driver, which runs on the server itself"),
-    ("scripts/smoke_result.py", "the script that makes the mark of the result line"),
+    ("scripts/ci/smoke_result.py", "the script that makes the mark of the result line"),
     ("docker-compose.yml", "a compose file of the stack"),
     ("services/inference/Dockerfile.v31", "the model server, whose image is never built on the server and whose start script the stack mounts from the tree"),
     ("services/inference/entrypoint-v3.1.sh", "the model server, whose image is never built on the server and whose start script the stack mounts from the tree"),
@@ -721,12 +721,12 @@ def test_the_image_of_dev_for_a_service_that_the_commit_builds_is_not_asked_for(
 def test_the_marks_are_made_by_the_copy_of_the_script_that_dev_has_before_anything_is_pulled_or_built(tmp_path, repository):
     commit = repository.on_a_branch({"services/proxy/prompt.go": "a change\n"})
     run = OneCommit(tmp_path, repository).run(commit)
-    calls = [call["args"] for call in run.calls() if call["args"][0] == "scripts/smoke_result.py"]
-    assert calls == [["scripts/smoke_result.py", "--mark", commit], ["scripts/smoke_result.py", "--mark", repository.head]]
+    calls = [call["args"] for call in run.calls() if call["args"][0] == "scripts/ci/smoke_result.py"]
+    assert calls == [["scripts/ci/smoke_result.py", "--mark", commit], ["scripts/ci/smoke_result.py", "--mark", repository.head]]
     assert run.did()[:2] == ["mark", "mark"]
     for made in [json.loads(line) for line in (tmp_path / "mark.log").read_text().splitlines()]:
         assert Path(made["from"]).resolve() == (run.dir / "tree").resolve()
-        assert made["holds"] == ON_DEV["scripts/smoke_result.py"]
+        assert made["holds"] == ON_DEV["scripts/ci/smoke_result.py"]
     assert run.report["mark"] == MARK
     assert run.report["mark_of_dev"] == MARK
 
@@ -767,7 +767,7 @@ def test_with_another_mark_than_dev_and_a_proxy_built_from_the_commit_the_line_n
 @pytest.mark.parametrize("plan, says", [
     pytest.param({"mark_status": 2}, "failed: the mark of the commit's text: status 2", id="the-mark-script-fails"),
     pytest.param({"mark": "the head has no recordings"},
-                 "failed: the mark of the commit's text: scripts/smoke_result.py printed no mark: the head has no recordings",
+                 "failed: the mark of the commit's text: scripts/ci/smoke_result.py printed no mark: the head has no recordings",
                  id="the-mark-script-prints-no-mark"),
 ])
 def test_without_a_mark_the_run_fails_before_it_pulls_builds_or_starts_anything(tmp_path, repository, plan, says):
@@ -890,7 +890,7 @@ def test_the_build_whose_context_is_the_whole_repository_reads_only_the_paths_th
 def test_every_file_that_the_run_starts_or_loads_on_the_server_itself_is_one_that_it_takes_from_dev():
     source = SCRIPT.read_text()
     started = set(re.findall(r'\[args\.python, "(scripts/[^"]+)"', source))
-    assert started == {"scripts/eval/e2e-reliability.py", "scripts/smoke_result.py"}, started
+    assert started == {"scripts/eval/e2e-reliability.py", "scripts/ci/smoke_result.py"}, started
     # The files of scripts/ and scripts/eval/ that the driver loads, and what those load in turn.
     loaded, to_read = set(), ["eval/e2e-reliability.py"]
     while to_read:

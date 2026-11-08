@@ -12,15 +12,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 
 
-def load(name):
-    spec = importlib.util.spec_from_file_location(f"atlas_statuses_{name}", ROOT / "scripts" / f"{name}.py")
+def load(path):
+    spec = importlib.util.spec_from_file_location(f"atlas_statuses_{Path(path).stem}", ROOT / "scripts" / path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
 
-nightly, smoke, canary = load("nightly_run"), load("smoke_result"), load("canary")
+nightly, smoke, canary = load("nightly_run.py"), load("ci/smoke_result.py"), load("canary.py")
 LIST = json.loads((ROOT / ".github" / "canary.json").read_text(encoding="utf-8"))["server"]
 A_START = "2026-10-08T08:00:03Z"
 
@@ -49,7 +49,7 @@ def test_the_three_scripts_use_the_same_two_names():
 def test_the_two_checks_take_the_statuses_of_the_same_account():
     # The canary's list names no account (0) while the server has written no night; then the nights are not looked for.
     assert LIST["writer"] in (0, smoke.WRITER), (
-        f"scripts/smoke_result.py takes the statuses of the account {smoke.WRITER} (WRITER), and .github/canary.json "
+        f"scripts/ci/smoke_result.py takes the statuses of the account {smoke.WRITER} (WRITER), and .github/canary.json "
         f"names the account {LIST['writer']} (`server.writer`). Both are the account of the server's GitHub App. Fix: "
         "give both the same id, or 0 in the list while the nights are not looked for.")
     assert type(smoke.WRITER) is int
@@ -88,6 +88,6 @@ def test_the_canary_check_reads_the_start_time_of_a_night_from_the_text_of_its_s
 
 def test_the_script_of_the_run_asks_the_smoke_check_for_the_mark_in_the_way_that_it_gives_it():
     source = (ROOT / "scripts" / "nightly_run.py").read_text(encoding="utf-8")
-    assert '[args.python, "scripts/smoke_result.py", "--mark", commit]' in source
-    assert '"--mark"' in (ROOT / "scripts" / "smoke_result.py").read_text(encoding="utf-8")
-    assert "scripts/smoke_result.py" in nightly.FROM_DEV
+    assert '[args.python, "scripts/ci/smoke_result.py", "--mark", commit]' in source
+    assert '"--mark"' in (ROOT / "scripts" / "ci" / "smoke_result.py").read_text(encoding="utf-8")
+    assert "scripts/ci/smoke_result.py" in nightly.FROM_DEV

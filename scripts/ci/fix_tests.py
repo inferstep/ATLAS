@@ -47,7 +47,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 FIX_TITLE = re.compile(r"^fix(\([^)]*\))?!?:")
 HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 GO_TEST = re.compile(r"^func (Test\w+)\(")
