@@ -277,7 +277,12 @@ v3-service gets it because no other check can name such a change: no
 recorded request shows that text. Each label says in its own description
 what it is computed from. The numbers, the list of core paths and the list
 of those files of v3-service are in
-[.github/atlas-bot.yml](atlas-bot.yml).
+[.github/atlas-bot.yml](atlas-bot.yml). The bot reads the label settings from
+each pull request's target commit in this repository. This keeps the labels
+aligned with that branch's file layout. It never reads settings from the
+contribution branch or a fork. A settings read failure stops the sync and
+reports the repository and commit. The bot reads each distinct target commit
+once per sync.
 
 ## 10. After your change merges
 

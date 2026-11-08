@@ -7,6 +7,7 @@ welcomes, RFC links) is checked without the network.
 """
 
 import ast
+import base64
 import datetime as dt
 import glob
 import importlib.util
@@ -37,6 +38,7 @@ class FakeAPI:
         self.counts = {}      # search query -> count
         self.results = {}     # search query -> [issue]
         self.pulls = []       # open PRs
+        self.configs = {"d" * 40: bot_mod.load_config()}
         self.files = {}       # PR number -> [path]
         self.linked = {}      # issue number -> [PR author]
         self.assigned = {}    # (issue number, login) -> when they were last assigned
@@ -85,6 +87,9 @@ class FakeAPI:
 
     def open_pulls(self):
         return self.pulls
+
+    def config_at(self, commit):
+        return self.configs[commit]
 
     def pull_changes(self, n):
         # A file is a path with one added line, or (path, lines added, lines removed).
@@ -516,7 +521,10 @@ class Recorded(bot_mod.API):
 
     def _call(self, method, path, body=None, mutate=None):
         self.paths.append((method, path))
-        return self.answers.get(path.split("?")[0], [])
+        answer = self.answers.get(path, self.answers.get(path.split("?")[0], []))
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
 
 
 def test_only_open_pull_requests_are_asked_for():
@@ -572,7 +580,7 @@ def test_ready_and_blocked_are_mirrored_to_labels(api, cfg):
 def test_area_labels_from_changed_paths(api, cfg):
     api.cards.clear()
     api.pulls = [{"number": 40, "labels": [{"name": "area/tui"}], "author_association": "CONTRIBUTOR",
-                  "created_at": stamp(1), "user": {"login": "bob"}}]
+                  "created_at": stamp(1), "user": {"login": "bob"}, "base": {"sha": "d" * 40}}]
     api.files[40] = ["services/proxy/loop.go", "clients/tui/main.go", "docs/SETUP.md", "deploy/compose/docker-compose.rocm.yml"]
     run(api, cfg).sync()
     assert api.log[0] == ("add_labels", 40, ("area/docs", "area/install", "area/proxy"))
@@ -583,11 +591,75 @@ def test_area_labels_from_changed_paths(api, cfg):
 
 def pull(number, login="bob", assoc="CONTRIBUTOR", labels=(), user_type="User"):
     return {"number": number, "labels": [{"name": name} for name in labels], "author_association": assoc,
-            "created_at": stamp(30), "user": {"login": login, "type": user_type}}
+            "created_at": stamp(30), "user": {"login": login, "type": user_type}, "base": {"sha": "d" * 40}}
 
 
 def label_calls(api, number):
     return [entry for entry in api.log if entry[0] in ("add_labels", "remove_label") and entry[1] == number]
+
+
+def test_labels_use_each_target_commit_once_and_never_the_contribution_head(api, cfg, monkeypatch):
+    api.cards.clear()
+    with open(bot_mod.CONFIG_PATH, encoding="utf-8") as fh:
+        dev_text = fh.read()
+    main_text = dev_text.replace("services/proxy/loop.go", "proxy/agent.go")
+    main_text = main_text.replace("services/proxy/", "proxy/")
+    dev_commit, main_commit = "d" * 40, "a" * 40
+    config_path = "/repos/inferstep/ATLAS/contents/.github/atlas-bot.yml"
+    recorded = Recorded({
+        f"{config_path}?ref={dev_commit}": {
+            "encoding": "base64", "content": base64.b64encode(dev_text.encode()).decode()},
+        f"{config_path}?ref={main_commit}": {
+            "encoding": "base64", "content": base64.b64encode(main_text.encode()).decode()},
+    })
+    monkeypatch.setattr(api, "config_at", recorded.config_at)
+    api.pulls = [pull(61), pull(62), pull(63)]
+    api.pulls[0]["base"] = {"ref": "dev", "sha": dev_commit}
+    api.pulls[1]["base"] = {"ref": "main", "sha": main_commit}
+    for pr in api.pulls:
+        pr["head"] = {"ref": "dev", "sha": "f" * 40, "repo": {"full_name": "contributor/ATLAS"}}
+    api.files = {61: [("services/proxy/loop.go", 2, 1)], 62: [("proxy/agent.go", 2, 1)],
+                 63: [("services/proxy/utility.go", 60, 0)]}
+    api.counts["is:pr is:merged author:bob"] = 2
+    cfg.update(bot_mod.parse_config(main_text))
+    # Local size settings must not replace target settings either.
+    cfg["pull_requests"]["sizes"]["M"] = 1
+
+    run(api, cfg).sync()
+
+    assert label_calls(api, 61) == [
+        ("add_labels", 61, ("area/proxy",)), ("add_labels", 61, ("risk:high", "size/S"))]
+    assert label_calls(api, 62) == [
+        ("add_labels", 62, ("area/proxy",)), ("add_labels", 62, ("risk:high", "size/S"))]
+    assert label_calls(api, 63) == [
+        ("add_labels", 63, ("area/proxy",)), ("add_labels", 63, ("size/S",))]
+    assert recorded.paths == [
+        ("GET", f"{config_path}?ref={dev_commit}"), ("GET", f"{config_path}?ref={main_commit}")]
+
+
+@pytest.mark.parametrize("answer, reason", [
+    pytest.param(RuntimeError("HTTP 404"), "HTTP 404", id="read-failure"),
+    pytest.param({"encoding": "base64", "content": base64.b64encode(b"not a mapping").decode()},
+                 "cannot read line", id="invalid-settings"),
+    pytest.param({"encoding": "none", "content": ""}, "expected base64", id="missing-file-content"),
+])
+def test_a_target_settings_failure_stops_labeling_and_names_the_commit(
+    api, cfg, monkeypatch, answer, reason,
+):
+    api.cards.clear()
+    api.pulls = [pull(64)]
+    api.files[64] = [("services/proxy/loop.go", 2, 1)]
+    commit = "d" * 40
+    path = f"/repos/inferstep/ATLAS/contents/.github/atlas-bot.yml?ref={commit}"
+    recorded = Recorded({path: answer})
+    monkeypatch.setattr(api, "config_at", recorded.config_at)
+
+    with pytest.raises(RuntimeError, match=reason) as error:
+        run(api, cfg).sync()
+
+    assert f"Cannot read .github/atlas-bot.yml at inferstep/ATLAS@{commit}:" in str(error.value)
+    assert recorded.paths == [("GET", path)]
+    assert label_calls(api, 64) == []
 
 
 @pytest.mark.parametrize("files, labels", [
@@ -640,7 +712,7 @@ def test_without_the_settings_of_the_labels_the_bot_sets_none(api, cfg):
     api.cards.clear()
     api.pulls = [pull(56, labels=["area/proxy"])]
     api.files[56] = [("services/proxy/loop.go", 900, 0)]
-    del cfg["pull_requests"]
+    del api.configs["d" * 40]["pull_requests"]
     run(api, cfg).sync()
     assert label_calls(api, 56) == []
 
@@ -648,9 +720,9 @@ def test_without_the_settings_of_the_labels_the_bot_sets_none(api, cfg):
 def test_first_pull_requests_are_welcomed_once(api, cfg):
     api.cards.clear()
     api.pulls = [{"number": 41, "labels": [], "author_association": "FIRST_TIME_CONTRIBUTOR",
-                  "created_at": stamp(1), "user": {"login": "newbie"}},
+                  "created_at": stamp(1), "user": {"login": "newbie"}, "base": {"sha": "d" * 40}},
                  {"number": 42, "labels": [], "author_association": "FIRST_TIME_CONTRIBUTOR",
-                  "created_at": stamp(30), "user": {"login": "old"}}]
+                  "created_at": stamp(30), "user": {"login": "old"}, "base": {"sha": "d" * 40}}]
     run(api, cfg).sync()
     run(api, cfg).sync()
     assert len(api.said(41)) == 1
@@ -669,7 +741,7 @@ def test_first_pull_requests_are_welcomed_once(api, cfg):
 def test_first_pr_is_found_by_counting_the_authors_prs(api, cfg, assoc, prs, user_type, welcomed):
     api.cards.clear()
     api.pulls = [{"number": 43, "labels": [], "author_association": assoc,
-                  "created_at": stamp(1), "user": {"login": "newbie", "type": user_type}}]
+                  "created_at": stamp(1), "user": {"login": "newbie", "type": user_type}, "base": {"sha": "d" * 40}}]
     api.counts["is:pr author:newbie"] = prs
     run(api, cfg).sync()
     assert bool(api.said(43)) is welcomed
@@ -858,7 +930,7 @@ RIGHT_OF = {
     "add_labels": ("issues", "write"), "remove_label": ("issues", "write"), "close_issue": ("issues", "write"),
     "open_pulls": ("pull-requests", "read"), "pull_files": ("pull-requests", "read"), "pull_changes": ("pull-requests", "read"),
     "merged_pulls": ("pull-requests", "read"), "linked_open_pr_authors": ("pull-requests", "read"),
-    "branch_commits": ("contents", "read"),
+    "branch_commits": ("contents", "read"), "config_at": ("contents", "read"),
     "item": ("organization-projects", "read"), "items": ("organization-projects", "read"),
     "set_status": ("organization-projects", "write"),
 }
@@ -940,6 +1012,29 @@ def test_the_claim_command_needs_the_right_to_read_pull_requests_and_its_workflo
     assert ("pull-requests", "read") in asked_by("claim")
     rights, _commands = bot_workflows()["bot-claim.yml"]
     assert rights == {"issues": "write", "pull-requests": "read", "organization-projects": "write"}
+
+
+def test_sync_checks_out_trusted_dev_with_the_existing_credential_restrictions():
+    with open(os.path.join(ROOT, ".github", "workflows", "bot-sync.yml"), encoding="utf-8") as fh:
+        workflow = yaml.safe_load(fh)
+    assert workflow[True] == {
+        "schedule": [{"cron": "41 * * * *"}],
+        "workflow_dispatch": {"inputs": {"dry_run": {
+            "description": "Print what would change, change nothing", "type": "boolean", "default": True}}},
+    }
+    assert workflow["permissions"] == {}
+    job = workflow["jobs"]["sync"]
+    assert job["if"] == "github.repository == 'inferstep/ATLAS'"
+    steps = job["steps"]
+    (checkout,) = [step for step in steps if step.get("uses", "").startswith("actions/checkout@")]
+    assert checkout["with"] == {
+        "ref": "dev", "persist-credentials": False,
+        "sparse-checkout": "scripts/bot\n.github/atlas-bot.yml\n", "sparse-checkout-cone-mode": False,
+    }
+    rights, commands = bot_workflows()["bot-sync.yml"]
+    assert commands == ["sync"]
+    assert rights == {
+        "issues": "write", "pull-requests": "write", "organization-projects": "read", "contents": "read"}
 
 
 @pytest.mark.parametrize("rights, needs, missing", [
