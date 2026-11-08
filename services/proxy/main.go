@@ -555,6 +555,13 @@ func main() {
 	log.Printf("  Geometric Lens: %s", lensURL)
 	log.Printf("  Sandbox: %s", sandboxURL)
 	log.Printf("  Pipeline: agent loop (/v1/agent) + V3 candidate pipeline in v3-service for T2/T3 writes")
+	// Host execution runs every command with the shell found at start.
+	if resolveVerifyTarget("") == "host" {
+		if hostShellErr != nil {
+			log.Fatalf("configuration: %v", hostShellErr)
+		}
+		log.Printf("  Host shell: %s", hostShell)
+	}
 
 	installTokenTransport()
 
