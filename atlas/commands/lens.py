@@ -773,8 +773,7 @@ def _load_build_samples(args: argparse.Namespace, atlas_root: str, color: bool):
                     f"--samples <file>.{RESET if color else ''}")
         _safe_print("  --from-results: a benchmark/results/<run>/v3_lcb/per_task "
                     "dir (this model's own candidates, via `atlas bench`)")
-        _safe_print("  --samples: a labeled [{\"text\": str, \"label\": 0|1}, ...] "
-                    "file")
+        _safe_print("  --samples: a labeled [{\"text\": str, \"label\": 0|1}, ...] file")
         return None, results_dir
     return samples, results_dir
 
@@ -1105,9 +1104,9 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
 
     Doesn't ship its own dataset — users point --from-results at their own
     bench run, or --samples at a labeled JSON/JSONL file (ATLAS publishes
-    none in that format). Tiny built-in
-    sanity datasets are intentionally NOT bundled: a 20-sample C(x) is
-    worse than no C(x) (it'll badly mis-rank and the user won't know).
+    none in that format). Tiny built-in sanity datasets are intentionally
+    NOT bundled: a 20-sample C(x) is worse than no C(x) (it'll badly
+    mis-rank and the user won't know).
     """
     atlas_root = cli_env.atlas_root()
 

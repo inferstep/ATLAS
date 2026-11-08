@@ -16,7 +16,7 @@ in the same `<condition>/v3_lcb/per_task/*.json` layout described below. Conditi
 is in this directory, at `condition_e_full/`.
 
 The [`ablation_traces/`](https://huggingface.co/datasets/itigges22/ATLAS/tree/main/ablation_traces)
-folder on HuggingFace does not hold full traces. Each
+folder on HuggingFace does not hold full traces of these conditions. Each
 `ablation_traces/ablation_*_final/embeddings.emb` file holds only 3 PASS
 records, for the tasks LCB/1873_A, LCB/1873_B and LCB/1873_D. The files in
 `ablation_B_final/` to `ablation_F_final/` are identical. You cannot use these
