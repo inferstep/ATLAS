@@ -559,7 +559,9 @@ def test_selection_and_closure_live_only_in_the_contract():
 
 def test_candidates_carry_one_canonical_record():
     """No parallel authoritative fields beside the contract record."""
-    src = (V3DIR / "pipeline.py").read_text()
+    # pipeline.py and the modules that were split from it.
+    src = "\n".join((V3DIR / module).read_text() for module in (
+        "pipeline.py", "run_steps.py", "candidate_cases.py", "pool_capture.py"))
     for banned in ('c["evidence_strength"]', 'c["behavior_score"]',
                    'c["missing_required"]', 'c["evidence"]',
                    '"evidence_strength": probe_result'):

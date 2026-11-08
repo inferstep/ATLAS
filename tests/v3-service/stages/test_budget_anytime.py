@@ -17,6 +17,7 @@ import time
 import pytest
 
 import pipeline
+import run_steps
 import stage_telemetry
 
 
@@ -28,19 +29,19 @@ def _clear_budget_env(monkeypatch):
 def test_remaining_budget_tracks_the_configured_cap(monkeypatch):
     monkeypatch.setenv("ATLAS_V3_TIMEOUT", "180")
     start = time.time()
-    left = pipeline._remaining_budget_ms(start)
+    left = run_steps._remaining_budget_ms(start)
     assert 179_000 < left <= 180_000
 
     # A spent clock goes negative rather than clamping, so a guard reading
     # "< reserve" fires rather than seeing a small positive budget.
-    assert pipeline._remaining_budget_ms(time.time() - 300) < 0
+    assert run_steps._remaining_budget_ms(time.time() - 300) < 0
 
 
 def test_a_disabled_cap_reports_no_budget(monkeypatch):
     """0 disables the cap for offline bench runs — the guards must then
     never fire, or they would truncate a run that was asked to be unbounded."""
     monkeypatch.setenv("ATLAS_V3_TIMEOUT", "0")
-    assert pipeline._remaining_budget_ms(time.time()) is None
+    assert run_steps._remaining_budget_ms(time.time()) is None
 
 
 def test_without_a_caller_cap_the_service_default_is_300s(monkeypatch):
@@ -53,11 +54,11 @@ def test_without_a_caller_cap_the_service_default_is_300s(monkeypatch):
     alone and phase-3 repair was skipped 19 times with 7-9s left.
     """
     monkeypatch.delenv("ATLAS_V3_TIMEOUT", raising=False)
-    left = pipeline._remaining_budget_ms(time.time())
+    left = run_steps._remaining_budget_ms(time.time())
     assert 299_000 < left <= 300_000
 
     monkeypatch.setenv("ATLAS_V3_TIMEOUT", "not-a-number")
-    left = pipeline._remaining_budget_ms(time.time())
+    left = run_steps._remaining_budget_ms(time.time())
     assert 299_000 < left <= 300_000
 
 
@@ -66,15 +67,15 @@ def test_a_caller_cap_replaces_the_configured_one(monkeypatch):
     sends that cap. The service used to plan a 300s run inside a call the
     proxy would abandon far sooner."""
     monkeypatch.setenv("ATLAS_V3_TIMEOUT", "300")
-    left = pipeline._remaining_budget_ms(time.time(), 40_000)
+    left = run_steps._remaining_budget_ms(time.time(), 40_000)
     assert 39_000 < left <= 40_000
     # A cap the caller applies holds even where the service's own reading
     # would be unbounded.
     monkeypatch.setenv("ATLAS_V3_TIMEOUT", "0")
-    assert pipeline._remaining_budget_ms(time.time(), 40_000) is not None
+    assert run_steps._remaining_budget_ms(time.time(), 40_000) is not None
     # No usable cap: the configured behaviour, unchanged.
-    assert pipeline._remaining_budget_ms(time.time(), None) is None
-    assert pipeline._remaining_budget_ms(time.time(), 0) is None
+    assert run_steps._remaining_budget_ms(time.time(), None) is None
+    assert run_steps._remaining_budget_ms(time.time(), 0) is None
 
 
 def test_the_run_plans_against_the_callers_cap(monkeypatch):
@@ -133,7 +134,7 @@ def test_reserve_covers_one_more_generation(monkeypatch):
         start = time.time() - elapsed_s
 
         def out_of_budget(reserve_ms=None):
-            left = pipeline._remaining_budget_ms(start)
+            left = run_steps._remaining_budget_ms(start)
             if left is None:
                 return False
             if reserve_ms is None:
@@ -155,7 +156,7 @@ def test_a_disabled_cap_never_trips_the_guard(monkeypatch):
     monkeypatch.setenv("ATLAS_V3_TIMEOUT", "0")
     start = time.time() - 10_000
 
-    left = pipeline._remaining_budget_ms(start)
+    left = run_steps._remaining_budget_ms(start)
     assert left is None, "an unbounded run must report no budget"
 
 

@@ -29,6 +29,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "services" / "v3-service"))
 import adapters
 import pipeline as v3pipeline
 import pool_capture
+import run_steps
 import scoring
 
 STUB_CODES = [
@@ -178,6 +179,7 @@ def test_repair_capture_carries_observational_lens_evidence(monkeypatch, tmp_pat
         return real_lens_view(code)
 
     monkeypatch.setattr(v3pipeline, "_lens_view", observe)
+    monkeypatch.setattr(run_steps, "_lens_view", observe)
     service = _make_service(
         monkeypatch, STUB_CODES, RecordingPRCoT(repairs=[REPAIRED_CODE]))
 
@@ -202,6 +204,7 @@ def test_repair_lens_observation_is_dormant_without_capture(monkeypatch):
         return real_lens_view(code)
 
     monkeypatch.setattr(v3pipeline, "_lens_view", observe)
+    monkeypatch.setattr(run_steps, "_lens_view", observe)
     service = _make_service(
         monkeypatch, STUB_CODES, RecordingPRCoT(repairs=[REPAIRED_CODE]))
 

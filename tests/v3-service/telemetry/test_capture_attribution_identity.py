@@ -21,7 +21,7 @@ sys.path.insert(0, V3)
 import pool_capture
 
 # pipeline.py and the modules that were split from it.
-PIPELINE_MODULES = ("pipeline.py", "pool_capture.py")
+PIPELINE_MODULES = ("pipeline.py", "run_steps.py", "candidate_cases.py", "pool_capture.py")
 
 
 def read_v3(module):

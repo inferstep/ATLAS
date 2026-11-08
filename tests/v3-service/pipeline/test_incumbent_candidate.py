@@ -22,6 +22,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "services" / "v3-service"))
 import adapters
 import contract
 import pipeline as P
+import run_steps
 import scoring
 import symbols
 
@@ -176,8 +177,8 @@ def test_the_budget_boundary_ranks_the_incumbent_too(monkeypatch):
     member is returned, and that may be the caller's own file."""
     # As the budget-exit test in test_mode_semantics drives it: the lens
     # declines to select, then the clock is spent before repair.
-    monkeypatch.setattr(P, "select_candidate", lambda cands, strategy="lens": None)
-    monkeypatch.setattr(P, "_remaining_budget_ms", lambda start, cap_ms=None: -1.0)
+    monkeypatch.setattr(run_steps, "select_candidate", lambda cands, strategy="lens": None)
+    monkeypatch.setattr(run_steps, "_remaining_budget_ms", lambda start, cap_ms=None: -1.0)
     service, _, _ = _service(monkeypatch, [BETTER], energies={THEIRS: 0.1})
     result = _run(service)
     stages = [e["stage"] for e in result["events"]]

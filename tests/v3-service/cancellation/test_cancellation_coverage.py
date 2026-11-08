@@ -30,7 +30,7 @@ def src(name):
 def test_every_adapter_construction_is_accounted_for():
     """Each LLMAdapter build is either scope-assigned or an explicit exception."""
     found = []
-    for name in ("pipeline.py", "planning.py", "adapters.py", "main.py"):
+    for name in ("pipeline.py", "run_steps.py", "planning.py", "adapters.py", "main.py"):
         for i, line in enumerate(src(name).split("\n"), 1):
             if "LLMAdapter(" in line and "class " not in line and not line.strip().startswith("#"):
                 found.append((name, i, line.strip()))

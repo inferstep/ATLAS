@@ -26,7 +26,9 @@ import adapters
 import candidate_cases
 import pipeline as v3pipeline
 import pool_capture
+import run_steps
 import scoring
+from candidate_records import INCUMBENT_INDEX
 
 VETO_PER_STEP = {
     "gx_score_min": 0.01,
@@ -634,9 +636,12 @@ def test_the_incumbent_is_evaluated_exactly_once(monkeypatch, tmp_path):
     """One canonical evaluation of its exact bytes, not one per visit."""
     calls = []
     real = candidate_cases._evaluate_candidate
-    monkeypatch.setattr(v3pipeline, "_evaluate_candidate",
-                        lambda fp, code, *a, **k: (calls.append(code),
-                                                   real(fp, code, *a, **k))[1])
+
+    def evaluate(fp, code, *a, **k):
+        calls.append(code)
+        return real(fp, code, *a, **k)
+    monkeypatch.setattr(v3pipeline, "_evaluate_candidate", evaluate)
+    monkeypatch.setattr(run_steps, "_evaluate_candidate", evaluate)
     _, sink = _run_with_incumbent(monkeypatch, tmp_path)
     assert calls.count(INCUMBENT) == 1, calls.count(INCUMBENT)
     assert len(_incumbent_records(_capture_records(sink))) == 1
@@ -651,7 +656,7 @@ def test_the_incumbent_record_describes_the_exact_baseline_bytes(
     assert obs["code_sha256"] == hashlib.sha256(raw).hexdigest()
     assert obs["code_bytes"] == len(raw)
     assert obs["contract_record"]["candidate_content_hash"] == obs["code_sha256"]
-    assert obs["candidate_index"] == v3pipeline.INCUMBENT_INDEX
+    assert obs["candidate_index"] == INCUMBENT_INDEX
 
 
 def test_the_incumbent_shares_the_task_identity_of_the_candidates(
@@ -721,9 +726,12 @@ def test_capture_off_still_checks_the_incumbent(monkeypatch, tmp_path):
     about it, and still writes nothing."""
     calls = []
     real = candidate_cases._evaluate_candidate
-    monkeypatch.setattr(v3pipeline, "_evaluate_candidate",
-                        lambda fp, code, *a, **k: (calls.append(code),
-                                                   real(fp, code, *a, **k))[1])
+
+    def evaluate(fp, code, *a, **k):
+        calls.append(code)
+        return real(fp, code, *a, **k)
+    monkeypatch.setattr(v3pipeline, "_evaluate_candidate", evaluate)
+    monkeypatch.setattr(run_steps, "_evaluate_candidate", evaluate)
     _run_with_incumbent(monkeypatch, tmp_path, capture=False)
     assert INCUMBENT in calls
     assert list(tmp_path.iterdir()) == []

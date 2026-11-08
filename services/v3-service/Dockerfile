@@ -37,6 +37,7 @@ COPY services/v3-service/planning.py /app/planning.py
 COPY services/v3-service/pipeline.py /app/pipeline.py
 COPY services/v3-service/pool_capture.py /app/pool_capture.py
 COPY services/v3-service/candidate_cases.py /app/candidate_cases.py
+COPY services/v3-service/run_steps.py /app/run_steps.py
 COPY services/v3-service/stage_telemetry.py /app/stage_telemetry.py
 COPY services/v3-service/candidate_records.py /app/candidate_records.py
 COPY services/v3-service/vetoes.py /app/vetoes.py

@@ -11,8 +11,7 @@
   "services/sandbox/executor_server.py:_syntax_check_impl": 123
  },
  "files": {
-  "services/sandbox/executor_server.py": 1988,
-  "services/v3-service/pipeline.py": 2700
+  "services/sandbox/executor_server.py": 1988
  },
  "proxy_main": {
   "files": 84

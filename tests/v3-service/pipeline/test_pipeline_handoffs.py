@@ -19,6 +19,7 @@ import graph
 import main
 import pipeline as v3pipeline
 import pool_capture
+import run_steps
 import scoring
 from graph.extract import available as graph_extraction_available
 
@@ -122,7 +123,7 @@ def test_a_budget_spent_before_pr_cot_returns_the_best_so_far_without_repairing(
     """Phase 3 regenerates the self-tests (phase 0 produced none), and that
     call spends the rest of the clock."""
     clock = {"spent": False}
-    monkeypatch.setattr(v3pipeline, "_remaining_budget_ms",
+    monkeypatch.setattr(run_steps, "_remaining_budget_ms",
                         lambda start, cap_ms=None: -1.0 if clock["spent"] else None)
     generations = []
 

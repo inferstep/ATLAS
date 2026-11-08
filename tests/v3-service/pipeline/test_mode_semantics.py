@@ -24,6 +24,8 @@ import symbols
 import contract as C
 import candidate_cases
 import pipeline as P
+import run_steps
+from stages.self_test_gen import PROVENANCE_GENERATED
 import scoring
 
 
@@ -372,8 +374,8 @@ def test_budget_exit_describes_its_delivery(monkeypatch):
     # The lens declines to select, so phase one does not close the run, and
     # the clock then expires before the repair phase -- which is exactly when
     # an anytime algorithm has to hand back its best verified candidate.
-    monkeypatch.setattr(P, "select_candidate", lambda cands, strategy="lens": None)
-    monkeypatch.setattr(P, "_remaining_budget_ms", lambda start, cap_ms=None: -1.0)
+    monkeypatch.setattr(run_steps, "select_candidate", lambda cands, strategy="lens": None)
+    monkeypatch.setattr(run_steps, "_remaining_budget_ms", lambda start, cap_ms=None: -1.0)
     service, calls = _service(monkeypatch, task_type="interactive",
                               code=PLAIN_JS)
     result = _run(service, "app.js")
@@ -445,7 +447,10 @@ def test_every_successful_exit_is_covered():
     Counted from the source rather than from a list someone maintains, so a
     seventh success site fails this immediately.
     """
-    src = (Path(__file__).resolve().parents[3] / "services" / "v3-service" / "pipeline.py").read_text()
+    v3dir = Path(__file__).resolve().parents[3] / "services" / "v3-service"
+    # pipeline.py and the modules that were split from it.
+    src = "\n".join((v3dir / module).read_text() for module in (
+        "pipeline.py", "run_steps.py", "candidate_cases.py", "pool_capture.py"))
     sites = src.count('result["passed"] = True')
     assert sites == len(SUCCESS_PHASES), (
         f"{sites} successful-return sites, {len(SUCCESS_PHASES)} covered phases: "
@@ -454,7 +459,7 @@ def test_every_successful_exit_is_covered():
     for phase in SUCCESS_PHASES:
         assert f'result["phase_solved"] = "{phase}"' in src, phase
     # And the finaliser is the single place that guarantees it.
-    assert "_ensure_delivered_evidence(result" in src
+    assert "_ensure_delivered_evidence(result" in (v3dir / "pipeline.py").read_text()
 
 
 # =====================================================================
@@ -474,7 +479,7 @@ RING2_CANDIDATE = ("def main():\n"
 
 def _generated_cases(n=5):
     return [SimpleNamespace(input_str=str(i), expected_output=str(i),
-                            provenance=P.PROVENANCE_GENERATED)
+                            provenance=PROVENANCE_GENERATED)
             for i in range(n)]
 
 
@@ -822,7 +827,7 @@ def test_a_consensus_pick_is_not_a_pass(monkeypatch):
 
     monkeypatch.setattr(adapters, "SandboxAdapter", _Sandbox)
     generated = [SimpleNamespace(input_str="1", expected_output="1",
-                                 provenance=P.PROVENANCE_GENERATED)
+                                 provenance=PROVENANCE_GENERATED)
                  for _ in range(2)]
     service.self_test_gen = SimpleNamespace(
         generate=lambda problem, llm, task_id: SimpleNamespace(
