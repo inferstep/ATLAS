@@ -14,7 +14,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -35,12 +34,9 @@ def _js_parses(js: str) -> tuple[bool, str]:
     node = shutil.which("node")
     if not node:
         return True, "node unavailable — skipped"
-    with tempfile.TemporaryDirectory() as folder:
-        script = Path(folder) / "check.js"
-        script.write_text(js)
-        p = subprocess.run([node, "--check", str(script)],
-                           capture_output=True, text=True, timeout=30)
-        return p.returncode == 0, p.stderr.strip().splitlines()[0] if p.stderr else ""
+    p = subprocess.run([node, "--check"], input=js,
+                       capture_output=True, text=True, timeout=30)
+    return p.returncode == 0, p.stderr.strip().splitlines()[0] if p.stderr else ""
 
 
 # Set once from --sandbox-container. The sandbox's interpreter is the one that
