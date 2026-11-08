@@ -1500,13 +1500,27 @@ The issue job did not run.
 2. Compare the selected version with `.github/workflows/test.yml` and the module requirements on `dev`.
    Check both `services/proxy/go.mod` and `clients/tui/go.mod`.
    Repeat this comparison after each Go upgrade, including the workflow copy on `main`.
-3. Run the existing weekly workflow tests, `actionlint`, and `zizmor` on the reviewed correction.
-   Obtain the release owner's approval for [the release step](RELEASE.md#the-release-step) into `main`.
+3. Use a temporary `dev` checkout for the Go-version check.
+   Replace its weekly cleanup workflow with the corrected `main` file.
+   Run these checks from that checkout:
+
+   ```bash
+   python -m pytest tests/infrastructure/nightly/test_weekly_workflows.py -k go_of_the_weekly_cleanup
+   actionlint -shellcheck= -pyflakes= .github/workflows/weekly-cleanup.yml
+   zizmor .github/workflows/weekly-cleanup.yml
+   ```
+
+   The focused test compares the Go versions without requiring matching action pins.
+4. Obtain the release owner's approval for [the release step](RELEASE.md#the-release-step) into `main`.
    This workflow correction does not require a runtime release.
-4. After publication, start `weekly cleanup` manually with `main` selected.
+   A push to `main` starts `build-images.yml` and waits for `production` approval before moving `:latest`.
+   The release owner decides whether to approve that waiting deployment.
+5. Merge `main` back into `dev` with step 3 of the [Hotfixes procedure](RELEASE.md#hotfixes).
+   This keeps the next promotion a fast-forward.
+6. After publication, start `weekly cleanup` manually with `main` selected.
    Confirm that setup selects Go `1.26.10` and both jobs succeed.
    Confirm that #445 receives the new date and commit.
-5. Check the next Monday scheduled run in the same way.
+7. Check the next Monday scheduled run in the same way.
    Record both run links in #315.
 
 #### Review the branch rules
@@ -1547,12 +1561,12 @@ set -euo pipefail
 review_start='2026-10-26T00:00:00Z'
 review_end='2026-11-02T00:00:00Z'
 for branch in dev main; do
-  gh api --method GET --paginate --slurp \
+  gh api --method GET --paginate \
     repos/inferstep/ATLAS/rulesets/rule-suites \
     -f ref="refs/heads/$branch" -f time_period=month \
-    -f rule_suite_result=all -f evaluate_status=all -F per_page=100 \
+    -f rule_suite_result=all -f evaluate_status=all -F per_page=100 -F page=1 \
     > "$branch-pages.json"
-  jq --arg start "$review_start" --arg end "$review_end" \
+  jq -s --arg start "$review_start" --arg end "$review_end" \
     '[.[][] | select(.pushed_at >= $start and .pushed_at < $end)]' \
     "$branch-pages.json" > "$branch-suites.json"
   jq -r '.[].id' "$branch-suites.json" | while read -r suite; do
@@ -1566,7 +1580,12 @@ The [rule-suite interface](https://docs.github.com/en/rest/repos/rule-suites)
 returns event summaries and individual rule evaluations.
 The month query includes the preceding complete week; the local filter selects the recorded period.
 Check that the requested period remains within the available history.
-The [pagination options](https://cli.github.com/manual/gh_api) retrieve all pages and collect them into one array.
+The [pagination option](https://cli.github.com/manual/gh_api) retrieves all pages; `jq -s` collects them into one array.
+The explicit `page=1` prevents the first page from appearing twice.
+Read each suite's event-level `result` before classifying its rule results.
+`fail` means the update was rejected; `bypass` means the update was accepted through a bypass.
+`pass` means the update passed the enforced rules.
+An accepted bypass can contain individual rule evaluations with `result: fail`.
 Inspect every saved suite's `rule_evaluations`, including its rule source, type, enforcement, result, and details.
 A failed request or missing detail means incomplete evidence, even if a partial file exists.
 The commands collect evidence only; the maintainer still reviews each result and the ruleset history.
@@ -1584,7 +1603,7 @@ Reviewer: <name>
 Period: <start UTC, inclusive> to <end UTC, exclusive>
 Cleanup: <run link; source branch; generated date and commit; both job conclusions>
 Issue #445: <open/closed; Made on date and commit; update/no changes/closed/failed/not judged/incomplete>
-Go correction: <review link; manual run result; next scheduled run result; or pending>
+Go correction: <review and merge-back links; deployment decision; manual run result; next scheduled run result; or pending>
 
 | Branch | Rulesets and rules reviewed | Pages and event details complete? | Ruleset history checked? | Coverage gaps |
 |---|---|---|---|---|
