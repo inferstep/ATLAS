@@ -884,10 +884,7 @@ func redundantReadShortCircuit(name string, args json.RawMessage, ctx *AgentCont
 	if err != nil {
 		return &wire.ToolResult{Success: false, Error: "read_file: " + err.Error()}
 	}
-	ctx.mu.Lock()
-	prev, ok := ctx.FilesRead[path]
-	cacheEntries := len(ctx.FilesRead)
-	ctx.mu.Unlock()
+	prev, ok, cacheEntries := ctx.cachedRead(path)
 	if !ok {
 		// Diagnostic: a re-read that SHOULD have been cached but wasn't.
 		// Logged only when some other entry exists (first read of a file

@@ -974,11 +974,7 @@ func lineNumberHistory(ctx *AgentContext, path, relPath, current string) string 
 	if ctx == nil {
 		return ""
 	}
-	ctx.mu.Lock()
-	wrote := ctx.SessionWrites[relPath]
-	lastRead, read := ctx.FileReadTimes[path]
-	original, seen := ctx.OriginalContent[path]
-	ctx.mu.Unlock()
+	wrote, lastRead, read, original, seen := ctx.lineNumberFacts(path, relPath)
 	if wrote {
 		return "The file changed since you read it (your own edits move line numbers), so the numbers you used are stale."
 	}
