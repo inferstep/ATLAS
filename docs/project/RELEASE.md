@@ -350,7 +350,7 @@ the branch `main` and from `v*` tags.
 The `build` job pushes each image as `:sha-<commit>`, with the first 7
 characters of the commit. The `promote` job then copies the manifest that
 `:sha-<commit>` points at to the moving tags. It copies the tag, not the
-digest that the `build` job pushed. Nothing is rebuilt.
+digest that the `build` job pushed. The `promote` job builds no image.
 
 A push of a `vX.Y.Z` tag builds the release commit again, and pushes
 `:sha-<commit>` again. Thus `:latest` and `:X.Y.Z` are two builds of the
