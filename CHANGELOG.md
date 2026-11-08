@@ -19,6 +19,27 @@ come from your checkout, so run `git pull` first.
 - `ATLAS_ALLOW_PICKLE_GX` is gone: the lens loads G(x) from `gx_xgboost.json` only.
   A model folder that holds only `gx_xgboost.pkl` runs without G(x) and says so in
   the lens's log. Run `atlas lens build` to rebuild it.
+- If you set `ATLAS_GO_VERSION` for the bootstrap, also set `ATLAS_GO_SHA256` to the
+  SHA-256 of that Go archive from https://go.dev/dl/. Without it, the Go step stops
+  before the download.
+
+### Security: the install scripts force HTTPS and check each installer before it runs
+
+`scripts/atlas-bootstrap.sh` and `scripts/install/install.sh` run as root. Every
+`curl` in them now has `--proto '=https' --tlsv1.2`, so a redirect cannot move a
+download to plain HTTP. No download goes into a shell. Each installer that they
+run is pinned, and its SHA-256 is checked before it runs:
+
+- Docker's convenience script comes from the `docker/docker-install` repository
+  at a pinned commit, and no longer from `get.docker.com`.
+- The Go archive is checked before it is unpacked.
+- The K3s installer and the Helm 3 installer come from pinned tags. They install
+  that same version of K3s and Helm.
+- The NVIDIA GPU operator chart has a pinned version.
+- The NVIDIA driver step installs EPEL by its package name `epel-release`, and no
+  longer from an address with `latest` in it.
+
+The pins and their SHA-256 values are at the top of each script. (#336)
 
 ### Changed: the Compose overlays and the K3s templates moved to `deploy/`
 

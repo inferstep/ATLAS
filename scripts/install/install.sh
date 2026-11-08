@@ -7,6 +7,17 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../lib/config.sh"
 
+# The pinned downloads. The script checks the SHA-256 of each installer before
+# it runs it. To move a pin, change the version and its SHA-256 together.
+K3S_VERSION='v1.37.2+k3s1'
+# SHA-256 of install.sh in github.com/k3s-io/k3s at the tag K3S_VERSION.
+K3S_INSTALLER_SHA256='ed01f89fd977bf20ac1516bbebf8370bf3ddbaa55dac8aba610956a4c78cc00b'
+HELM_VERSION='v3.22.1'
+# SHA-256 of scripts/get-helm-3 in github.com/helm/helm at the tag HELM_VERSION.
+HELM_INSTALLER_SHA256='e4a604efcff328eef2b2c7e67445d609f333e3875b34420ebf4e5ae379d259bb'
+# The version of NVIDIA's gpu-operator Helm chart.
+GPU_OPERATOR_VERSION='v26.7.2'
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -307,8 +318,17 @@ install_k3s() {
         return
     fi
 
-    log_info "Installing K3s..."
-    curl -sfL https://get.k3s.io | sh -s - --write-kubeconfig-mode 644
+    log_info "Installing K3s $K3S_VERSION..."
+    local installer
+    installer=$(mktemp)
+    if ! curl --proto '=https' --tlsv1.2 -fsSL -o "$installer" "https://raw.githubusercontent.com/k3s-io/k3s/$K3S_VERSION/install.sh" \
+        || ! echo "$K3S_INSTALLER_SHA256  $installer" | sha256sum --check --status; then
+        rm -f "$installer"
+        log_error "The K3s installer did not download, or it does not match K3S_INSTALLER_SHA256. It did not run."
+        exit 1
+    fi
+    INSTALL_K3S_VERSION="$K3S_VERSION" sh "$installer" --write-kubeconfig-mode 644
+    rm -f "$installer"
 
     # Wait for K3s to be ready
     log_info "Waiting for K3s to be ready..."
@@ -351,8 +371,17 @@ install_gpu_operator() {
 
     # Add Helm repo
     if ! command -v helm &> /dev/null; then
-        log_info "Installing Helm..."
-        curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+        log_info "Installing Helm $HELM_VERSION..."
+        local installer
+        installer=$(mktemp)
+        if ! curl --proto '=https' --tlsv1.2 -fsSL -o "$installer" "https://raw.githubusercontent.com/helm/helm/$HELM_VERSION/scripts/get-helm-3" \
+            || ! echo "$HELM_INSTALLER_SHA256  $installer" | sha256sum --check --status; then
+            rm -f "$installer"
+            log_error "The Helm installer did not download, or it does not match HELM_INSTALLER_SHA256. It did not run."
+            exit 1
+        fi
+        DESIRED_VERSION="$HELM_VERSION" bash "$installer"
+        rm -f "$installer"
     fi
 
     helm repo add nvidia https://helm.ngc.nvidia.com/nvidia || true
@@ -361,6 +390,7 @@ install_gpu_operator() {
     # Install GPU Operator
     kubectl create namespace gpu-operator || true
     helm install gpu-operator nvidia/gpu-operator \
+        --version "$GPU_OPERATOR_VERSION" \
         --namespace gpu-operator \
         --set driver.enabled=false \
         --wait --timeout 10m
