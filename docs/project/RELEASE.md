@@ -286,11 +286,15 @@ it is merged, the release owner runs `scripts/setup/rulesets.sh`.
    new version tag:
 
    ```bash
+   failed=""
    for svc in proxy v3 lens sandbox llama llama-vulkan; do
-     gh attestation verify "oci://ghcr.io/inferstep/atlas-${svc}:X.Y.Z" --repo inferstep/ATLAS
+     gh attestation verify "oci://ghcr.io/inferstep/atlas-${svc}:X.Y.Z" --repo inferstep/ATLAS ||
+       failed="$failed atlas-$svc"
    done
+   if [ -n "$failed" ]; then echo "Attestation check failed for:$failed"; false; fi
    ```
 
+   The commands check all six images, then name each image that failed.
    A failed check stops the release before step 6, the announcement. Find
    the cause first ([Build attestation](#build-attestation)).
 6. **Announce** the release (GitHub release, Discussions Announcements).
@@ -304,13 +308,22 @@ service's tag at an earlier one, e.g. `alias_tag: 3.2.0=latest` puts
 `:latest` back on 3.2.0. Nothing is rebuilt.
 From 3.2.0, also give `alias_digests`: the six lines of the release's
 `atlas-X.Y.Z-images.txt`, separated by spaces. Then no tag moves unless
-each source tag points at the digest in the file. Check the file first, as
-[Signed release tags](#signed-release-tags) shows. For example:
+each source tag points at the digest in the file. With an empty
+`alias_digests`, the job does not compare digests. For example, the
+commands below check the file's signature, as
+[Signed release tags](#signed-release-tags) shows. Each command runs only
+when the command before it passed:
 
 ```bash
-gh release download v3.2.0 --pattern 'atlas-3.2.0-images.txt*'
+gh release download v3.2.0 --pattern 'atlas-3.2.0-images.txt*' &&
+cosign verify-blob --bundle atlas-3.2.0-images.txt.sigstore.json \
+  --certificate-identity https://github.com/inferstep/ATLAS/.github/workflows/release-files.yml@refs/tags/v3.2.0 \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  atlas-3.2.0-images.txt &&
+digests=$(tr '\n' ' ' < atlas-3.2.0-images.txt) &&
+[ -n "$digests" ] &&
 gh workflow run build-images.yml --ref main -f alias_tag=3.2.0=latest \
-  -f alias_digests="$(tr '\n' ' ' < atlas-3.2.0-images.txt)"
+  -f alias_digests="$digests"
 ```
 
 ## Release safety steps
