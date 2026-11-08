@@ -268,9 +268,25 @@ it is merged, the release owner runs `scripts/setup/rulesets.sh`.
    you're not on `main`; answer `y`, since candidates are tagged on
    `staging`. Push the tag. See
    [Signed release tags](#signed-release-tags).
+   Only after the tag build's `promote moving tags` job is green, publish
+   a GitHub pre-release for the tag:
+
+   ```bash
+   gh release create vX.Y.Z-rc.N --verify-tag --prerelease \
+     --title vX.Y.Z-rc.N --notes "Release candidate of vX.Y.Z."
+   ```
+
+   When you publish the pre-release, GitHub runs `release-files.yml`.
+   This workflow attaches the image list `atlas-X.Y.Z-rc.N-images.txt`
+   and its keyless cosign bundle `atlas-X.Y.Z-rc.N-images.txt.sigstore.json`.
+   If `release-files.yml` fails with `no image`, run it again when the
+   `promote moving tags` job is green.
 3. **Test.** Keep the candidate on `staging` for at least 3 days. Qualify
-   it per the verification levels above, on release hardware. A fix found
-   now lands on `dev` and is promoted again as `-rc.2`.
+   it per the verification levels above, on release hardware. Make sure
+   that the pre-release shows the image list and its bundle. Download the
+   two files. Make sure that `cosign verify-blob` passes on them with the
+   candidate tag (see [Signed release tags](#signed-release-tags)). A fix
+   found now lands on `dev` and is promoted again as `-rc.2`.
 4. **Release.** Fast-forward `main` to `staging` with the release step:
    open a pull request from `staging` into `main`, wait for its checks,
    then run `release_step.py main <commit>`. In the build run for that
@@ -360,6 +376,12 @@ cosign verify-blob --bundle atlas-3.2.0-images.txt.sigstore.json \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   atlas-3.2.0-images.txt
 ```
+
+The tag at the end of `--certificate-identity` is the tag of the release
+that you check: `vX.Y.Z`, or `vX.Y.Z-rc.N` for a candidate. For the
+candidate `v3.2.0-rc.1`, the identity ends in
+`.../release-files.yml@refs/tags/v3.2.0-rc.1`, and the files are
+`atlas-3.2.0-rc.1-images.txt` and its bundle.
 
 Release tags from [`v3.1.3`](https://github.com/inferstep/ATLAS/releases/tag/v3.1.3)
 on are signed with the key in `.github/allowed_signers`, so `git verify-tag`
