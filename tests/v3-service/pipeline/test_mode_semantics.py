@@ -22,6 +22,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "services" / "v3-service"))
 import adapters
 import symbols
 import contract as C
+import candidate_cases
 import pipeline as P
 import scoring
 
@@ -813,8 +814,8 @@ def test_a_consensus_pick_is_not_a_pass(monkeypatch):
             pass
 
         def __call__(self, code, test_input="", **_):
-            if P._CONSENSUS_MARK in code:
-                return True, P._CONSENSUS_MARK + repr("42") + "\n", ""
+            if candidate_cases._CONSENSUS_MARK in code:
+                return True, candidate_cases._CONSENSUS_MARK + repr("42") + "\n", ""
             if "SELF_TEST_PASS" in code:
                 return True, "WRONG", ""
             return False, "", "EOFError: EOF when reading a line"

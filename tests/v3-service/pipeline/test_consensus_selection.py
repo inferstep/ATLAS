@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "services" / "v3-service"))
 
-import pipeline
+import candidate_cases
 import stage_telemetry
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -69,7 +69,7 @@ def _cands(*codes):
 
 def test_agreeing_candidates_win_despite_a_wrong_key():
     """The measured situation: the key is wrong, the code is not."""
-    winners = pipeline._consensus_winners(
+    winners = candidate_cases._consensus_winners(
         _cands(CORRECT_A, WRONG, CORRECT_B), [_case()], _sandbox, lambda *a, **k: None)
     assert sorted(c["index"] for c in winners) == [0, 2]
 
@@ -77,7 +77,7 @@ def test_agreeing_candidates_win_despite_a_wrong_key():
 def test_one_candidate_cannot_agree_with_itself():
     """Agreement between independent programs is evidence; a single program
     reproducing its own output is not."""
-    assert pipeline._consensus_winners(
+    assert candidate_cases._consensus_winners(
         _cands(CORRECT_A), [_case()], _sandbox, lambda *a, **k: None) == []
 
 
@@ -86,25 +86,25 @@ def test_total_disagreement_selects_nothing():
     a = "print(1)\n"
     b = "print(2)\n"
     c = "print(3)\n"
-    assert pipeline._consensus_winners(
+    assert candidate_cases._consensus_winners(
         _cands(a, b, c), [_case()], _sandbox, lambda *a, **k: None) == []
 
 
 def test_no_test_cases_selects_nothing():
-    assert pipeline._consensus_winners(
+    assert candidate_cases._consensus_winners(
         _cands(CORRECT_A, CORRECT_B), [], _sandbox, lambda *a, **k: None) == []
 
 
 def test_a_crashing_candidate_does_not_join_a_cluster():
     boom = "raise SystemExit(1)\n"
-    winners = pipeline._consensus_winners(
+    winners = candidate_cases._consensus_winners(
         _cands(CORRECT_A, boom, CORRECT_B), [_case()], _sandbox, lambda *a, **k: None)
     assert sorted(c["index"] for c in winners) == [0, 2]
 
 
 def test_the_probe_reports_output_rather_than_asserting():
-    probe, files = pipeline._make_output_probe(CORRECT_A, _case())
-    assert pipeline._CONSENSUS_MARK in probe
+    probe, files = candidate_cases._make_output_probe(CORRECT_A, _case())
+    assert candidate_cases._CONSENSUS_MARK in probe
     assert "SELF_TEST_PASS" not in probe
     assert "THIS KEY IS WRONG" not in probe, "the probe must not see the key"
     assert not any("THIS KEY IS WRONG" in v for v in files.values()), \
@@ -142,30 +142,30 @@ def _run(built):
 
 
 def test_the_task_input_file_is_recognised():
-    assert pipeline._task_input_file({"input.txt": "1\n"}) == "input.txt"
-    assert pipeline._task_input_file({"solve.py": "x=1"}) == ""
-    assert pipeline._task_input_file(None) == ""
+    assert candidate_cases._task_input_file({"input.txt": "1\n"}) == "input.txt"
+    assert candidate_cases._task_input_file({"solve.py": "x=1"}) == ""
+    assert candidate_cases._task_input_file(None) == ""
 
 
 def test_a_stdin_candidate_fails_the_task_contract():
     """The measured regression: it passed on a stdin the caller never gives."""
-    body = pipeline._make_self_test(STDIN_CANDIDATE, _case3("3"), "input.txt")
+    body = candidate_cases._make_self_test(STDIN_CANDIDATE, _case3("3"), "input.txt")
     assert "SELF_TEST_PASS" not in _run(body).stdout
 
 
 def test_a_file_candidate_passes_the_task_contract():
-    body = pipeline._make_self_test(FILE_CANDIDATE, _case3("3"), "input.txt")
+    body = candidate_cases._make_self_test(FILE_CANDIDATE, _case3("3"), "input.txt")
     assert "SELF_TEST_PASS" in _run(body).stdout
 
 
 def test_without_a_task_input_file_the_old_shapes_stand():
     """Tasks that really are stdin-driven must keep working."""
-    body, _files = pipeline._make_self_test(STDIN_CANDIDATE, _case3("3"))
+    body, _files = candidate_cases._make_self_test(STDIN_CANDIDATE, _case3("3"))
     assert "_s.stdin=" in body
 
 
 def test_the_probe_uses_the_same_contract():
-    probe, files = pipeline._make_output_probe(
+    probe, files = candidate_cases._make_output_probe(
         STDIN_CANDIDATE, _case(), "input.txt")
     # The case input is staged for the program, exactly as the self-test
     # stages it; stdin is attached-and-empty under the task contract, and
@@ -206,19 +206,19 @@ def _run_probe(built, work=None):
 
 
 def test_the_probe_stages_its_case_input():
-    body, files = pipeline._make_output_probe(
+    body, files = candidate_cases._make_output_probe(
         FILE_CANDIDATE, _case3("3"), "input.txt")
     assert "'w'" not in body, "the probe creates no files of its own"
     assert files["input.txt"] == "1\n2\n3"
-    assert files[pipeline._CANDIDATE_FILE] == FILE_CANDIDATE
+    assert files[candidate_cases._CANDIDATE_FILE] == FILE_CANDIDATE
 
 
 def test_the_probe_runs_a_main_guarded_candidate():
     """Its output is the whole point of the probe; under the old module
     identity it was empty and clustered with every other empty result."""
-    run, _ = _run_probe(pipeline._make_output_probe(
+    run, _ = _run_probe(candidate_cases._make_output_probe(
         PROBE_MAIN_GUARDED, _case3("3"), "input.txt"))
-    assert pipeline._CONSENSUS_MARK + repr("3") in run.stdout, (
+    assert candidate_cases._CONSENSUS_MARK + repr("3") in run.stdout, (
         run.stdout, run.stderr[:300])
 
 
@@ -226,16 +226,16 @@ def test_the_probe_executes_the_candidate_once():
     counter = ("open('runs.txt','a').write('x')\n"
                "if __name__ == '__main__':\n"
                "    print(len(open('runs.txt').read()))\n")
-    run, work = _run_probe(pipeline._make_output_probe(
+    run, work = _run_probe(candidate_cases._make_output_probe(
         counter, _case3("3"), "input.txt"))
-    assert pipeline._CONSENSUS_MARK + repr("1") in run.stdout, run.stdout
+    assert candidate_cases._CONSENSUS_MARK + repr("1") in run.stdout, run.stdout
     assert Path(work, "runs.txt").read_text() == "x"
 
 
 def test_each_probe_case_stages_its_own_input():
-    _, f1 = pipeline._make_output_probe(FILE_CANDIDATE, _case3("3"), "input.txt")
+    _, f1 = candidate_cases._make_output_probe(FILE_CANDIDATE, _case3("3"), "input.txt")
     other = type("TC", (), {"input_str": "9\n9", "expected_output": "2"})()
-    _, f2 = pipeline._make_output_probe(FILE_CANDIDATE, other, "input.txt")
+    _, f2 = candidate_cases._make_output_probe(FILE_CANDIDATE, other, "input.txt")
     assert f1["input.txt"] == "1\n2\n3"
     assert f2["input.txt"] == "9\n9"
 
@@ -264,12 +264,12 @@ def test_the_probe_body_reaches_the_sandbox_with_its_files(monkeypatch):
     def fake_urlopen(req, timeout=None):
         captured.append(_json.loads(req.data.decode()))
         return _Resp({"success": True,
-                      "stdout": pipeline._CONSENSUS_MARK + repr("3") + "\n",
+                      "stdout": candidate_cases._CONSENSUS_MARK + repr("3") + "\n",
                       "stderr": ""})
 
     monkeypatch.setattr(_adapters.urllib.request, "urlopen", fake_urlopen)
     sandbox = _adapters.SandboxAdapter()
-    pipeline._consensus_winners(
+    candidate_cases._consensus_winners(
         [{"index": 0, "code": FILE_CANDIDATE},
          {"index": 1, "code": PROBE_MAIN_GUARDED}],
         [_case3("3")], sandbox, lambda *a, **k: None, "input.txt")
@@ -288,21 +288,21 @@ def test_the_probe_body_reaches_the_sandbox_with_its_files(monkeypatch):
 
 def test_identical_copies_are_one_program():
     """Two copies of a wrong program do not outvote one correct program."""
-    winners = pipeline._consensus_winners(
+    winners = candidate_cases._consensus_winners(
         _cands(WRONG, WRONG, CORRECT_A), [_case()], _sandbox, lambda *a, **k: None)
     assert winners == []
 
 
 def test_distinct_agreeing_programs_still_win():
-    winners = pipeline._consensus_winners(
+    winners = candidate_cases._consensus_winners(
         _cands(CORRECT_A, CORRECT_A, CORRECT_B), [_case()], _sandbox, lambda *a, **k: None)
     assert sorted(c["index"] for c in winners) == [0, 1, 2]
 
 
 def test_a_function_shaped_probe_returns_its_pair():
     code = "def solve(n):\n    return n * 2\n"
-    probe, files = pipeline._make_output_probe(code, _case3("6"))
-    assert pipeline._CONSENSUS_MARK in probe
+    probe, files = candidate_cases._make_output_probe(code, _case3("6"))
+    assert candidate_cases._CONSENSUS_MARK in probe
     assert files == {}
 
 
@@ -311,7 +311,7 @@ def test_a_candidate_that_failed_a_project_check_cannot_agree_its_way_in():
     failed_import = {"verification_evidence": [{"verifier": "python_import_comparison",
                                                 "status": "failed"}]}
     unavailable = {"verification_evidence": [{"verifier": "build_command", "status": "unavailable"}]}
-    assert pipeline._failed_a_project_check(failed_build)
-    assert pipeline._failed_a_project_check(failed_import)
-    assert not pipeline._failed_a_project_check(unavailable)
-    assert not pipeline._failed_a_project_check({})
+    assert candidate_cases._failed_a_project_check(failed_build)
+    assert candidate_cases._failed_a_project_check(failed_import)
+    assert not candidate_cases._failed_a_project_check(unavailable)
+    assert not candidate_cases._failed_a_project_check({})

@@ -20,6 +20,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "services" / "v3-service"))
 
 import adapters
+import contract
 import pipeline as P
 import scoring
 import symbols
@@ -105,7 +106,7 @@ def test_the_exact_bytes_are_checked_not_a_copy(monkeypatch):
     assert result["code"] == THEIRS
     assert result["phase_solved"] == "incumbent"
     assert result["evidence_record"]["candidate_content_hash"] == \
-        P.contract.content_hash(THEIRS)
+        contract.content_hash(THEIRS)
     events = [e for e in result["events"] if e["stage"] == "incumbent"]
     assert events
     assert events[0]["data"]["passed"] is True

@@ -15,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "services" / "v3-service"))
 
-import pipeline
+import candidate_cases
 
 CRASH_RUNTIME = "raise RuntimeError('boom')\n"
 CRASH_KEYERROR = "x = {}\nprint(x['missing'])\n"
@@ -46,14 +46,14 @@ def _cands(*codes):
 
 def test_ordinary_exceptions_do_not_cluster():
     """The audit's exact reproduction, with Exception subclasses."""
-    winners = pipeline._consensus_winners(
+    winners = candidate_cases._consensus_winners(
         _cands(CRASH_RUNTIME, CRASH_KEYERROR, GOOD_A),
         [_case()], _sandbox, lambda *a, **k: None, "input.txt")
     assert not any(c["index"] in (0, 1) for c in winners), winners
 
 
 def test_agreeing_healthy_candidates_still_win_over_crashers():
-    winners = pipeline._consensus_winners(
+    winners = candidate_cases._consensus_winners(
         _cands(CRASH_RUNTIME, GOOD_A, GOOD_B),
         [_case()], _sandbox, lambda *a, **k: None, "input.txt")
     assert sorted(c["index"] for c in winners) == [1, 2], winners
@@ -70,14 +70,14 @@ def test_partial_validity_is_not_agreement_material():
                       "print(data[2])\n")  # IndexError when input is short
     case_long = _case()
     case_short = type("TC", (), {"input_str": "1", "expected_output": "1"})()
-    winners = pipeline._consensus_winners(
+    winners = candidate_cases._consensus_winners(
         _cands(crash_on_empty, crash_on_empty, GOOD_A),
         [case_long, case_short], _sandbox, lambda *a, **k: None, "input.txt")
     assert not any(c["index"] in (0, 1) for c in winners), winners
 
 
 def test_the_probe_marks_crashes_distinctly():
-    body, files = pipeline._make_output_probe(CRASH_RUNTIME, _case(), "input.txt")
+    body, files = candidate_cases._make_output_probe(CRASH_RUNTIME, _case(), "input.txt")
     ok, out, _err = _sandbox(body, files=files)
     assert "CRASH" in out
     assert "''" not in out

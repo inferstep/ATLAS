@@ -23,6 +23,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "services" / "v3-service"))
 
 import adapters
+import candidate_cases
 import pipeline as v3pipeline
 import pool_capture
 import scoring
@@ -632,7 +633,7 @@ def _run_with_incumbent(monkeypatch, tmp_path, *, capture=True,
 def test_the_incumbent_is_evaluated_exactly_once(monkeypatch, tmp_path):
     """One canonical evaluation of its exact bytes, not one per visit."""
     calls = []
-    real = v3pipeline._evaluate_candidate
+    real = candidate_cases._evaluate_candidate
     monkeypatch.setattr(v3pipeline, "_evaluate_candidate",
                         lambda fp, code, *a, **k: (calls.append(code),
                                                    real(fp, code, *a, **k))[1])
@@ -719,7 +720,7 @@ def test_capture_off_still_checks_the_incumbent(monkeypatch, tmp_path):
     """The incumbent is live: the diagnostic being off changes nothing
     about it, and still writes nothing."""
     calls = []
-    real = v3pipeline._evaluate_candidate
+    real = candidate_cases._evaluate_candidate
     monkeypatch.setattr(v3pipeline, "_evaluate_candidate",
                         lambda fp, code, *a, **k: (calls.append(code),
                                                    real(fp, code, *a, **k))[1])
