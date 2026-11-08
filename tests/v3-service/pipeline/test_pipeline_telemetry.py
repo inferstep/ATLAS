@@ -24,6 +24,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "services" / "v3-service"))
 
 import adapters
 import pipeline as v3pipeline
+import pool_capture
 import scoring
 
 VETO_PER_STEP = {
@@ -293,8 +294,8 @@ def test_interrupted_capture_flushes_pending_lens_candidate(
         monkeypatch, tmp_path):
     """A scored candidate survives cancellation before sandbox evaluation."""
     sink = tmp_path / "pending.jsonl"
-    monkeypatch.setenv(v3pipeline.CAPTURE_ENV, str(sink))
-    capture = v3pipeline._PoolCapture.from_env()
+    monkeypatch.setenv(pool_capture.CAPTURE_ENV, str(sink))
+    capture = pool_capture._PoolCapture.from_env()
     capture.bind("pending-task")
     capture.identify("pending-request", "pending-invocation")
     capture.note_lens_candidate(
@@ -318,7 +319,7 @@ def test_interrupted_capture_flushes_pending_lens_candidate(
 
 def _run_captured(monkeypatch, tmp_path, task_id="cap"):
     sink = tmp_path / "pool.jsonl"
-    monkeypatch.setenv(v3pipeline.CAPTURE_ENV, str(sink))
+    monkeypatch.setenv(pool_capture.CAPTURE_ENV, str(sink))
     service = _capture_service(monkeypatch)
     result = service.run("add one to the number on stdin", task_id=task_id,
                          file_path="/workspace/e2e/solve.py")
@@ -327,8 +328,8 @@ def _run_captured(monkeypatch, tmp_path, task_id="cap"):
 
 def test_capture_is_inert_without_the_environment_variable(monkeypatch, tmp_path):
     """Unset means no sink is opened and no file appears, not an empty file."""
-    monkeypatch.delenv(v3pipeline.CAPTURE_ENV, raising=False)
-    capture = v3pipeline._PoolCapture.from_env()
+    monkeypatch.delenv(pool_capture.CAPTURE_ENV, raising=False)
+    capture = pool_capture._PoolCapture.from_env()
     assert capture.enabled is False
     assert capture.path is None
 
@@ -432,12 +433,12 @@ def test_capture_status_closes_the_file(monkeypatch, tmp_path):
     assert status[0]["write_error"] == ""
     assert status[0]["records_written"] > 0
     assert status[0]["bytes_written"] > 0
-    assert status[0]["max_bytes"] == v3pipeline.CAPTURE_DEFAULT_MAX_BYTES
+    assert status[0]["max_bytes"] == pool_capture.CAPTURE_DEFAULT_MAX_BYTES
 
 
 def test_capture_changes_no_decision_and_no_public_surface(monkeypatch, tmp_path):
     """Off versus on must be indistinguishable to every caller."""
-    monkeypatch.delenv(v3pipeline.CAPTURE_ENV, raising=False)
+    monkeypatch.delenv(pool_capture.CAPTURE_ENV, raising=False)
     off = _capture_service(monkeypatch).run(
         "add one", task_id="cap-cmp", file_path="/workspace/e2e/solve.py")
     _, sink = _run_captured(monkeypatch, tmp_path, task_id="cap-cmp")
@@ -465,11 +466,11 @@ def test_a_capture_failure_never_changes_the_result(monkeypatch, tmp_path):
     """An unwritable sink degrades the diagnostic, never the pipeline."""
     blocker = tmp_path / "not-a-dir"
     blocker.write_text("file, not a directory")
-    monkeypatch.setenv(v3pipeline.CAPTURE_ENV, str(blocker / "pool.jsonl"))
+    monkeypatch.setenv(pool_capture.CAPTURE_ENV, str(blocker / "pool.jsonl"))
     broken = _capture_service(monkeypatch).run(
         "add one", task_id="cap-fail", file_path="/workspace/e2e/solve.py")
 
-    monkeypatch.delenv(v3pipeline.CAPTURE_ENV, raising=False)
+    monkeypatch.delenv(pool_capture.CAPTURE_ENV, raising=False)
     clean = _capture_service(monkeypatch).run(
         "add one", task_id="cap-fail", file_path="/workspace/e2e/solve.py")
     assert broken["passed"] == clean["passed"]
@@ -478,11 +479,11 @@ def test_a_capture_failure_never_changes_the_result(monkeypatch, tmp_path):
 
 
 def test_a_relative_path_or_missing_parent_disables_capture(monkeypatch, tmp_path):
-    monkeypatch.setenv(v3pipeline.CAPTURE_ENV, "pool.jsonl")
-    assert v3pipeline._PoolCapture.from_env().enabled is False
+    monkeypatch.setenv(pool_capture.CAPTURE_ENV, "pool.jsonl")
+    assert pool_capture._PoolCapture.from_env().enabled is False
 
-    monkeypatch.setenv(v3pipeline.CAPTURE_ENV, str(tmp_path / "gone" / "p.jsonl"))
-    assert v3pipeline._PoolCapture.from_env().enabled is False
+    monkeypatch.setenv(pool_capture.CAPTURE_ENV, str(tmp_path / "gone" / "p.jsonl"))
+    assert pool_capture._PoolCapture.from_env().enabled is False
 
 
 def test_capture_refuses_to_follow_a_pre_existing_symlink(monkeypatch, tmp_path):
@@ -490,8 +491,8 @@ def test_capture_refuses_to_follow_a_pre_existing_symlink(monkeypatch, tmp_path)
     target.write_text("")
     link = tmp_path / "pool.jsonl"
     link.symlink_to(target)
-    monkeypatch.setenv(v3pipeline.CAPTURE_ENV, str(link))
-    capture = v3pipeline._PoolCapture.from_env()
+    monkeypatch.setenv(pool_capture.CAPTURE_ENV, str(link))
+    capture = pool_capture._PoolCapture.from_env()
     assert capture.enabled is False
     assert target.read_text() == ""
 
@@ -505,8 +506,8 @@ def test_the_sink_is_owner_only(monkeypatch, tmp_path):
 def test_the_byte_cap_never_emits_a_partial_line(monkeypatch, tmp_path):
     """A record that will not fit is not written at all."""
     sink = tmp_path / "pool.jsonl"
-    monkeypatch.setenv(v3pipeline.CAPTURE_ENV, str(sink))
-    monkeypatch.setattr(v3pipeline, "CAPTURE_DEFAULT_MAX_BYTES", 900)
+    monkeypatch.setenv(pool_capture.CAPTURE_ENV, str(sink))
+    monkeypatch.setattr(pool_capture, "CAPTURE_DEFAULT_MAX_BYTES", 900)
     service = _capture_service(monkeypatch)
     service.run("add one", task_id="cap-limit",
                 file_path="/workspace/e2e/solve.py")
@@ -530,8 +531,8 @@ def test_concurrent_writers_append_complete_unique_records(tmp_path):
         import os, sys
         sys.path.insert(0, {str(PROJECT_ROOT / "services" / "v3-service")!r})
         os.environ["ATLAS_V3_CAPTURE_POOL"] = {str(sink)!r}
-        import pipeline
-        cap = pipeline._PoolCapture.from_env()
+        import pool_capture
+        cap = pool_capture._PoolCapture.from_env()
         assert cap.enabled
         tag = sys.argv[1]
         for i in range(200):
@@ -571,9 +572,9 @@ def test_candidate_bytes_reach_no_serialiser_or_emitter():
     owners = sorted(p.name for p in v3dir.glob("*.py")
                     if "_PoolCapture" in p.read_text()
                     or "CAPTURE_ENV" in p.read_text())
-    assert owners == ["pipeline.py"], owners
+    assert owners == ["pipeline.py", "pool_capture.py"], owners
 
-    source = (v3dir / "pipeline.py").read_text()
+    source = (v3dir / "pool_capture.py").read_text()
     assert "code_b64" in source
     for module in ("main.py", "adapters.py", "contract.py", "scoring.py",
                    "structured_log.py"):
@@ -610,9 +611,9 @@ def _run_with_incumbent(monkeypatch, tmp_path, *, capture=True,
                         baseline=INCUMBENT, task_id="inc", energies=None):
     sink = tmp_path / "pool.jsonl"
     if capture:
-        monkeypatch.setenv(v3pipeline.CAPTURE_ENV, str(sink))
+        monkeypatch.setenv(pool_capture.CAPTURE_ENV, str(sink))
     else:
-        monkeypatch.delenv(v3pipeline.CAPTURE_ENV, raising=False)
+        monkeypatch.delenv(pool_capture.CAPTURE_ENV, raising=False)
     service = _capture_service(monkeypatch)
     if energies is not None:
         # One energy per artifact, 1.0 unless named, through both lens calls:

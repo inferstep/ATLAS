@@ -18,6 +18,7 @@ import adapters
 import graph
 import main
 import pipeline as v3pipeline
+import pool_capture
 import scoring
 from graph.extract import available as graph_extraction_available
 
@@ -63,7 +64,7 @@ def service(monkeypatch):
     repairs nothing and refinement solves nothing."""
     monkeypatch.setenv("ATLAS_V3_TELEMETRY_DIR", "off")
     monkeypatch.delenv("ATLAS_V3_TIMEOUT", raising=False)
-    monkeypatch.delenv(v3pipeline.CAPTURE_ENV, raising=False)
+    monkeypatch.delenv(pool_capture.CAPTURE_ENV, raising=False)
     monkeypatch.setattr(adapters, "LLMAdapter", NoCodeLLM)
     monkeypatch.setattr(adapters, "SandboxAdapter", FailingSandbox)
     monkeypatch.setattr(adapters, "EmbedAdapter", NoEmbed)

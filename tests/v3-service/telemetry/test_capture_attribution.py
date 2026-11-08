@@ -16,13 +16,13 @@ import sys
 import threading
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "services", "v3-service"))
-import pipeline
+import pool_capture
 
 
 def open_capture(tmp_path, monkeypatch):
     path = tmp_path / "pool.jsonl"
-    monkeypatch.setenv(pipeline.CAPTURE_ENV, str(path))
-    cap = pipeline._PoolCapture.from_env()
+    monkeypatch.setenv(pool_capture.CAPTURE_ENV, str(path))
+    cap = pool_capture._PoolCapture.from_env()
     cap.bind("sess-1")
     assert cap.enabled, cap.write_error
     return cap, path
@@ -34,8 +34,8 @@ def records(path):
 
 
 def test_disabled_capture_costs_nothing(tmp_path, monkeypatch):
-    monkeypatch.delenv(pipeline.CAPTURE_ENV, raising=False)
-    cap = pipeline._PoolCapture.from_env()
+    monkeypatch.delenv(pool_capture.CAPTURE_ENV, raising=False)
+    cap = pool_capture._PoolCapture.from_env()
     assert not cap.enabled
     cap.note_cost(code="x", phase="p", tokens=5, latency_ms=1.0)
     cap.note_candidate(role="generated", index=0, code="x", accepted=True,

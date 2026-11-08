@@ -28,6 +28,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "services" / "v3-service"))
 
 import adapters
 import pipeline as v3pipeline
+import pool_capture
 import scoring
 from stages.cxgx_gate import FLOOR_TIER, K_FLOOR
 
@@ -346,7 +347,7 @@ def test_an_unscored_probe_allocates_the_floor_and_says_why(monkeypatch):
 def test_the_pool_record_carries_the_failure(monkeypatch, tmp_path):
     _install_fake_lens(monkeypatch)
     sink = tmp_path / "pool.jsonl"
-    monkeypatch.setenv(v3pipeline.CAPTURE_ENV, str(sink))
+    monkeypatch.setenv(pool_capture.CAPTURE_ENV, str(sink))
     service = _service(monkeypatch, [LONG, SCORED_A])
     service.run("sum two ints", task_id="unscored-pool",
                 file_path="/workspace/e2e/solve.py")

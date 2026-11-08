@@ -35,6 +35,7 @@ COPY services/v3-service/embedded_script.py /app/embedded_script.py
 COPY services/v3-service/node_splice.py /app/node_splice.py
 COPY services/v3-service/planning.py /app/planning.py
 COPY services/v3-service/pipeline.py /app/pipeline.py
+COPY services/v3-service/pool_capture.py /app/pool_capture.py
 COPY services/v3-service/stage_telemetry.py /app/stage_telemetry.py
 COPY services/v3-service/candidate_records.py /app/candidate_records.py
 COPY services/v3-service/vetoes.py /app/vetoes.py
