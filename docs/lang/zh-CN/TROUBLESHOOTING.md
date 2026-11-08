@@ -1,4 +1,4 @@
-<!-- source: docs/guides/TROUBLESHOOTING.md synced-through: 175f5a2e58eff2ed27b1fcb332122503a772ab43 -->
+<!-- source: docs/guides/TROUBLESHOOTING.md synced-through: 7e33f929de56372528b58bd9895f587735fef89a -->
 > **[English](../../guides/TROUBLESHOOTING.md)** | **简体中文** | **[日本語](../ja/TROUBLESHOOTING.md)** | **[한국어](../ko/TROUBLESHOOTING.md)**
 
 > ℹ️ **译者注：** 若本译文与英文原版 ([TROUBLESHOOTING.md](../../guides/TROUBLESHOOTING.md)) 有出入，以英文原版为准。
@@ -39,8 +39,7 @@ docker compose logs --tail 50
   "lens_ready": true,
   "sandbox": true,
   "port": "8090",
-  "capabilities": ["demo_raw_completion_v1"],
-  "stats": { "requests": 0, "repairs": 0, "sandbox_passes": 0, "sandbox_fails": 0 }
+  "capabilities": ["demo_raw_completion_v1"]
 }
 ```
 
@@ -67,6 +66,8 @@ docker compose logs --tail 50
 | `RPC failed; curl 56` / `early EOF` / `fetch-pack: invalid index-pack output` | [llama.cpp 克隆超时](#llamacpp-克隆超时) |
 | `error loading model: unknown (model) architecture '…'` | [重建 llama.cpp](#重建-llamacpp新模型架构或补丁漂移) |
 | `error: patch failed:` / `patch does not apply` | [重建 llama.cpp](#重建-llamacpp新模型架构或补丁漂移) |
+| 每次写入都出现 `open /workspace/....atlas.tmp: permission denied` | [代理无法写入工作区](#代理无法写入工作区atlastmp-permission-denied) |
+| 文件明明存在却说不存在；`read_file` 与 `run_command` 的结果不一致 | [工作区挂载分裂](#agent-说文件不存在但它就在那里工作区挂载分裂) |
 | 挂载卷 / 模型文件权限被拒绝（Fedora/RHEL） | [SELinux 阻止容器访问](#selinux-阻止容器访问fedorarhel) |
 | 代理健康检查中 `"sandbox": false`（手动容器部署） | [Sandbox 不可达](#sandbox-不可达) |
 | 代理健康检查中 `"sandbox": false`（Compose 栈） | [Sandbox 不可达](#sandbox-不可达) |
@@ -95,6 +96,7 @@ docker compose logs --tail 50
 | `You have full project context in the system prompt. Do not read more files.` | [探索预算警告](#探索预算警告) |
 | "ATLAS needs the geometric lens for every request" / 运行以 `lens_unavailable` 结束 / `"lens_ready": false` | [请求被拒：Lens 无法打分](#请求被拒lens-无法打分) |
 | "No gx_thresholds.json — Lens scores are uncalibrated" | [Lens 未校准](#lens-未校准) |
+| 分数看似合理却偏离范围；`fingerprint_ok: false` / `drifted: true` | [嵌入约定漂移](#分数看着合理但量级严重偏离嵌入约定漂移) |
 | lens 日志中出现 "embedding extraction failed" | [嵌入向量提取失败](#嵌入向量提取失败) |
 | Sandbox 返回 `"error_type": "Timeout"` | [代码执行超时](#代码执行超时) |
 | Sandbox 对特定语言报错 | [语言不受支持](#语言不受支持) |
@@ -284,7 +286,7 @@ docker compose -f docker-compose.yml -f deploy/compose/docker-compose.rocm.yml u
 ```env
 # Add to your .env
 ATLAS_ROCM_TAG=7.2.3-complete
-ATLAS_GFX_TARGET=gfx1201   # gfx1200 for RX 9070, gfx1201 for RX 9070 XT
+ATLAS_GFX_TARGET=gfx1201   # gfx1201 for RX 9070 / 9070 XT, gfx1200 for RX 9060 XT
 ```
 
 然后重新构建并拉起整个栈：
@@ -298,7 +300,7 @@ docker compose -f docker-compose.yml -f deploy/compose/docker-compose.rocm.yml u
 
 ### ROCm 容器无法拉取 `rocm/rocm-terminal`
 
-**现象：** `atlas doctor` 的 ROCm 检查在镜像拉取处超时，或 `docker compose -f ... -f deploy/compose/docker-compose.rocm.yml pull` 在 `llama-server` 构建上失败。
+**现象：** `atlas doctor` 的 ROCm 检查在拉取镜像时超时，或 `docker compose -f ... -f deploy/compose/docker-compose.rocm.yml build llama-server` 在获取 `rocm/dev-ubuntu-*` 基础镜像时停住。此覆盖层使用本地构建，设置为 `pull_policy: build`，因此 `docker compose pull` 不会拉取 llama-server。
 
 **含义：** ROCm 镜像很大（约 2 GB），且 Docker Hub 对匿名拉取限流。
 
@@ -554,7 +556,7 @@ ls -la "$ATLAS_MODELS_DIR/$ATLAS_MODEL_FILE"
 
 **解决方法：** 请确保：
 1. 没有其他 GPU 进程在运行（`nvidia-smi` —— 检查其他 CUDA 进程）
-2. 你有 16GB+ 显存
+2. 模型能装入可用显存（见[我的 GPU 能放下什么？](#我的-gpu-能放下什么)）；16 GB 是推荐值，并非统一的最低要求
 3. 运行时已按你的模型 + GPU 调整大小：`atlas tier fit --write`（不要把 `ATLAS_CTX_SIZE` 提高到它推荐的值之上）
 
 ```bash
@@ -714,7 +716,7 @@ except curses.error:
 
 **现象：** 让 ATLAS 写一个 HTML/CSS/JSON 文件导致约 5 分钟的停顿，伴随 PR-CoT 修复尝试和 LLM 超时。文件最终经由直接写入回退落盘。
 
-**发生了什么：** V3 冒烟检查是语言感知的 —— 它从目标文件的扩展名推导语言并路由到正确的检查器（`.py` → Python 编译、`.js` → `node --check`、`.ts` → `tsc --noEmit`、`.go` → `gofmt -e`、`.rs` → `rustc`、`.sh` → `bash -n`、`.html` → `html.parser`、`.xml` → `ElementTree`、`.json` → `json.loads`、`.yaml` → `yaml.safe_load`）。无法识别的扩展名会回退到 Python 并失败，进而级联进修复。注意 `.c`/`.cpp`/`.h` 不在扩展名映射（`services/v3-service/pipeline.py` 的 `_ext_to_lang`）中，因此即使 sandbox 本身有 C/C++ 检查器，C/C++ 文件也会撞上 Python 回退。
+**发生了什么：** V3 冒烟检查是语言感知的 —— 它从目标文件的扩展名推导语言并路由到正确的检查器（`.py` → Python 编译、`.js` → `node --check`、`.ts` → `tsc --noEmit`、`.go` → `gofmt -e`、`.java` → `javac`、`.kt` → `kotlinc`、`.rs` → `rustc`、`.rb` → `ruby`、`.php` → `php`、`.sh` → `bash -n`、`.html` → `html.parser`、`.xml` → `ElementTree`、`.json` → `json.loads`、`.yaml` → `yaml.safe_load`）。无法识别的扩展名会回退到 Python 并失败，进而级联进修复。注意 `.c`/`.cpp`/`.h` 不在扩展名映射（`services/v3-service/pipeline.py` 的 `_ext_to_lang`）中，因此即使 sandbox 本身有 C/C++ 检查器，C/C++ 文件也会撞上 Python 回退。
 
 如果 `/v3/generate` 收到了被批准的项目构建命令，V3 会在语法/自测验证之后发出一个 `build_verify` 事件。命令在一个临时 sandbox 工作区中运行，候选会覆盖到项目上，因此失败的构建证据会阻止 `passed=true`，而不会把候选写进真实的检出。覆盖快照会跳过依赖缓存、密钥、模型/数据工件、符号链接和大文件，并强制文件数与字节数限制。如果一个项目的构建需要重量级依赖，请把它们作为显式验证工作流的一部分装进 sandbox 工作区。
 
@@ -726,7 +728,7 @@ except curses.error:
 
 **发生了什么：** agent 循环的 tier 分类器（`services/proxy/task_tier.go:classifyAgentTier`）只回答一个问题：这是对话，还是工作？默认是工作，T0 需要正面证据，因为两类错误的代价相差很大。把对话读成工作，只是为一条模型一轮就能收尾的消息浪费一次 planner 调用；把工作读成对话，则会把该轮次上限压到 12 并跳过 planning，直接让请求失败。
 
-只有当消息少于 12 个字符（`hi`、`thanks`、`ok`），或呈现为疑问句时才算对话式 —— 以结束一个子句的 `?` 结尾，或以整词匹配的疑问词开头（`why`、`what`、`how`、`is`、`can` 等）。但表示任务的措辞优先于二者，因此 `can you fix the login bug?` 尽管带问号仍是工作。声明了 `task_mode: work` 的客户端（TUI 即如此）永远不会被分类为对话。但表示任务的措辞优先于二者，因此 `can you fix the login bug?` 尽管带问号仍是工作。其余一律视为工作：`still doesn't work, try again` 和 `the snake is moving way too fast, slow it down` 都不指名文件、也不匹配任务动词列表，但两者都会走 pipeline。
+只有当消息少于 12 个字符（`hi`、`thanks`、`ok`），或呈现为疑问句时才算对话式 —— 以结束一个子句的 `?` 结尾，或以整词匹配的疑问词开头（`why`、`what`、`how`、`is`、`can` 等）。但表示任务的措辞优先于二者，因此 `can you fix the login bug?` 尽管带问号仍是工作。声明了 `task_mode: work` 的客户端（TUI 即如此）永远不会被分类为对话。其余一律视为工作：`still doesn't work, try again` 和 `the snake is moving way too fast, slow it down` 都不指名文件、也不匹配任务动词列表，但两者都会走 pipeline。
 
 **怎么做：** 把你想要的说出来，哪怕很简短 —— "yes, fix it" 就能越过 T0 门控。如果一个跟进跑了 agent 循环但 V3 保持沉默，那么门控不在请求 tier —— 而在文件自身的 tier。见 [V3 Pipeline 未对功能文件触发](#v3-pipeline-未对功能文件触发)，并检查 `docker compose logs atlas-proxy | grep -E "write_file|edit_file"` 中的文件 tier 行（例如 `[write_file] app.py → T1:simple (8 lines)`）。
 
@@ -773,7 +775,7 @@ docker compose logs geometric-lens
 | 消息中的原因 | 修复 |
 |---|---|
 | unreachable | lens 容器已停或 `ATLAS_LENS_URL` 有误。`docker compose ps geometric-lens`。 |
-| no C(x) / no G(x) model loaded | 所服务模型没有 lens 权重。注册表模型运行 `atlas model install-artifacts <name>`，或 `atlas lens build`（见 [SETUP.md](../../guides/SETUP.md)）。 |
+| no C(x) / no G(x) model loaded | 所服务模型没有 lens 权重。注册表模型运行 `atlas model install-artifacts <name>`，或 `atlas lens build`（见 [SETUP.md](SETUP.md#geometric-lens-权重必需)）。 |
 | cannot reach llama-server | lens 连不上模型服务器。检查 `LLAMA_URL` / `LLAMA_EMBED_URL` 和 llama-server 健康状态。 |
 | self-test failed | 见 `/health` 中的 `self_test_error`。 |
 | drifted from the served model | 见[嵌入约定漂移](#分数看着合理但量级严重偏离嵌入约定漂移)。 |
@@ -792,7 +794,7 @@ docker compose logs geometric-lens
 
 **现象：** 一切都报告健康 —— Pod `Ready`、`/health` 返回 200、`gx-score` 返回看起来在区间内的 `gx_score` 和 `likely_correct` 判定 —— 但 `cx_energy` 与其校准区间相差若干数量级（例如模型的通过/失败均值在 20–30 时却出现 ~600）。在这种状态下启动的门控基准测试会产出一份完整、合理、却完全无效的结果。
 
-**原因：** 嵌入服务器提供的 `/embedding` 约定，与 Geometric Lens 的 `C(x)`/`G(x)` 工件训练时所用的不一致 —— 通常是逐 token 而非池化，或未归一化而非 L2 归一化（‖v‖≈60 而不是 ~1）。维度相同、分布不同；cost-field MLP 会外推出一个巨大的能量，`cx_normalized` 随之饱和。这通常发生在没有 `--pooling mean` 就重建服务栈之后（llama-server 没有 `--embd-normalize` 这个服务端标志；lens 通过 `/embedding` 请求体中的 `embd_normalize` 逐次请求 L2 归一化）。
+**原因：** 嵌入服务器提供的 `/embedding` 约定与 Geometric Lens 的 `C(x)`/`G(x)` 工件训练时不同：池化方式不同，或返回 L2 归一化向量而非原始向量（‖v‖≈1 而非 ≈137）。维度相同但分布不同，cost-field MLP 会外推出巨大的能量，`cx_normalized` 随之饱和。例如，`ATLAS_EMBED_POOLING` 被设为 `none`（默认）或 `mean` 之外的 `cls`、`last`；或服务器无视 `embd_normalize: -1` 仍做池化和归一化，返回 ‖v‖≈1 的扁平向量（如果返回的是归一化的逐 token 行，lens 会以错误拒绝）。llama-server 没有 `--embd-normalize` 服务端标志；lens 通过 `/embedding` 请求体中的 `embd_normalize: -1` 逐次请求原始向量，并自行对逐 token 行做平均池化。
 
 **验证：** 在工件旁放有 `drift_fingerprint.json` 的场合（见下文第 3 步），lens 会在自检中（启动时，以及可重试的失败之后由 `/ready` 重新运行时）对它重新打分。检查 `/ready` 和 `/health`：
 ```bash
@@ -804,11 +806,11 @@ curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerpri
 1. 确认嵌入服务器的约定。池化 + 归一化的服务器会返回 ‖v‖≈1 的扁平向量：
    ```bash
    curl -s -X POST http://localhost:8080/embedding -H "Authorization: Bearer $(cat secrets/service-token)" -H 'Content-Type: application/json' \
-     -d '{"content":"def add(a, b): return a + b","embd_normalize":-1}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; import itertools; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
+     -d '{"content":"def add(a, b): return a + b","embd_normalize":-1}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
    ```
-   池化后的 `norm` 应在数百量级（随附的 Gemma 工件约为 100-150）。若 `norm` 恰好为 `1.0`，说明服务器无视了 `embd_normalize: -1` 而对向量做了归一化，此时 C(x) 对任何输入都会返回约 0.8 的恒定值：分数看似正常，却无法区分任何东西。
+   池化后的 `norm` 应在数百量级（随附的 Gemma 工件约为 100-150）。若 `norm` 恰好为 `1.0`，说明服务器无视了 `embd_normalize: -1` 而对向量做了归一化，此时 C(x) 对任何输入都会返回约 0.8 的恒定值：分数看似正常，却无法区分任何东西。 请与 `cx_normalization.json` 中的 `pass_energy_mean` 比较：服务给出的能量应分布在该区间，而不是停留在单一数值。
 2. 设置 `ATLAS_EMBED_POOLING=none`（默认值；见 [CONFIGURATION.md](../../guides/CONFIGURATION.md)），并重建 llama-server 容器，让入口点固定这些标志。在 llama.cpp 中 `--pooling` 是服务器全局设置，只有 `none` 能同时满足全文路径和 per-step 路径；池化与缩放都在客户端处理。
-3. 服务器提供正确约定后，启动自检通过，`/ready` 返回 200。一次重建（`atlas lens build`）会把 `embedding_contract` 刻进 `model_identity.json`。它不会写入漂移指纹：`geometric_lens.drift.write_fingerprint` 存在，但尚无任何命令调用它，因此指纹检查只在存在手工写入的 `drift_fingerprint.json` 的场合运行。
+3. 服务器提供正确约定后，启动自检通过，`/ready` 返回 200。重新构建（`atlas lens build`）会把 `embedding_contract` 写入 `model_identity.json`，并在工件目录中写入 `drift_fingerprint.json`，让启动自检再次核查约定。如果无法给参考文本打分，会发出警告并跳过指纹，此时该包的漂移检查不施加任何约束。
 
 ### 嵌入向量提取失败
 
@@ -884,7 +886,9 @@ docker network create sandbox-net
 
 **现象：** Sandbox 对特定语言返回错误。
 
-**支持的语言（执行）：** Python、JavaScript、TypeScript、Go、Rust、C、C++、Bash。纯语法检查（`/syntax-check`、V3 冒烟检查）还额外覆盖 HTML、XML、JSON 和 YAML。
+**已实现的 `/execute` 处理器：** Python、JavaScript、TypeScript、Go、Java、Kotlin、Rust、C、C++、Ruby、PHP、Bash。默认 Docker 部署中，Go、Rust、C 和 C++ 可以编译，但无法从 `/tmp/sandbox` 下的 `noexec` 工作区运行原生二进制（[#163](https://github.com/inferstep/ATLAS/issues/163)）。请通过 `run_command`（`/shell`）执行项目命令，在 `/workspace` 中构建并运行；Go 的 `go run` 使用允许执行的 `GOTMPDIR` 挂载。Java 和 Kotlin 通过 JVM 运行，Ruby 和 PHP 使用解释器。这四种语言路径在[支持矩阵](../../guides/SUPPORT_MATRIX.md)中属于 Preview；不能仅因存在处理器就视为 Supported。
+
+**语法检查：** `/syntax-check` 还覆盖 HTML、XML、JSON 和 YAML。V3 按文件扩展名选择冒烟检查器；C/C++ 的扩展名映射限制见 [V3 在非 Python 文件上挂起数分钟](#v3-在非-python-文件上挂起数分钟)。语法检查不等于执行。
 
 检查可用的运行时：
 ```bash
@@ -897,7 +901,7 @@ curl -s http://localhost:30820/languages | python3 -m json.tool
 
 ### bench 运行的任务数少于请求数（`LIMITED MODE: running N tasks` 的 N 小于 `--tasks`）
 
-**现象：** `atlas bench --tasks 200` 显示 `LIMITED MODE: running 100 tasks`（或任何低于请求的数量），或恢复的运行打印 `Resuming: N/N tasks already done, 0 remaining` 后立即退出。
+**现象：** `atlas bench --tasks 200` 显示 `LIMITED MODE: running 100 tasks`（或任何低于请求的数量），或恢复的运行打印 `Resuming: {done}/{total} complete, {n} remaining` 后立即退出。
 
 **原因：** LiveCodeBench 数据集缓存（`benchmark/datasets/.cache/livecodebench_v5.jsonl`）是一次部分下载。HuggingFace rows API 可能在分页中途失败；旧版本会缓存已获取的部分并永久信任该文件。release_v5 完整集约有 880 个任务。
 
@@ -926,14 +930,9 @@ atlas bench --run-id <your-run-id> --tasks 200
 
 **现象：** 系统变得卡顿或服务被 OOMKill。
 
-**预期内存使用：**
-- llama-server：约 8 GB（模型在显存中，仅占少量系统内存）
-- geometric-lens：约 200 MB（PyTorch 运行时 + 模型）
-- v3-service：约 150 MB（不含 PyTorch：仅解析与编排）
-- sandbox：约 100 MB（基础值，编译时会有峰值）
-- atlas-proxy：约 30 MB（Go 二进制文件）
+最小 GPU 层级需要 12 GB 系统内存，medium 层级需要 16 GB，更高层级需要更多。这些主机要求包括容器、主机 OS、沙箱 tmpfs 和流水线的突发负载，并非服务空闲时的用量测量值。独立 GPU 的显存预算与系统内存分开，Apple Silicon 则共享系统内存。见[主机要求](../../guides/SETUP.md#hardware-sizing)。
 
-**总计：** 约 500 MB 系统内存 + 8.2 GB 显存。如果你的系统内存不足 14 GB，其他服务可能会争夺内存。
+运行 `atlas tier` 查看硬件层级，运行 `docker stats` 查看当前容器用量。编译和安装依赖可能增加沙箱内存使用量；写入 tmpfs 的文件也计入容器内存限制。
 
 ---
 
