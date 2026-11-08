@@ -1,0 +1,11 @@
+{
+  "name": "atlas-sandbox-js-tools",
+  "private": true,
+  "description": "The JavaScript tools of the sandbox image, installed with npm ci from package-lock.json.",
+  "dependencies": {
+    "pnpm": "12.14.0",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "yarn": "1.22.22"
+  }
+}
