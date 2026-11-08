@@ -37,7 +37,9 @@ def test_every_adapter_construction_is_accounted_for():
     assert found, "no adapter constructions found; the guard is looking in the wrong place"
     for name, line_no, line in found:
         body = src(name)
-        window = "\n".join(body.split("\n")[line_no - 1:line_no + 8])
+        # A comment that names cancel_scope does not assign it.
+        window = "\n".join(code for code in body.split("\n")[line_no - 1:line_no + 8]
+                           if not code.strip().startswith("#"))
         assert "cancel_scope" in window, (
             f"{name}:{line_no} builds an LLMAdapter without assigning a cancel "
             f"scope within the next few lines: {line}")
