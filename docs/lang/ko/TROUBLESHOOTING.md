@@ -1,4 +1,4 @@
-<!-- source: docs/guides/TROUBLESHOOTING.md synced-through: 175f5a2e58eff2ed27b1fcb332122503a772ab43 -->
+<!-- source: docs/guides/TROUBLESHOOTING.md synced-through: 7e33f929de56372528b58bd9895f587735fef89a -->
 > **[English](../../guides/TROUBLESHOOTING.md)** | **[简体中文](../zh-CN/TROUBLESHOOTING.md)** | **[日本語](../ja/TROUBLESHOOTING.md)** | **한국어**
 
 > ℹ️ 영어 원본([TROUBLESHOOTING.md](../../guides/TROUBLESHOOTING.md))의 번역본입니다. 원본과 차이가 있을 경우 영어 원본이 우선합니다.
@@ -39,8 +39,7 @@ docker compose logs --tail 50
   "lens_ready": true,
   "sandbox": true,
   "port": "8090",
-  "capabilities": ["demo_raw_completion_v1"],
-  "stats": { "requests": 0, "repairs": 0, "sandbox_passes": 0, "sandbox_fails": 0 }
+  "capabilities": ["demo_raw_completion_v1"]
 }
 ```
 
@@ -67,6 +66,8 @@ docker compose logs --tail 50
 | `RPC failed; curl 56` / `early EOF` / `fetch-pack: invalid index-pack output` | [llama.cpp 클론 타임아웃](#llamacpp-클론-타임아웃) |
 | `error loading model: unknown (model) architecture '…'` | [llama.cpp 재빌드](#llamacpp-재빌드-새-모델-아키텍처-또는-패치-드리프트) |
 | `error: patch failed:` / `patch does not apply` | [llama.cpp 재빌드](#llamacpp-재빌드-새-모델-아키텍처-또는-패치-드리프트) |
+| 매번 쓰기에서 `open /workspace/....atlas.tmp: permission denied` | [프록시가 워크스페이스에 쓰지 못함](#프록시가-워크스페이스에-쓰지-못함-atlastmp-permission-denied) |
+| 실제로 있는 파일을 없다고 하며 `read_file`과 `run_command` 결과가 다름 | [워크스페이스 마운트 분리](#바로-거기-있는-파일을-에이전트가-없다고-말함-워크스페이스-마운트-분리) |
 | 마운트된 볼륨 / 모델 파일에 대한 권한 거부 (Fedora/RHEL) | [SELinux가 컨테이너 접근을 차단함](#selinux가-컨테이너-접근을-차단함-fedorarhel) |
 | 프록시 헬스에 `"sandbox": false` (수동 컨테이너 설정) | [Sandbox에 연결할 수 없음](#sandbox에-연결할-수-없음) |
 | 프록시 헬스에 `"sandbox": false` (Compose 스택) | [Sandbox에 연결할 수 없음](#sandbox에-연결할-수-없음) |
@@ -95,6 +96,7 @@ docker compose logs --tail 50
 | `You have full project context in the system prompt. Do not read more files.` | [탐색 예산 경고](#탐색-예산-경고) |
 | "ATLAS needs the geometric lens for every request" / 실행이 `lens_unavailable`로 끝남 / `"lens_ready": false` | [요청 거부: 렌즈가 점수를 산출할 수 없음](#요청-거부-렌즈가-점수를-산출할-수-없음) |
 | "No gx_thresholds.json — Lens scores are uncalibrated" | [렌즈 미보정](#렌즈-미보정) |
+| 점수가 그럴듯하지만 스케일이 어긋남; `fingerprint_ok: false` / `drifted: true` | [임베딩 규약 드리프트](#점수는-그럴듯한데-스케일이-크게-어긋남-임베딩-규약-드리프트) |
 | lens 로그에 "embedding extraction failed" | [임베딩 추출 실패](#임베딩-추출-실패) |
 | 샌드박스가 `"error_type": "Timeout"`을 반환 | [코드 실행 타임아웃](#코드-실행-타임아웃) |
 | 특정 언어에서 샌드박스 오류 | [지원되지 않는 언어](#지원되지-않는-언어) |
@@ -284,7 +286,7 @@ docker compose -f docker-compose.yml -f deploy/compose/docker-compose.rocm.yml u
 ```env
 # Add to your .env
 ATLAS_ROCM_TAG=7.2.3-complete
-ATLAS_GFX_TARGET=gfx1201   # gfx1200 for RX 9070, gfx1201 for RX 9070 XT
+ATLAS_GFX_TARGET=gfx1201   # gfx1201 for RX 9070 / 9070 XT, gfx1200 for RX 9060 XT
 ```
 
 그런 다음 재빌드하고 스택을 기동하세요:
@@ -298,7 +300,7 @@ docker compose -f docker-compose.yml -f deploy/compose/docker-compose.rocm.yml u
 
 ### ROCm 컨테이너가 `rocm/rocm-terminal`을 pull하지 못함
 
-**증상:** `atlas doctor`의 ROCm 점검이 이미지 pull에서 타임아웃되거나, `docker compose -f ... -f deploy/compose/docker-compose.rocm.yml pull`이 `llama-server` 빌드에서 실패합니다.
+**증상:** `atlas doctor`의 ROCm 검사가 이미지 pull에서 타임아웃되거나, `docker compose -f ... -f deploy/compose/docker-compose.rocm.yml build llama-server`가 `rocm/dev-ubuntu-*` 베이스를 가져오다가 멈춥니다. 이 오버레이는 `pull_policy: build`인 로컬 빌드이므로 `docker compose pull`은 llama-server를 가져오지 않습니다.
 
 **의미:** ROCm 이미지는 크고(~2GB) Docker Hub는 익명 pull에 속도 제한을 겁니다.
 
@@ -574,7 +576,7 @@ ls -la "$ATLAS_MODELS_DIR/$ATLAS_MODEL_FILE"
 
 **해결:** 다음을 확인하세요:
 1. 다른 GPU 프로세스가 실행 중이지 않은지 (`nvidia-smi` — 다른 CUDA 프로세스 확인)
-2. 16GB 이상의 VRAM이 있는지
+2. 모델이 사용 가능한 VRAM에 들어가는지([내 GPU에는 무엇이 들어가는가?](#내-gpu에는-무엇이-들어가는가) 참고). 16 GB는 권장값이며 모든 구성의 최솟값은 아닙니다
 3. 런타임이 모델과 GPU에 맞게 사이징되었는지: `atlas tier fit --write` (권장값을 넘어 `ATLAS_CTX_SIZE`를 올리지 마세요)
 
 ```bash
@@ -734,7 +736,7 @@ except curses.error:
 
 **증상:** ATLAS에 HTML/CSS/JSON 파일 작성을 요청하면 PR-CoT 수리 시도와 LLM 타임아웃을 동반한 ~5분의 정지가 발생합니다. 파일은 결국 직접 쓰기 폴백으로 저장됩니다.
 
-**무슨 일인가:** V3 스모크 체크는 언어 인식입니다 — 대상 파일의 확장자에서 언어를 도출해 알맞은 검사기로 라우팅합니다(`.py` → Python compile, `.js` → `node --check`, `.ts` → `tsc --noEmit`, `.go` → `gofmt -e`, `.rs` → `rustc`, `.sh` → `bash -n`, `.html` → `html.parser`, `.xml` → `ElementTree`, `.json` → `json.loads`, `.yaml` → `yaml.safe_load`). 인식되지 않는 확장자는 Python으로 폴백해 실패하고, 이것이 수리로 연쇄됩니다. `.c`/`.cpp`/`.h`는 확장자 맵(`services/v3-service/pipeline.py`의 `_ext_to_lang`)에 없으므로, 샌드박스 자체에는 C/C++ 검사기가 있음에도 C/C++ 파일은 Python 폴백을 탑니다.
+**무슨 일인가:** V3 스모크 체크는 언어 인식입니다 — 대상 파일의 확장자에서 언어를 도출해 알맞은 검사기로 라우팅합니다(`.py` → Python compile, `.js` → `node --check`, `.ts` → `tsc --noEmit`, `.go` → `gofmt -e`, `.java` → `javac`, `.kt` → `kotlinc`, `.rs` → `rustc`, `.rb` → `ruby`, `.php` → `php`, `.sh` → `bash -n`, `.html` → `html.parser`, `.xml` → `ElementTree`, `.json` → `json.loads`, `.yaml` → `yaml.safe_load`). 인식되지 않는 확장자는 Python으로 폴백해 실패하고, 이것이 수리로 연쇄됩니다. `.c`/`.cpp`/`.h`는 확장자 맵(`services/v3-service/pipeline.py`의 `_ext_to_lang`)에 없으므로, 샌드박스 자체에는 C/C++ 검사기가 있음에도 C/C++ 파일은 Python 폴백을 탑니다.
 
 `/v3/generate`가 승인된 프로젝트 빌드 명령을 받으면, V3는 구문/셀프 테스트 검증 후에 `build_verify` 이벤트를 내보냅니다. 명령은 후보를 프로젝트에 겹쳐 얹은 일시적 샌드박스 워크스페이스에서 실행되므로, 실패한 빌드 증거가 실제 체크아웃에 후보를 쓰지 않은 채 `passed=true`를 차단합니다. 오버레이 스냅샷은 의존성 캐시, 시크릿, 모델/데이터 아티팩트, 심링크, 대용량 파일을 건너뛰며 파일 수와 바이트 제한을 강제합니다. 프로젝트 빌드에 무거운 의존성이 필요하면, 명시적 검증 워크플로의 일부로 샌드박스 워크스페이스 안에 설치하세요.
 
@@ -812,7 +814,7 @@ docker compose logs geometric-lens
 
 **증상:** 모든 것이 정상으로 보고됩니다 — 파드는 `Ready`, `/health`는 200, `gx-score`는 범위 안으로 보이는 `gx_score`와 `likely_correct` 판정을 반환합니다 — 그런데 `cx_energy`가 보정된 범위에서 자릿수 단위로 벗어나 있습니다(모델의 통과/실패 평균이 20~30인데 ~600 같은 값). 이 상태에서 시작한 게이트 벤치마크는 완전하고 그럴듯하지만 전적으로 무효한 결과를 만들어냅니다.
 
-**원인:** 임베딩 서버가 Geometric Lens의 `C(x)`/`G(x)` 아티팩트가 학습된 것과 다른 `/embedding` 규약으로 응답하고 있습니다 — 보통 풀링 대신 토큰별, 또는 L2 정규화 대신 비정규화(‖v‖가 ~1이 아니라 ≈60). 차원은 같고 분포가 다르므로, 코스트 필드 MLP가 거대한 에너지로 외삽하고 `cx_normalized`가 포화됩니다. `--pooling mean` 없이 서빙 스택을 재빌드한 뒤에 발생합니다(llama-server에는 `--embd-normalize` 서버 플래그가 없습니다. 렌즈는 `/embedding` 본문의 `embd_normalize`로 호출마다 L2 정규화를 요청합니다).
+**원인:** 임베딩 서버가 Geometric Lens의 `C(x)`/`G(x)` 아티팩트를 학습할 때와 다른 `/embedding` 규약으로 응답합니다. 풀링 방법이 다르거나, 원시 벡터 대신 L2 정규화된 벡터를 반환하는 경우입니다(‖v‖≈137 대신 ≈1). 차원은 같아도 분포가 달라 코스트 필드 MLP가 큰 에너지로 외삽하고 `cx_normalized`가 포화됩니다. `ATLAS_EMBED_POOLING`을 `none`(기본값)이나 `mean` 대신 `cls` 또는 `last`로 설정하거나, 서버가 `embd_normalize: -1`에도 불구하고 풀링과 정규화를 수행해 ‖v‖≈1인 평탄한 벡터를 반환할 때 발생할 수 있습니다(정규화된 토큰별 행이 반환되면 렌즈가 오류로 거부합니다). llama-server에는 `--embd-normalize` 서버 플래그가 없습니다. 렌즈는 `/embedding` 본문의 `embd_normalize: -1`로 호출마다 원시 벡터를 요청하고 토큰별 행을 직접 평균 풀링합니다.
 
 **확인:** 아티팩트 옆에 `drift_fingerprint.json`이 있는 경우(아래 3단계 참고), 렌즈는 자체 테스트(부팅 시, 그리고 재시도 가능한 실패 후 `/ready`가 다시 실행할 때)에서 그 지문을 다시 채점합니다. `/ready`와 `/health`를 확인하세요:
 ```bash
@@ -824,11 +826,11 @@ curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerpri
 1. 임베딩 서버의 규약을 확인하세요. 풀링 + 정규화된 서버는 ‖v‖≈1인 평탄한 벡터를 반환합니다:
    ```bash
    curl -s -X POST http://localhost:8080/embedding -H "Authorization: Bearer $(cat secrets/service-token)" -H 'Content-Type: application/json' \
-     -d '{"content":"def add(a, b): return a + b"}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; import itertools; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
+     -d '{"content":"def add(a, b): return a + b","embd_normalize":-1}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
    ```
    풀링된 `norm`은 수백 단위여야 합니다(제공되는 Gemma 아티팩트 기준 약 100-150). `norm`이 정확히 `1.0`이면 `embd_normalize: -1`에도 불구하고 서버가 벡터를 정규화한 것이며, 이 경우 C(x)는 모든 입력에 대해 약 0.8이라는 평탄한 값을 반환합니다. 정상처럼 보이지만 아무것도 구분하지 못하는 점수입니다. `cx_normalization.json`의 `pass_energy_mean`과 비교하세요: 서빙되는 에너지는 한 값에 머무르지 않고 그 대역에 걸쳐 분포해야 합니다.
 2. `ATLAS_EMBED_POOLING=none`(기본값. [CONFIGURATION.md](../../guides/CONFIGURATION.md) 참고)을 설정하고, 엔트리포인트가 플래그를 고정하도록 llama-server 컨테이너를 재생성하세요. `--pooling`은 llama.cpp에서 서버 전역 설정이며, 전체 텍스트 경로와 per-step 경로를 모두 지원하는 값은 `none`뿐입니다. 풀링과 스케일은 클라이언트 측에서 처리됩니다.
-3. 서버가 올바른 규약으로 응답하면 부팅 자체 테스트가 통과하고 `/ready`가 200을 반환합니다. 재빌드(`atlas lens build`)는 `embedding_contract`를 `model_identity.json`에 새깁니다. 다만 드리프트 지문은 쓰지 않습니다: `geometric_lens.drift.write_fingerprint`가 존재하지만 아직 이를 호출하는 명령이 없으므로, 지문 검사는 `drift_fingerprint.json`을 직접 만들어 둔 경우에만 동작합니다.
+3. 서버가 올바른 규약으로 응답하면 부팅 자체 테스트가 통과하고 `/ready`가 200을 반환합니다. 재빌드(`atlas lens build`)는 `embedding_contract`를 `model_identity.json`에 기록하고 아티팩트 디렉터리에 `drift_fingerprint.json`을 써서 부팅 자체 테스트가 규약을 다시 확인하게 합니다. 참조 텍스트를 채점할 수 없으면 경고와 함께 지문을 생략하며, 그 번들에서는 드리프트 검사가 아무것도 강제하지 않습니다.
 
 ### 임베딩 추출 실패
 
@@ -904,7 +906,9 @@ docker network create sandbox-net
 
 **증상:** 특정 언어에 대해 샌드박스가 오류를 반환합니다.
 
-**지원 언어(실행):** Python, JavaScript, TypeScript, Go, Rust, C, C++, Bash. 구문 전용 검사(`/syntax-check`, V3 스모크 체크)는 HTML, XML, JSON, YAML도 추가로 커버합니다.
+**구현된 `/execute` 핸들러:** Python, JavaScript, TypeScript, Go, Java, Kotlin, Rust, C, C++, Ruby, PHP, Bash. 기본 Docker 배포에서는 Go, Rust, C, C++를 컴파일할 수 있지만 `/tmp/sandbox` 아래의 `noexec` 워크스페이스에서 네이티브 바이너리를 실행할 수 없습니다([#163](https://github.com/inferstep/ATLAS/issues/163)). `run_command`(`/shell`)로 프로젝트 명령을 실행하여 `/workspace`에서 빌드하고 실행하세요. Go의 `go run`은 실행 가능한 `GOTMPDIR` 마운트를 사용합니다. Java와 Kotlin은 JVM, Ruby와 PHP는 인터프리터로 실행됩니다. 이 네 언어 경로는 [지원 매트릭스](../../guides/SUPPORT_MATRIX.md)에서 Preview입니다. 핸들러가 있다는 사실만으로 Supported를 뜻하지 않습니다.
+
+**구문 검사:** `/syntax-check`는 HTML, XML, JSON, YAML도 검사합니다. V3는 파일 확장자로 스모크 검사기를 선택합니다. C/C++ 확장자 맵의 한계는 [비 Python 파일에서 V3가 수 분간 멈춤](#비-python-파일에서-v3가-수-분간-멈춤)을 참고하세요. 구문 검사는 실행이 아닙니다.
 
 사용 가능한 런타임 확인:
 ```bash
@@ -917,7 +921,7 @@ curl -s http://localhost:30820/languages | python3 -m json.tool
 
 ### bench가 요청보다 적은 태스크만 실행함 (`LIMITED MODE: running N tasks`의 N이 `--tasks`보다 작음)
 
-**증상:** `atlas bench --tasks 200`이 `LIMITED MODE: running 100 tasks`(또는 요청보다 적은 수)를 보고하거나, 재개한 실행이 `Resuming: N/N tasks already done, 0 remaining`을 출력하고 즉시 종료됩니다.
+**증상:** `atlas bench --tasks 200`이 `LIMITED MODE: running 100 tasks`(또는 요청보다 적은 수)를 보고하거나, 재개한 실행이 `Resuming: {done}/{total} complete, {n} remaining`을 출력하고 즉시 종료됩니다.
 
 **원인:** LiveCodeBench 데이터셋 캐시(`benchmark/datasets/.cache/livecodebench_v5.jsonl`)가 부분 다운로드 상태입니다. HuggingFace rows API는 페이지네이션 도중 실패할 수 있으며, 이전 버전은 받은 만큼만 캐시하고 그 파일을 영구히 신뢰했습니다. release_v5의 전체 세트는 약 880개 태스크입니다.
 
@@ -946,14 +950,9 @@ T2 파일에 대해서는 정상입니다. V3 파이프라인은 여러 번의 L
 
 **증상:** 시스템이 느려지거나 서비스가 OOMKilled됩니다.
 
-**예상 RAM 사용량:**
-- llama-server: 약 8 GB (모델은 VRAM에, RAM은 최소)
-- geometric-lens: 약 200 MB (PyTorch 런타임 + 모델)
-- v3-service: 약 150 MB (PyTorch 없음: 파싱과 오케스트레이션만)
-- sandbox: 약 100 MB (기본, 컴파일 중 급증)
-- atlas-proxy: 약 30 MB (Go 바이너리)
+가장 작은 GPU 티어에는 시스템 RAM 12 GB, medium 티어에는 16 GB가 필요하며 상위 티어에는 더 필요합니다. 이 호스트 요구 사항은 컨테이너, 호스트 OS, 샌드박스 tmpfs, 파이프라인의 일시적인 부하를 포함하며 유휴 서비스 사용량의 측정값이 아닙니다. 외장 GPU의 VRAM은 별도 예산이지만 Apple Silicon은 시스템 메모리를 공유합니다. [호스트 요구 사항](../../guides/SETUP.md#hardware-sizing)을 참고하세요.
 
-**합계:** 약 500 MB RAM + 8.2 GB VRAM. 시스템 RAM이 14 GB 미만이면 다른 서비스와 메모리를 경합할 수 있습니다.
+`atlas tier`로 하드웨어 티어를, `docker stats`로 현재 컨테이너 사용량을 확인하세요. 컴파일과 의존성 설치로 샌드박스 메모리 사용량이 늘 수 있으며, tmpfs에 쓰는 파일도 컨테이너 메모리 제한에 포함됩니다.
 
 ---
 
