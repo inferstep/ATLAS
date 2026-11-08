@@ -955,7 +955,9 @@ on the commit of a smoke run.
 ### The timer
 
 A timer on the server starts the script with `--tick`, every 15 minutes.
-The server only calls out: it has no open port, no tunnel and no runner for
+A look that comes due while the one before still runs does not start beside
+it: it starts as soon as that one ends, and the times that passed meanwhile
+give that one look, not several. The server only calls out: it has no open port, no tunnel and no runner for
 this. One look:
 
 1. sends each status that waits;
