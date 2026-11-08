@@ -19,6 +19,9 @@ come from your checkout, so run `git pull` first.
 - `ATLAS_ALLOW_PICKLE_GX` is gone: the lens loads G(x) from `gx_xgboost.json` only.
   A model folder that holds only `gx_xgboost.pkl` runs without G(x) and says so in
   the lens's log. Run `atlas lens build` to rebuild it.
+- A lens that runs on the host ([SETUP.md](docs/guides/SETUP.md) Method 2) needs
+  Python 3.12 or later. Its numpy 2.5 and xgboost 3.4 do not install on 3.11. The
+  lens image moved to Python 3.13, the Python of the sandbox and V3 images.
 
 ### Changed: the Compose overlays and the K3s templates moved to `deploy/`
 
