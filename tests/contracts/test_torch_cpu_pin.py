@@ -59,19 +59,25 @@ def test_torch_lock_uses_cpu_index(name, lockfile, requirements):
 
 
 def test_ci_lens_job_installs_the_cpu_torch():
-    """CI's lens test job installs the CPU build of torch, as the Dockerfile does.
+    """CI's lens tests and the CLI's lens tests install the CPU build of torch, as the Dockerfile does.
 
-    It installs .github/requirements/lens.txt, whose torch comes from PyTorch's
-    CPU index (a version that ends in "+cpu"); tests/contracts/test_ci_lock.py
-    holds the version to services/geometric-lens/requirements.txt. It drifted once: CI
+    The services/geometric-lens/tests subset installs the image's own lock,
+    services/geometric-lens/requirements-lock.txt, on the image's Python;
+    test_torch_lock_uses_cpu_index holds its torch to the CPU build.
+    The tests/atlas subset installs .github/requirements/lens.txt, whose torch
+    also comes from PyTorch's CPU index (a version that ends in "+cpu");
+    tests/contracts/test_ci_lock.py holds the version to
+    services/geometric-lens/requirements.txt. It drifted once: CI
     pre-installed 2.12.1 while requirements.txt pinned 2.13.0, so the
     requirements install replaced the CPU wheel with PyPI's build on every
     run, the failure this file exists to prevent in images.
     """
     workflow = (REPO / ".github" / "workflows" / "test.yml").read_text()
     lock = (REPO / ".github" / "requirements" / "lens.txt").read_text()
+    assert "pip install --require-hashes -r services/geometric-lens/requirements-lock.txt" in workflow, (
+        "test.yml: the lens subset does not install services/geometric-lens/requirements-lock.txt")
     assert "pip install --require-hashes -r .github/requirements/lens.txt" in workflow, (
-        "test.yml: the lens job does not install .github/requirements/lens.txt")
+        "test.yml: the tests/atlas subset does not install .github/requirements/lens.txt")
     torch = re.search(r"^torch==(\S+)", lock, re.MULTILINE)
     why = (f"lens.txt pins torch {torch.group(1) if torch else 'nowhere'}, not the "
            f"build of PyTorch's CPU index. Fix: run scripts/ci/ci-lock.sh.")

@@ -144,11 +144,23 @@ jobs:
           - tests/concurrency
           - tests/perf
           - services/geometric-lens/tests
+        # The tests of a service run on the Python of the service's image, so a
+        # test that passes here passes on the interpreter that ships:
+        # tests/v3-service on v3-service's 3.13, tests/infrastructure on the
+        # sandbox's 3.13 (it boots the sandbox's executor), and the lens's
+        # tests on the lens's 3.11. The other subsets run on 3.12, the Python
+        # that ci.txt is made for. tests/contracts/test_ci_lock.py holds each
+        # Python to its Dockerfile and the default to ci.txt.
         include:
+          - subset: tests/v3-service
+            python: '3.13'
+          - subset: tests/infrastructure
+            python: '3.13'
           # The lens's check keeps the name it had before its folder moved:
           # the rulesets require it by that name.
           - subset: services/geometric-lens/tests
             label: geometric-lens/tests
+            python: '3.11'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -156,7 +168,7 @@ jobs:
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
-          python-version: '3.12'
+          python-version: ${{ matrix.python || '3.12' }}
           cache: pip
           # Default cache key only tracks requirements*.txt; include
           # pyproject.toml so dependency changes there rotate the cache.
@@ -188,14 +200,20 @@ jobs:
           pip install --require-hashes -r .github/requirements/ci.txt
           pip install --no-deps -e .
 
+      - name: install lens dependencies (the image's lock)
+        if: matrix.subset == 'services/geometric-lens/tests'
+        # The lock that services/geometric-lens/Dockerfile installs, so the
+        # tests run with the packages the image ships: the CPU-only torch
+        # wheel (the CUDA default is ~2 GB and pointless on a CPU runner) and
+        # the service requirements. xgboost tests importorskip if absent, but
+        # requirements.txt pins xgboost-cpu so they run here.
+        run: pip install --require-hashes -r services/geometric-lens/requirements-lock.txt
+
       - name: install lens dependencies (CPU torch)
-        if: matrix.subset == 'services/geometric-lens/tests' || matrix.subset == 'tests/atlas'
-        # Mirrors services/geometric-lens/Dockerfile: CPU-only torch wheel (the
-        # CUDA default is ~2 GB and pointless on a CPU runner), then the
-        # service requirements, from a hashed lock (see lens.in). xgboost
-        # tests importorskip if absent, but requirements.txt pins
-        # xgboost-cpu so they run here. The CLI's lens and ASA tests need
-        # torch, gguf and huggingface_hub, and skip without them.
+        if: matrix.subset == 'tests/atlas'
+        # The CLI's lens and ASA tests need torch, gguf and huggingface_hub,
+        # and skip without them: the CPU-only torch, the lens's requirements
+        # and huggingface_hub, from a hashed lock (see lens.in).
         run: pip install --require-hashes -r .github/requirements/lens.txt
 
       - name: pytest
