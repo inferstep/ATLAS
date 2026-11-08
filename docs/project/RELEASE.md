@@ -158,25 +158,42 @@ AMD or a Vulkan GPU or on K3s. Before 3.2.0, on a host of each kind:
 
 ### Rollback check for 3.2.0
 
-`atlas rollback` is the way back from a failed upgrade. It has not run on a
-real install since the images moved to `ghcr.io/inferstep` in 3.1.4, and its
-tests mock every Docker step. The code leaves three things that only a real
-run shows:
+`atlas rollback` returns an install to the release that ran before the last
+`atlas upgrade`. It has not run on a real install since the images moved to
+`ghcr.io/inferstep` in 3.1.4. Its tests mock every Docker step.
 
-- When the previous images are gone, the rollback pulls them inside
-  `docker compose up -d`, which has a 600 s timeout. The upgrade's own pull
-  has 3600 s.
-- Every service has a `build:` section, so when that pull fails, Compose may
-  build the images from the checkout under the previous release's tag.
+The restore point keeps a copy of `.env`, but `atlas rollback` does not use
+it. The command reads `previous_tag` from the restore point and then does what
+`atlas rollback --to <tag>` does (`run_rollback` in `atlas/upgrade_engine.py`):
+
+1. It checks the image signatures for the owner that `.env` names.
+2. It changes only `ATLAS_IMAGE_TAG` in `.env`.
+3. It runs `docker compose pull`, with a timeout of 3600 s
+   (`ATLAS_UPGRADE_PULL_TIMEOUT`). Then it runs `docker compose up -d`, with
+   a timeout of 600 s.
+4. It waits for the proxy's `/ready`.
+
+The code leaves these questions, which only a real run answers:
+
+- The upgrade moves a legacy `ATLAS_GHCR_OWNER=itigges22` to `inferstep`.
+  The rollback does not move it back, and `inferstep` has no 3.1.3 images.
+  Run 1 shows what the pull does then.
+- Every service has a `build:` section. When the pull fails, Compose may build
+  the images from the checkout under the previous release's tag.
 - The rollback moves neither the checkout nor the CLI, so the previous images
   run under the new compose file. The 3.2.0 one changes the embedding pooling
   default and the users the services run as.
 
-Run the check twice, on a Linux CUDA host:
+The pass conditions below describe a correct rollback. Do not change them to
+fit the current code: the run records each difference as a failure.
+
+Run the check twice, on a Linux CUDA host. Start run 1 only after the
+code-health work ([#262](https://github.com/inferstep/ATLAS/issues/262)) and
+its follow-ups are finished:
 
 | Run | When | `PREV` | `PREV_OWNER` | `NEXT` |
 |---|---|---|---|---|
-| 1 | Now | `3.1.3` | `itigges22` | `3.1.7` |
+| 1 | After the code-health work | `3.1.3` | `itigges22` | `3.1.7` |
 | 2 | Once the candidate is tagged (release process, step 2) | `3.1.7` | `inferstep` | `3.2.0-rc.N` |
 
 Each run has two cases:
@@ -194,8 +211,8 @@ return to the earlier images
 and `latest` never points at a candidate.
 
 The host needs git, Python 3.9 or newer with `venv`, Docker with the Compose
-and Buildx plugins, `jq`, `curl` and cosign 3. The upgrade checks the image
-signatures with cosign 3; without it, set `ATLAS_UPGRADE_SKIP_VERIFY=1` and say
+and Buildx plugins, `jq`, `curl` and cosign 3. The upgrade and the rollback
+check the image signatures with cosign 3; without it, set `ATLAS_UPGRADE_SKIP_VERIFY=1` and say
 so in the record. Stop any other ATLAS stack on the host first, since this one
 uses the same ports. Keep one shell for the whole run: every step reads its
 variables.
@@ -227,9 +244,22 @@ A failed, copy `$CHECK/case-A/env-before` back to `.env` before case B.
 CASE=A   # then CASE=B
 OUT=$CHECK/case-$CASE && mkdir -p "$OUT"
 git checkout "v$PREV" && pip install -e .
-docker compose pull && docker compose up -d
-until curl -fsS -o /dev/null http://localhost:${ATLAS_PROXY_PORT:-8090}/ready; do sleep 5; done
+docker compose pull && docker compose up -d && echo "started"
+deadline=$((SECONDS + 600))
+until curl -fsS -m 5 -o /dev/null http://localhost:${ATLAS_PROXY_PORT:-8090}/ready; do
+  if [ "$SECONDS" -ge "$deadline" ]; then echo "not ready after 600 s"; break; fi
+  sleep 5
+done
 docker compose images | tee "$OUT/images-before.txt"
+```
+
+If `started` does not appear, or the wait prints `not ready after 600 s`, the
+previous release did not start. Save the diagnostics with these commands.
+Then stop the case and record it as a failure.
+
+```bash
+docker compose ps -a > "$OUT/start-ps.txt"
+docker compose logs --no-color > "$OUT/start-logs.txt"
 ```
 
 **3. Move the checkout to the new release and take the baseline.** An
@@ -282,7 +312,7 @@ checkout and does not move it.
 ```bash
 cmp "$OUT/env-before" .env && echo ".env is as before the upgrade"
 docker compose ps --format '{{.Service}} {{.Image}}'
-curl -fsS -o /dev/null -w '%{http_code}\n' http://localhost:${ATLAS_PROXY_PORT:-8090}/ready
+curl -sS -m 10 -o /dev/null -w '%{http_code}\n' http://localhost:${ATLAS_PROXY_PORT:-8090}/ready
 docker compose images | tee "$OUT/images-after.txt"
 atlas doctor --json > "$OUT/doctor-after.json"
 diff <(jq -r '.checks[] | "\(.name): \(.status)"' "$OUT/doctor-before.json") \
@@ -297,15 +327,15 @@ docker compose images --format json | jq -r '.[].ID' | sort -u > "$OUT/ids-after
 diff "$OUT/ids-before.txt" "$OUT/ids-after.txt" && echo "same images as before the upgrade"
 ```
 
-Case B, each image came from the registry and was not built from the
-checkout:
+Case B, each image that a container runs came from the registry and was not
+built from the checkout:
 
 ```bash
-for image in atlas-llama atlas-lens atlas-v3 atlas-sandbox atlas-proxy; do
-  ref=ghcr.io/$PREV_OWNER/$image
-  pulled=$ref@$(docker buildx imagetools inspect "$ref:$PREV" --format '{{.Manifest.Digest}}')
-  if docker image inspect "$ref:$PREV" --format '{{join .RepoDigests "\n"}}' | grep -qxF "$pulled"
-  then echo "pulled: $image"; else echo "NOT the registry's image: $image"; fi
+docker compose images --format json | jq -r '.[] | "\(.Repository) \(.Tag)"' | sort -u |
+while read -r repo tag; do
+  digest=$(docker buildx imagetools inspect "$repo:$tag" --format '{{.Manifest.Digest}}')
+  if docker image inspect "$repo:$tag" --format '{{join .RepoDigests "\n"}}' | grep -qxF "$repo@$digest"
+  then echo "pulled: $repo:$tag"; else echo "NOT the registry's image: $repo:$tag"; fi
 done
 ```
 
@@ -327,7 +357,7 @@ Record for each case, besides pass or fail:
 
 - The rollback's wall time, the `real` line of `time`.
 - Case B: the size of the pulled images, the `SIZE` column of
-  `images-after.txt`. The pull runs under the 600 s timeout of `up -d`.
+  `images-after.txt`. The rollback's pull has a timeout of 3600 s.
 - `git describe` of the checkout during the rollback.
 - The GPU, the model (`ATLAS_MODEL_FILE` in `.env`), `docker compose version`,
   and whether the signatures were checked or skipped.
