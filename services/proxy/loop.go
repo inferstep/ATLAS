@@ -15,6 +15,718 @@ import (
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
+// checkCategory records the cause separately from the turn's control decision.
+type checkCategory uint8
+
+const (
+	checkPass checkCategory = iota + 1
+	checkGuardRefusal
+	checkToolError
+	checkModelError
+	checkInfrastructureError
+)
+
+type checkResult struct {
+	category checkCategory
+	outcome  turnOutcome
+}
+
+type orderedCheck[T any] struct {
+	name string
+	run  func(*T) checkResult
+}
+
+func runCheckPhase[T any](checks []orderedCheck[T], input *T) checkResult {
+	for _, check := range checks {
+		result := check.run(input)
+		if result.outcome != turnContinues {
+			return result
+		}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+// proxyChecks owns the order within each existing execution phase.
+// Preparation rows preserve the boundaries between checks with shared state.
+var proxyChecks struct {
+	request              []orderedCheck[requestCheckInput]
+	requestDirectory     []orderedCheck[requestServiceCheckInput]
+	requestConfiguration []orderedCheck[requestServiceCheckInput]
+	requestServices      []orderedCheck[requestServiceCheckInput]
+	stream               []orderedCheck[streamCheckInput]
+	conversation         []orderedCheck[AgentContext]
+	modelStart           []orderedCheck[modelCheckInput]
+	modelInference       []orderedCheck[modelCheckInput]
+	modelReply           []orderedCheck[modelCheckInput]
+	beforeWorkspace      []orderedCheck[toolCheckInput]
+	workspace            []orderedCheck[toolCheckInput]
+	afterWorkspace       []orderedCheck[toolCheckInput]
+	writePreparation     []orderedCheck[writePreparationCheckInput]
+	warnedWrite          []orderedCheck[warnedWriteCheckInput]
+	fencedCall           []orderedCheck[fencedCallCheckInput]
+	fencedFetch          []orderedCheck[fencedFetchCheckInput]
+	fencedResolution     []orderedCheck[writePreparationCheckInput]
+	existingWrite        []orderedCheck[existingWriteCheckInput]
+	beforeDispatch       []orderedCheck[toolCheckInput]
+	toolHealth           []orderedCheck[toolHealthCheckInput]
+	dispatchSelection    []orderedCheck[dispatchSelectionCheckInput]
+	dispatch             []orderedCheck[dispatchCheckInput]
+	dispatchAfter        []orderedCheck[dispatchSelectionCheckInput]
+	toolReported         []orderedCheck[toolHealthCheckInput]
+	failure              []orderedCheck[failureCheckInput]
+	readFile             []orderedCheck[readFileCheckInput]
+	outlineInput         []orderedCheck[outlineInputCheckInput]
+	searchInput          []orderedCheck[searchInputCheckInput]
+	findInput            []orderedCheck[findInputCheckInput]
+	writeInput           []orderedCheck[writeEarlyCheckInput]
+	writeEarly           []orderedCheck[writeEarlyCheckInput]
+	fastWrite            []orderedCheck[fastWriteCheckInput]
+	directWrite          []orderedCheck[fastWriteCheckInput]
+	directLanding        []orderedCheck[directLandingCheckInput]
+	editInput            []orderedCheck[editInputCheckInput]
+	editRead             []orderedCheck[editReadCheckInput]
+	matchedEdit          []orderedCheck[matchedEditCheckInput]
+	composedEdit         []orderedCheck[composedEditCheckInput]
+	editLanding          []orderedCheck[editLandingCheckInput]
+	insertInput          []orderedCheck[insertInputCheckInput]
+	replaceInput         []orderedCheck[replaceInputCheckInput]
+	lineRead             []orderedCheck[lineReadCheckInput]
+	insertion            []orderedCheck[insertionCheckInput]
+	lineReplacement      []orderedCheck[lineReplacementCheckInput]
+	lineLanding          []orderedCheck[lineLandingCheckInput]
+	structuralInput      []orderedCheck[structuralInputCheckInput]
+	structuralRead       []orderedCheck[structuralReadCheckInput]
+	structuralSplice     []orderedCheck[structuralSpliceCheckInput]
+	structuralLanding    []orderedCheck[structuralLandingCheckInput]
+	deleteInput          []orderedCheck[deleteCheckInput]
+	deleteTarget         []orderedCheck[deleteCheckInput]
+	deleteApproval       []orderedCheck[deleteCheckInput]
+	move                 []orderedCheck[moveCheckInput]
+	commandTrust         []orderedCheck[commandCheckInput]
+	commandMemory        []orderedCheck[commandCheckInput]
+	background           []orderedCheck[backgroundCheckInput]
+	tailInput            []orderedCheck[tailInputCheckInput]
+	stopInput            []orderedCheck[stopInputCheckInput]
+	editCandidate        []orderedCheck[editCandidateCheckInput]
+	candidate            []orderedCheck[candidateCheckInput]
+	delivery             []orderedCheck[deliveryCheckInput]
+	settlement           []orderedCheck[settlementCheckInput]
+	exit                 []orderedCheck[exitCheckInput]
+	completion           []orderedCheck[completionCheckInput]
+}
+
+func init() {
+	proxyChecks.request = []orderedCheck[requestCheckInput]{
+		{"request.method", (*requestCheckInput).method},
+		{"request.decode", (*requestCheckInput).decode},
+		{"request.message", (*requestCheckInput).message},
+	}
+}
+
+func init() {
+	proxyChecks.requestDirectory = []orderedCheck[requestServiceCheckInput]{
+		{"request.directory", (*requestServiceCheckInput).directory},
+	}
+}
+
+func init() {
+	proxyChecks.requestConfiguration = []orderedCheck[requestServiceCheckInput]{
+		{"request.configuration", (*requestServiceCheckInput).configuration},
+	}
+}
+
+func init() {
+	proxyChecks.requestServices = []orderedCheck[requestServiceCheckInput]{
+		{"request.contract", (*requestServiceCheckInput).contract},
+		{"request.lens", (*requestServiceCheckInput).lens},
+	}
+}
+
+func init() {
+	proxyChecks.stream = []orderedCheck[streamCheckInput]{
+		{"request.streaming", (*streamCheckInput).supported},
+	}
+}
+
+func init() {
+	proxyChecks.conversation = []orderedCheck[AgentContext]{
+		{"conversation.workspace_alignment", func(ctx *AgentContext) checkResult {
+
+			if problem := verifyWorkspaceAlignment(ctx); problem != "" {
+				log.Printf("[agent] refusing to start — proxy and sandbox workspaces are not aligned")
+				emitTerminal(ctx, nil, wire.TerminalFailed, "workspace_misaligned", problem)
+				return checkResult{checkInfrastructureError, runEnds}
+			}
+			return checkResult{checkPass, turnContinues}
+		}},
+	}
+}
+
+func init() {
+	proxyChecks.modelStart = []orderedCheck[modelCheckInput]{
+		{"model.cancellation", (*modelCheckInput).cancellation},
+	}
+}
+
+func init() {
+	proxyChecks.modelInference = []orderedCheck[modelCheckInput]{
+		{"model.inference", (*modelCheckInput).inference},
+	}
+}
+
+func init() {
+	proxyChecks.modelReply = []orderedCheck[modelCheckInput]{
+		{"model.parse", (*modelCheckInput).parse},
+		{"model.swallowedContent", (*modelCheckInput).swallowedContent},
+		{"model.ambiguousContent", (*modelCheckInput).ambiguousContent},
+	}
+}
+
+func init() {
+	proxyChecks.beforeWorkspace = []orderedCheck[toolCheckInput]{
+		{"tool.permission", func(input *toolCheckInput) checkResult {
+			if input.parsed.Name != "delete_file" {
+				return input.permission()
+			}
+			return checkResult{checkPass, turnContinues}
+		}},
+		{"tool.truncated_arguments", func(input *toolCheckInput) checkResult {
+			return turnCheckResult(checkModelError, input.loop.refuseTruncatedArgs(input.turn, *input.parsed))
+		}},
+	}
+}
+
+func init() {
+	proxyChecks.workspace = []orderedCheck[toolCheckInput]{
+		{"tool.workspace", (*toolCheckInput).workspace},
+	}
+}
+
+func init() {
+	proxyChecks.afterWorkspace = []orderedCheck[toolCheckInput]{
+		{"tool.record_intent", func(input *toolCheckInput) checkResult {
+			noteMutationIntent(input.loop.ctx, input.loop.st, input.parsed.Name, input.parsed.Args)
+			return checkResult{checkPass, turnContinues}
+		}},
+		{"tool.deletion_permission", func(input *toolCheckInput) checkResult {
+			if input.parsed.Name == "delete_file" {
+				return input.permission()
+			}
+			return checkResult{checkPass, turnContinues}
+		}},
+		{"tool.run_first_edit", func(input *toolCheckInput) checkResult {
+			return turnCheckResult(checkGuardRefusal, input.loop.runFirstGateForEdits(*input.parsed))
+		}},
+		{"tool.prepare_write", func(input *toolCheckInput) checkResult {
+			return input.loop.prepareWriteFile(input.turn, input.parsed, input.intentArgs)
+		}},
+	}
+}
+
+func init() {
+	proxyChecks.writePreparation = []orderedCheck[writePreparationCheckInput]{
+		{"write_preparation.run_first", func(input *writePreparationCheckInput) checkResult {
+			return turnCheckResult(checkGuardRefusal, input.loop.runFirstGateForWrite(input.write))
+		}},
+		{"write_preparation.fenced", func(input *writePreparationCheckInput) checkResult {
+			return input.loop.resolveFencedContent(input.turn, input.parsed, input.intentArgs, input.write)
+		}},
+	}
+}
+
+func init() {
+	proxyChecks.warnedWrite = []orderedCheck[warnedWriteCheckInput]{
+		{"warned_write.recovery", (*warnedWriteCheckInput).recovery},
+		{"warned_write.bounce", (*warnedWriteCheckInput).bounce},
+	}
+}
+
+func init() {
+	proxyChecks.fencedCall = []orderedCheck[fencedCallCheckInput]{
+		{"fenced_call.arguments", (*fencedCallCheckInput).arguments},
+		{"fenced_call.decode", (*fencedCallCheckInput).decode},
+		{"fenced_call.path", (*fencedCallCheckInput).path},
+		{"fenced_call.workspace", (*fencedCallCheckInput).workspace},
+		{"fenced_call.denyList", (*fencedCallCheckInput).denyList},
+	}
+}
+
+func init() {
+	proxyChecks.fencedFetch = []orderedCheck[fencedFetchCheckInput]{
+		{"fenced_fetch.channel", (*fencedFetchCheckInput).channel},
+		{"fenced_fetch.allowance", (*fencedFetchCheckInput).allowance},
+		{"fenced_fetch.budget", (*fencedFetchCheckInput).budget},
+	}
+}
+
+func init() {
+	proxyChecks.fencedResolution = []orderedCheck[writePreparationCheckInput]{
+		{"fenced_resolution.recovery", (*writePreparationCheckInput).recoverChannel},
+		{"fenced_resolution.body", func(input *writePreparationCheckInput) checkResult {
+			return input.loop.replaceFencedSentinel(input.turn, input.parsed, input.intentArgs, input.write, input.trimmed)
+		}},
+	}
+}
+
+func init() {
+	proxyChecks.existingWrite = []orderedCheck[existingWriteCheckInput]{
+		{"existing_write.unread", (*existingWriteCheckInput).unread},
+		{"existing_write.rewrite", (*existingWriteCheckInput).rewrite},
+	}
+}
+
+func init() {
+	proxyChecks.beforeDispatch = []orderedCheck[toolCheckInput]{
+		{"dispatch.foreground_server", func(input *toolCheckInput) checkResult {
+			return turnCheckResult(checkGuardRefusal, input.loop.redirectForegroundServer(*input.parsed, input.intentArgs))
+		}},
+		{"dispatch.unsafe_command", func(input *toolCheckInput) checkResult {
+			return turnCheckResult(checkGuardRefusal, input.loop.refuseUnsafeRunCommand(*input.parsed, input.intentArgs))
+		}},
+		{"dispatch.unsafe_background", func(input *toolCheckInput) checkResult {
+			return turnCheckResult(checkGuardRefusal, input.loop.refuseUnsafeRunBackground(*input.parsed, input.intentArgs))
+		}},
+		{"dispatch.count_writes", func(input *toolCheckInput) checkResult {
+			input.runawayWrite = input.loop.countWholeFileWrites(*input.parsed)
+			return checkResult{checkPass, turnContinues}
+		}},
+		{"dispatch.banned_tool", func(input *toolCheckInput) checkResult {
+			return turnCheckResult(checkGuardRefusal, input.loop.refuseBannedTool(input.turn, *input.parsed))
+		}},
+		{"dispatch.rejected_proposal", func(input *toolCheckInput) checkResult {
+			return turnCheckResult(checkGuardRefusal, input.loop.answerRejectedProposal(*input.parsed, input.intentArgs))
+		}},
+		{"dispatch.broken_artifact", func(input *toolCheckInput) checkResult {
+			return turnCheckResult(checkGuardRefusal, input.loop.answerBrokenArtifact(*input.parsed, input.intentArgs))
+		}},
+		{"dispatch.identical_retry", func(input *toolCheckInput) checkResult {
+			return turnCheckResult(checkGuardRefusal, input.loop.refuseIdenticalRetry(input.turn, *input.parsed, input.intentArgs))
+		}},
+	}
+}
+
+func init() {
+	proxyChecks.toolHealth = []orderedCheck[toolHealthCheckInput]{
+		{"tool_health.repetition", (*toolHealthCheckInput).repetition},
+		{"tool_health.reasoning", (*toolHealthCheckInput).reasoning},
+		{"tool_health.lens", (*toolHealthCheckInput).lens},
+	}
+}
+
+func init() {
+	proxyChecks.dispatchSelection = []orderedCheck[dispatchSelectionCheckInput]{
+		{"dispatch_selection.cached_read", (*dispatchSelectionCheckInput).cachedRead},
+		{"dispatch_selection.rerun", (*dispatchSelectionCheckInput).rerun},
+	}
+}
+
+func init() {
+	proxyChecks.dispatch = []orderedCheck[dispatchCheckInput]{
+		{"dispatch.knownTool", (*dispatchCheckInput).knownTool},
+		{"dispatch.arguments", (*dispatchCheckInput).arguments},
+		{"dispatch.denyList", (*dispatchCheckInput).denyList},
+		{"dispatch.readOnly", (*dispatchCheckInput).readOnly},
+	}
+}
+
+func init() {
+	proxyChecks.dispatchAfter = []orderedCheck[dispatchSelectionCheckInput]{
+		{"dispatch_after.cancelled", (*dispatchSelectionCheckInput).cancelled},
+	}
+}
+
+func init() {
+	proxyChecks.toolReported = []orderedCheck[toolHealthCheckInput]{
+		{"tool_reported.lens", (*toolHealthCheckInput).reportedLensFailure},
+	}
+}
+
+func init() {
+	proxyChecks.failure = []orderedCheck[failureCheckInput]{
+		{"failure.ceiling", (*failureCheckInput).ceiling},
+		{"failure.same_path", (*failureCheckInput).samePath},
+	}
+}
+
+func init() {
+	proxyChecks.readFile = []orderedCheck[readFileCheckInput]{
+		{"read_file.path", (*readFileCheckInput).pathCheck},
+		{"read_file.read", (*readFileCheckInput).read},
+		{"read_file.binary", (*readFileCheckInput).binary},
+	}
+}
+
+func init() {
+	proxyChecks.outlineInput = []orderedCheck[outlineInputCheckInput]{
+		{"outlineInput.required", (*outlineInputCheckInput).required},
+	}
+}
+
+func init() {
+	proxyChecks.searchInput = []orderedCheck[searchInputCheckInput]{
+		{"searchInput.required", (*searchInputCheckInput).required},
+	}
+}
+
+func init() {
+	proxyChecks.findInput = []orderedCheck[findInputCheckInput]{
+		{"findInput.required", (*findInputCheckInput).required},
+	}
+}
+
+func init() {
+	proxyChecks.writeInput = []orderedCheck[writeEarlyCheckInput]{
+		{"write_input.path", (*writeEarlyCheckInput).pathCheck},
+	}
+}
+
+func init() {
+	proxyChecks.writeEarly = []orderedCheck[writeEarlyCheckInput]{
+		{"writeEarly.sibling", (*writeEarlyCheckInput).sibling},
+		{"writeEarly.echo", (*writeEarlyCheckInput).echo},
+		{"writeEarly.stub", (*writeEarlyCheckInput).stub},
+	}
+}
+
+func init() {
+	proxyChecks.fastWrite = []orderedCheck[fastWriteCheckInput]{
+		{"fast_write.syntax", (*fastWriteCheckInput).syntax},
+		{"fast_write.unresolved", (*fastWriteCheckInput).unresolved},
+	}
+}
+
+func init() {
+	proxyChecks.directWrite = []orderedCheck[fastWriteCheckInput]{
+		{"direct_write.unresolved", (*fastWriteCheckInput).directUnresolved},
+	}
+}
+
+func init() {
+	proxyChecks.directLanding = []orderedCheck[directLandingCheckInput]{
+		{"direct_landing.new_file_warning", (*directLandingCheckInput).newFileWarning},
+		{"direct_landing.rewrite_warning", (*directLandingCheckInput).rewriteWarning},
+		{"direct_landing.read_baseline", (*directLandingCheckInput).readBaseline},
+		{"direct_landing.embedded", (*directLandingCheckInput).embedded},
+		{"direct_landing.entrypoint", (*directLandingCheckInput).entrypoint},
+	}
+}
+
+func init() {
+	proxyChecks.editInput = []orderedCheck[editInputCheckInput]{
+		{"editInput.path", (*editInputCheckInput).path},
+		{"editInput.oldString", (*editInputCheckInput).oldString},
+	}
+}
+
+func init() {
+	proxyChecks.editRead = []orderedCheck[editReadCheckInput]{
+		{"edit_read.currentView", (*editReadCheckInput).currentView},
+		{"edit_read.read", (*editReadCheckInput).read},
+		{"edit_read.staleness", (*editReadCheckInput).staleness},
+	}
+}
+
+func init() {
+	proxyChecks.matchedEdit = []orderedCheck[matchedEditCheckInput]{
+		{"matched_edit.unique", (*matchedEditCheckInput).unique},
+		{"matched_edit.changed", (*matchedEditCheckInput).changed},
+	}
+}
+
+func init() {
+	proxyChecks.composedEdit = []orderedCheck[composedEditCheckInput]{
+		{"composedEdit.shrinkage", (*composedEditCheckInput).shrinkage},
+		{"composedEdit.unchanged", (*composedEditCheckInput).unchanged},
+		{"composedEdit.alreadyApplied", (*composedEditCheckInput).alreadyApplied},
+	}
+}
+
+func init() {
+	proxyChecks.editLanding = []orderedCheck[editLandingCheckInput]{
+		{"editLanding.syntax", (*editLandingCheckInput).syntax},
+		{"editLanding.unresolvedCalls", (*editLandingCheckInput).unresolvedCalls},
+		{"editLanding.embeddedScript", (*editLandingCheckInput).embeddedScript},
+		{"editLanding.entrypoint", (*editLandingCheckInput).entrypoint},
+	}
+}
+
+func init() {
+	proxyChecks.insertInput = []orderedCheck[insertInputCheckInput]{
+		{"insertInput.path", (*insertInputCheckInput).path},
+		{"insertInput.content", (*insertInputCheckInput).content},
+	}
+}
+
+func init() {
+	proxyChecks.replaceInput = []orderedCheck[replaceInputCheckInput]{
+		{"replaceInput.path", (*replaceInputCheckInput).path},
+	}
+}
+
+func init() {
+	proxyChecks.lineRead = []orderedCheck[lineReadCheckInput]{
+		{"line_read.current_view", (*lineReadCheckInput).currentView},
+		{"line_read.read", (*lineReadCheckInput).read},
+	}
+}
+
+func init() {
+	proxyChecks.insertion = []orderedCheck[insertionCheckInput]{
+		{"insertion.bounds", (*insertionCheckInput).bounds},
+		{"insertion.reparenting", (*insertionCheckInput).reparenting},
+	}
+}
+
+func init() {
+	proxyChecks.lineReplacement = []orderedCheck[lineReplacementCheckInput]{
+		{"line_replacement.bounds", (*lineReplacementCheckInput).boundsCheck},
+		{"line_replacement.span", (*lineReplacementCheckInput).spanCheck},
+		{"line_replacement.relocate", (*lineReplacementCheckInput).relocateCheck},
+		{"line_replacement.firstLine", (*lineReplacementCheckInput).firstLineCheck},
+		{"line_replacement.lastLine", (*lineReplacementCheckInput).lastLineCheck},
+		{"line_replacement.replacement", (*lineReplacementCheckInput).replacementCheck},
+	}
+}
+
+func init() {
+	proxyChecks.lineLanding = []orderedCheck[lineLandingCheckInput]{
+		{"line_landing.syntax", (*lineLandingCheckInput).syntax},
+		{"line_landing.unresolved", (*lineLandingCheckInput).unresolved},
+		{"line_landing.embedded", (*lineLandingCheckInput).embedded},
+		{"line_landing.entrypoint", (*lineLandingCheckInput).entrypoint},
+	}
+}
+
+func init() {
+	proxyChecks.structuralInput = []orderedCheck[structuralInputCheckInput]{
+		{"structuralInput.path", (*structuralInputCheckInput).path},
+		{"structuralInput.selector", (*structuralInputCheckInput).selector},
+	}
+}
+
+func init() {
+	proxyChecks.structuralRead = []orderedCheck[structuralReadCheckInput]{
+		{"structural_read.current_view", (*structuralReadCheckInput).currentView},
+		{"structural_read.read", (*structuralReadCheckInput).read},
+		{"structural_read.empty", func(c *structuralReadCheckInput) checkResult { return c.empty() }},
+		{"structural_read.runaway", func(c *structuralReadCheckInput) checkResult { return c.runaway() }},
+		{"structural_read.staleness", (*structuralReadCheckInput).staleness},
+	}
+}
+
+func init() {
+	proxyChecks.structuralSplice = []orderedCheck[structuralSpliceCheckInput]{
+		{"structuralSplice.service", (*structuralSpliceCheckInput).service},
+		{"structuralSplice.shrinkage", (*structuralSpliceCheckInput).shrinkage},
+		{"structuralSplice.unchanged", (*structuralSpliceCheckInput).unchanged},
+	}
+}
+
+func init() {
+	proxyChecks.structuralLanding = []orderedCheck[structuralLandingCheckInput]{
+		{"structuralLanding.syntax", (*structuralLandingCheckInput).syntax},
+		{"structuralLanding.unresolvedCalls", (*structuralLandingCheckInput).unresolvedCalls},
+		{"structuralLanding.embeddedScript", (*structuralLandingCheckInput).embeddedScript},
+		{"structuralLanding.entrypoint", (*structuralLandingCheckInput).entrypoint},
+	}
+}
+
+func init() {
+	proxyChecks.deleteInput = []orderedCheck[deleteCheckInput]{
+		{"delete.path", (*deleteCheckInput).pathCheck},
+	}
+}
+
+func init() {
+	proxyChecks.deleteTarget = []orderedCheck[deleteCheckInput]{
+		{"delete.exists", (*deleteCheckInput).exists},
+		{"delete.empty", (*deleteCheckInput).empty},
+	}
+}
+
+func init() {
+	proxyChecks.deleteApproval = []orderedCheck[deleteCheckInput]{
+		{"delete.identity", (*deleteCheckInput).identity},
+		{"delete.capacity", (*deleteCheckInput).capacity},
+	}
+}
+
+func init() {
+	proxyChecks.move = []orderedCheck[moveCheckInput]{
+		{"move.paths", (*moveCheckInput).paths},
+		{"move.source", (*moveCheckInput).source},
+		{"move.destination", (*moveCheckInput).destination},
+		{"move.different", (*moveCheckInput).different},
+		{"move.absent", (*moveCheckInput).absent},
+	}
+}
+
+func init() {
+	proxyChecks.commandTrust = []orderedCheck[commandCheckInput]{
+		{"command.trust", (*commandCheckInput).trust},
+	}
+}
+
+func init() {
+	proxyChecks.commandMemory = []orderedCheck[commandCheckInput]{
+		{"command.memory", (*commandCheckInput).memory},
+	}
+}
+
+func init() {
+	proxyChecks.background = []orderedCheck[backgroundCheckInput]{
+		{"background.trust", (*backgroundCheckInput).trust},
+		{"background.command", (*backgroundCheckInput).command},
+		{"background.shell", (*backgroundCheckInput).shell},
+		{"background.host", (*backgroundCheckInput).host},
+	}
+}
+
+func init() {
+	proxyChecks.tailInput = []orderedCheck[tailInputCheckInput]{
+		{"tailInput.required", (*tailInputCheckInput).required},
+	}
+}
+
+func init() {
+	proxyChecks.stopInput = []orderedCheck[stopInputCheckInput]{
+		{"stopInput.required", (*stopInputCheckInput).required},
+	}
+}
+
+func init() {
+	proxyChecks.editCandidate = []orderedCheck[editCandidateCheckInput]{
+		{"edit_candidate.empty", (*editCandidateCheckInput).empty},
+		{"edit_candidate.unchanged", (*editCandidateCheckInput).unchanged},
+		{"edit_candidate.rewrite", (*editCandidateCheckInput).rewrite},
+		{"edit_candidate.language", (*editCandidateCheckInput).language},
+	}
+}
+
+func init() {
+	proxyChecks.candidate = []orderedCheck[candidateCheckInput]{
+		{"candidate.authorization", func(input *candidateCheckInput) checkResult {
+			return input.accept(checkGuardRefusal, withdrawRefusedCandidate(input.write))
+		}},
+		{"candidate.syntax", func(input *candidateCheckInput) checkResult {
+			return input.accept(checkGuardRefusal, refuseContentThatDoesNotParse(input.write))
+		}},
+		{"candidate.unresolved", func(input *candidateCheckInput) checkResult {
+			return input.accept(checkGuardRefusal, refuseUnresolvedCalls(input.write))
+		}},
+		{"candidate.embedded", func(input *candidateCheckInput) checkResult {
+			return input.accept(checkGuardRefusal, refuseBrokenEmbeddedScript(input.write))
+		}},
+		{"candidate.entrypoint", func(input *candidateCheckInput) checkResult {
+			return input.accept(checkGuardRefusal, refuseDuplicateEntrypoint(input.write))
+		}},
+		{"candidate.cancellation", func(input *candidateCheckInput) checkResult {
+			return input.accept(checkInfrastructureError, refuseCancelledWrite(input.write))
+		}},
+	}
+}
+
+func init() {
+	proxyChecks.delivery = []orderedCheck[deliveryCheckInput]{
+		{"delivery.authorization", (*deliveryCheckInput).authorization},
+		{"delivery.hash", (*deliveryCheckInput).hash},
+		{"delivery.target", (*deliveryCheckInput).target},
+	}
+}
+
+func init() {
+	proxyChecks.settlement = []orderedCheck[settlementCheckInput]{
+		{"settlement.read", (*settlementCheckInput).read},
+		{"settlement.identity", (*settlementCheckInput).identity},
+		{"settlement.validation", (*settlementCheckInput).validation},
+	}
+}
+
+func init() {
+	proxyChecks.exit = []orderedCheck[exitCheckInput]{
+		{"exit.repair", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.repairGate(input.ctx))
+		}},
+		{"exit.promised_content", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.promisedContentGate(input.ctx, input.claimText))
+		}},
+		{"exit.announced_tool", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.announcedToolGate(input.ctx, input.claimText))
+		}},
+		{"exit.deferred_reply", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.deferredReplyGate(input.ctx, input.claimText))
+		}},
+		{"exit.handoff", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.handoffGate(input.ctx, input.claimText))
+		}},
+		{"exit.unread_citation", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.unreadCitationGate(input.ctx, input.claimText))
+		}},
+		{"exit.unshown_symbol", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.unshownSymbolGate(input.ctx, input.claimText))
+		}},
+		{"exit.scope", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.scopeGate(input.ctx, input.userMessage, input.claimText))
+		}},
+		{"exit.run_first", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.runFirstGateAtExit(input.ctx))
+		}},
+		{"exit.route_contract", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.routeContractGate(input.ctx))
+		}},
+		{"exit.prepare_contract", (*exitCheckInput).prepareContract},
+		{"exit.background", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.backgroundGate(input.ctx, input.contractOwed))
+		}},
+		{"exit.redirect", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.redirectGate(input.ctx))
+		}},
+		{"exit.artifact", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.artifactGate(input.ctx))
+		}},
+		{"exit.verification", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.verificationGate(input.ctx))
+		}},
+		{"exit.stale_probe", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.staleProbeGate(input.ctx))
+		}},
+		{"exit.contract_verification", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.contractVerificationGate(input.ctx, input.contractDemand, input.contractOwed))
+		}},
+		{"exit.orphan", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.orphanGate(input.ctx))
+		}},
+		{"exit.plan", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.planGate(input.ctx))
+		}},
+		{"exit.action", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.actionGate(input.ctx, input.userMessage))
+		}},
+		{"exit.output", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.outputGate(input.ctx))
+		}},
+		{"exit.claim", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.claimCheckGate(input.ctx, input.userMessage, input.claimText))
+		}},
+	}
+}
+
+func init() {
+	proxyChecks.completion = []orderedCheck[completionCheckInput]{
+		{"completion.repairs", (*completionCheckInput).repairs},
+		{"completion.deliverables", (*completionCheckInput).deliverables},
+		{"completion.action", (*completionCheckInput).action},
+		{"completion.verification", (*completionCheckInput).verification},
+		{"completion.contract", (*completionCheckInput).contract},
+		{"completion.deliverySettlement", (*completionCheckInput).deliverySettlement},
+		{"completion.declaredCompletion", (*completionCheckInput).declaredCompletion},
+		{"completion.reply", (*completionCheckInput).reply},
+		{"completion.background", (*completionCheckInput).background},
+		{"completion.mutationDebt", (*completionCheckInput).mutationDebt},
+		{"completion.unresolvedGates", (*completionCheckInput).unresolvedGates},
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Agent loop — iterative tool-calling loop between model and executors
 // ---------------------------------------------------------------------------
@@ -75,11 +787,12 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 
 			// Enforce the workspace boundary before any pre-execution gate reads
 			// a path. executeToolCall repeats this check for parallel dispatch.
-			if rejection := enforceWorkspacePaths(&parsed, ctx); rejection != "" {
-				if loop.refuseOutsideWorkspace(parsed, intentArgs, rejection) {
-					return nil
-				}
+			workspaceCheck := toolCheckInput{loop: loop, turn: turn, parsed: &parsed, intentArgs: intentArgs}
+			switch runCheckPhase(proxyChecks.workspace, &workspaceCheck).outcome {
+			case turnEnds:
 				continue
+			case runEnds:
+				return nil
 			}
 
 			switch loop.screenAfterWorkspaceCheck(turn, response, &parsed, intentArgs) {
@@ -88,18 +801,11 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			case runEnds:
 				return nil
 			}
-			if parsed.Name == "write_file" {
-				var wfInput wire.WriteFileInput
-				if json.Unmarshal(parsed.Args, &wfInput) == nil {
-					existingPath := resolveAgentPath(ctx, wfInput.Path)
-					existing, readErr := os.ReadFile(existingPath)
-					switch loop.guardExistingFileWrite(parsed, intentArgs, wfInput, existingPath, existing, readErr) {
-					case turnEnds:
-						continue
-					case runEnds:
-						return nil
-					}
-				}
+			switch loop.screenExistingWrite(parsed, intentArgs) {
+			case turnEnds:
+				continue
+			case runEnds:
+				return nil
 			}
 
 			result, steers, callOutcome, callErr := loop.runToolCall(turn, parsed, intentArgs)
@@ -189,7 +895,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 // happened.
 func fetchFencedContent(ctx *AgentContext, rawCall, path string) (string, error) {
 	if err := fencedFetchRefusal(ctx, path); err != nil {
-		return "", err
+		return "", &fencedCheckError{err, checkGuardRefusal}
 	}
 	tag := fenceTagForPath(path)
 	note := wire.AgentMessage{Role: "user", Content: fmt.Sprintf(
@@ -232,13 +938,13 @@ func fetchFencedContent(ctx *AgentContext, rawCall, path string) (string, error)
 		}
 	}
 	if fetch.lastErr != nil {
-		return "", fmt.Errorf("fenced resolution for %s was cut after %d attempt(s) "+
+		return "", &fencedCheckError{fmt.Errorf("fenced resolution for %s was cut after %d attempt(s) "+
 			"this session (%v); send the file inline or edit it instead",
-			path, ctx.FencedFailures[fencedKey(ctx, path)], fetch.lastErr)
+			path, ctx.FencedFailures[fencedKey(ctx, path)], fetch.lastErr), checkInfrastructureError}
 	}
-	return "", fmt.Errorf("no fenced block after %d attempt(s) for %s this session; "+
+	return "", &fencedCheckError{fmt.Errorf("no fenced block after %d attempt(s) for %s this session; "+
 		"send the file inline or edit it instead",
-		ctx.FencedFailures[fencedKey(ctx, path)], path)
+		ctx.FencedFailures[fencedKey(ctx, path)], path), checkModelError}
 }
 
 // Toolchain describes one language ecosystem detected in the project.

@@ -1076,26 +1076,28 @@ func TestFinalizeCompletionHandsTheContractToThePolicyOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	start := strings.Index(string(body), "func finalizeCompletion")
-	if start < 0 {
-		t.Fatal("loop_end.go holds no func finalizeCompletion, so its check reads nothing; name the file that holds it")
-	}
-	final := string(body)[start:]
-	if e := strings.Index(final[1:], "\nfunc "); e >= 0 {
-		final = final[:e]
-	}
-	for _, want := range []string{
-		"decideVerificationDemand(ctx, ctx.TaskContract, st.expectedOutputs)",
+	for _, row := range []struct {
+		start, delegation string
+		reads             int
+	}{
+		{"func finalizeCompletion(", "runCheckPhase(proxyChecks.completion", 0},
+		{"func (input *completionCheckInput) contract(", "decideVerificationDemand(ctx, ctx.TaskContract, st.expectedOutputs)", 1},
+		{"func (input *completionCheckInput) declaredCompletion(", `completedReason == "text_reply"`, 1},
 	} {
-		if !strings.Contains(final, want) {
-			t.Errorf("finalizeCompletion no longer delegates to the policy owner: %q", want)
+		start := strings.Index(string(body), row.start)
+		if start < 0 {
+			t.Fatalf("completion lost %s", row.start)
 		}
-	}
-	// The one inline contract read it is allowed is the scope of the text
-	// exit, which is a terminal-shape rule and not a completion decision.
-	if n := strings.Count(final, "ctx.TaskContract"); n != 2 {
-		t.Errorf("finalizeCompletion reads the contract %d times; exactly two are "+
-			"allowed: the delegation and the text-exit scope", n)
+		fn := string(body)[start:]
+		if end := strings.Index(fn[1:], "\nfunc "); end >= 0 {
+			fn = fn[:end+1]
+		}
+		if !strings.Contains(fn, row.delegation) {
+			t.Errorf("%s lost %s", row.start, row.delegation)
+		}
+		if n := strings.Count(fn, "ctx.TaskContract"); n != row.reads {
+			t.Errorf("%s reads the contract %d times, want %d", row.start, n, row.reads)
+		}
 	}
 }
 
@@ -3750,14 +3752,18 @@ func TestOneVerificationDemandSharedByBothExits(t *testing.T) {
 		t.Fatalf("the agent loop calls decideVerificationDemand %d times; want the finalizer "+
 			"and the exit gates, which both exits share", n)
 	}
-	i := strings.Index(body, "func finalizeCompletion")
-	if i < 0 || !strings.Contains(body[i:i+2500], "decideVerificationDemand(") {
-		t.Fatal("the demand is not evaluated inside finalizeCompletion, the single " +
-			"finalizer both the done and text exits call")
+	if g := guardCalls(t, "loop_end.go", "contract"); !g["decideVerificationDemand"] {
+		t.Fatal("the completion contract adapter does not evaluate the shared demand")
 	}
-	if g := guardCalls(t, "gates_exit.go", "exitGates"); !g["decideVerificationDemand"] {
-		t.Fatal("the second call site is not the exit gates both exits run")
+	if g := guardCalls(t, "gates_exit.go", "prepareContract"); !g["decideVerificationDemand"] {
+		t.Fatal("the exit contract adapter does not evaluate the shared demand")
 	}
+	for _, phase := range []string{"runCheckPhase(proxyChecks.completion, &input)", "runCheckPhase(proxyChecks.exit, &input)"} {
+		if !strings.Contains(body, phase) {
+			t.Fatalf("the shared completion path lost %q", phase)
+		}
+	}
+
 	for _, marker := range []string{
 		`textStatus, textReason := finalizeCompletion(ctx, st, userMessage, "text_reply")`,
 		`status, reason := finalizeCompletion(`,

@@ -39,9 +39,9 @@ func writeFileTool() *ToolDef {
 				return nil, errNoMutation(fmt.Errorf("invalid input: %w", err))
 			}
 
-			// Reject empty path — same reasoning as read_file.
-			if strings.TrimSpace(input.Path) == "" {
-				return noMutation("write_file: path cannot be empty. Provide a relative path like \"snake_game.py\" or \"src/main.py\"."), nil
+			check := writeEarlyCheckInput{input: input}
+			if runCheckPhase(proxyChecks.writeInput, &check).outcome != turnContinues {
+				return check.result, nil
 			}
 
 			path := resolveAgentPath(ctx, input.Path)
@@ -60,19 +60,6 @@ func writeFileTool() *ToolDef {
 
 			if refusal := writeFileEarlyRefusal(ctx, input, path); refusal != nil {
 				return refusal, nil
-			}
-
-			// Stub detection. Reject one-heading or to-do-marker
-			// placeholder writes that pass syntactic gates but ship the
-			// minimum content humanly possible. The model's lazy-completion
-			// failure mode is to write 8-line stubs and call it done; this
-			// gate forces it to either commit real content or acknowledge
-			// the stub explicitly. New files only — edits to existing
-			// files might legitimately shrink to a stub via refactor.
-			if isNewWrite(path) {
-				if reason := looksLikeStub(input.Path, input.Content); reason != "" {
-					return refusedNoCheck(reason), nil
-				}
 			}
 
 			fileTier := writeFileTier(ctx, input)
@@ -99,34 +86,11 @@ func writeFileTool() *ToolDef {
 
 // writeFileEarlyRefusal is the refusal a write meets before it is classified:
 // a new file that should start from its siblings, or bytes that echo the file
-// already there. nil when neither applies.
+// already there, or an unfinished stub. nil when no check refuses it.
 func writeFileEarlyRefusal(ctx *AgentContext, input wire.WriteFileInput, path string) *wire.ToolResult {
-	// Pattern-matching reflex. When the model creates a
-	// NEW file in a non-empty directory of similar files (HTML
-	// alongside HTML, route handler alongside route handlers),
-	// nudge it to read a sibling first instead of generating
-	// content from scratch. Only fires for genuinely-new files
-	// to avoid breaking edits-via-write_file. Soft hint via
-	// tool result, not a hard reject — the model can ignore it
-	// if the content is clearly intentional.
-	if hint := patternMatchHint(path, ctx.SnapshotFilesRead()); hint != "" {
-		return refusedNoCheck(hint)
-	}
-
-	// Echoed write: the content is the file that is already there.
-	// Reproducing data the session already has is never the task,
-	// and it is where a bad failure starts: the model retyping a long
-	// fixture from memory, degenerating into repetition, and getting
-	// its stream cut mid-JSON.
-	if existing, err := workspacefs.ReadRegularFile(path); err == nil {
-		if echoesExistingFile(string(existing), input.Content) ||
-			(ctx.SessionWrites[input.Path] && resendsOwnWrite(string(existing), input.Content)) {
-			log.Printf("[write_file] refusing an echoed write of %s (%d bytes on disk, %d incoming)",
-				logPath(input.Path), len(existing), len(input.Content))
-			return refusedNoCheck(echoedWriteRejection(input.Path, ctx.SessionWrites[input.Path]))
-		}
-	}
-	return nil
+	check := writeEarlyCheckInput{ctx: ctx, input: input, path: path}
+	runCheckPhase(proxyChecks.writeEarly, &check)
+	return check.result
 }
 
 // writeFileTier is the tier of the file a write lands in, which the real
@@ -339,36 +303,9 @@ func writeFileDirectRoute(ctx *AgentContext, input wire.WriteFileInput, path str
 	// skips the gate (fail open) — treating it as empty would count
 	// every pre-existing call as introduced.
 	if !iterating {
-		if original, ok := readOriginalForGate(path); ok {
-			if introduced := editIntroducesUnresolved(ctx, path, original, input.Content); len(introduced) > 0 {
-				log.Printf("[write_file] direct write introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
-				// Structural validation failed before any mutation.
-				// Syntax does NOT run on this route (see the comment
-				// above), so no syntax verdict is implied in either
-				// direction -- the decisive demonstrated fact is the
-				// structural failure.
-				//
-				// editIntroducesUnresolved -> checkStructuralUnresolved
-				// posts to /internal/structural_check (NOT
-				// /internal/symbol_index, a different path in
-				// loop_project.go) and returns
-				// {"ok": bool, "unresolved": []string}. It FAILS OPEN
-				// when ok is absent or false, on transport error,
-				// non-200, parse error or missing tree-sitter, and
-				// needs BOTH the edited- and original-side calls to
-				// succeed before it can refuse. Observing an HTTP
-				// request therefore does not prove the gate ran; only
-				// the refusal does.
-				rejection := structuralWriteRejection(input.Path, introduced)
-				return &wire.ToolResult{
-					Success:          false,
-					Error:            rejection,
-					MutationStatus:   wire.MutationRefused,
-					ValidationKind:   wire.ValidationKindStructural,
-					ValidationStatus: wire.ValidationFailed,
-					ValidationDetail: rejection,
-				}, nil
-			}
+		check := fastWriteCheckInput{ctx: ctx, input: input, path: path}
+		if runCheckPhase(proxyChecks.directWrite, &check).outcome != turnContinues {
+			return check.result, nil
 		}
 	}
 
@@ -391,64 +328,10 @@ func writeFastPathGates(ctx *AgentContext, input wire.WriteFileInput, path strin
 	// config being iterated), which is exactly why the T0/T1
 	// direct path below carries no syntax gate.
 	original, origOK := readOriginalForGate(path)
-	// The proposal was already evaluated above whenever the
-	// destination exists, which is the normal state of this route:
-	// it fires on a file the session wrote and just watched fail.
-	// Evaluate here only for the residual case where it was not --
-	// the file has been deleted since that write.
-	if proposalCheck.Status == wire.ValidationUnknown {
-		proposalCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, input.Content).aggregate()
-	}
-	if proposalCheck.Status == wire.ValidationFailed {
-		// Reaching here with a demonstrably failing proposal means
-		// the gate above did not decide: either the baseline
-		// demonstrably failed (repair-in-progress), or there was
-		// no baseline to read -- the file is gone or unreadable.
-		// That second case is why this gate stays.
-		// readOriginalForGate yields "" for it, which the checker
-		// finds healthy, so the regression is still refused rather
-		// than landing unexamined.
-		if baselineCheck.Status == wire.ValidationUnknown {
-			baselineCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, original).aggregate()
-		}
-		if !baselineAllowsRepair(baselineCheck) {
-			synErr := proposalCheck.Detail
-			// The check examined input.Content, the exact bytes
-			// that would have been written, and nothing has
-			// reached disk at this point.
-			return proposalCheck, &wire.ToolResult{
-				Success:          false,
-				Error:            fallbackSyntaxRejection(input.Path, input.Content, synErr),
-				MutationStatus:   wire.MutationRefused,
-				ValidationKind:   wire.ValidationKindSyntax,
-				ValidationStatus: wire.ValidationFailed,
-				ValidationDetail: synErr,
-			}
-		}
-		log.Printf("[write_file] %s still unparsable after fast-path write (was already broken) — allowing repair-in-progress", input.Path)
-	}
-	// The fast-path skips V3 (and its
-	// structural veto), so it needs the same structural gate
-	// edit_file/structural_edit have — otherwise a fast-path rewrite that
-	// introduces render_template lands as verified and 500s. A new
-	// unresolved call vs the on-disk state blocks; an unreadable
-	// original skips the gate (fail open).
-	if origOK {
-		if introduced := editIntroducesUnresolved(ctx, path, original, input.Content); len(introduced) > 0 {
-			log.Printf("[write_file] fast-path write introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
-			// Syntax ran first and PASSED on these exact bytes; the
-			// structural check is what refused them, so structural
-			// is the decisive outcome.
-			return proposalCheck, &wire.ToolResult{Success: false,
-				Error:            structuralWriteRejection(input.Path, introduced),
-				MutationStatus:   wire.MutationRefused,
-				ValidationKind:   wire.ValidationKindStructural,
-				ValidationStatus: wire.ValidationFailed,
-				ValidationDetail: structuralWriteRejection(input.Path, introduced),
-			}
-		}
-	}
-	return proposalCheck, nil
+	check := fastWriteCheckInput{ctx: ctx, input: input, path: path, proposal: proposalCheck,
+		baseline: baselineCheck, original: original, readable: origOK}
+	runCheckPhase(proxyChecks.fastWrite, &check)
+	return check.proposal, check.result
 }
 
 // landDirectWrite lands the bytes of a write that does not go through the
@@ -471,56 +354,12 @@ func landDirectWrite(ctx *AgentContext, input wire.WriteFileInput, path string, 
 	_, statErr := os.Stat(path)
 	isNew := os.IsNotExist(statErr)
 	newFileCheck := checkOutcome{Status: wire.ValidationUnknown}
-	if isNew {
-		newFileCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, input.Content).aggregate()
-		if newFileCheck.Status == wire.ValidationFailed {
-			log.Printf("[write_file] new file %s does not parse — writing with a warning (%s)",
-				logPath(input.Path), truncateStr(newFileCheck.Detail, 80))
-			return writeNewFileWithWarning(path, input.Path, input.Content, newFileCheck.Detail, ctx)
-		}
+	check := directLandingCheckInput{ctx: ctx, input: input, path: path, isNew: isNew,
+		newFile: newFileCheck, proposal: proposalCheck}
+	if runCheckPhase(proxyChecks.directLanding, &check).outcome != turnContinues {
+		return check.result, check.err
 	}
-
-	// The destination exists and these exact bytes were already
-	// observed not to parse. A healthy baseline was refused outright
-	// above, so reaching here means what is on disk is itself broken
-	// or unreadable — the same case the non-bypassed route lands with
-	// a warning. Land it the same way, and say so.
-	//
-	// The observation is overlaid onto the result below, so the ledger
-	// and the completion gate know; the model has to be told too, or
-	// {"bytes_written":1243} reads as a clean write and it cannot
-	// reconcile the failing run with a write it was told was fine.
-	if proposalCheck.Status == wire.ValidationFailed {
-		log.Printf("[write_file] %s: landing an unparseable rewrite with a warning (%s)",
-			logPath(input.Path), logsafe.DiagnosticSummary(proposalCheck.Detail))
-		return preflightWarnedWrite(path, input.Path, input.Content, proposalCheck, ctx)
-	}
-
-	// The two comparative gates the V3 route applies to the bytes it
-	// writes (writeFileWithV3). They are checks on the write, not part
-	// of candidate generation, so a write that does not generate --
-	// small, mid-iteration, or with nothing deliverable -- must not skip
-	// them. Healthy->broken and fail-soft, as there.
-	if original, ok := readOriginalForGate(path); ok {
-		if msg := embeddedScriptGate(ctx, path, original, input.Content); msg != "" {
-			log.Printf("[write_file] direct write breaks an embedded script in %s — rejecting", logPath(input.Path))
-			return &wire.ToolResult{Success: false, Error: msg,
-				MutationStatus:   wire.MutationRefused,
-				ValidationKind:   wire.ValidationKindStructural,
-				ValidationStatus: wire.ValidationFailed,
-				ValidationDetail: msg}, nil
-		}
-		if msg := duplicateMainGuard(path, original, input.Content); msg != "" {
-			log.Printf("[write_file] direct write duplicates the module entrypoint in %s — rejecting", logPath(input.Path))
-			return &wire.ToolResult{Success: false, Error: msg,
-				MutationStatus:   wire.MutationRefused,
-				ValidationKind:   wire.ValidationKindStructural,
-				ValidationStatus: wire.ValidationFailed,
-				ValidationDetail: msg}, nil
-		}
-	}
-
-	return writeDirectAndObserve(ctx, input, path, isNew, newFileCheck, proposalCheck)
+	return writeDirectAndObserve(ctx, input, path, isNew, check.newFile, proposalCheck)
 }
 
 // writeDirectAndObserve writes the bytes of a direct write and attaches the
@@ -828,4 +667,277 @@ func writeFileDirect(path, content string) (*wire.ToolResult, error) {
 		MutationStatus: wire.MutationApplied,
 		ValidationKind: kind, ValidationStatus: status,
 	}, nil
+}
+
+type writeEarlyCheckInput struct {
+	toolCheckOutput
+	ctx   *AgentContext
+	input wire.WriteFileInput
+	path  string
+}
+
+func (check *writeEarlyCheckInput) sibling() checkResult {
+	ctx := check.ctx
+	path := check.path
+	// Pattern-matching reflex. When the model creates a
+	// NEW file in a non-empty directory of similar files (HTML
+	// alongside HTML, route handler alongside route handlers),
+	// nudge it to read a sibling first instead of generating
+	// content from scratch. Only fires for genuinely-new files
+	// to avoid breaking edits-via-write_file. Soft hint via
+	// tool result, not a hard reject — the model can ignore it
+	// if the content is clearly intentional.
+	if hint := patternMatchHint(path, ctx.SnapshotFilesRead()); hint != "" {
+		return check.accept(checkGuardRefusal, refusedNoCheck(hint))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *writeEarlyCheckInput) echo() checkResult {
+	ctx := check.ctx
+	input := check.input
+	path := check.path
+	// Echoed write: the content is the file that is already there.
+	// Reproducing data the session already has is never the task,
+	// and it is where a bad failure starts: the model retyping a long
+	// fixture from memory, degenerating into repetition, and getting
+	// its stream cut mid-JSON.
+	if existing, err := workspacefs.ReadRegularFile(path); err == nil {
+		if echoesExistingFile(string(existing), input.Content) ||
+			(ctx.SessionWrites[input.Path] && resendsOwnWrite(string(existing), input.Content)) {
+			log.Printf("[write_file] refusing an echoed write of %s (%d bytes on disk, %d incoming)",
+				logPath(input.Path), len(existing), len(input.Content))
+			return check.accept(checkGuardRefusal, refusedNoCheck(echoedWriteRejection(input.Path, ctx.SessionWrites[input.Path])))
+		}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *writeEarlyCheckInput) stub() checkResult {
+	path, input := check.path, check.input
+	// Stub detection. Reject one-heading or to-do-marker
+	// placeholder writes that pass syntactic gates but ship the
+	// minimum content humanly possible. The model's lazy-completion
+	// failure mode is to write 8-line stubs and call it done; this
+	// gate forces it to either commit real content or acknowledge
+	// the stub explicitly. New files only — edits to existing
+	// files might legitimately shrink to a stub via refactor.
+	if isNewWrite(path) {
+		if reason := looksLikeStub(input.Path, input.Content); reason != "" {
+			return check.accept(checkGuardRefusal, refusedNoCheck(reason))
+		}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+type fastWriteCheckInput struct {
+	toolCheckOutput
+	ctx                *AgentContext
+	input              wire.WriteFileInput
+	path, original     string
+	readable           bool
+	proposal, baseline checkOutcome
+}
+
+func (check *fastWriteCheckInput) syntax() checkResult {
+	ctx, input, original := check.ctx, check.input, check.original
+	// The proposal was already evaluated above whenever the
+	// destination exists, which is the normal state of this route:
+	// it fires on a file the session wrote and just watched fail.
+	// Evaluate here only for the residual case where it was not --
+	// the file has been deleted since that write.
+	if check.proposal.Status == wire.ValidationUnknown {
+		check.proposal = fallbackSyntaxOutcomeFor(ctx, input.Path, input.Content).aggregate()
+	}
+	if check.proposal.Status == wire.ValidationFailed {
+		// Reaching here with a demonstrably failing proposal means
+		// the gate above did not decide: either the baseline
+		// demonstrably failed (repair-in-progress), or there was
+		// no baseline to read -- the file is gone or unreadable.
+		// That second case is why this gate stays.
+		// readOriginalForGate yields "" for it, which the checker
+		// finds healthy, so the regression is still refused rather
+		// than landing unexamined.
+		if check.baseline.Status == wire.ValidationUnknown {
+			check.baseline = fallbackSyntaxOutcomeFor(ctx, input.Path, original).aggregate()
+		}
+		if !baselineAllowsRepair(check.baseline) {
+			synErr := check.proposal.Detail
+			// The check examined input.Content, the exact bytes
+			// that would have been written, and nothing has
+			// reached disk at this point.
+			return check.accept(checkGuardRefusal, &wire.ToolResult{
+				Success:          false,
+				Error:            fallbackSyntaxRejection(input.Path, input.Content, synErr),
+				MutationStatus:   wire.MutationRefused,
+				ValidationKind:   wire.ValidationKindSyntax,
+				ValidationStatus: wire.ValidationFailed,
+				ValidationDetail: synErr,
+			})
+		}
+		log.Printf("[write_file] %s still unparsable after fast-path write (was already broken) — allowing repair-in-progress", input.Path)
+	}
+	return checkResult{checkPass, turnContinues}
+}
+func (check *fastWriteCheckInput) unresolved() checkResult {
+	ctx, input, path, original, origOK := check.ctx, check.input, check.path, check.original, check.readable
+	// The fast-path skips V3 (and its
+	// structural veto), so it needs the same structural gate
+	// edit_file/structural_edit have — otherwise a fast-path rewrite that
+	// introduces render_template lands as verified and 500s. A new
+	// unresolved call vs the on-disk state blocks; an unreadable
+	// original skips the gate (fail open).
+	if origOK {
+		if introduced := editIntroducesUnresolved(ctx, path, original, input.Content); len(introduced) > 0 {
+			log.Printf("[write_file] fast-path write introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
+			// Syntax ran first and PASSED on these exact bytes; the
+			// structural check is what refused them, so structural
+			// is the decisive outcome.
+			return check.accept(checkGuardRefusal, &wire.ToolResult{Success: false,
+				Error:            structuralWriteRejection(input.Path, introduced),
+				MutationStatus:   wire.MutationRefused,
+				ValidationKind:   wire.ValidationKindStructural,
+				ValidationStatus: wire.ValidationFailed,
+				ValidationDetail: structuralWriteRejection(input.Path, introduced),
+			})
+		}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+type directLandingCheckInput struct {
+	toolCheckOutput
+	ctx               *AgentContext
+	input             wire.WriteFileInput
+	path, original    string
+	isNew, readable   bool
+	newFile, proposal checkOutcome
+	err               error
+}
+
+func (check *directLandingCheckInput) written() checkResult {
+	if check.err != nil {
+		return checkResult{checkToolError, turnEnds}
+	}
+	return checkResult{checkPass, turnEnds}
+}
+func (check *directLandingCheckInput) newFileWarning() checkResult {
+	ctx, input, path, isNew := check.ctx, check.input, check.path, check.isNew
+
+	if isNew {
+		check.newFile = fallbackSyntaxOutcomeFor(ctx, input.Path, input.Content).aggregate()
+		if check.newFile.Status == wire.ValidationFailed {
+			log.Printf("[write_file] new file %s does not parse — writing with a warning (%s)",
+				logPath(input.Path), truncateStr(check.newFile.Detail, 80))
+			check.result, check.err = writeNewFileWithWarning(path, input.Path, input.Content, check.newFile.Detail, ctx)
+			return check.written()
+		}
+	}
+
+	return checkResult{checkPass, turnContinues}
+}
+func (check *directLandingCheckInput) rewriteWarning() checkResult {
+	ctx, input, path, proposalCheck := check.ctx, check.input, check.path, check.proposal
+
+	// The destination exists and these exact bytes were already
+	// observed not to parse. A healthy baseline was refused outright
+	// above, so reaching here means what is on disk is itself broken
+	// or unreadable — the same case the non-bypassed route lands with
+	// a warning. Land it the same way, and say so.
+	//
+	// The observation is overlaid onto the result below, so the ledger
+	// and the completion gate know; the model has to be told too, or
+	// {"bytes_written":1243} reads as a clean write and it cannot
+	// reconcile the failing run with a write it was told was fine.
+	if proposalCheck.Status == wire.ValidationFailed {
+		log.Printf("[write_file] %s: landing an unparseable rewrite with a warning (%s)",
+			logPath(input.Path), logsafe.DiagnosticSummary(proposalCheck.Detail))
+		check.result, check.err = preflightWarnedWrite(path, input.Path, input.Content, proposalCheck, ctx)
+		return check.written()
+	}
+
+	return checkResult{checkPass, turnContinues}
+}
+func (check *directLandingCheckInput) readBaseline() checkResult {
+	check.original, check.readable = readOriginalForGate(check.path)
+	return checkResult{checkPass, turnContinues}
+}
+func (check *directLandingCheckInput) embedded() checkResult {
+	if !check.readable {
+		return checkResult{checkPass, turnContinues}
+	}
+	ctx, input, path, original := check.ctx, check.input, check.path, check.original
+
+	if msg := embeddedScriptGate(ctx, path, original, input.Content); msg != "" {
+		log.Printf("[write_file] direct write breaks an embedded script in %s — rejecting", logPath(input.Path))
+		return check.accept(checkGuardRefusal, &wire.ToolResult{Success: false, Error: msg,
+			MutationStatus:   wire.MutationRefused,
+			ValidationKind:   wire.ValidationKindStructural,
+			ValidationStatus: wire.ValidationFailed,
+			ValidationDetail: msg})
+	}
+	return checkResult{checkPass, turnContinues}
+}
+func (check *directLandingCheckInput) entrypoint() checkResult {
+	if !check.readable {
+		return checkResult{checkPass, turnContinues}
+	}
+	input, path, original := check.input, check.path, check.original
+
+	if msg := duplicateMainGuard(path, original, input.Content); msg != "" {
+		log.Printf("[write_file] direct write duplicates the module entrypoint in %s — rejecting", logPath(input.Path))
+		return check.accept(checkGuardRefusal, &wire.ToolResult{Success: false, Error: msg,
+			MutationStatus:   wire.MutationRefused,
+			ValidationKind:   wire.ValidationKindStructural,
+			ValidationStatus: wire.ValidationFailed,
+			ValidationDetail: msg})
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *fastWriteCheckInput) directUnresolved() checkResult {
+	ctx, input, path := check.ctx, check.input, check.path
+
+	if original, ok := readOriginalForGate(path); ok {
+		if introduced := editIntroducesUnresolved(ctx, path, original, input.Content); len(introduced) > 0 {
+			log.Printf("[write_file] direct write introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
+			// Structural validation failed before any mutation.
+			// Syntax does NOT run on this route (see the comment
+			// above), so no syntax verdict is implied in either
+			// direction -- the decisive demonstrated fact is the
+			// structural failure.
+			//
+			// editIntroducesUnresolved -> checkStructuralUnresolved
+			// posts to /internal/structural_check (NOT
+			// /internal/symbol_index, a different path in
+			// loop_project.go) and returns
+			// {"ok": bool, "unresolved": []string}. It FAILS OPEN
+			// when ok is absent or false, on transport error,
+			// non-200, parse error or missing tree-sitter, and
+			// needs BOTH the edited- and original-side calls to
+			// succeed before it can refuse. Observing an HTTP
+			// request therefore does not prove the gate ran; only
+			// the refusal does.
+			rejection := structuralWriteRejection(input.Path, introduced)
+			return check.accept(checkGuardRefusal, &wire.ToolResult{
+				Success:          false,
+				Error:            rejection,
+				MutationStatus:   wire.MutationRefused,
+				ValidationKind:   wire.ValidationKindStructural,
+				ValidationStatus: wire.ValidationFailed,
+				ValidationDetail: rejection,
+			})
+		}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *writeEarlyCheckInput) pathCheck() checkResult {
+	input := check.input
+
+	// Reject empty path — same reasoning as read_file.
+	if strings.TrimSpace(input.Path) == "" {
+		return check.accept(checkModelError, noMutation("write_file: path cannot be empty. Provide a relative path like \"snake_game.py\" or \"src/main.py\"."))
+	}
+	return checkResult{checkPass, turnContinues}
 }

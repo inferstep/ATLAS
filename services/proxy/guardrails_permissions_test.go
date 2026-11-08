@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -930,7 +931,7 @@ func TestTheDeleteConfirmationPathConsultsNoLanguageHelper(t *testing.T) {
 // purpose, so that every attempt spends the approval.
 func TestTheDeleteApprovalIsSpentFirstAndRevalidatedAtTheRemoval(t *testing.T) {
 	tools := readSourceForTest(t, "tool_files.go")
-	reval := strings.Index(tools, "approved.identityMatches(now)")
+	reval := strings.Index(tools, "runCheckPhase(proxyChecks.deleteApproval")
 	rm := strings.Index(tools, "if rmErr := os.Remove(path)")
 	if reval < 0 || rm < 0 || reval > rm || rm-reval > 1600 {
 		t.Errorf("the identity revalidation is not adjacent to the removal (revalidation=%d rm=%d)",
@@ -945,9 +946,29 @@ func TestTheDeleteApprovalIsSpentFirstAndRevalidatedAtTheRemoval(t *testing.T) {
 	}
 	body := tools[tool:]
 	take := strings.Index(body, "takeDeleteApproval(ctx, path)")
-	preflight := strings.Index(body, "info, err := os.Stat(path)")
+	preflight := strings.Index(body, "runCheckPhase(proxyChecks.deleteTarget")
 	if take < 0 || preflight < 0 || take > preflight {
 		t.Errorf("the approval is taken after the preflight (take=%d preflight=%d)", take, preflight)
+	}
+	for _, phase := range []struct {
+		rows []orderedCheck[deleteCheckInput]
+		want []func(*deleteCheckInput) checkResult
+	}{
+		{proxyChecks.deleteTarget, []func(*deleteCheckInput) checkResult{(*deleteCheckInput).exists, (*deleteCheckInput).empty}},
+		{proxyChecks.deleteApproval, []func(*deleteCheckInput) checkResult{(*deleteCheckInput).identity, (*deleteCheckInput).capacity}},
+	} {
+		if len(phase.rows) != len(phase.want) {
+			t.Fatal("the deletion checks changed")
+		}
+		for i, row := range phase.rows {
+			if reflect.ValueOf(row.run).Pointer() != reflect.ValueOf(phase.want[i]).Pointer() {
+				t.Errorf("deletion row %d calls the wrong check", i)
+			}
+		}
+	}
+	if !guardCalls(t, "tool_files.go", "identity")["identityMatches"] ||
+		!guardCalls(t, "tool_files.go", "capacity")["reserveDeletionSlot"] {
+		t.Error("deletion adapters lost identity or capacity checks")
 	}
 }
 

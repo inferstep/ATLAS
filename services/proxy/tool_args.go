@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/itigges22/atlas-proxy/internal/wire"
@@ -132,4 +133,248 @@ func encodeCanonicalArgs(fields map[string]json.RawMessage) (json.RawMessage, er
 		return nil, err
 	}
 	return json.RawMessage(bytes.TrimRight(buf.Bytes(), "\n")), nil
+}
+
+type toolCheckOutput struct{ result *wire.ToolResult }
+
+func (output *toolCheckOutput) accept(category checkCategory, result *wire.ToolResult) checkResult {
+	output.result = result
+	if result == nil {
+		return checkResult{checkPass, turnContinues}
+	}
+	return checkResult{category, turnEnds}
+}
+
+func fencedCallIsExecutable(name string, args json.RawMessage, ctx *AgentContext) (bool, string) {
+	input := fencedCallCheckInput{name: name, args: args, ctx: ctx}
+	result := runCheckPhase(proxyChecks.fencedCall, &input)
+	return result.outcome == turnContinues, input.reason
+}
+
+type fencedCallCheckInput struct {
+	name   string
+	args   json.RawMessage
+	ctx    *AgentContext
+	input  wire.WriteFileInput
+	reason string
+}
+
+func (input *fencedCallCheckInput) refuse(category checkCategory, reason string) checkResult {
+	input.reason = reason
+	return checkResult{category, turnEnds}
+}
+
+func (input *fencedCallCheckInput) arguments() checkResult {
+	trimmed := strings.TrimSpace(string(input.args))
+	if trimmed == "" || trimmed == "null" {
+		return input.refuse(checkModelError, "the call carried no arguments")
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *fencedCallCheckInput) decode() checkResult {
+	if err := json.Unmarshal(input.args, &input.input); err != nil {
+		return input.refuse(checkModelError, "the arguments are not the shape "+input.name+" takes")
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *fencedCallCheckInput) path() checkResult {
+	if strings.TrimSpace(input.input.Path) == "" {
+		return input.refuse(checkModelError, "the call names no path")
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *fencedCallCheckInput) workspace() checkResult {
+	if reason := validateToolWorkspacePaths(input.name, input.args, input.ctx); reason != "" {
+		return input.refuse(checkGuardRefusal, reason)
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *fencedCallCheckInput) denyList() checkResult {
+	if denied, reason := shouldDenyToolCall(input.name, input.args); denied {
+		return input.refuse(checkGuardRefusal, reason)
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+type lineReplacementCheckInput struct {
+	toolCheckOutput
+	ctx         *AgentContext
+	in          wire.ReplaceLinesInput
+	path        string
+	original    string
+	fileLines   []string
+	limit       int
+	history     string
+	updated     string
+	replacement []string
+}
+
+func (check *lineReplacementCheckInput) boundsCheck() checkResult {
+	in := check.in
+	limit := check.limit
+	if in.StartLine < 1 || in.EndLine < in.StartLine || in.EndLine > limit {
+		return check.accept(checkModelError, noMutation(fmt.Sprintf(
+			"replace_lines: range %d-%d is invalid for %s, which has %d lines. Both bounds are 1-based and "+
+				"inclusive, and start_line must not exceed end_line. Use the numbers read_file showed you.",
+			in.StartLine, in.EndLine, in.Path, limit)))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *lineReplacementCheckInput) spanCheck() checkResult {
+	in := check.in
+	original := check.original
+	if span := in.EndLine - in.StartLine + 1; span > replaceLinesMaxSpan {
+		// A size policy declining a replacement it never formed.
+		return check.accept(checkGuardRefusal, noMutation(fmt.Sprintf(
+			"replace_lines: %d lines is too large a range (limit %d). A replacement that size is a rewrite rather "+
+				"than an edit. Split it into consecutive replace_lines calls of at most %d lines, working from "+
+				"the BOTTOM of the file upward so the earlier line numbers stay valid. For a whole function "+
+				"or class, structural_edit replaces the node in one call (%s) — but only for real nodes: code "+
+				"inside a string literal (a <script> block in an HTML template, say) is one string to the "+
+				"host grammar and no selector reaches into it, so there the split is the way.",
+			span, replaceLinesMaxSpan, replaceLinesMaxSpan, selectorGuidanceOrOutline(in.Path, original))))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *lineReplacementCheckInput) relocateCheck() checkResult {
+	ctx := check.ctx
+	in := check.in
+	path := check.path
+	original := check.original
+	fileLines := check.fileLines
+	limit := check.limit
+	// A stale range that simply moved is relocated rather than
+	// refused: the numbers go stale as soon as an earlier edit
+	// changes the file's length, and the model cannot see that.
+	if strings.TrimSpace(in.ExpectedFirstLine) != "" &&
+		strings.TrimSpace(fileLines[in.StartLine-1]) != strings.TrimSpace(in.ExpectedFirstLine) {
+		span := in.EndLine - in.StartLine + 1
+		if moved := relocateStaleRange(fileLines, limit,
+			in.ExpectedFirstLine, in.ExpectedLastLine, span); moved > 0 {
+			log.Printf("[replace_lines] %s: range %d-%d is stale; the same block is at %d-%d — relocating",
+				in.Path, in.StartLine, in.EndLine, moved, moved+span-1)
+			in.StartLine, in.EndLine = moved, moved+span-1
+		}
+	}
+	// The anchors did not match, so no replacement was ever formed.
+	check.history = lineNumberHistory(ctx, path, in.Path, original)
+	check.in = in
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *lineReplacementCheckInput) firstLineCheck() checkResult {
+	in := check.in
+	fileLines := check.fileLines
+	history := check.history
+	if msg := lineAssertionMismatch(in.ExpectedFirstLine, fileLines[in.StartLine-1], in.StartLine, in.Path, fileLines, history); msg != "" {
+		return check.accept(checkGuardRefusal, noMutation(msg))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *lineReplacementCheckInput) lastLineCheck() checkResult {
+	in := check.in
+	fileLines := check.fileLines
+	history := check.history
+	if msg := lineAssertionMismatch(in.ExpectedLastLine, fileLines[in.EndLine-1], in.EndLine, in.Path, fileLines, history); msg != "" {
+		return check.accept(checkGuardRefusal, noMutation(msg))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *lineReplacementCheckInput) replacementCheck() checkResult {
+	in := check.in
+	original := check.original
+	fileLines := check.fileLines
+	replacement := strings.Split(strings.TrimSuffix(in.Content, "\n"), "\n")
+	merged := append([]string{}, fileLines[:in.StartLine-1]...)
+	merged = append(merged, replacement...)
+	merged = append(merged, fileLines[in.EndLine:]...)
+	updated := strings.Join(merged, "\n")
+
+	if updated == original {
+		return check.accept(checkGuardRefusal, noMutation("replace_lines: the replacement is identical to what is already on "+
+			"those lines — nothing changed and the bug is still there."))
+	}
+	check.updated, check.replacement = updated, replacement
+	return checkResult{checkPass, turnContinues}
+}
+
+type insertInputCheckInput struct {
+	toolCheckOutput
+	in wire.InsertAfterInput
+}
+
+func (check *insertInputCheckInput) path() checkResult {
+	in := check.in
+	if strings.TrimSpace(in.Path) == "" {
+		// Naming only the missing field sends the model back with a
+		// different field missing.
+		return check.accept(checkModelError, noMutation("insert_after: path is required. The call is "+
+			"insert_after {\"path\":\"app.py\", \"line\":<1-based number from read_file, 0 for top of file>, "+
+			"\"content\":<the new lines>}."))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+func (check *insertInputCheckInput) content() checkResult {
+	in := check.in
+	if in.Content == "" {
+		return check.accept(checkModelError, noMutation("insert_after: content is empty — nothing would be inserted"))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+type replaceInputCheckInput struct {
+	toolCheckOutput
+	in wire.ReplaceLinesInput
+}
+
+func (check *replaceInputCheckInput) path() checkResult {
+	in := check.in
+	if strings.TrimSpace(in.Path) == "" {
+		return check.accept(checkModelError, noMutation("replace_lines: path is required. The call is "+
+			"replace_lines {\"path\":\"app.py\", \"start_line\":N, \"end_line\":M, "+
+			"\"expected_first_line\":<text of line N>, \"expected_last_line\":<text of line M>, "+
+			"\"content\":<the new lines>}."))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+type insertionCheckInput struct {
+	toolCheckOutput
+	in            wire.InsertAfterInput
+	path          string
+	lines, insert []string
+	limit         int
+}
+
+func (check *insertionCheckInput) bounds() checkResult {
+	in, limit := check.in, check.limit
+
+	if in.Line < 0 || in.Line > limit {
+		return check.accept(checkModelError, noMutation(fmt.Sprintf(
+			"insert_after: line %d is out of range for %s, which has %d lines. Use the numbers read_file showed you.",
+			in.Line, in.Path, limit)))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+func (check *insertionCheckInput) reparenting() checkResult {
+	in, path, lines := check.in, check.path, check.lines
+
+	insert := strings.Split(strings.TrimSuffix(in.Content, "\n"), "\n")
+	// Before any pipeline work: an insertion that moves existing
+	// statements into another block is refused outright, however well
+	// the result parses. See insertionReparentsPython.
+	if msg, moved := insertionReparentsPython(path, lines, in.Line, insert); moved {
+		return check.accept(checkGuardRefusal, structuralRefusal(msg))
+	}
+	check.insert = insert
+
+	return checkResult{checkPass, turnContinues}
 }

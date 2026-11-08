@@ -38,35 +38,11 @@ func readFileTool() *ToolDef {
 				return nil, fmt.Errorf("invalid input: %w", err)
 			}
 
-			// Empty path → resolves to the working dir, which is a
-			// directory, which fails with a confusing error the model
-			// can't recover from. Reject early with a hint at how to
-			// discover the file.
-			if strings.TrimSpace(input.Path) == "" {
-				return &wire.ToolResult{
-					Success: false,
-					Error:   "read_file: path cannot be empty. Call list_directory with path \".\" to see what files exist, or find_file with a name regex (e.g. \"snake_game\\.py\").",
-				}, nil
+			check := readFileCheckInput{ctx: ctx, input: input}
+			if runCheckPhase(proxyChecks.readFile, &check).outcome != turnContinues {
+				return check.result, check.err
 			}
-
-			path := resolveAgentPath(ctx, input.Path)
-
-			data, err := workspacefs.ReadRegularFile(path)
-			if err != nil {
-				return nil, fmt.Errorf("cannot read %s: %w", input.Path, err)
-			}
-
-			// Binary-file guard: a compiled binary, image or archive
-			// read as text gives the model bytes it cannot use, and it
-			// then gives up or loops. Point it at the inspection tools
-			// instead of returning the raw bytes.
-			if isBinaryContent(data) {
-				return &wire.ToolResult{
-					Success: false,
-					Error: fmt.Sprintf("read_file: %q is a binary file, not text — reading it as text is not useful. Inspect it with run_command instead: `strings %q` (printable strings), `readelf -a %q` or `objdump -d %q` (ELF headers / disassembly), `nm %q` (symbols), `file %q` (type), or `xxd %q | head` (hex dump).",
-						input.Path, input.Path, input.Path, input.Path, input.Path, input.Path, input.Path),
-				}, nil
-			}
+			path, data := check.path, check.data
 
 			lines := strings.Split(string(data), "\n")
 			totalLines := len(lines)
@@ -231,10 +207,11 @@ func outlineFileTool() *ToolDef {
 			if err := json.Unmarshal(rawInput, &input); err != nil {
 				return nil, fmt.Errorf("invalid input: %w", err)
 			}
-			if strings.TrimSpace(input.Path) == "" {
-				return &wire.ToolResult{Success: false,
-					Error: "outline_file: path cannot be empty. Pass {\"path\":\"<file>\"}."}, nil
+			check := outlineInputCheckInput{input: input}
+			if runCheckPhase(proxyChecks.outlineInput, &check).outcome != turnContinues {
+				return check.result, nil
 			}
+
 			path := resolveAgentPath(ctx, input.Path)
 			data, err := workspacefs.ReadRegularFile(path)
 			if err != nil {
@@ -447,11 +424,9 @@ func searchFilesTool() *ToolDef {
 
 			// Reject empty pattern: same reasoning as find_file. An empty
 			// regex matches every line in every file.
-			if strings.TrimSpace(input.Pattern) == "" {
-				return &wire.ToolResult{
-					Success: false,
-					Error:   "search_files: pattern cannot be empty. Provide a regex to grep file contents for (e.g. \"def main\" or \"TODO\\(.*\\)\").",
-				}, nil
+			check := searchInputCheckInput{input: input}
+			if runCheckPhase(proxyChecks.searchInput, &check).outcome != turnContinues {
+				return check.result, nil
 			}
 
 			searchPath := ctx.WorkingDir
@@ -764,19 +739,9 @@ func findFileTool() *ToolDef {
 			// Reject empty pattern: it matches every filename, returns the
 			// 200-match cap full of unrelated files, and confuses the model
 			// into thinking it found nothing useful.
-			if strings.TrimSpace(input.Pattern) == "" {
-				// A model can put the filename in `path` and leave `pattern`
-				// empty. The generic "pattern cannot be empty" is correct but
-				// never mentions the argument the model actually filled in. When
-				// `path` looks like a filename rather than a directory, hand
-				// back the exact call.
-				if hint := findFileArgSwapHint(input.Path); hint != "" {
-					return &wire.ToolResult{Success: false, Error: hint}, nil
-				}
-				return &wire.ToolResult{
-					Success: false,
-					Error:   "find_file: pattern cannot be empty. Provide a regex matching the filename you want to locate (e.g. \"snake_game\\.py\" or \"^main\\.\").",
-				}, nil
+			check := findInputCheckInput{input: input}
+			if runCheckPhase(proxyChecks.findInput, &check).outcome != turnContinues {
+				return check.result, nil
 			}
 
 			searchPath := ctx.WorkingDir
@@ -957,4 +922,182 @@ func fileContentInContext(ctx *AgentContext, content string) bool {
 		}
 	}
 	return false
+}
+
+func readFileToEdit(ctx *AgentContext, path, relPath string) (string, error) {
+	input := editReadCheckInput{ctx: ctx, path: path, relPath: relPath}
+	runCheckPhase(proxyChecks.editRead, &input)
+	return string(input.data), input.err
+}
+
+type editReadCheckInput struct {
+	ctx           *AgentContext
+	path, relPath string
+	data          []byte
+	err           error
+}
+
+func (input *editReadCheckInput) currentView() checkResult {
+	if !editViewIsCurrent(input.ctx, input.path) {
+		input.err = errNoMutation(fmt.Errorf("file not read yet — use read_file first before editing: %s", input.relPath))
+		return checkResult{checkGuardRefusal, turnEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *editReadCheckInput) read() checkResult {
+	data, err := workspacefs.ReadRegularFile(input.path)
+	if err != nil {
+		input.err = errNoMutation(fmt.Errorf("cannot read %s: %w", input.relPath, err))
+		return checkResult{checkToolError, turnEnds}
+	}
+	input.data = data
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *editReadCheckInput) staleness() checkResult {
+	if modifiedSinceSessionView(input.ctx, input.path, input.data) {
+		input.data = nil
+		input.err = errNoMutation(fmt.Errorf("file modified since last read — read it again before editing: %s", input.relPath))
+		return checkResult{checkGuardRefusal, turnEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+type lineReadCheckInput struct {
+	toolCheckOutput
+	ctx                     *AgentContext
+	path, relPath, original string
+	err                     error
+}
+
+func (check *lineReadCheckInput) currentView() checkResult {
+	if !editViewIsCurrent(check.ctx, check.path) {
+		check.err = errNoMutation(fmt.Errorf("file not read yet — use read_file first so the line numbers are current: %s", check.relPath))
+		return checkResult{checkGuardRefusal, turnEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+func (check *lineReadCheckInput) read() checkResult {
+	data, err := workspacefs.ReadRegularFile(check.path)
+	if err != nil {
+		return check.accept(checkToolError, noMutation(fmt.Sprintf("cannot read %s: %v", check.relPath, err)))
+	}
+	check.original = string(data)
+	return checkResult{checkPass, turnContinues}
+}
+
+type readFileCheckInput struct {
+	toolCheckOutput
+	ctx   *AgentContext
+	input wire.ReadFileInput
+	path  string
+	data  []byte
+	err   error
+}
+
+func (check *readFileCheckInput) pathCheck() checkResult {
+	input := check.input
+
+	// Empty path → resolves to the working dir, which is a
+	// directory, which fails with a confusing error the model
+	// can't recover from. Reject early with a hint at how to
+	// discover the file.
+	if strings.TrimSpace(input.Path) == "" {
+		return check.accept(checkModelError, &wire.ToolResult{
+			Success: false,
+			Error:   "read_file: path cannot be empty. Call list_directory with path \".\" to see what files exist, or find_file with a name regex (e.g. \"snake_game\\.py\").",
+		})
+	}
+
+	return checkResult{checkPass, turnContinues}
+}
+func (check *readFileCheckInput) read() checkResult {
+	input := check.input
+
+	check.path = resolveAgentPath(check.ctx, input.Path)
+
+	data, err := workspacefs.ReadRegularFile(check.path)
+	if err != nil {
+		check.err = fmt.Errorf("cannot read %s: %w", input.Path, err)
+		return checkResult{checkToolError, turnEnds}
+	}
+
+	check.data = data
+
+	return checkResult{checkPass, turnContinues}
+}
+func (check *readFileCheckInput) binary() checkResult {
+	input, data := check.input, check.data
+
+	// Binary-file guard: a compiled binary, image or archive
+	// read as text gives the model bytes it cannot use, and it
+	// then gives up or loops. Point it at the inspection tools
+	// instead of returning the raw bytes.
+	if isBinaryContent(data) {
+		return check.accept(checkGuardRefusal, &wire.ToolResult{
+			Success: false,
+			Error: fmt.Sprintf("read_file: %q is a binary file, not text — reading it as text is not useful. Inspect it with run_command instead: `strings %q` (printable strings), `readelf -a %q` or `objdump -d %q` (ELF headers / disassembly), `nm %q` (symbols), `file %q` (type), or `xxd %q | head` (hex dump).",
+				input.Path, input.Path, input.Path, input.Path, input.Path, input.Path, input.Path),
+		})
+	}
+
+	return checkResult{checkPass, turnContinues}
+}
+
+type outlineInputCheckInput struct {
+	toolCheckOutput
+	input wire.OutlineInput
+}
+
+func (check *outlineInputCheckInput) required() checkResult {
+	input := check.input
+
+	if strings.TrimSpace(input.Path) == "" {
+		return check.accept(checkModelError, &wire.ToolResult{Success: false,
+			Error: "outline_file: path cannot be empty. Pass {\"path\":\"<file>\"}."})
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+type searchInputCheckInput struct {
+	toolCheckOutput
+	input wire.SearchFilesInput
+}
+
+func (check *searchInputCheckInput) required() checkResult {
+	input := check.input
+
+	if strings.TrimSpace(input.Pattern) == "" {
+		return check.accept(checkModelError, &wire.ToolResult{
+			Success: false,
+			Error:   "search_files: pattern cannot be empty. Provide a regex to grep file contents for (e.g. \"def main\" or \"TODO\\(.*\\)\").",
+		})
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+type findInputCheckInput struct {
+	toolCheckOutput
+	input wire.FindFileInput
+}
+
+func (check *findInputCheckInput) required() checkResult {
+	input := check.input
+
+	if strings.TrimSpace(input.Pattern) == "" {
+		// A model can put the filename in `path` and leave `pattern`
+		// empty. The generic "pattern cannot be empty" is correct but
+		// never mentions the argument the model actually filled in. When
+		// `path` looks like a filename rather than a directory, hand
+		// back the exact call.
+		if hint := findFileArgSwapHint(input.Path); hint != "" {
+			return check.accept(checkModelError, &wire.ToolResult{Success: false, Error: hint})
+		}
+		return check.accept(checkModelError, &wire.ToolResult{
+			Success: false,
+			Error:   "find_file: pattern cannot be empty. Provide a regex matching the filename you want to locate (e.g. \"snake_game\\.py\" or \"^main\\.\").",
+		})
+	}
+	return checkResult{checkPass, turnContinues}
 }

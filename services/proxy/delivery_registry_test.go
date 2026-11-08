@@ -29,39 +29,25 @@ var v3DeliveryRouteSteps = map[string][]string{
 	},
 }
 
-// writeRouteGates are the gates of the new-file route, in the order they run.
-// Each can restore the baseline or end the write, so the order decides what
-// lands and which refusal the model reads.
-var writeRouteGates = []string{
-	"withdrawRefusedCandidate",
-	"refuseContentThatDoesNotParse",
-	"refuseUnresolvedCalls",
-	"refuseBrokenEmbeddedScript",
-	"refuseDuplicateEntrypoint",
-	"refuseCancelledWrite",
-}
-
-// The route runs its gates from one list, so nothing but this test fixes the
-// list's order, and each gate stays on it.
+// The candidate rows preserve the order of the write route's guards.
 func TestTheWriteRouteRunsItsGatesInTheirOrder(t *testing.T) {
 	var got []string
-	for _, d := range proxyFiles(t)["tool_write_v3.go"].Decls {
-		fd, ok := d.(*ast.FuncDecl)
-		if !ok || fd.Name.Name != "applyWriteGates" {
-			continue
-		}
-		ast.Inspect(fd.Body, func(n ast.Node) bool {
-			if list, ok := n.(*ast.CompositeLit); ok {
-				for _, gate := range list.Elts {
-					got = append(got, gate.(*ast.Ident).Name)
-				}
-			}
-			return true
-		})
+	for _, row := range proxyChecks.candidate {
+		got = append(got, row.name)
 	}
-	if !slices.Equal(got, writeRouteGates) {
-		t.Errorf("applyWriteGates runs %v, want %v", got, writeRouteGates)
+	want := []string{"candidate.authorization", "candidate.syntax", "candidate.unresolved", "candidate.embedded", "candidate.entrypoint", "candidate.cancellation"}
+	if !slices.Equal(got, want) {
+		t.Errorf("candidate checks = %v, want %v", got, want)
 	}
+	if !guardCalls(t, "tool_write_v3.go", "applyWriteGates")["runCheckPhase"] {
+		t.Fatal("the write route does not run the check table")
+	}
+	wantGuards := []string{"withdrawRefusedCandidate", "refuseContentThatDoesNotParse", "refuseUnresolvedCalls",
+		"refuseBrokenEmbeddedScript", "refuseDuplicateEntrypoint", "refuseCancelledWrite"}
+	if guards := callsInOrder(proxyFiles(t), "loop.go:init", wantGuards); !slices.Equal(guards, wantGuards) {
+		t.Errorf("candidate adapters call %v, want %v", guards, wantGuards)
+	}
+
 }
 
 // routeOf names the route a call site answers for: the route whose step the

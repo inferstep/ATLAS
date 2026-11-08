@@ -51,22 +51,12 @@ func executeStructuralEdit(rawInput json.RawMessage, ctx *AgentContext) (res *wi
 	}
 
 	path := resolveAgentPath(ctx, input.Path)
-	if !editViewIsCurrent(ctx, path) {
-		return nil, errNoMutation(fmt.Errorf("file not read yet — use read_file first before structural_edit: %s", input.Path))
+	check := structuralReadCheckInput{ctx: ctx, path: path,
+		structuralContentCheckInput: structuralContentCheckInput{input: input}}
+	if runCheckPhase(proxyChecks.structuralRead, &check).outcome != turnContinues {
+		return check.result, check.err
 	}
-
-	data, err := workspacefs.ReadRegularFile(path)
-	if err != nil {
-		return nil, errNoMutation(fmt.Errorf("cannot read %s: %w", input.Path, err))
-	}
-	source := string(data)
-	if refusal := structuralContentRefusal(input, source); refusal != nil {
-		return refusal, nil
-	}
-
-	if modifiedSinceSessionView(ctx, path, data) {
-		return nil, errNoMutation(fmt.Errorf("file modified since last read — read it again before structural_edit: %s", input.Path))
-	}
+	source := check.source
 
 	// Sanitise replacement content the same way edit_file does — the
 	// model occasionally fences fragments with ```python or ```html.
@@ -96,14 +86,11 @@ func executeStructuralEdit(rawInput json.RawMessage, ctx *AgentContext) (res *wi
 	// file that already failed stays editable, which is what makes
 	// repair-in-progress possible, and the check fails open when it
 	// cannot run.
-	observed, refusal := editSyntaxObservation(ctx, "structural_edit", input.Path, input.Path,
-		source, finalContent, structuralSyntaxMessage(input, finalContent))
+	observed, refusal := structuralGateRefusal(ctx, path, input, source, finalContent)
 	if refusal != nil {
 		return refusal, nil
 	}
-	if refusal := structuralGateRefusal(ctx, path, input.Path, source, finalContent); refusal != nil {
-		return refusal, nil
-	}
+
 	logMandatoryChecks(ctx, "structural_edit", input.Path, "")
 
 	// Atomic write — same pattern as edit_file/write_file.
@@ -132,53 +119,9 @@ func executeStructuralEdit(rawInput json.RawMessage, ctx *AgentContext) (res *wi
 
 // structuralInputRefusal refuses a call that names no file or no node.
 func structuralInputRefusal(input wire.StructuralEditInput) *wire.ToolResult {
-	if strings.TrimSpace(input.Path) == "" {
-		return noMutation("structural_edit: path cannot be empty. Read the file first then structural_edit with the same path.")
-	}
-	if strings.TrimSpace(input.Selector) == "" {
-		return noMutation("structural_edit: selector cannot be empty. Examples: function:dashboard, class:UserModel, <body>")
-	}
-	return nil
-}
-
-// structuralContentRefusal refuses a replacement that cannot be one node's body.
-func structuralContentRefusal(input wire.StructuralEditInput, source string) *wire.ToolResult {
-	// Empty-content guard. Replacing a node with nothing is a
-	// deletion, not an edit: an omitted `content` field would splice
-	// an empty string over the node and silently delete it. That
-	// passes the syntax gate (the file still parses) and the no-op
-	// guard (the content did change), so nothing else catches it.
-	// Refuse it and steer: an edit needs a replacement body; an
-	// intentional removal is delete_file's job.
-	if strings.TrimSpace(input.Content) == "" {
-		log.Printf("[structural_edit] rejected empty content for %s selector=%q — would delete the node", input.Path, input.Selector)
-		return noMutation(fmt.Sprintf(
-			"structural_edit: content is empty — that would DELETE `%s`, not fix it. "+
-				"Provide the full replacement body of the node (e.g. the corrected function definition). "+
-				"If you truly mean to remove code, use delete_file on the whole file instead.",
-			input.Selector))
-	}
-
-	// Runaway-content guard. structural_edit replaces ONE node, so the
-	// replacement should be roughly node-sized. A reasoning-heavy
-	// model sometimes leaks its entire chain-of-thought into the
-	// content field instead of emitting just the new body, and that
-	// blob then lands on disk and, being huge, trips downstream size
-	// heuristics. Reject when the
-	// replacement is implausibly larger than the whole file: >4× the
-	// file and over an 8KB floor (so legit edits that grow a small
-	// file stay clear, and large-function edits in large files aren't
-	// touched). Steer the model to emit only the replacement node.
-	if len(input.Content) > 8000 && len(input.Content) > len(source)*4 {
-		log.Printf("[structural_edit] rejected runaway content for %s selector=%q: %d chars vs %d-byte file",
-			input.Path, input.Selector, len(input.Content), len(source))
-		return noMutation(fmt.Sprintf(
-			"structural_edit: replacement content is %d characters — far larger than the entire %d-byte file. "+
-				"You only need to provide the new body of the single node `%s` (just the function/class/element itself), "+
-				"not the whole file and not your reasoning. Re-emit structural_edit with content set to ONLY the replacement node.",
-			len(input.Content), len(source), input.Selector))
-	}
-	return nil
+	check := structuralInputCheckInput{input: input}
+	runCheckPhase(proxyChecks.structuralInput, &check)
+	return check.result
 }
 
 // withoutRepeatedDoctype is the replacement, without a doctype the file keeps.
@@ -250,38 +193,9 @@ func spliceStructuralEdit(ctx *AgentContext, input wire.StructuralEditInput, sou
 
 // spliceRefusal refuses a splice that failed or would not help.
 func spliceRefusal(ctx *AgentContext, input wire.StructuralEditInput, source string, astResp structuralSplice) *wire.ToolResult {
-	if !astResp.Success {
-		// The selector matched nothing, or the splice would not parse:
-		// either way no replacement content came back to write.
-		return noMutation(astResp.Error + moduleLevelContentNote(ctx, input.Path, input.Content))
-	}
-
-	// Shrinkage guard: catch a destructive stub, such as only
-	// "<!DOCTYPE html>" emitted for a whole <html>-element
-	// rewrite. astResp.OldSize is the original node's bytes;
-	// astResp.NewSize is the replacement bytes. If the replacement
-	// is suspiciously small for the original, reject the write and
-	// tell the model to re-emit with the full body.
-	if rejection := validateNotSuspiciouslyShrunk("structural_edit", input.Path, astResp.OldSize, astResp.NewSize); rejection != "" {
-		log.Printf("[structural_edit] rejecting suspicious shrinkage: %s old=%dB new=%dB selector=%q",
-			input.Path, astResp.OldSize, astResp.NewSize, input.Selector)
-		return refusedNoCheck(rejection)
-	}
-
-	// No-op guard. A weak model frequently "fixes" a bug by
-	// re-emitting the node's existing (broken) code verbatim.
-	// Reporting success on a no-op tells the model the fix landed
-	// when nothing changed; it then moves on to verification, fails,
-	// and can't work out why. Fail loudly instead so the model
-	// re-derives the edit.
-	if astResp.NewContent == source {
-		log.Printf("[structural_edit] no-op edit rejected for %s selector=%q — replacement identical to existing code", input.Path, input.Selector)
-		return noMutation(fmt.Sprintf(
-			"structural_edit: your replacement for `%s` is IDENTICAL to the code already in the file — nothing was changed and the bug is still there. "+
-				"Look at the current code again and emit a replacement that actually differs (for a swapped-operator bug, the operator itself must change).",
-			input.Selector))
-	}
-	return nil
+	check := structuralSpliceCheckInput{ctx: ctx, input: input, source: source, astResp: astResp}
+	runCheckPhase(proxyChecks.structuralSplice, &check)
+	return check.result
 }
 
 // routeStructuralEdit sends the spliced file down the protected route when it
@@ -363,32 +277,10 @@ func structuralSyntaxMessage(input wire.StructuralEditInput, finalContent string
 }
 
 // structuralGateRefusal runs structural_edit's gates after the syntax gate.
-func structuralGateRefusal(ctx *AgentContext, path, relPath, source, finalContent string) *wire.ToolResult {
-	// Structural gate: the structural splice guarantees the result
-	// parses, but not that its calls resolve, so a new call with no
-	// matching import would land as verified and fail at runtime.
-	// Block a write that NEWLY makes a direct call unresolved
-	// (healthy->broken); a pre-existing one is left alone for
-	// repair-in-progress. Fail-open when the check can't run.
-	if introduced := editIntroducesUnresolved(ctx, path, source, finalContent); len(introduced) > 0 {
-		log.Printf("[structural_edit] edit introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(relPath))
-		return structuralRefusal(structuralRejection(relPath, introduced))
-	}
-
-	// Embedded-script gate: the post-splice check in v3-service
-	// proves the .py/.html parses, not that the JavaScript inside a
-	// <script> block does — and `<script>` is a first-class selector
-	// here, so this tool is the likeliest way to land broken JS.
-	// Healthy->broken, fail-soft.
-	if msg := embeddedScriptGate(ctx, path, source, finalContent); msg != "" {
-		log.Printf("[structural_edit] edit breaks an embedded script in %s — rejecting", logPath(relPath))
-		return structuralRefusal(msg)
-	}
-	if msg := duplicateMainGuard(path, source, finalContent); msg != "" {
-		log.Printf("[structural_edit] edit duplicates the module entrypoint in %s — rejecting", logPath(relPath))
-		return structuralRefusal(msg)
-	}
-	return nil
+func structuralGateRefusal(ctx *AgentContext, path string, input wire.StructuralEditInput, source, finalContent string) (checkOutcome, *wire.ToolResult) {
+	check := structuralLandingCheckInput{ctx: ctx, path: path, input: input, relPath: input.Path, source: source, finalContent: finalContent}
+	runCheckPhase(proxyChecks.structuralLanding, &check)
+	return check.observed, check.result
 }
 
 // structuralEditOutput is what structural_edit tells the model about the change.
@@ -423,4 +315,234 @@ func structuralEditOutput(input wire.StructuralEditInput, astResp structuralSpli
 			input.Path, truncateStr(observed.Detail, 160))
 	}
 	return out
+}
+
+type structuralInputCheckInput struct {
+	toolCheckOutput
+	input wire.StructuralEditInput
+}
+
+func (check *structuralInputCheckInput) path() checkResult {
+	input := check.input
+	if strings.TrimSpace(input.Path) == "" {
+		return check.accept(checkModelError, noMutation("structural_edit: path cannot be empty. Read the file first then structural_edit with the same path."))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *structuralInputCheckInput) selector() checkResult {
+	input := check.input
+	if strings.TrimSpace(input.Selector) == "" {
+		return check.accept(checkModelError, noMutation("structural_edit: selector cannot be empty. Examples: function:dashboard, class:UserModel, <body>"))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+type structuralContentCheckInput struct {
+	toolCheckOutput
+	input  wire.StructuralEditInput
+	source string
+}
+
+func (check *structuralContentCheckInput) empty() checkResult {
+	input := check.input
+	// Empty-content guard. Replacing a node with nothing is a
+	// deletion, not an edit: an omitted `content` field would splice
+	// an empty string over the node and silently delete it. That
+	// passes the syntax gate (the file still parses) and the no-op
+	// guard (the content did change), so nothing else catches it.
+	// Refuse it and steer: an edit needs a replacement body; an
+	// intentional removal is delete_file's job.
+	if strings.TrimSpace(input.Content) == "" {
+		log.Printf("[structural_edit] rejected empty content for %s selector=%q — would delete the node", input.Path, input.Selector)
+		return check.accept(checkGuardRefusal, noMutation(fmt.Sprintf(
+			"structural_edit: content is empty — that would DELETE `%s`, not fix it. "+
+				"Provide the full replacement body of the node (e.g. the corrected function definition). "+
+				"If you truly mean to remove code, use delete_file on the whole file instead.",
+			input.Selector)))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *structuralContentCheckInput) runaway() checkResult {
+	input := check.input
+	source := check.source
+	// Runaway-content guard. structural_edit replaces ONE node, so the
+	// replacement should be roughly node-sized. A reasoning-heavy
+	// model sometimes leaks its entire chain-of-thought into the
+	// content field instead of emitting just the new body, and that
+	// blob then lands on disk and, being huge, trips downstream size
+	// heuristics. Reject when the
+	// replacement is implausibly larger than the whole file: >4× the
+	// file and over an 8KB floor (so legit edits that grow a small
+	// file stay clear, and large-function edits in large files aren't
+	// touched). Steer the model to emit only the replacement node.
+	if len(input.Content) > 8000 && len(input.Content) > len(source)*4 {
+		log.Printf("[structural_edit] rejected runaway content for %s selector=%q: %d chars vs %d-byte file",
+			input.Path, input.Selector, len(input.Content), len(source))
+		return check.accept(checkGuardRefusal, noMutation(fmt.Sprintf(
+			"structural_edit: replacement content is %d characters — far larger than the entire %d-byte file. "+
+				"You only need to provide the new body of the single node `%s` (just the function/class/element itself), "+
+				"not the whole file and not your reasoning. Re-emit structural_edit with content set to ONLY the replacement node.",
+			len(input.Content), len(source), input.Selector)))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+type structuralSpliceCheckInput struct {
+	toolCheckOutput
+	ctx     *AgentContext
+	input   wire.StructuralEditInput
+	source  string
+	astResp structuralSplice
+}
+
+func (check *structuralSpliceCheckInput) service() checkResult {
+	ctx := check.ctx
+	input := check.input
+	astResp := check.astResp
+	if !astResp.Success {
+		// The selector matched nothing, or the splice would not parse:
+		// either way no replacement content came back to write.
+		return check.accept(checkToolError, noMutation(astResp.Error+moduleLevelContentNote(ctx, input.Path, input.Content)))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *structuralSpliceCheckInput) shrinkage() checkResult {
+	input := check.input
+	astResp := check.astResp
+	// Shrinkage guard: catch a destructive stub, such as only
+	// "<!DOCTYPE html>" emitted for a whole <html>-element
+	// rewrite. astResp.OldSize is the original node's bytes;
+	// astResp.NewSize is the replacement bytes. If the replacement
+	// is suspiciously small for the original, reject the write and
+	// tell the model to re-emit with the full body.
+	if rejection := validateNotSuspiciouslyShrunk("structural_edit", input.Path, astResp.OldSize, astResp.NewSize); rejection != "" {
+		log.Printf("[structural_edit] rejecting suspicious shrinkage: %s old=%dB new=%dB selector=%q",
+			input.Path, astResp.OldSize, astResp.NewSize, input.Selector)
+		return check.accept(checkGuardRefusal, refusedNoCheck(rejection))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *structuralSpliceCheckInput) unchanged() checkResult {
+	input := check.input
+	source := check.source
+	astResp := check.astResp
+	// No-op guard. A weak model frequently "fixes" a bug by
+	// re-emitting the node's existing (broken) code verbatim.
+	// Reporting success on a no-op tells the model the fix landed
+	// when nothing changed; it then moves on to verification, fails,
+	// and can't work out why. Fail loudly instead so the model
+	// re-derives the edit.
+	if astResp.NewContent == source {
+		log.Printf("[structural_edit] no-op edit rejected for %s selector=%q — replacement identical to existing code", input.Path, input.Selector)
+		return check.accept(checkGuardRefusal, noMutation(fmt.Sprintf(
+			"structural_edit: your replacement for `%s` is IDENTICAL to the code already in the file — nothing was changed and the bug is still there. "+
+				"Look at the current code again and emit a replacement that actually differs (for a swapped-operator bug, the operator itself must change).",
+			input.Selector)))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+type structuralLandingCheckInput struct {
+	observed checkOutcome
+	input    wire.StructuralEditInput
+	toolCheckOutput
+	ctx          *AgentContext
+	path         string
+	relPath      string
+	source       string
+	finalContent string
+}
+
+func (check *structuralLandingCheckInput) unresolvedCalls() checkResult {
+	ctx := check.ctx
+	path := check.path
+	relPath := check.relPath
+	source := check.source
+	finalContent := check.finalContent
+	// Structural gate: the structural splice guarantees the result
+	// parses, but not that its calls resolve, so a new call with no
+	// matching import would land as verified and fail at runtime.
+	// Block a write that NEWLY makes a direct call unresolved
+	// (healthy->broken); a pre-existing one is left alone for
+	// repair-in-progress. Fail-open when the check can't run.
+	if introduced := editIntroducesUnresolved(ctx, path, source, finalContent); len(introduced) > 0 {
+		log.Printf("[structural_edit] edit introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(relPath))
+		return check.accept(checkGuardRefusal, structuralRefusal(structuralRejection(relPath, introduced)))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *structuralLandingCheckInput) embeddedScript() checkResult {
+	ctx := check.ctx
+	path := check.path
+	relPath := check.relPath
+	source := check.source
+	finalContent := check.finalContent
+	// Embedded-script gate: the post-splice check in v3-service
+	// proves the .py/.html parses, not that the JavaScript inside a
+	// <script> block does — and `<script>` is a first-class selector
+	// here, so this tool is the likeliest way to land broken JS.
+	// Healthy->broken, fail-soft.
+	if msg := embeddedScriptGate(ctx, path, source, finalContent); msg != "" {
+		log.Printf("[structural_edit] edit breaks an embedded script in %s — rejecting", logPath(relPath))
+		return check.accept(checkGuardRefusal, structuralRefusal(msg))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *structuralLandingCheckInput) entrypoint() checkResult {
+	path := check.path
+	relPath := check.relPath
+	source := check.source
+	finalContent := check.finalContent
+	if msg := duplicateMainGuard(path, source, finalContent); msg != "" {
+		log.Printf("[structural_edit] edit duplicates the module entrypoint in %s — rejecting", logPath(relPath))
+		return check.accept(checkGuardRefusal, structuralRefusal(msg))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *structuralLandingCheckInput) syntax() checkResult {
+	observed, refusal := editSyntaxObservation(check.ctx, "structural_edit", check.relPath, check.relPath,
+		check.source, check.finalContent, structuralSyntaxMessage(check.input, check.finalContent))
+	check.observed = observed
+	return check.accept(checkGuardRefusal, refusal)
+}
+
+type structuralReadCheckInput struct {
+	structuralContentCheckInput
+	ctx  *AgentContext
+	path string
+	data []byte
+	err  error
+}
+
+func (check *structuralReadCheckInput) currentView() checkResult {
+	if !editViewIsCurrent(check.ctx, check.path) {
+		check.err = errNoMutation(fmt.Errorf("file not read yet — use read_file first before structural_edit: %s", check.input.Path))
+		return checkResult{checkGuardRefusal, turnEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *structuralReadCheckInput) read() checkResult {
+	data, err := workspacefs.ReadRegularFile(check.path)
+	if err != nil {
+		check.err = errNoMutation(fmt.Errorf("cannot read %s: %w", check.input.Path, err))
+		return checkResult{checkToolError, turnEnds}
+	}
+	check.data, check.source = data, string(data)
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *structuralReadCheckInput) staleness() checkResult {
+	if modifiedSinceSessionView(check.ctx, check.path, check.data) {
+		check.err = errNoMutation(fmt.Errorf("file modified since last read — read it again before structural_edit: %s", check.input.Path))
+		return checkResult{checkGuardRefusal, turnEnds}
+	}
+	return checkResult{checkPass, turnContinues}
 }
