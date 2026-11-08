@@ -287,6 +287,13 @@ detect_existing_setup() {
     echo ""
 }
 
+# The K3s release that install_k3s installs, and the SHA-256 of the install
+# script at that tag. To move the pin, take the tag that
+# https://update.k3s.io/v1-release/channels/stable redirects to, and run
+# sha256sum on https://raw.githubusercontent.com/k3s-io/k3s/<tag>/install.sh.
+K3S_VERSION="v1.37.2+k3s1"
+K3S_INSTALL_SHA256="ed01f89fd977bf20ac1516bbebf8370bf3ddbaa55dac8aba610956a4c78cc00b"
+
 # Install K3s
 install_k3s() {
     if [[ "$SKIP_K3S" == "true" ]]; then
@@ -307,8 +314,18 @@ install_k3s() {
         return
     fi
 
-    log_info "Installing K3s..."
-    curl -sfL https://get.k3s.io | sh -s - --write-kubeconfig-mode 644
+    log_info "Installing K3s $K3S_VERSION..."
+    local script
+    script="$(mktemp)"
+    curl --proto '=https' --tlsv1.2 -fsSL -o "$script" \
+        "https://raw.githubusercontent.com/k3s-io/k3s/${K3S_VERSION}/install.sh"
+    # Stop here also when a caller has turned off set -e (an if, && or ||).
+    if ! echo "${K3S_INSTALL_SHA256}  ${script}" | sha256sum -c -; then
+        log_error "The K3s install script does not match K3S_INSTALL_SHA256, so it was not run"
+        exit 1
+    fi
+    INSTALL_K3S_VERSION="$K3S_VERSION" sh "$script" --write-kubeconfig-mode 644
+    rm -f "$script"
 
     # Wait for K3s to be ready
     log_info "Waiting for K3s to be ready..."
@@ -321,6 +338,40 @@ install_k3s() {
 # Check if GPU is already available in cluster
 check_gpu_available() {
     kubectl get nodes -o json 2>/dev/null | grep -q '"nvidia.com/gpu"'
+}
+
+# The Helm 3 release that install_helm installs, and the SHA-256 of its
+# archives. To move the pin, take the newest v3 tag of
+# https://github.com/helm/helm/releases, and read the hashes from the
+# .sha256sum file next to each archive on https://get.helm.sh.
+HELM_VERSION="v3.22.1"
+HELM_SHA256_AMD64="896cf63684a42a723d61c980369d6e588330927deb13676ca0d85006dd6da0ea"
+HELM_SHA256_ARM64="4c29e286b279d170fa048ddfc3e4e83dcd069ca9c52102766ba672d7149e694d"
+
+# Install Helm to /usr/local/bin
+install_helm() {
+    local arch sha
+    case "$(uname -m)" in
+        x86_64) arch=amd64; sha="$HELM_SHA256_AMD64" ;;
+        aarch64|arm64) arch=arm64; sha="$HELM_SHA256_ARM64" ;;
+        *)
+            log_error "No Helm archive is pinned for the architecture $(uname -m)"
+            exit 1
+            ;;
+    esac
+
+    log_info "Installing Helm $HELM_VERSION..."
+    local dir
+    dir="$(mktemp -d)"
+    curl --proto '=https' --tlsv1.2 -fsSL -o "$dir/helm.tar.gz" \
+        "https://get.helm.sh/helm-${HELM_VERSION}-linux-${arch}.tar.gz"
+    if ! echo "${sha}  ${dir}/helm.tar.gz" | sha256sum -c -; then
+        log_error "The Helm archive does not match its pinned SHA-256, so it was not installed"
+        exit 1
+    fi
+    tar -xzf "$dir/helm.tar.gz" -C "$dir"
+    install -m 0755 "$dir/linux-${arch}/helm" /usr/local/bin/helm
+    rm -rf "$dir"
 }
 
 # Install NVIDIA GPU Operator (or skip if GPU already available)
@@ -349,12 +400,11 @@ install_gpu_operator() {
 
     log_info "Installing NVIDIA GPU Operator..."
 
-    # Add Helm repo
     if ! command -v helm &> /dev/null; then
-        log_info "Installing Helm..."
-        curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+        install_helm
     fi
 
+    # Add Helm repo
     helm repo add nvidia https://helm.ngc.nvidia.com/nvidia || true
     helm repo update
 
