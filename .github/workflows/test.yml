@@ -167,7 +167,7 @@ jobs:
 
       - name: install
         run: |
-          # The CLI is stdlib-only, so --no-deps installs everything it needs.
+          # The tests import ATLAS from this checkout, so no step installs ATLAS.
           # Everything else comes from the one hashed lock (ci.in lists it;
           # scripts/ci/ci-lock.sh makes ci.txt again), and pip checks each file
           # it downloads against the lock's hashes:
@@ -186,7 +186,6 @@ jobs:
           # A contract test holds each of these pins the same as its product
           # file (tests/contracts/test_ci_lock.py).
           pip install --require-hashes -r .github/requirements/ci.txt
-          pip install --no-deps -e .
 
       - name: install lens dependencies (CPU torch)
         if: matrix.subset == 'services/geometric-lens/tests' || matrix.subset == 'tests/atlas'
@@ -426,7 +425,6 @@ jobs:
         run: |
           # The sandbox's runtime packages are in the hashed lock.
           pip install --require-hashes -r .github/requirements/ci.txt
-          pip install --no-deps -e .
 
       - name: e2e acceptance test
         env:
@@ -574,7 +572,6 @@ jobs:
           # pytest, and httpx with which the tests reach the service: from
           # the hashed lock.
           pip install --require-hashes -r .github/requirements/ci.txt
-          pip install --no-deps -e .
 
       - name: the settings that an install gives the compose file
         run: |
@@ -687,7 +684,6 @@ jobs:
       - name: install
         run: |
           pip install --require-hashes -r .github/requirements/ci.txt
-          pip install --no-deps -e .
 
       - name: build the proxy and the TUI
         run: |

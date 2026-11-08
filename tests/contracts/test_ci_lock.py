@@ -186,20 +186,20 @@ def test_the_lens_lock_holds_every_linux_pin_of_the_lens_requirements():
         assert locked[name.lower()][0].split("+")[0] == version, why
 
 
-def test_every_install_of_the_lock_checks_the_hashes():
-    installs = [(name, number, line) for name, number, line in _workflow_lines()
-                if "pip install" in line and "requirements/ci.txt" in line]
+def test_every_pip_install_of_a_workflow_checks_the_hashes():
+    installs = [(name, number, line) for name, number, line in _workflow_lines() if "pip install" in line]
     assert len(installs) >= 5, (
-        f"only {len(installs)} installs of the lock were found; this test reads the workflows wrongly")
+        f"only {len(installs)} pip installs were found; this test reads the workflows wrongly")
     for name, number, line in installs:
         assert "--require-hashes" in line, (
-            f"{name}:{number} installs the lock and does not check its hashes: {line.strip()}. Fix: write "
-            "`pip install --require-hashes -r .github/requirements/ci.txt`.")
+            f"{name}:{number} installs with no hash check: {line.strip()}. Fix: install from a hashed "
+            "lock with `pip install --require-hashes -r`. The tests import ATLAS from the checkout, "
+            "so no step installs ATLAS.")
 
 
 def test_workflows_install_locked_tools_only_through_the_lock():
     tools = [name for name, _wanted in _lines(_read(".github", "requirements", "ci.in"))]
-    loose = re.compile(r"pip install (?!--require-hashes)(?!--no-deps)(?!-r )(?!-e )[^\n]*\b(%s)\b" % "|".join(
+    loose = re.compile(r"pip install (?!--require-hashes)(?!-r )[^\n]*\b(%s)\b" % "|".join(
         re.escape(tool) for tool in tools))
     for name, number, line in _workflow_lines():
         assert not loose.search(line), f"{name}:{number} installs a locked tool without the lock: {line.strip()}"
