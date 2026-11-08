@@ -16,7 +16,7 @@ Provenance (ported behavior-for-behavior):
 
 The design is issue #39 (https://github.com/inferstep/ATLAS/issues/39).
 
-The package facade exports only what production imports (pipeline.py and
+The package facade exports only what production imports (run_steps.py and
 main.py); tests import the submodules directly.
 """
 

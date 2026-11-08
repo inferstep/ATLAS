@@ -714,11 +714,11 @@ except curses.error:
 
 **现象：** 让 ATLAS 写一个 HTML/CSS/JSON 文件导致约 5 分钟的停顿，伴随 PR-CoT 修复尝试和 LLM 超时。文件最终经由直接写入回退落盘。
 
-**发生了什么：** V3 冒烟检查是语言感知的 —— 它从目标文件的扩展名推导语言并路由到正确的检查器（`.py` → Python 编译、`.js` → `node --check`、`.ts` → `tsc --noEmit`、`.go` → `gofmt -e`、`.rs` → `rustc`、`.sh` → `bash -n`、`.html` → `html.parser`、`.xml` → `ElementTree`、`.json` → `json.loads`、`.yaml` → `yaml.safe_load`）。无法识别的扩展名会回退到 Python 并失败，进而级联进修复。注意 `.c`/`.cpp`/`.h` 不在扩展名映射（`services/v3-service/pipeline.py` 的 `_ext_to_lang`）中，因此即使 sandbox 本身有 C/C++ 检查器，C/C++ 文件也会撞上 Python 回退。
+**发生了什么：** V3 冒烟检查是语言感知的 —— 它从目标文件的扩展名推导语言并路由到正确的检查器（`.py` → Python 编译、`.js` → `node --check`、`.ts` → `tsc --noEmit`、`.go` → `gofmt -e`、`.rs` → `rustc`、`.sh` → `bash -n`、`.html` → `html.parser`、`.xml` → `ElementTree`、`.json` → `json.loads`、`.yaml` → `yaml.safe_load`）。无法识别的扩展名会回退到 Python 并失败，进而级联进修复。注意 `.c`/`.cpp`/`.h` 不在扩展名映射（`services/v3-service/run_steps.py` 的 `_ext_to_lang`）中，因此即使 sandbox 本身有 C/C++ 检查器，C/C++ 文件也会撞上 Python 回退。
 
 如果 `/v3/generate` 收到了被批准的项目构建命令，V3 会在语法/自测验证之后发出一个 `build_verify` 事件。命令在一个临时 sandbox 工作区中运行，候选会覆盖到项目上，因此失败的构建证据会阻止 `passed=true`，而不会把候选写进真实的检出。覆盖快照会跳过依赖缓存、密钥、模型/数据工件、符号链接和大文件，并强制文件数与字节数限制。如果一个项目的构建需要重量级依赖，请把它们作为显式验证工作流的一部分装进 sandbox 工作区。
 
-**怎么做：** 对无法识别的扩展名，把它加进 `services/v3-service/pipeline.py` 的 `_ext_to_lang` 并重建 `v3-service` 镜像。V3 出错时代理会回退到直接写入，因此文件无论如何都会落盘 —— 只是慢。检查 `docker compose logs v3-service | grep smoke_check` 确认路由到了正确的语言。
+**怎么做：** 对无法识别的扩展名，把它加进 `services/v3-service/run_steps.py` 的 `_ext_to_lang` 并重建 `v3-service` 镜像。V3 出错时代理会回退到直接写入，因此文件无论如何都会落盘 —— 只是慢。检查 `docker compose logs v3-service | grep smoke_check` 确认路由到了正确的语言。
 
 ### "再修一次"的提示词不触发 V3 Pipeline
 

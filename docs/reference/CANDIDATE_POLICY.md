@@ -507,7 +507,7 @@ use.
 | Layer | Owns | Must not |
 | --- | --- | --- |
 | `services/v3-service/contract.py` | The domain: vocabulary, coverage arithmetic, comparability, ranking, closure policy, and the wire envelope that renders them | — |
-| `services/v3-service/pipeline.py` | Orchestration: runs verifiers, supplies the selected record | Decide wire shape |
+| `services/v3-service/pipeline.py` and `run_steps.py` | Orchestration: runs verifiers, supplies the selected record | Decide wire shape |
 | `services/v3-service/adapters.py` | Adapter knowledge: which criteria an adapter can observe, what its grading means in contract terms, and the live-record → contract-record bridge | Decide closure, ranking or selection |
 | `services/v3-service/main.py` | Transport: calls `adapters.evidence_envelope`, writes its output | Hold any policy — pinned by `test_main_serialises_but_decides_nothing` |
 | `services/proxy/internal/wire/v3.go` | The one Go wire representation, beside `V3GenerateResponse` | — |
@@ -650,7 +650,7 @@ where every suite scored 0/N cannot be attributed to the candidates or to
 the answer key from what was retained.
 
 `ATLAS_V3_CAPTURE_POOL=<absolute path>` turns on an append-only JSONL sink
-in `pipeline.py` holding `candidate_evaluation` (exact candidate bytes,
+in `pool_capture.py` holding `candidate_evaluation` (exact candidate bytes,
 hash, length, role including candidate zero, contract record, and every
 generated case with its input, generated expected output, observed actual
 and a classified outcome), one `selection_summary` and one `capture_status`

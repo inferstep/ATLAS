@@ -13,7 +13,9 @@ Streams progress events back as SSE for real-time feedback.
 
 The pipeline itself lives in flat sibling modules: adapters.py (service
 clients), scoring.py (candidate verification), symbols.py (tree-sitter
-tooling), planning.py (/v3/plan), and pipeline.py (the orchestrator).
+tooling), planning.py (/v3/plan), and pipeline.py (the orchestrator), with
+its run steps, candidate cases and pool capture in run_steps.py,
+candidate_cases.py and pool_capture.py.
 """
 
 import json

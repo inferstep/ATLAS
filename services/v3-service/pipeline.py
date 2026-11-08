@@ -1,10 +1,11 @@
 """The V3 pipeline orchestrator. V3PipelineService runs one task through its
 phases (probe, allocation, generation, sandbox verification, selection,
-repair) as the steps defined here. Also here: the benchmark-only pool
-capture, the self-test and output-probe case wrappers with the CodeT
-consensus over them, the candidate verifier, and the /v3/generate problem
-builder. Stage telemetry, the candidate records and the vetoes are modules
-of their own beside this one."""
+repair). Also here: the diagnostic candidate allocation and the /v3/generate
+problem builder. The modules beside this one hold the other parts:
+run_steps.py holds the steps of a run and the candidate verifier,
+candidate_cases.py holds the case wrappers and the CodeT consensus, and
+pool_capture.py holds the benchmark-only pool capture. Stage telemetry, the
+candidate records and the vetoes are also modules of their own."""
 
 import json
 import threading
