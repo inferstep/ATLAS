@@ -1,4 +1,4 @@
-<!-- source: docs/reference/ARCHITECTURE.md synced-through: 466a1142e05780965df4e27c30fd389eb9fa701c -->
+<!-- source: docs/reference/ARCHITECTURE.md synced-through: 7e33f929de56372528b58bd9895f587735fef89a -->
 > **[English](../../reference/ARCHITECTURE.md)** | **[简体中文](../zh-CN/ARCHITECTURE.md)** | **日本語** | **[한국어](../ko/ARCHITECTURE.md)**
 
 # ATLAS アーキテクチャ
@@ -47,13 +47,13 @@ llama-server は GPU を使用する唯一のサービスです。それ以外�
 
 | バックエンド | ステータス (V3.1.x) | イメージ / ビルドパス | Compose オーバーライド | 検証済みカード |
 |---|---|---|---|---|
-| **CUDA** (NVIDIA) | サポート対象 (Supported)（V3.1.0 以降） | `services/inference/Dockerfile.v31` → `atlas-llama` | (デフォルト) | RTX 5060 Ti 16GB（標準構成）。公開イメージは Blackwell（compute capability 12.0/12.1）のみを対象にコンパイルされており、それより前の世代はローカル再ビルドが必要 — [SETUP.md](../../guides/SETUP.md) を参照 |
+| **CUDA** (NVIDIA) | Blackwell: Supported（V3.1.0 以降）。古い GPU: Preview、ローカル再ビルドが必要 | `services/inference/Dockerfile.v31` → `atlas-llama` | (デフォルト) | RTX 5060 Ti 16GB（標準構成）。公開イメージは Blackwell（compute capability 12.0/12.1）のみを対象にコンパイルされており、それより前の世代はローカル再ビルドが必要 — [SETUP.md](../../guides/SETUP.md) を参照 |
 | **ROCm / HIP** (AMD) | コミュニティ検証済み (Community-tested)（V3.1.1 以降） | `services/inference/Dockerfile.rocm` → `atlas-llama-rocm`、ホスト上でビルド（`pull_policy: build`; GHCR イメージなし） | `deploy/compose/docker-compose.rocm.yml` | RX 7900 XTX（コミュニティによるスモークテスト、GH #26） |
 | **Metal** (Apple Silicon) | サポート対象 ([#32](https://github.com/inferstep/ATLAS/issues/32)) | ハイブリッド: ネイティブ llama-server (Metal) + 残りは Docker（macOS は GPU をコンテナにパススルーできないため） | `deploy/compose/docker-compose.macos.yml` | M シリーズ; 16 GB 以下では Q4_K_M、24 GB 以上のユニファイドメモリでは Q6_K |
 | **Vulkan**（クロスベンダーフォールバック） | プレビュー (Preview) | `services/inference/Dockerfile.vulkan` → `atlas-llama-vulkan` | `deploy/compose/docker-compose.vulkan.yml` | lavapipe の CPU 起動パス（スモークテスト済み）。実 GPU での検証はまだなし |
 | **SYCL** (Intel Arc) | ロードマップ (Roadmap) — Intel Arc は現在 `vulkan` を使用 | 未定 | 未定 | — |
 
-**バックエンドの選択は実行時ではなくインストール時に行われます。** `atlas init` は `tier.detect_gpu()`（`atlas/commands/tier.py` を参照）を実行し、検出されたすべてのベンダーの中から VRAM が最大の GPU を選び（`ATLAS_GPU_VENDOR` / `ATLAS_GPU_INDEX` でオーバーライド可能）、`.env` に `ATLAS_BACKEND={cuda|rocm|metal|vulkan}` を書き込みます。パッケージ済みのネイティブバックエンドが存在する場合、検出はそれに解決されます: NVIDIA には CUDA、x86_64 上の AMD には ROCm、macOS にはハイブリッド Metal パス。ホスト向けのネイティブバックエンドがパッケージされていない場合（Intel Arc、arm64 上の AMD、未認識のベンダー）、ウィザードは Vulkan ユニバーサルフォールバックを提案します（デフォルトは yes）: 1 つのイメージで AMD、Intel、Adreno、MoltenVK、lavapipe CPU ラスタライザをカバーし、性能はチューニング済みのネイティブバックエンドよりおおよそ 20〜40% 低くなります。起動しない `.env` を書き込む代わりに拒否するのは、使えるものが何も存在しない場合だけです。各バックエンドにはそれぞれ事前ビルド済みのイメージがあります。ユーザーがすべてのバックエンドのライブラリを同梱した肥大化したイメージを実行することはありません。
+**バックエンドの選択は実行時ではなくインストール時に行われます。** `atlas init` は `tier.detect_gpu()`（`atlas/commands/tier.py` を参照）を実行し、検出されたすべてのベンダーの中から VRAM が最大の GPU を選び（`ATLAS_GPU_VENDOR` / `ATLAS_GPU_INDEX` でオーバーライド可能）、`.env` に `ATLAS_BACKEND={cuda|rocm|metal|vulkan}` を書き込みます。パッケージ済みのネイティブバックエンドが存在する場合、検出はそれに解決されます: NVIDIA には CUDA、x86_64 上の AMD には ROCm、macOS にはハイブリッド Metal パス。ホスト向けのネイティブバックエンドがパッケージされていない場合（Intel Arc、arm64 上の AMD、未認識のベンダー）、ウィザードは Vulkan ユニバーサルフォールバックを提案します（デフォルトは yes）: 1 つのイメージで AMD、Intel、Adreno、MoltenVK、lavapipe CPU ラスタライザをカバーし、性能はチューニング済みのネイティブバックエンドよりおおよそ 20〜40% 低くなります。起動しない `.env` を書き込む代わりに拒否するのは、使えるものが何も存在しない場合だけです。各バックエンドには独自のイメージがあり、CUDA と Vulkan は GHCR の事前ビルド済みイメージ、ROCm は AMD ホスト上の最初の `up` でコンパイルします。ユーザーがすべてのバックエンドのライブラリを同梱した肥大化したイメージを実行することはありません。
 
 **持ち込みモデルの対応面 (V3.1.1)。** `atlas lens check` は、稼働中の llama-server に対する安価な事前チェックで、ロード済みモデルが Lens 互換かどうかを報告します。`atlas lens build --samples <path>` は `services/geometric-lens/geometric_lens/training.py` をラップし、モデルのネイティブ埋め込み次元で新しい C(x)（`cost_field.pt`）**と** G(x)（XGBoost）のアーティファクトをトレーニングします。この2つを組み合わせることで、ユーザーは Lens コードをフォークすることなくデフォルト以外の GGUF を差し込めます — C(x) コンストラクタは任意の `input_dim` を受け付けるため、モデルごとに変わるのはトレーニング済み重みだけです。ユーザー向けのフローは [CLI.md § atlas lens](../../reference/CLI.md#atlas-lens) を参照してください。`atlas lens publish`（または統合コマンドの `atlas publish`）がアーティファクトを HuggingFace にアップロードし、そのハッシュを固定するレジストリ PR を開きます。
 
@@ -91,15 +91,15 @@ K3s デプロイパス（`scripts/install/install.sh`、`deploy/k3s/` 内のマ�
 | ファイル | 担当 |
 |---|---|
 | `main.go` | HTTP サーバー、ルーティング、認証、パススルー、エラーエンベロープ、秘匿値のログフィルタ |
-| `model_call.go`, `model_reply.go` | llama-server への 1 回の呼び出しと、モデルの応答の読み取り |
+| `loop.go` | `runAgentLoop`、フェンス取得、ツールチェーン検出 |
+| `model_call.go`, `model_reply.go` | llama-server への 1 回の呼び出しと応答の読み取り。`model_reply.go` はモデルテキストの JSON エスケープを復号し、UTF-16 サロゲートペアを 1 文字として扱います。`\b` と `\f` は文字のままにし、バックスペースやフォームフィードを端末へ送りません |
 | `model_prompt.go`, `task_tier.go` | システムプロンプトとコンテキスト予算、メッセージのティア |
 | `server_agent.go` | `/v1/agent` と `/cancel` エンドポイント |
-| `loop.go` | `runAgentLoop`、フェンス取得、ツールチェーン検出 |
-| `gates_exit.go` | 終了ゲートと、それらが読む実行状態 |
-| `loop_turn.go`, `loop_checks.go`, `loop_results.go` | ループの 1 ターン: モデル呼び出しと応答、ツール実行前のチェック、結果とスタックループのブレーカー。`loop_turn.go` は読み取り専用コールの反復の後、リクエストが要求するものに応じて実行に行動か応答を促す |
 | `plan_generation.go`, `task_intake.go` | リクエストにプランが必要かの判定とプランナーを呼び出す処理、リクエストが宣言するタスクコントラクト |
 | `loop_end.go`, `loop_recovery.go` | 実行の終わり方（ターミナル、時間予算、サマリー）、行き詰まったモデルに示す内容と未完了の作業 |
 | `model_fenced_channel.go` | ファイル本体を取得するサブコールとその予算 |
+| `gates_exit.go` | 終了ゲートと、それらが読む実行状態。検証コマンドが長時間稼働するサーバーだから失敗した場合（時間切れやポートの使用中）と、コードが壊れて失敗した場合も区別します |
+| `loop_turn.go`, `loop_checks.go`, `loop_results.go` | ループの 1 ターン: モデル呼び出しと応答、ツール実行前のチェック、結果とスタックループのブレーカー。`loop_turn.go` は読み取り専用コールの反復の後、リクエストが要求するものに応じて実行に行動か応答を促す |
 | `tools.go`, `tool_*.go` | 16 個のツール定義 + 実行系、ティア分類、ツールコール文法 |
 | `gates*.go` | 誠実性 / プランゲート: クレームチェック、構造、構文、埋め込みスクリプト、プラン遵守、プランリマインダ |
 | `loop_detectors.go` | スタックパターン検出: ツールの繰り返し、推論の繰り返し、トレースバックの局所化 |
@@ -121,8 +121,6 @@ K3s デプロイパス（`scripts/install/install.sh`、`deploy/k3s/` 内のマ�
 | `task_obligations.go` | 実行の義務が呼び出し側の宣言した契約と ATLAS のレガシー推論のどちらに由来するかを選び、その決定をリクエストに束ねたまま保つ |
 | `internal/shellcmd/command_evidence.go` | シェルコマンドが何を実証するか: 実行、プローブ、静的チェック、または無。またコマンドラインがその部位の終了ステータスを報告するかどうか |
 | `guardrails*.go` | ツールごとのステアリングガード（縮約、コマンド/モジュール欠落のステア、doctype 除去）。`guardrails_reply.go` は序文のフレーズを正規化し、完了チェックが将来の作業を告知するだけの応答を認識できるようにする |
-| `internal/shellcmd/shell_wrapper.go` | `validateShellCommand` の背後にあるコマンドポリシー: 複合コマンドを分割し、実行ラッパー（`sh -c`、`eval` など）の中を最大 16 層まで調べ、壊滅的なコマンドと検査できないラッパーを拒否 |
-| `internal/shellcmd/destructive.go` | どのコマンドにも許されないシェルの形。破壊的な削除、フォークボム、デバイスへの書き込み |
 | `server_events.go` | 型付きエンベロープのブローカー（`/events`）と SSE の配管 |
 | `internal/v3client/client.go` | v3-service の `/v3/generate` + `/v3/plan` 向け SSE クライアント。呼び出しの上限 `ATLAS_V3_TIMEOUT` は `tool_write_v3.go` に残ります |
 | `loop_state.go` | 共有型、ティア、ターン上限 |
@@ -153,6 +151,9 @@ K3s デプロイパス（`scripts/install/install.sh`、`deploy/k3s/` 内のマ�
 | `internal/wire/execution_outcome.go` | コマンドの完了・中断・リソース枯渇を分類し、不完全な実行が成功した検証として数えられないようにする |
 | `candidate_feasibility.go` | 生成の前に、利用可能な証拠生成者がタスクを充足できるかを評価し、生成を制御せずにその評価を記録する |
 | `internal/fencing/framing.go` | 完全なフェンス済みファイルペイロードを認識し、その内容を抽出し、フレーミング文法とリトライガイダンスを供給する |
+| `internal/workspacefs/file_kind.go` | パスが保持する種類を判断し、通常ファイルだけを読みます。名前付きパイプは書き手が現れるまで open が待機するため、読み取る前に開いたハンドルの種類を判定します |
+| `internal/workspacefs/file_kind_unix.go` | 非ブロッキングの open フラグ。読み取り対象の名前を持つパイプも、書き手を待たず即座に開きます |
+| `internal/workspacefs/file_kind_other.go` | 同等の機能がないプラットフォームのフラグ。種類チェックだけで判断します |
 | `model_old_str_watch.go` | ストリーミング中の編集テキストが対象ファイルに一致できなくなった時点で暴走を止め、回復ガイダンスを供給する |
 | `loop_repair.go` | セッションの書き込みが残した未解決の構文リペアを追跡し、 premature な完了をブロックし、ハンドオフ時に未解決のリペアを報告する |
 | `candidate_route_disposition.go` | 各候補ルートがどう終わったか、その配信許可が内容のディスク到達に至ったかを追跡する |
@@ -164,6 +165,11 @@ K3s デプロイパス（`scripts/install/install.sh`、`deploy/k3s/` 内のマ�
 | `delivery_v3_fallback.go` | V3 が失敗・タイムアウトした後に書かれたファイルを追跡し、最終サマリでまだ現行の未チェック内容を開示する |
 | `evidence_verification.go` | クライアント宣言のコマンド観測から証拠を生成し、それが個々の検証義務のどれを充足するかを追跡する。宣言された検証の証拠の強度も、このセッションが観測したテスト資産の出自に応じて制限する |
 | `gates_workspace_observation.go` | フォアグラウンドとバックグラウンドのコマンドが行ったファイル変更を観測し、成果物と削除をセッション台帳に記録する |
+| `internal/workspacefs/confined_dir.go` | `os.Root` で 1 つのフォルダーを読みます。外側へ解決される名前はエラーとして読み取らず、通常ファイル以外は存在しないものと同様にスキップします |
+| `internal/workspacefs/sandbox_subdir.go` | `sandbox_subdir` は ASCII の英数字、ピリオド、アンダースコア、ハイフンのみ、最大 64 文字で、`.` と `..` は許可しません |
+| `server_service_answer.go` | スタック内のサービス（llama-server、V3、lens、sandbox）から最大 64 MiB の応答を読み、無限に送信するサービスが proxy のメモリを埋めないようにします |
+| `internal/shellcmd/shell_wrapper.go` | `validateShellCommand` の背後にあるコマンドポリシー: 複合コマンドを分割し、実行ラッパー（`sh -c`、`eval` など）の中を最大 16 層まで調べ、壊滅的なコマンドと検査できないラッパーを拒否 |
+| `internal/shellcmd/destructive.go` | どのコマンドにも許されないシェルの形。破壊的な削除、フォークボム、デバイスへの書き込み |
 
 ### エージェントループのフロー
 
@@ -200,7 +206,7 @@ flowchart LR
 
 デフォルトの `strict` モードでは、プロキシは完全な JSON スキーマ — `oneOf` と `additionalProperties: false` を用い、ツール名をレジストリから列挙したもの — を送信し、llama-server がそれをトークン生成中の文法として強制します。文法制約は不正な出力を稀にしますが、不可能にはしません: `ATLAS_GRAMMAR_MODE=loose` は `{"type":"json_object"}` のみを送信し（有効な JSON にはなるが形状は強制されない — 一部のモデルはこれを必要とします）、応答トークンの上限が JSON の途中で切り詰めることもあります。プロキシはパースを失敗し得るものとして扱います — 散文や `reasoning_content` から JSON を回復し、切り詰められたツール引数を実行前に検出し、的を絞ったパース失敗の説明をフィードバックし、3連続失敗でループを打ち切ります。
 
-**フェンスされたコンテンツのチャネル（`@fenced`）。** ファイル全体の本体は JSON チャネルには載りません。JSON 文字列内のコードは密度の高いすべての行でエスケープの圧力を支払い、サーブされる 12B はそれを持続できないことが計測されています: 同じ解答が、フェンスされた markdown ブロックとして出力された場合は 6/6 でパースされ、JSON 文字列として出力された場合は 0/6 でした（閉じ括弧の欠落、リテラルの `\n` が文をコメントへ融合、join が空白を失う）。システムプロンプトはモデルに `write_file` の `content` を正確に `@fenced` に設定するよう指示します。プロキシは次に、*制約なしの*サブコール（文法なし、`response_format` なし）を1回行い、その応答はターゲット拡張子のタグが付いた単一のフェンスブロック内のファイルです。エンベロープは JSON 制約の下に留まり、ファイル本体だけがプレーンテキストへ移ります。メカニズムの詳細（`services/proxy/loop.go::fetchFencedContent`）: サブコールはエフェメラルです（会話には決して追加されない — メインスレッドから見れば、モデルは `@fenced` と書き、書き込みが起こったように見えます）。ファイル自体が ` ``` ` を含む応答は、末尾フェンスアンカーによって抽出され、内部のフェンスで切断されることはありません。センチネル*と*ファイルを1つの文字列に入れたモデルには、センチネルが剥がされ、インラインの内容が使われます。2回試行した後は、インラインでの提出を求めるバウンスが返ります。すべての試行は実際の生成であり、実行の合計に計上されます（最終 `done` ペイロード上の `fenced_calls` / `fenced_tokens`、試行ごとに1つの `fenced_fetch` ステージイベント）。
+**フェンスされたコンテンツのチャネル（`@fenced`）。** ファイル全体の本体は JSON チャネルには載りません。JSON 文字列内のコードは密度の高いすべての行でエスケープの圧力を支払い、サーブされる 12B はそれを持続できないことが計測されています: 同じ解答が、フェンスされた markdown ブロックとして出力された場合は 6/6 でパースされ、JSON 文字列として出力された場合は 0/6 でした（閉じ括弧の欠落、リテラルの `\n` が文をコメントへ融合、join が空白を失う）。システムプロンプトはモデルに `write_file` の `content` を正確に `@fenced` に設定するよう指示します。プロキシは次に、*制約なしの*サブコール（文法なし、`response_format` なし）を1回行い、その応答はターゲット拡張子のタグ（` ```python `、` ```html ` など）が付いた単一のフェンスブロック内のファイルです。エンベロープは JSON 制約の下に留まり、ファイル本体だけがプレーンテキストへ移ります。メカニズムの詳細（`services/proxy/loop.go::fetchFencedContent`）: サブコールはエフェメラルです（会話には決して追加されない — メインスレッドから見れば、モデルは `@fenced` と書き、書き込みが起こったように見えます）。ファイル自体が ` ``` ` を含む応答は、末尾フェンスアンカーによって抽出され、内部のフェンスで切断されることはありません。センチネル*と*ファイルを1つの文字列に入れたモデルには、センチネルが剥がされ、インラインの内容が使われます。2回試行した後は、インラインでの提出を求めるバウンスが返ります。すべての試行は実際の生成であり、実行の合計に計上されます（最終 `done` ペイロード上の `fenced_calls` / `fenced_tokens`、試行ごとに1つの `fenced_fetch` ステージイベント）。
 
 繰り返し検出器は、フェンス解決が `parsed.Args` を取得済みの本体で書き換える前の、ツールコールブランチの先頭でスナップショットされた、**モデルが送信した**コールをフィンガープリントします。このスナップショットがなければ、検出器は、コール自体はバイト同一であるにもかかわらず、試行ごとに異なるバイトを読むことになります。凍結された実行で7ターンの `@fenced` ループが、検出器を沈黙させたままハーネスの上限に到達したのはこのためです。取得されたバイトには影響ありません: それらは引き続き、ミューテーション、ゲート、台帳、書き込みを駆動します。ターゲットパスはシグネチャのために正規化されるため、`solve.py` と `./solve.py` が別々の予算を得ることはありません。
 
@@ -336,7 +342,7 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 
 `task_mode: work` を宣言したクライアントは、決して会話としてティア付けされません（`declaredTier`）: 宣言だけが、疑問形で言い回されたリクエスト（「ページに今日の日付も表示できますか」）を質問と区別できます。分類器は、何も宣言しない呼び出し元のためのフォールバックです。
 
-この非対称は、疑問形テスト（`isQuestionMessage`）にも及びます。節を終える `?`（後に終端・空白・引用符が続き、括弧とバッククォートの外にあるもの）は質問です。URL クエリや正規表現の中の `?` は違います。疑問詞による開始は、wh 語が語として独立している場合にのみ質問です — "Whole-number…"、"Whenever…"、"However…" は違います — で、"when"/"where" 開始は倒置されていなければなりません（"when does"）。"When the timer hits zero, …" はリクエストを開始するためです。開始の "do" は代名詞を必要とするため（"do you"）、"Do the same for the /users route" は作業です。文中の助動詞は主語を必要とするため、". Do not hardcode the answer." は質問ではありません。文中の節を開く wh 語は、その節が倒置されている場合にのみ質問です — 助動詞が wh 語の後に続く、"what DOES x do" のように。関係詞節は主語動詞語順を保ち（"what it is"、"where it was found"）記述的であるため、"post an item (what it is, where it was found)" のようなフィールド列挙は質問として読まれません。過去形の助動詞は同じ非対称により倒置集合から外されます: ビルドリクエストが打ち切られてはならず、`?` のない稀な過去形の文中質問を見逃すコストはプラン呼び出し1回だけです。質問に読めるビルドリクエストが、これが閉じた失敗でした: �とし物探しの Web アプリが "where it was found" という言葉で会話と分類され、打ち切られ、プランなしになりました。
+この非対称は、疑問形テスト（`isQuestionMessage`）にも及びます。節を終える `?`（後に終端・空白・引用符が続き、括弧とバッククォートの外にあるもの）は質問です。URL クエリや正規表現の中の `?` は違います。疑問詞による開始は、wh 語が語として独立している場合にのみ質問です — "Whole-number…"、"Whenever…"、"However…" は違います — で、"when"/"where" 開始は倒置されていなければなりません（"when does"）。"When the timer hits zero, …" はリクエストを開始するためです。開始の "do" は代名詞を必要とするため（"do you"）、"Do the same for the /users route" は作業です。文中の助動詞は主語を必要とするため、". Do not hardcode the answer." は質問ではありません。文中の節を開く wh 語は、その節が倒置されている場合にのみ質問です — 助動詞が wh 語の後に続く、"what DOES x do" のように。関係詞節は主語動詞語順を保ち（"what it is"、"where it was found"）記述的であるため、"post an item (what it is, where it was found)" のようなフィールド列挙は質問として読まれません。過去形の助動詞は同じ非対称により倒置集合から外されます: ビルドリクエストが打ち切られてはならず、`?` のない稀な過去形の文中質問を見逃すコストはプラン呼び出し1回だけです。質問に読めるビルドリクエストが、これが閉じた失敗でした: 落とし物探しの Web アプリが "where it was found" という言葉で会話と分類され、打ち切られ、プランなしになりました。
 
 ティア上限は 0（無制限）で、ループ内の検出スタックが打ち切るタイミングを決めます: レンズの退行（`agent_lens_intervention`）、推論の繰り返し（`agent_reasoning_intervention`）、ツール呼び出しの繰り返し（`agent_repeat_intervention`）、パスを認識するエラーブレーカー、行動なき done ゲート、クレームチェックゲート、証拠ゲート、プラン遵守しきい値、空応答フォールバック。オペレーターは `ATLAS_MAX_TURNS=<n>` で1回限りの「アプリ全体を直して」プロンプトに対して上書きできます — `services/proxy/loop_state.go::envOverrideMaxTurns` を参照。
 
@@ -383,9 +389,9 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 
 設定ファイルの正確なリストと拡張子集合は `services/proxy/tools.go:classifyFileTier` にあります。
 
-すべてのコンテンツ編集ツールは `runEditPipeline`（`services/proxy/tool_write_v3.go`）を通じてパイプラインに入ります — `edit_file`、`insert_after`、`replace_lines` は直接、`structural_edit` と `write_file` はそれぞれの V3 パス経由。ティア分類は `max(oldTier, newTier)` を使うため、T2+ ファイルを T1 のスタブへ縮小する破壊的な編集も依然として対象になります。これをスキップするツールは、ティアにかかわらず候補生成もレンズスコアリングもない貪欲サンプルを1つだけ生成します。ティアシステムが防ぐために存在するのはまさにそれです。`tests/contracts/api/test_write_gate_coverage.py` が、すべての書き込みパスがそこに到達することを表明します。
+`edit_file`、`insert_after`、`replace_lines` は `runEditPipeline`（`services/proxy/tool_write_v3.go`）から入り、`deliverEditCandidate` で終わります。`write_file` は `writeFileWithV3` から V3 サービスの生成ストリームを直接呼びます。`structural_edit` はまず V3 の `/internal/structural_edit` に差し込みを送り、自身で同じ tier 判定を行って `deliverEditCandidate` に渡します。`runEditPipeline` と `structural_edit` は `max(oldTier, newTier)` で分類するため、T2+ のファイルを T1 のスタブへ縮小する破壊的な編集も対象です。パイプラインをスキップした編集ツールは tier に関係なく候補生成を得られません。それを防ぐのが tier システムです。`tests/contracts/api/test_write_gate_coverage.py` は 5 つの書き込みツールがすべてパイプラインに入り、未解決呼び出し、埋め込みスクリプト、重複 main の同じゲートを通ることを検証します。
 
-**T2（V3 パイプライン）** — ファイルが以下の場合に該当:
+**T2（V3 パイプライン）** — 10 行以上で、次のいずれかを満たす場合に該当:
 - `hasLogicIndicators(content)` が true を返す — 関数/メソッド定義、制御フロー、エラー処理、Flask/FastAPI/Django ルーティング、Express/Node API、React の状態/データ、バリデーション、データベース呼び出し、JSX/React コンポーネントパターン、インポートをカバーするパターンファミリーにわたる **2+ 一致**（リテラルトークンリストは `services/proxy/tools.go:hasLogicIndicators`）
 - またはファイルが認識されたソースコード/マークアップ拡張子（`.py`、`.go`、`.rs`、`.ts`、`.tsx`、`.js`、`.jsx`、`.html`、`.htm`、…）を持ち、ロジック指標が発火しなかった — T2 として疑いの利益を得る（12行のコンポーネントシェルのような最小だが本物のファイルをカバー）
 
@@ -558,11 +564,10 @@ flowchart LR
     SB1 --> Pass1{"Pass?"}
     Pass1 -->|"Yes"| Done["Done"]
 
-    Pass1 -->|"No"| PS["PlanSearch"] --> DS["DivSampling"] --> BF["BudgetForcing"] --> Build["Build Check"] --> Score2["Score K"] --> SB2["Test K"]
+    Pass1 -->|"No"| Alloc["CxGx Gate\nk >= 3"] --> PS["PlanSearch"] --> DS["DivSampling"] --> BF["BudgetForcing"] --> Build["Build Check"] --> Score2["Score K"] --> SB2["Test K"]
 
     SB2 --> AnyPass{"Passed?"}
-    AnyPass -->|"2+"| SStar["S* Tiebreak"] --> Done
-    AnyPass -->|"1"| Select["Lens Select"] --> Done
+    AnyPass -->|"1+"| Select["Lens Select"] --> Done
 
     AnyPass -->|"0"| FA["Failure Analysis"] --> PRCOT["PR-CoT"]
     PRCOT --> PRPass{"Pass?"}
@@ -572,10 +577,10 @@ flowchart LR
     style Entry fill:#1a3a5c,color:#fff
     style Done fill:#333,color:#fff
     style Probe fill:#1a3a5c,color:#fff
+    style Alloc fill:#1a3a5c,color:#fff
     style PS fill:#1a3a5c,color:#fff
     style DS fill:#1a3a5c,color:#fff
     style BF fill:#1a3a5c,color:#fff
-    style SStar fill:#2d5016,color:#fff
     style Select fill:#2d5016,color:#fff
     style Score1 fill:#2d5016,color:#fff
     style Score2 fill:#2d5016,color:#fff
@@ -711,7 +716,6 @@ graph LR
 
     TR["Training Pipeline\ncontrastive ranking loss"] --> CX
 
-
     style EE fill:#333,color:#fff
     style CX fill:#2d5016,color:#fff
     style GX fill:#2d5016,color:#fff
@@ -738,11 +742,13 @@ C(x) の正規化は `sigmoid(steepness × (energy - midpoint))` です。両方
 
 > **注:** モデルの重み（.pt、.pkl ファイル）はリポジトリにコミットされていません — トレーニング中にビルドされ、コンテナイメージに焼き込まれるか、実行時にマウントされます。モデルファイルが存在しない場合、そのスコアリングエンドポイントは `enabled: false` と答えます（プレースホルダの数値: C(x) 0.0、G(x) `gx_score: 0.5`、`verdict: "unavailable"`）。プロキシと V3 はその応答を「スコアリングできないレンズ」として扱い、ファイルが存在するまで ATLAS はリクエストを拒否します（[ADR 0011](../../adr/0011-the-lens-is-required.md)）。レンズが試みたが計算できなかったスコアには、型付きの `failure` と数値なしの `scored: false` が返ります: レンズまたはそのモデルサーバーの失敗は実行を停止し、レンズが拒否した入力（長すぎる、空、非有限）はスコアなしとして報告されます。トレーニングデータと重みは [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS) で公開しています。
 
+> **実行間で保持するものはありません。** lens はスコアリングしたコードを保持せず、プロジェクト索引も過去セッションのストアも持たないため、前の実行の情報が lens 経由で次の実行に渡ることはありません。ヘルス・レディネスチェックと 3 つの `/internal/lens/*` スコアリング呼び出しを提供します（`services/geometric-lens/main.py`）。
+
 ---
 
 ## 6. サンドボックス
 
-コンパイル、テスト、リントを伴う分離されたコード実行。
+コンパイル、テスト、リントを伴う分離されたコード実行です。図は実装済みハンドラーの一覧であり、サポートレベルを保証するものではありません。Java、Kotlin、Ruby、PHP は Preview です（[サポートマトリクス](../../guides/SUPPORT_MATRIX.md)）。デフォルトの Docker デプロイでは、Go、Rust、C、C++ の `/execute` ハンドラーはコンパイルできますが、作業領域 `/tmp/sandbox` が `noexec` のためネイティブバイナリを実行できません（[#163](https://github.com/inferstep/ATLAS/issues/163)）。`/shell` 経由のプロジェクトコマンドは `/workspace` でビルド・実行でき、Go の `go run` は実行可能な `GOTMPDIR` マウントを使います。`/syntax-check` は解析またはコンパイルのみで、提出されたプログラムを実行しません。
 
 ```mermaid
 graph LR

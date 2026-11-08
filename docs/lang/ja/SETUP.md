@@ -1,4 +1,4 @@
-<!-- source: docs/guides/SETUP.md synced-through: 7d90cbee05ec5196e2ed3f72ffc52735ce8ce245 -->
+<!-- source: docs/guides/SETUP.md synced-through: 7e33f929de56372528b58bd9895f587735fef89a -->
 > **[English](../../guides/SETUP.md)** | **[简体中文](../zh-CN/SETUP.md)** | **日本語** | **[한국어](../ko/SETUP.md)**
 
 # ATLAS セットアップガイド
@@ -13,7 +13,7 @@
 
 | ハードウェア | OS | 推奨パス | サポートレベル ([マトリクス](../../guides/SUPPORT_MATRIX.md)) |
 |---|---|---|---|
-| NVIDIA RTX 50 シリーズ / Blackwell (B100、GB10) | Linux | [方法 0: ブートストラップ](#方法-0-ワンショットブートストラップ) または [方法 1: Docker](#方法-1-docker-compose-推奨) | サポート対象 (Supported) — 公開されている CUDA イメージは Blackwell を対象 |
+| NVIDIA RTX 50 シリーズ / Blackwell (GB10) | Linux | [方法 0: ブートストラップ](#方法-0-ワンショットブートストラップ) または [方法 1: Docker](#方法-1-docker-compose-推奨) | サポート対象 (Supported) — 公開されている CUDA イメージは Blackwell を対象 |
 | NVIDIA RTX 20/30/40、GTX 10xx、データセンター (V100/A100/H100/T4/L4) | Linux | [方法 1: Docker](#方法-1-docker-compose-推奨) + 一度だけの[ローカル再ビルド](#cuda-compute-capability-dockerfilev31) | プレビュー (Preview) — ローカル再ビルドが必要 |
 | NVIDIA GPU | Windows (WSL2) | [方法 1: Docker — NVIDIA セクション](#方法-1-docker-compose-推奨) | サポート対象外 (Unsupported) — 未テスト、動作の主張はなし。報告歓迎 |
 | AMD GPU (RX 6000/7000、MI200+) | Linux | [方法 1: Docker — AMD ROCm](#amd-rocm--相違点) | コミュニティ検証済み (Community-tested) ([GH #26](https://github.com/inferstep/ATLAS/issues/26)) |
@@ -38,7 +38,7 @@
 
 > **NVIDIA の Blackwell 以前の GPU（RTX 20/30/40 シリーズ、GTX 10xx、V100/A100/T4/L4/H100）をお使いの方: まずこれをお読みください。**
 > 公開されている `atlas-llama` CUDA イメージは compute capability
-> `120;121`（Blackwell — RTX 50xx、B100、GB10）**のみ**を対象にコンパイルされています。それより古い NVIDIA GPU では
+> `120;121`（Blackwell — RTX 50xx、GB10）**のみ**を対象にコンパイルされています。それより古い NVIDIA GPU では
 > llama-server が起動時に
 > `no kernel image is available for execution on the device` で失敗します。
 > 推論イメージをお使いの GPU のアーキテクチャ向けに一度だけ再ビルドしてください:
@@ -60,7 +60,7 @@ curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-
 ./scripts/atlas-bootstrap.sh
 ```
 
-**対応ディストリビューション:**
+**ブートストラップが受け付けるディストリビューション**（CI でテストするのは Ubuntu 22.04/24.04、Debian 12、Rocky 9 — [サポートマトリクス](../../guides/SUPPORT_MATRIX.md)を参照）:
 
 | ファミリー | ディストロ |
 |---|---|
@@ -70,11 +70,15 @@ curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-
 
 `ID_LIKE` が上記のいずれかに一致するその他のディストロ（例: Linux Mint、Pop!_OS）は警告付きで受け付けます。このリストにないディストロ — Arch、openSUSE、Alpine、NixOS — はテストされておらず、スクリプトは実行を拒否します。
 
-ブートストラップは、EPEL、nouveau ドライバの競合、libnvidia-ml.so.1 が見つからないケース（RHEL のミニマルインストール）、そして「docker グループにユーザーを追加したが現在のシェルにはまだ反映されていない」レースを回避します。
+ブートストラップは EPEL、libnvidia-ml.so.1 が見つからないケース（RHEL のミニマルインストール）、docker グループへのユーザー追加が現在のシェルにまだ反映されていないレースを回避します。RHEL 系のホストでは、nouveau がロードされていると警告し、ブラックリストに登録する手順を表示します。
+
+**Docker グループのセキュリティ:** ブートストラップは `sudo` なしで Docker コマンドを実行できるよう、ユーザーを `docker` グループに追加することがあります。このグループのメンバーにはホスト上の root 相当の権限が与えられます。信頼できるユーザーにのみ付与してください。Docker のインストールとグループ管理を自分で行う場合は、実行前に `ATLAS_BOOTSTRAP_SKIP_DOCKER=1` を設定してください。
 
 **モデル選択:** `.env.example` はモデル未選択の状態で出荷されます。ブートストラップが `.env` を作成した時点で `ATLAS_MODEL_FILE` が空の場合、レジストリのデフォルト推奨モデルを `.env` に書き込む（実行時にログに出ます）ため、ワンショットのフローはウィザードなしで完了します。選択は `.env` の編集または `atlas init` の実行でいつでも変更できます。既存の空でない選択は尊重されます。
 
 <a id="cpu-only"></a>
+
+**内部認証:** ブートストラップはインストールしたユーザーだけが読める `secrets/service-token` を作成し、そのユーザーの ID を `.env` の `ATLAS_PROXY_UID`、`ATLAS_PROXY_GID`、`ATLAS_SANDBOX_UID`、`ATLAS_SANDBOX_GID` に記録します（設定済みの値は維持）。再実行時は既存のトークンを保持します。古いインストールにはトークンを追加し、Docker が root として作成した `secrets/` の所有権を引き継ぎ、サービスを再作成して読み込ませます。以後、サービスへの直接呼び出しには `Authorization: Bearer <token>` ヘッダーが必要で、ない場合は 401 になります。`atlas` と TUI はインストールしたユーザーのトークンを送信します。同じマシンの別ユーザーは読めないため、その呼び出しは拒否されます。
 **CPU のみ / GPU なしのホスト（プレビュー (Preview) — スモークテスト専用）。** ATLAS は Vulkan イメージの lavapipe CPU ラスタライザ経由で GPU なしでも起動しますが、推論は非常に低速です。スタックが動くことの確認に使い、実際のコーディングセッションには使わないでください。
 
 1. **ブートストラップは、明示的にオプトインしない限り GPU なしのホストを拒否します:**
@@ -90,6 +94,8 @@ atlas model install Qwen3.5-9B-Q6_K
 docker compose -f docker-compose.yml -f deploy/compose/docker-compose.vulkan.yml -f deploy/compose/docker-compose.cpu.yml up -d
 atlas doctor            # gpu check WARNS ("CPU-only mode — very slow"); warns exit 0
 ```
+
+手動で作成した `.env` にはサービストークンがなく、内部認証は無効のままです。ブートストラップと `atlas init` はトークンを作成します。
 
 **ファイアウォール:** Compose スタックはすべてのサービスを `127.0.0.1` にのみ公開するため、ローカル利用にファイアウォールの変更は不要で、ブートストラップはデフォルトで firewalld に触れません。サービスをルーティング可能なインターフェースに再バインドするデプロイでは、`ATLAS_BOOTSTRAP_OPEN_FIREWALL=1` を設定するとサービスポート（8090、8099、8070、30820）が開放されます。
 
@@ -137,6 +143,10 @@ bash atlas-bootstrap.sh
 | `ATLAS_INSTALL_DIR=/path` | クローン先（デフォルト `/opt/atlas` — 下記参照） |
 | `ATLAS_REPO_URL=https://...` | 別のリポジトリ URL |
 | `ATLAS_GO_VERSION=1.26.10` | TUI ビルド用にインストールされる Go ツールチェーンのバージョン（TUI には 1.26.10+ が必要。より古いインストール済みツールチェーンは自動で取得します） |
+| `ATLAS_DOWNLOAD_TRIES=3` | 失敗したダウンロードを、インストール中止までに試す回数（pip のダウンロードと Go モジュールのダウンロード） |
+| `ATLAS_DOWNLOAD_WAIT_SECONDS=5` | ダウンロードの再試行間の待ち時間 |
+
+**ダウンロードとログ。** インストーラーは実行ごとに作成する非公開の一時フォルダーにダウンロードとログを保存します。成功時は最後に削除します。失敗した場合や、手順が警告とログ名を表示した場合は保持し、出力の最終行にパスを表示します。
 
 **なぜ `/opt/atlas` なのか?** システム全体で使うサードパーティソフトウェアの標準的な FHS プレフィックスであり、`$HOME` のクリーンアップを生き残るためです。インストールを所有するユーザーは 1 人で、サービストークンはそのユーザー専用です。ホームディレクトリに置きたい場合は:
 
@@ -155,9 +165,9 @@ curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-
 
 | 要件 | 詳細 |
 |-------------|---------|
-| **GPU** | VRAM 16 GB 以上。NVIDIA (CUDA、サポート対象 (Supported) — 公開イメージは Blackwell を対象。より古いカードは一度だけの[ローカル再ビルド](#cuda-compute-capability-dockerfilev31)が必要)。AMD (ROCm、コミュニティ検証済み (Community-tested))。Apple Silicon (Metal、macOS ハイブリッド、サポート対象 — [SETUP_MACOS.md](../../guides/SETUP_MACOS.md) を参照)。Vulkan (プレビュー (Preview)) はクロスベンダーのフォールバック。Intel Arc (SYCL) はロードマップ (Roadmap)。[§ 対応 GPU](#対応-gpu) を参照。 |
+| **GPU** | 最小 GPU tier は VRAM 8 GB 以上（16 GB 推奨）。収まるモデルとコンテキストを選んでください。NVIDIA Blackwell（CUDA、Supported）。より古い NVIDIA（Preview）は一度だけの[ローカル再ビルド](#cuda-compute-capability-dockerfilev31)が必要です。AMD ROCm は Community-tested。Apple Silicon Metal（macOS ハイブリッド）は Supported でシステムメモリを共有します — [SETUP_MACOS.md](../../guides/SETUP_MACOS.md) を参照。Vulkan（Preview）はクロスベンダーのフォールバック、Intel Arc（SYCL）は Roadmap。[対応 GPU](#対応-gpu)を参照。 |
 | **GPU ドライバ** | NVIDIA: プロプライエタリドライバ（`nvidia-smi` で GPU が表示されること）。AMD: `amdgpu-dkms` カーネルドライバ（`/dev/kfd` が存在すること。`rocm-smi` で GPU が表示されること）。 |
-| **Python 3.9+** | pip 付き |
+| **Python 3.9+** | CLI 用に pip が必要。方法 2 はホストでサービスを実行するため Python 3.11+ が必要 |
 | **curl** | モデル重みのダウンロード用 |
 | **モデル重み** | ホストに収まるレジストリモデルまたは持ち込みの GGUF。`atlas init` が推奨を提示し、選択を `.env` に書き込みます。 |
 
@@ -188,7 +198,7 @@ rocm-smi --showproductname --showmeminfo vram
 ```bash
 pip install -e .
 atlas tier              # prints detected GPU, tier classification, recommended settings
-atlas tier --json       # machine-readable (used by atlas init wizard)
+atlas tier --json       # machine-readable (for scripts)
 ```
 
 ---
@@ -206,6 +216,7 @@ atlas tier --json       # machine-readable (used by atlas init wizard)
 **AMD (ROCm):**
 - **Docker** 単体 — ROCm に別個のコンテナランタイムは不要で、`--device=/dev/kfd --device=/dev/dri` によるパススルーで十分です
 - ユーザーが `video` と `render` グループに属している必要があります: `sudo usermod -aG video,render $USER`（その後再ログイン）
+- 最初の `up` は ROCm llama-server イメージを取得せず、ローカルでコンパイルします（[AMD ROCm — 相違点](#amd-rocm--相違点)を参照）
 
 ### セットアップ
 
@@ -226,10 +237,9 @@ case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *)
 # 3. Select/install a model and write model-aware runtime sizing
 atlas init
 
-# 4. Install Go 1.26.10+ — required for the TUI client (atlas tui) and
-#    optional for the proxy (proxy builds automatically on first run if Go
-#    is present; otherwise it runs in Docker with file access limited to
-#    ATLAS_PROJECT_DIR). Quickest path:
+# 4. Install Go 1.26.10+ — required for the TUI client (atlas tui). With
+#    this method the proxy runs in Docker, with file access limited to
+#    ATLAS_PROJECT_DIR. Quickest path:
 mkdir -p /tmp/go-install && cd /tmp/go-install
 curl -LO https://go.dev/dl/go1.26.10.linux-amd64.tar.gz
 sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.26.10.linux-amd64.tar.gz
@@ -245,7 +255,7 @@ cd clients/tui && go build -o ~/.local/bin/atlas-tui . && cd ../..
 #    selected model; they are intentionally not project-wide defaults.
 ${EDITOR:-vi} .env
 
-# 6. Start all services (first run builds container images — this takes several minutes)
+# 6. Start all services (the first run pulls the container images — this takes a few minutes; on ROCm it builds llama-server)
 #    NVIDIA hosts (default):
 docker compose up -d                                                  # or: podman-compose up -d
 #    AMD ROCm hosts:
@@ -262,15 +272,20 @@ atlas
 
 #### AMD ROCm — 相違点
 
-ROCm パスは、次の 3 点を*除いて* NVIDIA と同一です:
+ROCm パスは次の 4 点を除いて NVIDIA と同じです:
 
-1. **両方の compose ファイルで立ち上げる**（または `atlas init` に任せる）:
+1. **両方の compose ファイルで立ち上げる**（`atlas init` がこのコマンドを `.env` に記録して表示します）:
    ```bash
    docker compose -f docker-compose.yml -f deploy/compose/docker-compose.rocm.yml up -d
    ```
    オーバーライドは llama-server のイメージを ROCm ビルドに切り替え、NVIDIA のドライバ要求を `/dev/kfd` + `/dev/dri` のパススルーに差し替え、エントリーポイントが HIP チューニング分岐を取るよう `ATLAS_BACKEND=rocm` を強制します。
 
-2. **`nvidia-container-toolkit` は不要** — ROCm に別個のコンテナランタイムは要らず、カーネルレベルのデバイスアクセスだけで済みます。ユーザーが正しいグループに属していることを確認してください:
+2. **llama-server イメージは取得せず、このマシンでビルドします。** GHCR にある事前ビルド済みの llama イメージは CUDA と Vulkan 用です。CI にテスト用 AMD GPU がないため `atlas-llama-rocm` は公開されていません（ROCm は Community-tested — [SUPPORT_MATRIX.md](../../guides/SUPPORT_MATRIX.md) を参照）。オーバーライドは `pull_policy: build` を指定するため、`docker compose pull` は llama-server をスキップし、上記の `up` は `services/inference/Dockerfile.rocm` からコンパイルします。以後のビルドはレイヤーキャッシュを再利用します。他の ATLAS サービスは通常どおり事前ビルド済みイメージを取得します。先にビルドする場合:
+   ```bash
+   docker compose -f docker-compose.yml -f deploy/compose/docker-compose.rocm.yml build llama-server
+   ```
+
+3. **`nvidia-container-toolkit` は不要** — ROCm に別個のコンテナランタイムは要らず、カーネルレベルのデバイスアクセスだけで済みます。ユーザーが正しいグループに属していることを確認してください:
    ```bash
    id -nG | tr ' ' '\n' | grep -E '^(render|video)$'
    # Should print both. If not:
@@ -278,14 +293,14 @@ ROCm パスは、次の 3 点を*除いて* NVIDIA と同一です:
    # Then log out + back in (or: newgrp render)
    ```
 
-3. **GPU のコンピュートターゲット。** デフォルトの `Dockerfile.rocm` ビルドは、RDNA3（7000 シリーズ）、RDNA2（6000 シリーズ）、CDNA2（MI200）をカバーする「肥大」イメージです — `gfx1100;gfx1101;gfx1102;gfx1030;gfx90a`。特定の GPU に絞ったより小さいイメージを作るには、ビルド前に `ATLAS_GFX_TARGET` を設定してください:
+4. **GPU のコンピュートターゲット。** デフォルトの `Dockerfile.rocm` ビルドは、RDNA3（7000 シリーズ）、RDNA2（6000 シリーズ）、CDNA2（MI200）をカバーする「肥大」イメージです — `gfx1100;gfx1101;gfx1102;gfx1030;gfx90a`。特定の GPU に絞ったより小さいイメージを作るには、ビルド前に `ATLAS_GFX_TARGET` を設定してください:
    ```bash
    # Example: only build for RX 7900 XT/XTX
    ATLAS_GFX_TARGET=gfx1100 docker compose -f docker-compose.yml -f deploy/compose/docker-compose.rocm.yml build llama-server
    ```
    お使いのカードの gfx ターゲットは [LLVM AMDGPU プロセッサ表](https://llvm.org/docs/AMDGPUUsage.html) を参照してください。
 
-「非対応の GPU だが ROCm がそれなりに動く」ケース（古い Vega、RDNA1）については、`ATLAS_HSA_OVERRIDE_GFX_VERSION` の回避策を [TROUBLESHOOTING.md § AMD GPU が検出されない](./TROUBLESHOOTING.md) で確認してください。
+「非対応の GPU だが ROCm がそれなりに動く」ケース（古い Vega、RDNA1）については、`ATLAS_HSA_OVERRIDE_GFX_VERSION` の回避策を [TROUBLESHOOTING.md § AMD GPU is "unsupported" by ROCm](../../guides/TROUBLESHOOTING.md#amd-gpu-is-unsupported-by-rocm-but-you-want-to-try-anyway-no-kernel-image-on-rocm) で確認してください。
 
 #### Vulkan — クロスベンダーフォールバック
 
@@ -310,7 +325,7 @@ CUDA/ROCm との相違点:
 
 1. **ベンダー固有のカーネルドライバ要件がない。** Vulkan ICD はイメージ内に含まれます（`mesa-vulkan-drivers` が AMD/Intel/CPU をカバー。NVIDIA の ICD は nvidia-container-toolkit のマウント経由）。
 2. **`/dev/dri` パススルーのみ** — `/dev/kfd` も `--gpus all` も不要（NVIDIA toolkit 経由でルーティングする場合を除く。その場合は両方とも引き続き動作します）。
-3. **GPU の個別選択は `CUDA_VISIBLE_DEVICES` / `HIP_VISIBLE_DEVICES` の代わりに `ATLAS_VK_DEVICE_SELECT`。** フォーマットは Mesa 標準: `"vendorID:deviceID"`（16 進）またはデバイス名の部分文字列。`GGML_VK_VISIBLE_DEVICES`（数値インデックス）も動作します。
+3. **GPU の個別選択には `CUDA_VISIBLE_DEVICES` / `HIP_VISIBLE_DEVICES` の代わりに `ATLAS_VK_DEVICE_SELECT` を使用します。** Mesa 標準の `"vendorID:deviceID"`（16 進）またはデバイス名の部分文字列を指定します。`ATLAS_GPU_INDEX`（数値インデックス。エントリーポイントが `GGML_VK_VISIBLE_DEVICES` に渡します）も使えます。
 4. **`atlas doctor`** は `_check_vulkan_via_docker` プローブを実行します — ただし `ATLAS_BACKEND=vulkan` が設定されている場合のみ（それ以外では CUDA/ROCm の実行を速く保つためスキップします）。
 
 GPU を期待していたのに `vulkaninfo` が `llvmpipe` の CPU デバイスしか表示しない場合は、カーネル側のデバイスパススルーが失敗しています — ホスト上に `/dev/dri/renderD*` が存在すること、ユーザーが `video` + `render` グループに属していること（上記の ROCm と同じ要件）を確認してください。
@@ -362,9 +377,9 @@ Jetson では、両方の build arg を `nvcr.io/nvidia/l4t-jetpack:r36.3.0` に
 
 **既知のギャップ（#115 で追跡）:**
 
-- GHCR にまだ arm64 のプレビルドイメージがない — arm64 ユーザーは上記のレシピでローカルビルドが必要です。少なくとも 1 つの arm64 デバイスがエンドツーエンドで検証され次第、プレビルドのマルチアーキイメージが提供されます。
-- ブートストラップインストーラー（`scripts/atlas-bootstrap.sh`）は arm64 パスの監査が済んでいません。
-- 5 つの対象デバイスすべてでハードウェアテストのマトリクスが空です — これらのいずれかをお持ちのアーリーアダプターの方は、`atlas doctor` の出力と `vulkaninfo --summary` を [#115](https://github.com/inferstep/ATLAS/issues/115) に投稿してください。
+- arm64 向けに公開されているのは `atlas-llama-vulkan` のみです（リリースタグ）。CUDA llama、proxy、V3、lens、sandbox のイメージは amd64 のみなので、arm64 では上記の手順でローカルビルドします。
+- ブートストラップは arm64 でテストされていません（CI テストは amd64 のみ）。
+- これらのデバイスからの報告を歓迎します。`atlas doctor` と `vulkaninfo --summary` の出力を [#115](https://github.com/inferstep/ATLAS/issues/115) に投稿してください。
 
 ### 初回実行時の動作
 
@@ -424,15 +439,18 @@ atlas doctor -v           # verbose: show detail for each check
 | ホスト | lens_weights | `cost_field.pt` + G(x) アーティファクトが存在 |
 | ホスト | asa_steering | `ast_edit_steering.gguf` が存在（fail ではなく warn。ATLAS はこれなしでも動作しますが、structural_edit と edit_file のバイアスがステアされないままになります） |
 | ホスト | tier_match | `.env` のモデル選択がホストのハードウェアに合致（オーバーシュートは警告 — OOM リスク。一致またはアンダーシュートは pass） |
+| ホスト | grammar_mode | `ATLAS_GRAMMAR_MODE` が選択モデルのレジストリプロファイルと一致するか（不一致は警告） |
 | ホスト | tier_constraints | ホストの CPU/RAM/ディスクが推奨ティアの最小値を満たす（「GPU は 16 GB だが RAM は 8 GB」の不一致を捕捉） |
 | スタック | container/llama-server, geometric-lens, v3-service, sandbox, atlas-proxy | 5 つすべてが実行中かつ healthy |
-| スタック | health/llama, lens, v3, sandbox, proxy | 5 つの `/health` エンドポイントすべてが ok を返す |
-| スタック | internal_auth | 内部サービス認証: トークンファイルが厳格なパーミッションで存在し、実際の強制が双方向でプローブされる（誤ったトークン → 401、有効なトークンは受理）。認証が無効（`secrets/service-token` なし）の場合は警告 |
-| スタック | status_dimensions | プロキシの `/v1/calibration/status` から得られる 7 つの lens/ASA ステータスディメンション（TUI のバッジが読むのと同じソース） |
+| スタック | health/llama, lens, v3, sandbox, proxy | `/health` が ok を返すこと。lens は厳密な `/ready`（スコアリングが機能すること）を確認し、機能しなければ返された理由を表示 |
+| スタック | internal_auth | トークンファイルが存在し、権限が制限され、サービス実行ユーザーが読めること。proxy、lens、V3、sandbox のそれぞれで実際に認証を両方向から検証（誤ったトークン → 401、有効なトークンは受理）。認証無効（`secrets/service-token` がない）の場合は警告 |
+| スタック | status_dimensions | proxy の `/v1/calibration/status` にある lens/ASA の 7 つの状態次元（TUI バッジと同じ情報源）。`blocked` があれば失敗（proxy はすべてのリクエストを拒否）。それ以外は情報表示 |
 | スタック | image_skew | 5 つの `atlas-*` イメージすべてが同じタグ |
-| エンドツーエンド | e2e_smoke | llama-server への実際の `/v1/chat/completions` ラウンドトリップ（`--quick` でスキップ） |
+| スタック | workspace_mounts | proxy と sandbox が同じホストディレクトリを `/workspace` にバインドしていること |
+| エンドツーエンド | e2e_smoke | proxy 経由で llama-server まで実際の `/v1/chat/completions` 往復を行う（`--quick` でスキップ） |
+| エンドツーエンド | inference_contract | llama-server が lens で使える `/embedding` ベクトルと層ごとの隠れ状態を返すこと（満たさなければ警告。`--quick` でスキップ） |
 
-`vulkan` と `metal-native` の行は設定されたバックエンドに応じた条件付きです。health、`internal_auth`、`status_dimensions` の行は少なくとも 1 つのコンテナが起動している場合にのみ実行され、`e2e_smoke` は `--quick` でスキップされます。残りのチェックは常に実行されます。
+`vulkan` と `metal-native` は設定されたバックエンドに応じて実行します。health、`internal_auth`、`status_dimensions` は少なくとも 1 つのコンテナが稼働中の場合のみ実行し、`e2e_smoke` と `inference_contract` は `--quick` でスキップします。それ以外は常に実行しますが、`docker` チェックが失敗すると doctor はそこで停止します。
 
 手動で確認したい場合:
 
@@ -456,7 +474,7 @@ atlas doctor
 
 ```bash
 docker compose down          # Stop all services (preserves images)
-docker compose down --rmi all  # Stop and remove images (next start rebuilds)
+docker compose down --rmi all  # Stop and remove images (next start pulls them again)
 ```
 
 ### ログとアップデート
@@ -482,7 +500,7 @@ rm -rf ~/.cache/atlas-tui          # TUI session history
 # disk (models are the multi-GB part).
 ```
 
-K3s のインストールでは代わりに `scripts/install/uninstall.sh` を使います。マニフェストを削除し、（任意で）K3s ノード自体も削除します。
+K3s インストールでは `scripts/install/uninstall.sh` を使い、マニフェストと、任意で K3s ノード自体を削除します。`--data` はデータフォルダーと自分のプロジェクトがあるプロジェクトフォルダーも削除し、`--models` はモデルファイルを削除します。確認を求める前に、削除する各フォルダーのパスを表示します。
 
 ---
 
@@ -615,7 +633,7 @@ GPU スケジューリング、ヘルスプローブ、リソース制限を備�
 ```bash
 # 1. Configure
 cp atlas.conf.example atlas.conf
-# Edit atlas.conf: model paths, GPU layers, context size, NodePorts
+# Edit atlas.conf: model paths, context size, NodePorts
 
 # 2. Run the installer (requires root)
 sudo scripts/install/install.sh
@@ -654,7 +672,7 @@ scripts/install/verify-install.sh
 
 ### K3s 固有の設定
 
-K3s は設定に `.env` ではなく `atlas.conf` を使用します。HTTP コントラクトとパイプラインの動作は Docker Compose と同一で、異なるのはデプロイの配管だけです:
+K3s は `.env` ではなく `atlas.conf` を使います。HTTP 契約は Docker Compose と同じです。下表のデプロイ構成に加え、ランタイム設定が 2 点異なります。K3s は llama-server を `ATLAS_EMBED_POOLING=mean`（Compose は `none`）で実行し、サービストークンをマウントしないため内部認証は無効です:
 
 | 設定項目 | Docker Compose | K3s |
 |---------|---------------|-----|
@@ -666,7 +684,7 @@ K3s は設定に `.env` ではなく `atlas.conf` を使用します。HTTP コ�
 | GPU 割り当て | `deploy.resources.reservations.devices` (nvidia) | `resources.limits.nvidia.com/gpu: 1`（GPU Operator またはデバイスプラグインが必要） |
 | サンドボックスのツールチェーンキャッシュ | 言語ごとの `tmpfs` マウント | 言語ごとの `sizeLimit` 付き `emptyDir`（共通パターン、同一セット） |
 
-モデル・ランタイムパラメータ（`ATLAS_MAIN_MODEL`、`ATLAS_CONTEXT_LENGTH`、`ATLAS_PARALLEL_SLOTS`、`ATLAS_FLASH_ATTENTION`、KV キャッシュ量子化、レンズスコアリング用の `--embeddings`）は、どちらのモードでも同じ環境変数から読み込まれます — `atlas.conf.example` と `.env.example` を参照してください。
+モデルとランタイムのパラメーターはモードによってキーが異なります。Compose は `.env` の `ATLAS_MODEL_FILE`、`ATLAS_CTX_SIZE`、`ATLAS_PARALLEL_SLOTS`、`ATLAS_KV_TYPE_K`/`_V` を読み、K3s は `atlas.conf` の `ATLAS_MAIN_MODEL`、`ATLAS_CONTEXT_LENGTH`、`ATLAS_PARALLEL_SLOTS` を読みます。Flash attention と `--embeddings` は llama-server のエントリーポイントにより常に有効です。`atlas.conf.example` と `.env.example` を参照してください。
 
 全 `atlas.conf` リファレンスは [CONFIGURATION.md](../../guides/CONFIGURATION.md) をご覧ください。
 
@@ -699,6 +717,8 @@ ATLAS は GPU を 5 つのティアに分類し、ティアごとにレジスト
 | **large** | 20–32 GB | Qwen3.5 14B Q5_K_M (10.5 GB) | 32K | 2 | RTX 3090, 4090, 5090 24GB |
 | **xlarge** | 32 GB+ | Qwen3.5 32B Q5_K_M (23 GB) | 64K | 2 | RTX 5090 32GB, A6000, A100, H100 |
 
+small、large、xlarge のモデルにはダウンロード元も lens bundle もまだないため、`atlas init` は代わりに Qwen3.5 9B Q6_K を選びます。これらを使うには自分の GGUF をインストールし（`atlas model install --url`）、bundle を作成してください（`atlas bench` の後に `atlas lens build --from-results`）。bundle ができるまでリクエストは拒否されます。
+
 ```bash
 atlas tier              # classify this host + show recommendations
 atlas tier list         # show all 5 tier definitions
@@ -709,14 +729,16 @@ atlas tier --raw        # just the probe (no classification)
 
 ティア表は VRAM 帯ごとの出発点を与えるものです。**`atlas tier fit`** は、実際に動かす*特定の*モデルに合わせてそれを精密化します — GGUF の KV ジオメトリと GPU の VRAM を読み取り、完全に GPU 上に収まる最大のコンテキストを求めます（`atlas tier fit --write` で結果を `.env` に反映）。`ATLAS_MODEL_FILE` や GPU を変更するたびに実行してください。[CLI.md § atlas tier fit](../../reference/CLI.md#atlas-tier-fit) と、ダウンロード前のサイジングの目安については [TROUBLESHOOTING.md § この GPU には何が収まる?](./TROUBLESHOOTING.md#この-gpu-には何が収まる) を参照してください。
 
-medium ティアが ATLAS の開発ターゲットです — `atlas-bootstrap.sh` はそのモデル + コンテキスト設定をデフォルトにしています。他のティアでは、ブートストラップ完了後に**`atlas init`**（初回セットアップウィザード）を実行してください。`atlas tier` 経由でハードウェアをプローブし、レジストリから適切なモデルを選び、SHA 検証付きでダウンロードして `.env` を書き換えます。ハードウェアやレジストリのデフォルトモデルが変わったら `atlas init --reconfigure` を再実行してください。ウィザード実行後は `atlas tier fit --write` が、ウィザードのティアレベルのデフォルトを選択したモデル向けに引き締めます。
+medium tier は ATLAS の開発対象で、`atlas-bootstrap.sh` はそのモデルをデフォルトにします。コンテキストとスロットは `atlas tier fit --write` を実行するまで `.env.example` の値（`ATLAS_CTX_SIZE=131072`、4 スロット）のままです。他の tier ではブートストラップ完了後に **`atlas init`**（初回ウィザード）を実行してください。`atlas tier` でハードウェアを検出し、レジストリから適切なモデルを選び、SHA 検証付きでダウンロードして `.env` を書き直します。ハードウェアやレジストリのデフォルトが変わったら `atlas init --reconfigure` で再実行し、その後 `atlas tier fit --write` で tier 単位の設定を選択モデルに合わせてください。
 
 | リソース | 最小 | 推奨 | 備考 |
 |----------|---------|-------------|-------|
 | GPU VRAM | 8 GB | 16 GB | 上のティア表を参照 |
-| システム RAM | 14 GB | 16 GB+ | PyTorch ランタイム + コンテナオーバーヘッド |
-| ディスク | 15 GB | 25 GB | モデル（ティアにより 4.4–23 GB）+ コンテナイメージ（5–8 GB）+ 作業スペース |
+| システム RAM | 12 GB | 16 GB+ | PyTorch ランタイム + コンテナオーバーヘッド |
+| ディスク | 20 GB | 25 GB | モデル（ティアにより 4.4–23 GB）+ コンテナイメージ（5–8 GB）+ 作業スペース |
 | CPU | 4 コア | 8 コア以上 | V3 パイプラインは修復フェーズで CPU 負荷が高い |
+
+この最小要件は最小 GPU tier のものです。medium tier はシステム RAM 16 GB と空きディスク 25 GB を必要とし、より大きい tier はさらに必要です。`atlas tier` で該当 tier の要件を確認してください。Apple Silicon は OS と GPU でメモリを共有するため、[SETUP_MACOS.md](../../guides/SETUP_MACOS.md) の容量ガイドを参照してください。
 
 ### 対応 GPU
 
@@ -724,7 +746,7 @@ medium ティアが ATLAS の開発ターゲットです — `atlas-bootstrap.sh
 
 | ベンダー | バックエンド | 状況 | ビルドパス | テスト済みカード |
 |---|---|---|---|---|
-| NVIDIA (Blackwell — RTX 50xx、B100、GB10) | CUDA | サポート対象 (Supported)（公開イメージ） | `services/inference/Dockerfile.v31` | RTX 5060 Ti 16GB（主要開発機） |
+| NVIDIA (Blackwell — RTX 50xx、GB10) | CUDA | サポート対象 (Supported)（公開イメージ） | `services/inference/Dockerfile.v31` | RTX 5060 Ti 16GB（主要開発機） |
 | NVIDIA (Blackwell 以前 — RTX 20xx–40xx、GTX 10xx、V100/A100/H100/T4/L4) | CUDA | プレビュー (Preview) — 一度だけの[ローカル再ビルドが必要](#cuda-compute-capability-dockerfilev31) | `services/inference/Dockerfile.v31` + `--build-arg CUDA_ARCH=<cc>` | —（上流の llama.cpp はこれらをサポート。ATLAS 上でのメンテナー検証はなし） |
 | AMD | ROCm / HIP | コミュニティ検証済み (Community-tested) | `services/inference/Dockerfile.rocm` | RX 7900 XTX（コミュニティスモークテスト、[GH #26](https://github.com/inferstep/ATLAS/issues/26)） |
 | Apple Silicon | Metal | サポート対象（macOS ハイブリッド: ネイティブ llama-server + Docker、[#32](https://github.com/inferstep/ATLAS/issues/32)） | `scripts/install/atlas-setup-macos.sh` + `deploy/compose/docker-compose.macos.yml` | M2 Pro 32GB（検証済み）、M3/M4（対象） |
@@ -735,7 +757,7 @@ medium ティアが ATLAS の開発ターゲットです — `atlas-bootstrap.sh
 
 #### CUDA Compute Capability (Dockerfile.v31)
 
-`services/inference/Dockerfile.v31` は llama.cpp を特定の CUDA compute capability 向けにコンパイルします。デフォルト — そして GHCR 上に公開されている `atlas-llama` イメージのビルドに使われている値 — は `120;121`（Blackwell: RTX 50xx、B100、GB10）**のみ**です。公開イメージにはそれより前の GPU 向けのカーネルが含まれず、埋め込まれた PTX を下位向けに JIT コンパイルすることもできないため、RTX 20/30/40 シリーズ、GTX 10xx、Blackwell 以前のデータセンターカード（V100/A100/H100/T4/L4）では、llama-server が起動時に `no kernel image is available for execution on the device` で失敗します。お使いのアーキテクチャ向けに、推論イメージを一度だけ再ビルドする必要があります。（誤った arch 値でのローカルビルドは、より早い段階で `nvcc fatal: unsupported gpu architecture` により失敗します。）
+`services/inference/Dockerfile.v31` は llama.cpp を特定の CUDA compute capability 向けにコンパイルします。デフォルト — そして GHCR 上に公開されている `atlas-llama` イメージのビルドに使われている値 — は `120;121`（Blackwell: RTX 50xx、GB10）**のみ**です。公開イメージにはそれより前の GPU 向けのカーネルが含まれず、埋め込まれた PTX を下位向けに JIT コンパイルすることもできないため、RTX 20/30/40 シリーズ、GTX 10xx、Blackwell 以前のデータセンターカード（V100/A100/H100/T4/L4）では、llama-server が起動時に `no kernel image is available for execution on the device` で失敗します。お使いのアーキテクチャ向けに、推論イメージを一度だけ再ビルドする必要があります。（誤った arch 値でのローカルビルドは、より早い段階で `nvcc fatal: unsupported gpu architecture` により失敗します。）
 
 お使いの GPU の arch を確認し、`--build-arg CUDA_ARCH=<value>` で再ビルドしてください:
 
@@ -813,10 +835,10 @@ ATLAS のすべてのリクエストは Geometric Lens を必要とします（[
 
 ウェイトファイルを `services/geometric-lens/geometric_lens/models/` に配置してください（または Docker Compose で `ATLAS_LENS_MODELS` 経由でマウント）。サービスは起動時に自動的にロードします。
 
-ウェイトがないモデルは、独自のベンチマークデータでビルドします。`atlas bench` はプロキシを経由せずに V3 の各ステージを直接実行するため、レンズがウェイトを持つ前でも動作します。ループ全体が CLI で完結します:
+重みのないモデルでは、自分のベンチマークデータから作成してください。`atlas bench` は proxy を経由せず、モデルにベンチマークタスクを直接実行させます（ベースラインモード: V3 段階は無効、タスクごとに候補 1 つ）。そのため lens に重みがなくても動作します。全手順を CLI から実行できます:
 
 ```bash
-atlas bench --run-id mymodel_lens --tasks 200    # 候補の生成とセルフラベリング
+atlas bench --run-id mymodel_lens --tasks 200    # 各タスクで候補を 1 つ生成し、セルフラベリング
 atlas lens build --force --from-results benchmark/results/mymodel_lens/v3_lcb/per_task
 ```
 
@@ -824,7 +846,7 @@ atlas lens build --force --from-results benchmark/results/mymodel_lens/v3_lcb/pe
 
 ### llama-server の持ち込み
 
-推論を自分で実行したい場合 — ホストネイティブビルド、リモートマシン、またはルーターモードの llama.cpp — は、消費する 4 つのサービスをそこに向けて、同梱コンテナをスタブします。`docker-compose.override.yml` を作成します:
+ホスト上のネイティブビルド、リモートマシン、llama.cpp の router モードなどで自分の推論サーバーを使うには、3 つの利用サービスの接続先を変更し、同梱コンテナをスタブに置き換えます。`docker-compose.override.yml` を作成してください:
 
 ```yaml
 services:
@@ -833,15 +855,20 @@ services:
     entrypoint: []
     healthcheck:
       test: ["CMD", "true"]
-    deploy: {}
+    deploy:
+      resources:
+        reservations:
+          devices: !reset []         # drop the base file's GPU reservation
   geometric-lens:
     environment:
       LLAMA_URL: http://host.docker.internal:8080
+      LLAMA_EMBED_URL: http://host.docker.internal:8080
   v3-service:
     environment:
-      LLAMA_URL: http://host.docker.internal:8080
+      ATLAS_INFERENCE_URL: http://host.docker.internal:8080
   atlas-proxy:
     environment:
+      ATLAS_INFERENCE_URL: http://host.docker.internal:8080
       ATLAS_LLAMA_URL: http://host.docker.internal:8080
 ```
 
@@ -849,13 +876,7 @@ services:
 
 **ルーターモード。** `llama-server --models-preset` は `model` フィールドのないリクエストをすべて拒否します（`model name is missing from the request`）。`.env` の `ATLAS_MODEL_NAME` を提供モデルの名前に設定してください — `atlas doctor` のスモークテストがそれを送信し、単一モデルサーバーはそれを無視します。
 
-**初回の `docker compose up` の前に、** シークレットディレクトリが存在することを確認してください — これがないとバインドマウントが失敗します:
-
-```bash
-mkdir -p secrets     # or set ATLAS_SECRETS_DIR
-```
-
-`atlas init` が代わりに作成します。手動の compose-first フローでのみ必要です。
+secrets ディレクトリがなければ内部サービス認証は無効です。`atlas init` がディレクトリとトークンを作成します。
 
 ### モデルの持ち込み
 
@@ -869,11 +890,13 @@ mkdir -p secrets     # or set ATLAS_SECRETS_DIR
 
 `atlas-bootstrap.sh` はサービス起動後に自動的にビルドします。パイプラインは:
 
-1. `build_cvector_prompts.py` が、コミット済みの `services/geometric-lens/asa_calibration/contrast_pairs.jsonl`（1000 ペア）をポジティブ / ネガティブのプロンプトファイルに変換する。
+1. `build_cvector_prompts.py` が `services/geometric-lens/asa_calibration/contrast_pairs.jsonl`（`generate_pairs.py` が必要に応じて生成する 1000 対）を正例・負例のプロンプトファイルに変換します。
 2. ブートストラップが `llama-server` を短時間停止し、`llama-cvector-generator` を `--method mean -ngl 99` 付きのワンショットコンテナとして実行し、`models/ast_edit_steering.gguf` に加えて、ベクトルがどのモデルに対してビルドされたかを記録する `models/ast_edit_steering.gguf.model` サイドカーマーカーを書き込み、その後 `llama-server` を再起動する。
 3. `services/inference/entrypoint-v3.1.sh` が次回起動時にファイルを検出し、`.model` サイドカーマーカーが選択中のモデルと一致することを確認して、`llama-server` のコマンドラインに `--control-vector-scaled /models/ast_edit_steering.gguf:0.5` を追加する。マーカーが存在しない、または別のモデルを指しているベクトルは**無効のまま**になります（起動バナーが理由を報告します）— ベクトルは 1 つのモデルに紐づく残差空間のアーティファクトだからです。
 
 ビルドはモデルが載っているのと同じハードウェア上で実行され、生成されるベクトルはモデル固有です（あるモデルのアーティファクトに対してビルドされた `ast_edit_steering.gguf` を、別のベースモデルを実行するホストに移動しないでください）。
+
+> `ast_edit_steering` というファイル名は意図的に固定されています。レジストリが SHA で固定し、隣に `.model` マーカーがあるため、誘導対象のツール名が `structural_edit` に変わってもファイル名は維持します。
 
 **動作のオーバーライド**（調整したい場合に `.env` で設定）:
 
@@ -884,7 +907,7 @@ mkdir -p secrets     # or set ATLAS_SECRETS_DIR
 | `ATLAS_CONTROL_VECTOR_LAYER_RANGE` | (全レイヤー) | 2 つの整数（例: `"24 30"`）を渡すとレイヤー帯にスコープします。狭いほど安全ですが効果は弱まります。 |
 | `ATLAS_CONTROL_VECTOR_ALLOW_UNVERIFIED` | `0` | `1` に設定すると、`.model` サイドカーマーカーが存在しない、または選択中のモデルと一致しない場合でもベクトルを適用します。自分でビルドし、一致すると分かっているベクトルにのみ使ってください。 |
 
-**ローカルビルドが失敗する場合**（例: 古い `atlas-llama` イメージに cvector-generator がない、GPU の OOM、ランタイム取得時のネットワーク障害）、ブートストラップは [ATLAS HuggingFace データセット](https://huggingface.co/datasets/itigges22/ATLAS)からプレビルドの `ast_edit_steering.gguf` をダウンロードするフォールバックを取ります。それも失敗した場合、インストールは警告付きで完了します — `atlas doctor` はこのギャップを `fail` ではなく `warn` としてフラグします。
+**ローカルビルドが失敗した場合**（古い `atlas-llama` イメージに cvector-generator がない、GPU OOM、ランタイム取得中のネットワーク障害など）、インストールは警告付きで完了し、ATLAS はステアリングなしで動作します。別モデル用のベクトルは適用しません。`atlas doctor` はこれを `fail` ではなく `warn` として表示します。
 
 ビルドを完全にスキップするには、インストーラーの実行前に `ATLAS_BOOTSTRAP_SKIP_ASA=1` を設定してください。
 
