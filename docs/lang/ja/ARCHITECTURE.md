@@ -753,7 +753,7 @@ graph LR
         Go["Go 1.27.2\ngo build + run"]
         Java["Java 21\njavac + java -cp"]
         Kotlin["Kotlin 2.4.0\nkotlinc + java -jar"]
-        Rust["Rust stable\nrustc + run"]
+        Rust["Rust 1.99.1\nrustc + run"]
         C["C / C++\ngcc/g++ -Wall"]
         Ruby["Ruby\nruby -c + run"]
         PHP["PHP\nphp -l + run"]

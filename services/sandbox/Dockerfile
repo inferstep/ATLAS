@@ -12,7 +12,8 @@ WORKDIR /app
 # between base bumps; within a week they come from the cache.
 ARG PACKAGE_REFRESH
 
-# Install system dependencies and language runtimes
+# Install system dependencies and language runtimes.
+# apt verifies package hashes through signed Debian metadata. Unpinned versions allow Debian security updates.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # C/C++
     gcc g++ make \
@@ -70,7 +71,8 @@ RUN arch="$(dpkg --print-architecture)" \
     && rm /tmp/go.tar.gz
 ENV PATH="/usr/local/go/bin:${PATH}"
 RUN go version \
-    # Install Java 21 (JDK headless — javac + java, no GUI libs)
+    # Install Java 21 (JDK headless — javac + java, no GUI libs).
+    # apt verifies signed Debian metadata and package hashes; the unpinned package receives Debian security updates.
     && apt-get update && apt-get install -y --no-install-recommends \
         openjdk-21-jdk-headless \
     && rm -rf /var/lib/apt/lists/* \
@@ -89,7 +91,8 @@ RUN curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/kotlin.zip \
 
 ENV PATH="/opt/kotlinc/bin:${PATH}"
 
-# Install PHP (CLI, no compile step) and Ruby (interpreter, no compile step)
+# Install PHP (CLI, no compile step) and Ruby (interpreter, no compile step).
+# apt verifies signed Debian metadata and package hashes; unpinned packages receive Debian security updates.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         php-cli \
         ruby \
@@ -102,7 +105,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # (read-only toolchain); CARGO_HOME is repointed to the user's tmpfs
 # home by compose so registry/cache writes work on the read-only root.
 # rustup-init is checked against its published SHA-256; rustup checks the
-# toolchain it downloads.
+# toolchain it downloads against the release manifest; this also selects the platform components.
 ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo
 ARG RUSTUP_VERSION=1.29.1
 ARG RUSTUP_SHA256_AMD64=dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71
@@ -126,6 +129,7 @@ RUN rustc --version && cargo --version \
     # Project detection may select npm, pnpm, yarn, or bun from lockfiles; the
     # sandbox needs all of them available for build-command verification to be
     # accurate.
+    # npm checks registry integrity metadata. Dependency ranges remain unlocked; the package manager resolves platform packages.
     && npm install -g --ignore-scripts typescript@7.0.2 tsx@4.23.15 pnpm@12.14.0 yarn@1.22.22 \
     && tsc --version && pnpm --version && yarn --version
 
