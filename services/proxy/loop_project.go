@@ -177,48 +177,74 @@ func walkPythonFilesWithin(root string, deadline time.Time) map[string]string {
 	if root == "" {
 		return result
 	}
-	totalBytes := 0
-	skipDirs := map[string]bool{
-		".git": true, ".venv": true, "venv": true, "env": true,
-		"__pycache__": true, "node_modules": true, ".tox": true,
-		"dist": true, "build": true, ".mypy_cache": true,
-		".pytest_cache": true, ".idea": true, ".vscode": true,
-	}
 	// The walk and every read go through the folder, so a name in it that
 	// points somewhere else is skipped like an unreadable entry.
 	dir := workspacefs.OpenConfinedDir(root)
 	defer dir.Close()
-	_ = dir.Walk(func(rel string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return nil // skip unreadable entries
-		}
-		if scanExpired(deadline) {
-			return fs.SkipAll
-		}
-		if entry.IsDir() {
-			if skipDirs[entry.Name()] {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(strings.ToLower(entry.Name()), ".py") {
-			return nil
-		}
-		if len(result) >= projectScanMaxFiles || totalBytes >= projectScanMaxBytes {
-			return fs.SkipAll
-		}
-		data, err := dir.ReadFile(rel)
-		if err != nil {
-			return nil
-		}
-		if totalBytes+len(data) > projectScanMaxBytes {
-			return fs.SkipAll
-		}
-		result[rel] = string(data)
-		totalBytes += len(data)
-		return nil
-	})
+	scan := &pythonScan{dir: dir, deadline: deadline, files: result}
+	_ = dir.Walk(scan.visit)
 	return result
+}
+
+// pythonSkipDirs are the folders a project's own sources are never in: version
+// control, installed packages, caches and build output.
+var pythonSkipDirs = map[string]bool{
+	".git": true, ".venv": true, "venv": true, "env": true,
+	"__pycache__": true, "node_modules": true, ".tox": true,
+	"dist": true, "build": true, ".mypy_cache": true,
+	".pytest_cache": true, ".idea": true, ".vscode": true,
+}
+
+// pythonScan is one pass over the project's sources: the folder it reads
+// through, the budget it stops at, and the bytes it has taken so far.
+type pythonScan struct {
+	dir      workspacefs.ConfinedDir
+	deadline time.Time
+	files    map[string]string
+	bytes    int
+}
+
+// visit answers one walked entry, and SkipAll is how a spent budget ends the
+// walk wherever it has got to.
+func (s *pythonScan) visit(rel string, entry fs.DirEntry, err error) error {
+	if err != nil {
+		return nil // skip unreadable entries
+	}
+	if scanExpired(s.deadline) {
+		return fs.SkipAll
+	}
+	if entry.IsDir() {
+		return dirWalkDir(entry.Name())
+	}
+	return s.takeFile(rel, entry.Name())
+}
+
+// dirWalkDir skips a directory the walk should not enter.
+func dirWalkDir(name string) error {
+	if pythonSkipDirs[name] {
+		return fs.SkipDir
+	}
+	return nil
+}
+
+// takeFile reads a .py file, stopping the walk at the byte cap.
+func (s *pythonScan) takeFile(rel, name string) error {
+	if !strings.HasSuffix(strings.ToLower(name), ".py") {
+		return nil
+	}
+	if len(s.files) >= projectScanMaxFiles || s.bytes >= projectScanMaxBytes {
+		return fs.SkipAll
+	}
+	data, err := s.dir.ReadFile(rel)
+	if err != nil {
+		return nil
+	}
+	if s.bytes+len(data) > projectScanMaxBytes {
+		return fs.SkipAll
+	}
+	s.files[rel] = string(data)
+	s.bytes += len(data)
+	return nil
 }
 
 // symbolGraphNode mirrors one entry of the v3-service symbol_index "graph"
