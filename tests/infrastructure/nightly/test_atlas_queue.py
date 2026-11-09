@@ -127,24 +127,24 @@ def test_a_job_stops_its_command_when_it_is_told_to_stop(tmp_path):
     assert lock_is_free(tmp_path)
 
 
-def test_no_job_takes_the_queue_while_the_nightly_runs_beside_a_stuck_holder(tmp_path, sleeping_group):
-    # The note names a command the group does not run, so the nightly refuses to signal it and, after its waits,
-    # runs beside the holder, without the lock.
+def test_the_nightly_runs_nothing_and_ends_with_status_75_when_a_stuck_holder_keeps_the_queue(tmp_path,
+                                                                                         sleeping_group):
+    # The note names a command the group does not run, so the nightly refuses to signal it. After its waits the
+    # holder still holds the lock, and the nightly gives up: it never uses the card beside another run.
     held = hold_the_lock(tmp_path, {"what": "a stuck job", "command": ["not", "this"],
                                     "process_group": sleeping_group.pid, "yields": True})
+
     nightly = start_queue(tmp_path, "nightly", "--yield-wait-minutes", "0.01", "--stop-wait-minutes", "0.01",
-                          command="touch nightly-started; sleep 2; touch nightly-done")
-    wait_for(tmp_path / "nightly-started")
-    job = start_queue(tmp_path, "dev", command="test -e nightly-done && touch ran-after-the-nightly")
+                          command="touch nightly-started")
 
-    held.close()
-
-    assert job.wait(timeout=20) == 0
-    assert (tmp_path / "ran-after-the-nightly").exists()
-    assert nightly.wait(timeout=20) == 0
+    assert nightly.wait(timeout=20) == 75
     output = nightly.stdout.read()
     assert "does not run the noted command" in output
-    assert "the nightly runs beside it" in output
+    assert "the nightly gives up" in output
+    assert "not started" in output
+    assert not (tmp_path / "nightly-started").exists()
+    assert not (tmp_path / "q" / "yield").exists()
+    held.close()
 
 
 def test_a_yield_request_older_than_12_hours_is_ignored(tmp_path):
