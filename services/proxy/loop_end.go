@@ -869,6 +869,8 @@ func modelProseIfAuthorized(status wire.TerminalStatus, prose string) string {
 // completedReason lets an exit name its own reason for a genuine completion
 // (the text exit says text_reply); empty keeps the deliverable evidence's.
 func finalizeCompletion(ctx *AgentContext, st *runState, userMessage, completedReason string) (wire.TerminalStatus, string) {
+	// Settle what can be settled FIRST, so the evidence the rest of this
+	// function reads is about a workspace nothing is still writing to.
 	input := completionCheckInput{ctx: ctx, state: st, userMessage: userMessage, completedReason: completedReason,
 		liveJobs: settleBackgroundHazard(ctx)}
 	if runCheckPhase(proxyChecks.completion, &input).outcome != turnContinues {

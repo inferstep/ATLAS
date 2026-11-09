@@ -452,6 +452,10 @@ func (input *requestServiceCheckInput) contract() checkResult {
 }
 
 func (input *requestServiceCheckInput) lens() checkResult {
+	// The lens is required (lens_required.go): a request is not started
+	// while it cannot score. After every 400, and before any work or any
+	// streamed byte, so the answer is an ordinary HTTP error the client
+	// shows as such.
 	if ok, why := lensReady(lensURL); !ok {
 		writeError(input.writer, http.StatusServiceUnavailable, ErrDependencyDown,
 			"ATLAS needs the geometric lens for every request, and "+why+
@@ -468,6 +472,7 @@ func (input *requestServiceCheckInput) directory() checkResult {
 	}
 	return checkResult{checkPass, turnContinues}
 }
+
 func (input *requestServiceCheckInput) configuration() checkResult {
 	req := input.request
 	if msg := removedSwitchRefusal(req.RemovedBypassV3, req.RemovedV3Mode, req.RemovedFeasibilityMode); msg != "" {

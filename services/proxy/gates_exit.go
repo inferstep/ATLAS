@@ -632,9 +632,7 @@ func (s *runState) repairGate(ctx *AgentContext) (string, string) {
 	return "", ""
 }
 
-// intentGates hold a reply that is not an answer yet: one that promises the
-// content, announces a tool call it never made, or closes by deferring the
-// work. A reply that says it cannot do the work is marked, not sent back.
+// promisedContentGate holds a reply that promises content but does not provide it.
 func (s *runState) promisedContentGate(ctx *AgentContext, claimText string) (string, string) {
 	if promisesMoreContent(claimText) {
 		if s.continuationFits(ctx) && s.chargeBounce("intent_gate") {
@@ -660,8 +658,8 @@ func (s *runState) announcedToolGate(ctx *AgentContext, claimText string) (strin
 }
 
 func (s *runState) deferredReplyGate(ctx *AgentContext, claimText string) (string, string) {
-	// The same failure after work has started. The zero-tools condition above
-	// is there so narration cannot interrupt work in progress -- but a
+	// announcedToolGate checks for zero tools so narration cannot interrupt work in progress.
+	// This check handles the same failure after work has started. A
 	// `text` exit has already stopped the work, and a reply that CLOSES by
 	// deferring ("I will now check the generate_plan function", "Please wait
 	// while I verify the exact line") hands the user nothing. Judged on the
@@ -707,8 +705,7 @@ func (s *runState) handoffGate(ctx *AgentContext, claimText string) (string, str
 	return "", ""
 }
 
-// evidenceGates hold a reply that cites a file the run never read, or code
-// that no read showed.
+// unreadCitationGate holds a reply that cites a file the run never read.
 func (s *runState) unreadCitationGate(ctx *AgentContext, claimText string) (string, string) {
 	// A claim about a file the run never opened. This is the conversational
 	// half of an invariant the write path already enforces — edit_file,
@@ -730,7 +727,7 @@ func (s *runState) unreadCitationGate(ctx *AgentContext, claimText string) (stri
 }
 
 func (s *runState) unshownSymbolGate(ctx *AgentContext, claimText string) (string, string) {
-	// The same claim one level down: the file was opened, but a truncated or
+	// unreadCitationGate checks whether the file was opened. Here, a truncated or
 	// ranged read never showed the code the reply describes.
 	if gaps := unshownSymbolCitations(ctx, claimText); len(gaps) > 0 {
 		if s.chargeBounce("evidence_gate") {

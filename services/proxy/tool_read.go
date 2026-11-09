@@ -924,6 +924,8 @@ func fileContentInContext(ctx *AgentContext, content string) bool {
 	return false
 }
 
+// readFileToEdit reads the file an edit names, if the model has seen what is
+// there now.
 func readFileToEdit(ctx *AgentContext, path, relPath string) (string, error) {
 	input := editReadCheckInput{ctx: ctx, path: path, relPath: relPath}
 	runCheckPhase(proxyChecks.editRead, &input)
@@ -978,6 +980,7 @@ func (check *lineReadCheckInput) currentView() checkResult {
 	}
 	return checkResult{checkPass, turnContinues}
 }
+
 func (check *lineReadCheckInput) read() checkResult {
 	data, err := workspacefs.ReadRegularFile(check.path)
 	if err != nil {
@@ -1012,6 +1015,7 @@ func (check *readFileCheckInput) pathCheck() checkResult {
 
 	return checkResult{checkPass, turnContinues}
 }
+
 func (check *readFileCheckInput) read() checkResult {
 	input := check.input
 
@@ -1027,6 +1031,7 @@ func (check *readFileCheckInput) read() checkResult {
 
 	return checkResult{checkPass, turnContinues}
 }
+
 func (check *readFileCheckInput) binary() checkResult {
 	input, data := check.input, check.data
 

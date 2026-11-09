@@ -624,10 +624,6 @@ func (loop *agentLoop) answerContentLoop(turn int, response string) turnOutcome 
 	return turnContinues
 }
 
-// refuseBrokenContent refuses, before anything runs, a tool call whose content
-// string ended early or whose intended bytes are ambiguous. Three refusals in a
-// row end the run.
-
 // logModelTurn writes the turn's reply to the operator log, its arguments
 // summarised, and the raw reply's shape when a tool call came without any.
 func logModelTurn(ctx *AgentContext, turn int, parsed wire.ModelResponse, response string) {
@@ -787,6 +783,10 @@ type modelCheckInput struct {
 }
 
 func (input *modelCheckInput) cancellation() checkResult {
+	// Bail out fast if the upstream request was cancelled (the client closed the
+	// connection, user hit Ctrl-C, terminal exited). Without this check the
+	// loop would keep grinding LLM calls and tool work for a client that's
+	// already gone, burning GPU.
 	ctx := input.loop.ctx
 	if ctx.Ctx != nil {
 		select {
@@ -822,6 +822,12 @@ func (input *modelCheckInput) swallowedContent() checkResult {
 	if parsed.Type != "tool_call" {
 		return checkResult{checkPass, turnContinues}
 	}
+	// A tool_call can parse cleanly and still be mis-segmented: an
+	// unescaped quote inside a file body closes the JSON string early and
+	// the file's remainder is discarded into unknown keys, so a truncated
+	// write reports success. Catch it here, before execution, and hand the
+	// model the real cause under the same retry cap parse failures use —
+	// never write the truncated content.
 	if feedback, bad := swallowedContentFeedback(parsed.Name, parsed.Args); bad {
 		log.Printf("[agent] turn=%d %s: content string terminated early (unescaped quote) — refusing the truncated write", turn, parsed.Name)
 		ctx.Stream("error", map[string]string{

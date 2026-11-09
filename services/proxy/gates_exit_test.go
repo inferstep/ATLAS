@@ -154,7 +154,28 @@ func TestCheckTableInitializesEveryPhase(t *testing.T) {
 			if name == "" || names[name] || row.FieldByName("run").IsNil() {
 				t.Errorf("invalid or duplicate check %q", name)
 			}
+			if !strings.HasPrefix(name, table.Type().Field(i).Name+".") {
+				t.Errorf("check %q does not name its phase", name)
+			}
 			names[name] = true
+		}
+	}
+}
+
+func TestArgumentChecksClassifyModelErrors(t *testing.T) {
+	move := moveCheckInput{src: "note.txt", dst: "note.txt"}
+	edit := matchedEditCheckInput{input: wire.EditFileInput{OldStr: "same", NewStr: "same"}}
+	structural := structuralContentCheckInput{input: wire.StructuralEditInput{Content: " "}}
+	for _, row := range []struct {
+		name   string
+		result checkResult
+	}{
+		{"identical move paths", move.different()},
+		{"identical edit text", edit.changed()},
+		{"empty structural content", structural.empty()},
+	} {
+		if row.result != (checkResult{checkModelError, turnEnds}) {
+			t.Errorf("%s returned %+v, want model error and turn end", row.name, row.result)
 		}
 	}
 }

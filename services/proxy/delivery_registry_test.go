@@ -35,7 +35,7 @@ func TestTheWriteRouteRunsItsGatesInTheirOrder(t *testing.T) {
 	for _, row := range proxyChecks.candidate {
 		got = append(got, row.name)
 	}
-	want := []string{"candidate.authorization", "candidate.syntax", "candidate.unresolved", "candidate.embedded", "candidate.entrypoint", "candidate.cancellation"}
+	want := []string{"candidate.withdrawRefusedCandidate", "candidate.refuseContentThatDoesNotParse", "candidate.refuseUnresolvedCalls", "candidate.refuseBrokenEmbeddedScript", "candidate.refuseDuplicateEntrypoint", "candidate.refuseCancelledWrite"}
 	if !slices.Equal(got, want) {
 		t.Errorf("candidate checks = %v, want %v", got, want)
 	}
@@ -47,7 +47,6 @@ func TestTheWriteRouteRunsItsGatesInTheirOrder(t *testing.T) {
 	if guards := callsInOrder(proxyFiles(t), "loop.go:init", wantGuards); !slices.Equal(guards, wantGuards) {
 		t.Errorf("candidate adapters call %v, want %v", guards, wantGuards)
 	}
-
 }
 
 // routeOf names the route a call site answers for: the route whose step the

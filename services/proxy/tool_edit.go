@@ -139,9 +139,6 @@ func editInputRefusal(input wire.EditFileInput, rawInput json.RawMessage) *wire.
 	return check.result
 }
 
-// readFileToEdit reads the file an edit names, if the model has seen what is
-// there now.
-
 // locateOldStr finds the text of the file that old_str names, and a note for
 // the model when the match needed any tolerance.
 func locateOldStr(content string, input wire.EditFileInput) (string, string, error) {
@@ -1000,21 +997,6 @@ func editSyntaxObservation(ctx *AgentContext, tool, checkPath, relPath, original
 // the content parses, and something about its structure does not. Syntax ran
 // first and did not fail on these bytes, so the structural failure is the
 // decisive one and recording it as syntax/failed would assert the opposite.
-// fencedCallIsExecutable answers one question before any generation is spent:
-// would this call survive the checks it has to survive anyway?
-//
-// The fenced channel exists to carry a file body around the JSON encoding, and
-// it costs a full unconstrained generation per attempt. Starting one for a
-// call that cannot execute -- no path, a path outside the workspace, a
-// deny-listed target -- spends a minute of the session budget to produce
-// content that is then thrown away, and a model that keeps re-sending the
-// malformed call spends the whole session that way.
-//
-// It runs the SAME checks executeToolCall runs, by calling them, so the set of
-// calls refused here is a subset of the set refused there. That is what lets
-// the caller simply decline to resolve and hand the call to the tool, whose
-// own producer owns the refusal, its wording and its MutationNone.
-
 func structuralRefusal(msg string) *wire.ToolResult {
 	return &wire.ToolResult{
 		Success:          false,
@@ -1344,6 +1326,7 @@ func (check *matchedEditCheckInput) unique() checkResult {
 
 	return checkResult{checkPass, turnContinues}
 }
+
 func (check *matchedEditCheckInput) changed() checkResult {
 	content := check.content
 	actualOldStr := check.actualOldStr
@@ -1371,7 +1354,7 @@ func (check *matchedEditCheckInput) changed() checkResult {
 				"verbatim AND change it, which is what just failed — use %s.%s "+
 				"If you meant to REPLACE the whole file, use write_file with the "+
 				"complete new contents", alt, currentSpanNote(input.Path, content, actualOldStr)))
-		return checkResult{checkGuardRefusal, turnEnds}
+		return checkResult{checkModelError, turnEnds}
 	}
 	return checkResult{checkPass, turnContinues}
 }

@@ -779,6 +779,7 @@ func (check *fastWriteCheckInput) syntax() checkResult {
 	}
 	return checkResult{checkPass, turnContinues}
 }
+
 func (check *fastWriteCheckInput) unresolved() checkResult {
 	ctx, input, path, original, origOK := check.ctx, check.input, check.path, check.original, check.readable
 	// The fast-path skips V3 (and its
@@ -821,6 +822,7 @@ func (check *directLandingCheckInput) written() checkResult {
 	}
 	return checkResult{checkPass, turnEnds}
 }
+
 func (check *directLandingCheckInput) newFileWarning() checkResult {
 	ctx, input, path, isNew := check.ctx, check.input, check.path, check.isNew
 
@@ -836,6 +838,7 @@ func (check *directLandingCheckInput) newFileWarning() checkResult {
 
 	return checkResult{checkPass, turnContinues}
 }
+
 func (check *directLandingCheckInput) rewriteWarning() checkResult {
 	ctx, input, path, proposalCheck := check.ctx, check.input, check.path, check.proposal
 
@@ -858,10 +861,12 @@ func (check *directLandingCheckInput) rewriteWarning() checkResult {
 
 	return checkResult{checkPass, turnContinues}
 }
+
 func (check *directLandingCheckInput) readBaseline() checkResult {
 	check.original, check.readable = readOriginalForGate(check.path)
 	return checkResult{checkPass, turnContinues}
 }
+
 func (check *directLandingCheckInput) embedded() checkResult {
 	if !check.readable {
 		return checkResult{checkPass, turnContinues}
@@ -878,6 +883,7 @@ func (check *directLandingCheckInput) embedded() checkResult {
 	}
 	return checkResult{checkPass, turnContinues}
 }
+
 func (check *directLandingCheckInput) entrypoint() checkResult {
 	if !check.readable {
 		return checkResult{checkPass, turnContinues}
@@ -902,8 +908,8 @@ func (check *fastWriteCheckInput) directUnresolved() checkResult {
 		if introduced := editIntroducesUnresolved(ctx, path, original, input.Content); len(introduced) > 0 {
 			log.Printf("[write_file] direct write introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
 			// Structural validation failed before any mutation.
-			// Syntax does NOT run on this route (see the comment
-			// above), so no syntax verdict is implied in either
+			// Syntax does NOT run on this route (see writeFileDirectRoute),
+			// so no syntax verdict is implied in either
 			// direction -- the decisive demonstrated fact is the
 			// structural failure.
 			//

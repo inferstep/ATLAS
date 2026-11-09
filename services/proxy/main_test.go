@@ -1071,7 +1071,7 @@ func moduleGoFiles(t *testing.T) []string {
 // contract field to reach its own conclusion, it hands the contract to the
 // policy owner and uses the answer. This pins that shape exactly, so a
 // future edit that starts inspecting TaskMode inline still fails.
-func TestFinalizeCompletionHandsTheContractToThePolicyOwner(t *testing.T) {
+func TestCompletionDelegationKeepsTheTextExitScope(t *testing.T) {
 	body, err := os.ReadFile("loop_end.go")
 	if err != nil {
 		t.Fatal(err)
@@ -1098,6 +1098,26 @@ func TestFinalizeCompletionHandsTheContractToThePolicyOwner(t *testing.T) {
 		if n := strings.Count(fn, "ctx.TaskContract"); n != row.reads {
 			t.Errorf("%s reads the contract %d times, want %d", row.start, n, row.reads)
 		}
+	}
+}
+
+func TestFinalizeCompletionHandsTheContractToThePolicyOwner(t *testing.T) {
+	// Include every completion adapter and helper, even when it moves to another file.
+	reads := 0
+	for _, fn := range funcsWithBodies(proxyFiles(t)) {
+		name := funcIdentity(fn.decl)
+		if name != "finalizeCompletion" && !strings.HasPrefix(name, "(*completionCheckInput).") {
+			continue
+		}
+		ast.Inspect(fn.decl.Body, func(node ast.Node) bool {
+			if field, ok := node.(*ast.SelectorExpr); ok && field.Sel.Name == "TaskContract" {
+				reads++
+			}
+			return true
+		})
+	}
+	if reads != 2 {
+		t.Errorf("completion reads TaskContract %d times, want 2", reads)
 	}
 }
 

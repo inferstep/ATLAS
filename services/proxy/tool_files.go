@@ -225,6 +225,7 @@ func (check *deleteCheckInput) pathCheck() checkResult {
 	}
 	return checkResult{checkPass, turnContinues}
 }
+
 func (check *deleteCheckInput) exists() checkResult {
 
 	info, err := os.Stat(check.path)
@@ -236,6 +237,7 @@ func (check *deleteCheckInput) exists() checkResult {
 
 	return checkResult{checkPass, turnContinues}
 }
+
 func (check *deleteCheckInput) empty() checkResult {
 
 	if check.info.IsDir() {
@@ -247,6 +249,7 @@ func (check *deleteCheckInput) empty() checkResult {
 	}
 	return checkResult{checkPass, turnContinues}
 }
+
 func (check *deleteCheckInput) identity() checkResult {
 	refusal, approved, now, shownPath := check.refusal, check.approved, check.current, check.shownPath
 
@@ -259,6 +262,7 @@ func (check *deleteCheckInput) identity() checkResult {
 	}
 	return checkResult{checkPass, turnContinues}
 }
+
 func (check *deleteCheckInput) capacity() checkResult {
 	ctx, path, shownPath := check.ctx, check.path, check.shownPath
 
@@ -290,6 +294,7 @@ func (check *moveCheckInput) paths() checkResult {
 	}
 	return checkResult{checkPass, turnContinues}
 }
+
 func (check *moveCheckInput) source() checkResult {
 	ctx := check.ctx
 	input := check.input
@@ -303,6 +308,7 @@ func (check *moveCheckInput) source() checkResult {
 
 	return checkResult{checkPass, turnContinues}
 }
+
 func (check *moveCheckInput) destination() checkResult {
 	ctx := check.ctx
 	input := check.input
@@ -322,15 +328,17 @@ func (check *moveCheckInput) destination() checkResult {
 
 	return checkResult{checkPass, turnContinues}
 }
+
 func (check *moveCheckInput) different() checkResult {
 	src := check.src
 	dst := check.dst
 
 	if src == dst {
-		return check.accept(checkGuardRefusal, noMutation("move_file: source and destination are the same path — nothing to do."))
+		return check.accept(checkModelError, noMutation("move_file: source and destination are the same path — nothing to do."))
 	}
 	return checkResult{checkPass, turnContinues}
 }
+
 func (check *moveCheckInput) absent() checkResult {
 	dst := check.dst
 	relDest := check.relDest

@@ -435,6 +435,8 @@ func deliverCandidateBytes(ctx *AgentContext,
 		write = writeFileRecorded
 	}
 	out := deliveryOutcome{}
+	// (4) and (5), before anything is spent: the bytes must be the grant's,
+	// and the target must be the one it was minted for.
 	checks := deliveryCheckInput{ctx: ctx, request: req}
 	if runCheckPhase(proxyChecks.delivery, &checks).outcome != turnContinues {
 		out.Reason = checks.reason
@@ -675,6 +677,7 @@ func (check *settlementCheckInput) read() checkResult {
 	}
 	return checkResult{checkPass, turnContinues}
 }
+
 func (check *settlementCheckInput) identity() checkResult {
 	if check.landedHash != check.authorizedHash {
 		check.reason = "delivered_bytes_are_not_the_authorized_ones"
@@ -682,6 +685,7 @@ func (check *settlementCheckInput) identity() checkResult {
 	}
 	return checkResult{checkPass, turnContinues}
 }
+
 func (check *settlementCheckInput) validation() checkResult {
 	if check.observed.Status == wire.ValidationFailed {
 		check.reason = "post_write_validation_failed"

@@ -1307,11 +1307,12 @@ func (check *commandCheckInput) trust() checkResult {
 	}
 	return checkResult{checkPass, turnContinues}
 }
+
 func (check *commandCheckInput) memory() checkResult {
 
 	if refusal := memoryenvelope.ExecutionRefusal(declaredMemoryEnvelope()); refusal != "" {
 		log.Printf("[run_command] %s", refusal)
-		return check.accept(checkGuardRefusal, &wire.ToolResult{
+		return check.accept(checkInfrastructureError, &wire.ToolResult{
 			Success: false,
 			Error: "commands cannot be run in this deployment: its memory " +
 				"limits add up to more than the machine has, so a command " +

@@ -276,7 +276,7 @@ func structuralSyntaxMessage(input wire.StructuralEditInput, finalContent string
 	}
 }
 
-// structuralGateRefusal runs structural_edit's gates after the syntax gate.
+// structuralGateRefusal runs structural_edit's gates, starting with syntax.
 func structuralGateRefusal(ctx *AgentContext, path string, input wire.StructuralEditInput, source, finalContent string) (checkOutcome, *wire.ToolResult) {
 	check := structuralLandingCheckInput{ctx: ctx, path: path, input: input, relPath: input.Path, source: source, finalContent: finalContent}
 	runCheckPhase(proxyChecks.structuralLanding, &check)
@@ -355,7 +355,7 @@ func (check *structuralContentCheckInput) empty() checkResult {
 	// intentional removal is delete_file's job.
 	if strings.TrimSpace(input.Content) == "" {
 		log.Printf("[structural_edit] rejected empty content for %s selector=%q — would delete the node", input.Path, input.Selector)
-		return check.accept(checkGuardRefusal, noMutation(fmt.Sprintf(
+		return check.accept(checkModelError, noMutation(fmt.Sprintf(
 			"structural_edit: content is empty — that would DELETE `%s`, not fix it. "+
 				"Provide the full replacement body of the node (e.g. the corrected function definition). "+
 				"If you truly mean to remove code, use delete_file on the whole file instead.",

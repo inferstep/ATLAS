@@ -145,6 +145,20 @@ func (output *toolCheckOutput) accept(category checkCategory, result *wire.ToolR
 	return checkResult{category, turnEnds}
 }
 
+// fencedCallIsExecutable answers one question before any generation is spent:
+// would this call survive the checks it has to survive anyway?
+//
+// The fenced channel exists to carry a file body around the JSON encoding, and
+// it costs a full unconstrained generation per attempt. Starting one for a
+// call that cannot execute -- no path, a path outside the workspace, a
+// deny-listed target -- spends a minute of the session budget to produce
+// content that is then thrown away, and a model that keeps re-sending the
+// malformed call spends the whole session that way.
+//
+// It runs the SAME checks executeToolCall runs, by calling them, so the set of
+// calls refused here is a subset of the set refused there. That is what lets
+// the caller simply decline to resolve and hand the call to the tool, whose
+// own producer owns the refusal, its wording and its MutationNone.
 func fencedCallIsExecutable(name string, args json.RawMessage, ctx *AgentContext) (bool, string) {
 	input := fencedCallCheckInput{name: name, args: args, ctx: ctx}
 	result := runCheckPhase(proxyChecks.fencedCall, &input)
@@ -322,6 +336,7 @@ func (check *insertInputCheckInput) path() checkResult {
 	}
 	return checkResult{checkPass, turnContinues}
 }
+
 func (check *insertInputCheckInput) content() checkResult {
 	in := check.in
 	if in.Content == "" {
@@ -364,6 +379,7 @@ func (check *insertionCheckInput) bounds() checkResult {
 	}
 	return checkResult{checkPass, turnContinues}
 }
+
 func (check *insertionCheckInput) reparenting() checkResult {
 	in, path, lines := check.in, check.path, check.lines
 

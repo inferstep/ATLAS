@@ -229,9 +229,13 @@ func (loop *agentLoop) dispatchToolCall(turn int, parsed wire.ModelResponse) (*w
 		return check.result, turnContinues, nil
 	}
 	result := executeToolCall(parsed.Name, parsed.Args, ctx)
+	// The deadline can land in the middle of a tool call. Stop
+	// here rather than starting another turn on a dead context.
 	if outcome := runCheckPhase(proxyChecks.dispatchAfter, &check); outcome.outcome != turnContinues {
 		return nil, outcome.outcome, check.err
 	}
+	// Debt is settled from the ledger's own evidence, never from
+	// the call reporting that it worked.
 	settleMutationDebt(ctx, st)
 	return result, turnContinues, nil
 }
@@ -820,10 +824,12 @@ func (check *toolHealthCheckInput) repetition() checkResult {
 	check.steers.repeat, outcome = check.loop.detectRepetition(check.turn, check.parsed, check.intentArgs, check.runawayWrite)
 	return turnCheckResult(checkGuardRefusal, outcome)
 }
+
 func (check *toolHealthCheckInput) reasoning() checkResult {
 	check.steers.reasoning = detectReasoningRepetition(check.loop.ctx, check.turn)
 	return checkResult{checkPass, turnContinues}
 }
+
 func (check *toolHealthCheckInput) lens() checkResult {
 	lens, outcome, err := check.loop.scoreWithLens(check.turn, check.parsed)
 	check.err = err
@@ -832,6 +838,7 @@ func (check *toolHealthCheckInput) lens() checkResult {
 	}
 	return turnCheckResult(checkInfrastructureError, outcome)
 }
+
 func (check *toolHealthCheckInput) reportedLensFailure() checkResult {
 	ctx, st := check.loop.ctx, check.loop.st
 
@@ -859,6 +866,7 @@ func (check *dispatchSelectionCheckInput) cachedRead() checkResult {
 	}
 	return checkResult{checkPass, turnContinues}
 }
+
 func (check *dispatchSelectionCheckInput) rerun() checkResult {
 	if check.parsed.Name == "run_command" || check.parsed.Name == "run_background" {
 		if blk := runBlockAfterTraceback(check.loop.ctx); blk != nil {
@@ -869,6 +877,7 @@ func (check *dispatchSelectionCheckInput) rerun() checkResult {
 	}
 	return checkResult{checkPass, turnContinues}
 }
+
 func (check *dispatchSelectionCheckInput) cancelled() checkResult {
 	ctx, st := check.loop.ctx, check.loop.st
 	if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
@@ -907,6 +916,7 @@ func (check *failureCheckInput) ceiling() checkResult {
 	}
 	return checkResult{checkPass, turnContinues}
 }
+
 func (check *failureCheckInput) samePath() checkResult {
 	loop, turn, parsed := check.loop, check.turn, check.parsed
 	ctx := loop.ctx
