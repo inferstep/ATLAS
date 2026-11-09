@@ -7,7 +7,6 @@
  "functions": {
   "services/geometric-lens/geometric_lens/training.py:train_gx": 132,
   "services/proxy/delivery.go:deliverCandidateBytes": 128,
-  "services/proxy/loop.go:runAgentLoop": 151,
   "services/sandbox/executor_server.py:_syntax_check_impl": 123
  },
  "files": {
@@ -124,7 +123,6 @@
   "services/proxy/lens.go:scoreContentForAgent": 19,
   "services/proxy/lens_identity_test.go:TestVectorsCarryNoExperimentIdentity": 17,
   "services/proxy/loop.go:probeToolchainReady": 53,
-  "services/proxy/loop.go:runAgentLoop": 87,
   "services/proxy/loop_detectors_test.go:TestCorruptedDeliverableIsRestoredAtTheRepeatTerminal": 19,
   "services/proxy/loop_detectors_test.go:TestEveryWorkspaceGuardedToolRefusesBoundedly": 33,
   "services/proxy/loop_detectors_test.go:TestMissingModuleAndMissingFileSteers": 19,
@@ -247,7 +245,6 @@
   "services/proxy/lens.go:probeLensStatus": 19,
   "services/proxy/lens.go:scoreContentForAgent": 18,
   "services/proxy/loop.go:probeToolchainReady": 36,
-  "services/proxy/loop.go:runAgentLoop": 44,
   "services/proxy/loop_detectors_test.go:TestCorruptedDeliverableIsRestoredAtTheRepeatTerminal": 19,
   "services/proxy/loop_end.go:finalizeCompletion": 18,
   "services/proxy/loop_recovery.go:brokenArtifactRecovery": 19,

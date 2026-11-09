@@ -443,6 +443,19 @@ func (loop *agentLoop) refuseFencedFetch(turn int, parsed wire.ModelResponse, in
 	return turnEnds
 }
 
+func (loop *agentLoop) screenExistingFileWrite(parsed wire.ModelResponse, intentArgs json.RawMessage) turnOutcome {
+	if parsed.Name != "write_file" {
+		return turnContinues
+	}
+	var wfInput wire.WriteFileInput
+	if json.Unmarshal(parsed.Args, &wfInput) != nil {
+		return turnContinues
+	}
+	existingPath := resolveAgentPath(loop.ctx, wfInput.Path)
+	existing, readErr := os.ReadFile(existingPath)
+	return loop.guardExistingFileWrite(parsed, intentArgs, wfInput, existingPath, existing, readErr)
+}
+
 // guardExistingFileWrite applies the existing-file guards to a write_file,
 // given what the read of its target found: a target this session never read
 // is refused, and so is a whole-file rewrite of a file over five lines that is

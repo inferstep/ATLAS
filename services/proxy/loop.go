@@ -1,10 +1,8 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"io/fs"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -29,18 +27,11 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 		return nil
 	}
 
-	// edit_file old_str-mismatch failures per path. A successful read_file
-	// between attempts resets consecutiveErrors/RecentFailurePaths, which
-	// masks the classic read→edit-miss→read loop (smaller models can't
-	// reproduce old_str byte-for-byte). This counter survives interleaved
-	// reads so we can force the structural_edit steer after the second miss.
-	editMissByPath := map[string]int{}
 	// THE output-obligation decision, made once, from the contract the
 	// request boundary already validated. Nothing the model emits later can
 	// change which source spoke.
 	outputObligation := resolveOutputObligation(ctx, userMessage)
 	loop := newAgentLoop(ctx, userMessage, outputObligation)
-	st := loop.st
 
 	for turn := 0; ctx.MaxTurns <= 0 || turn < ctx.MaxTurns; turn++ {
 		response, parsed, outcome, err := loop.takeModelTurn(turn)
@@ -51,122 +42,8 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			return err
 		}
 
-		switch parsed.Type {
-		case "done":
-			if loop.endOnDone(turn, parsed) {
-				return nil
-			}
-
-		case "text":
-			if loop.endOnText(turn, parsed) {
-				return nil
-			}
-
-		case "tool_call":
-			st.toolsRun++
-			st.pendingToolCall = parsed.Name
-			intentArgs := announceToolCall(ctx, turn, parsed)
-			switch loop.screenBeforeWorkspaceCheck(turn, response, parsed, intentArgs) {
-			case turnEnds:
-				continue
-			case runEnds:
-				return nil
-			}
-
-			// Enforce the workspace boundary before any pre-execution gate reads
-			// a path. executeToolCall repeats this check for parallel dispatch.
-			if rejection := enforceWorkspacePaths(&parsed, ctx); rejection != "" {
-				if loop.refuseOutsideWorkspace(parsed, intentArgs, rejection) {
-					return nil
-				}
-				continue
-			}
-
-			switch loop.screenAfterWorkspaceCheck(turn, response, &parsed, intentArgs) {
-			case turnEnds:
-				continue
-			case runEnds:
-				return nil
-			}
-			if parsed.Name == "write_file" {
-				var wfInput wire.WriteFileInput
-				if json.Unmarshal(parsed.Args, &wfInput) == nil {
-					existingPath := resolveAgentPath(ctx, wfInput.Path)
-					existing, readErr := os.ReadFile(existingPath)
-					switch loop.guardExistingFileWrite(parsed, intentArgs, wfInput, existingPath, existing, readErr) {
-					case turnEnds:
-						continue
-					case runEnds:
-						return nil
-					}
-				}
-			}
-
-			result, steers, callOutcome, callErr := loop.runToolCall(turn, parsed, intentArgs)
-			switch callOutcome {
-			case turnEnds:
-				continue
-			case runEnds:
-				return callErr
-			}
-			if result.Success && len(ctx.LiteralBlocks) > 0 &&
-				(parsed.Name == "write_file" || parsed.Name == "edit_file" ||
-					parsed.Name == "structural_edit" ||
-					parsed.Name == "insert_after" || parsed.Name == "replace_lines") {
-				// Literal-contract enforcement: the user's own bytes are the
-				// authoritative rendering of any content they spelled out, and
-				// the model measurably cannot transcribe bytes (space-prefixed
-				// BPE tokens win after quotes — `BANNER = "ready"` arrives as
-				// `BANNER = " ready"` deterministically). Spacing drift within
-				// lines of a stated literal is repaired in place; indentation
-				// is never changed (repairLiteralDrift).
-				var wp struct {
-					Path string `json:"path"`
-				}
-				if json.Unmarshal(parsed.Args, &wp) == nil && wp.Path != "" {
-					lp := resolveAgentPath(ctx, wp.Path)
-					if body, rerr := os.ReadFile(lp); rerr == nil {
-						if fixed, repairedLits, changed := repairLiteralDrift(string(body), ctx.LiteralBlocks); changed {
-							if werr := os.WriteFile(lp, []byte(fixed), 0o644); werr == nil {
-								reportLiteralRepair(ctx, result, wp.Path, lp, fixed, repairedLits)
-							}
-						}
-					}
-				}
-			}
-			loop.recordCallEffects(turn, parsed, result)
-
-			// edit_file old_str miss: count per path independently of the
-			// consecutiveErrors reset an interleaved read causes. On the
-			// second miss for the same structured file, force the structural_edit
-			// steer as a [system note] (the inline tool-error hint alone
-			// doesn't reliably move a small model off edit_file).
-			if !result.Success && parsed.Name == "edit_file" &&
-				strings.Contains(result.Error, "string to replace not found") {
-				mp := extractFailurePath(parsed.Name, parsed.Args)
-				editMissByPath[mp]++
-				ext := strings.ToLower(filepath.Ext(mp))
-				// Force the structural_edit steer on the FIRST miss for structured
-				// files — small models bail to run_command after a single
-				// edit_file miss rather than retrying, so waiting for a
-				// second miss never fires.
-				if editMissByPath[mp] >= 1 && (ext == ".py" || ext == ".html" || ext == ".htm") {
-					var source string
-					if b, rerr := os.ReadFile(resolveAgentPath(ctx, mp)); rerr == nil {
-						source = string(b)
-					}
-					steers.repeat = editMissSteer(mp, source)
-					log.Printf("[agent] edit_file miss on %q — forcing structural_edit steer", mp)
-				}
-			}
-
-			if loop.breakErrorLoop(turn, parsed, result) {
-				return nil
-			}
-			loop.answerToolCall(turn, response, parsed, result, steers)
-
-		default:
-			askForAKnownResponseType(ctx, parsed)
+		if outcome, err := loop.handleModelReply(turn, response, parsed); outcome == runEnds {
+			return err
 		}
 	}
 
