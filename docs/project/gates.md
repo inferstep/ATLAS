@@ -109,7 +109,7 @@ job on this list that does not start gives no red:
 | `e2e acceptance (proxy + sandbox + fake llama)` | The real proxy and sandbox against a stand-in model server |
 | `ruff (python lint)`, `shellcheck`, `yamllint (workflows)` | Lint for Python, shell and workflow files |
 | `docker compose config` | Every compose file and overlay parses |
-| `code health (size)` | No new function over 100 lines or over complexity 15 (cognitive for Go and Python, cyclomatic for Go), no new file over 1,500 lines, and nothing on the baseline grows (`dev` only) |
+| `code health` | No new function over 100 lines or over complexity 15 (cognitive for Go and Python, cyclomatic for Go), no new file over 1,500 lines, and nothing on the baseline grows (`dev` only) |
 | `llama.cpp patches apply to pinned SHA` | The patches still apply to the pinned upstream commit |
 | `bootstrap on debian-12`, `bootstrap on rockylinux-9`, `bootstrap on ubuntu-22.04`, `bootstrap on ubuntu-24.04`, `bootstrap via sudo for a regular user` | The installer's dry run on each system |
 | `codeql (go)`, `codeql (python)` | CodeQL analysis ran to its end |
