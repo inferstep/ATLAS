@@ -152,7 +152,9 @@ func beginAgentRun(ctx *AgentContext, userMessage string) time.Time {
 	ctx.LiteralBlocks = extractLiteralBlocks(userMessage)
 	// What the user's workspace held before this request: a shell command
 	// that removes one of these files removes the user's work.
-	ctx.InitialWorkspace = snapshotWorkspace(ctx.WorkingDir)
+	scan := beginScanWatch(workspaceStage, workspaceScanSlow)
+	ctx.InitialWorkspace = snapshotWorkspaceWithin(ctx.WorkingDir, scanDeadline())
+	scan.End(len(ctx.InitialWorkspace.files), ctx.InitialWorkspace.truncated)
 	if n := len(ctx.LiteralBlocks); n > 0 {
 		log.Printf("[agent] %d literal content contract(s) extracted from the request", n)
 	}
@@ -298,7 +300,7 @@ func openConversation(ctx *AgentContext, userMessage string) bool {
 // need not spend turns finding them. Every failure leaves the conversation as
 // it was.
 func injectSymbolContext(ctx *AgentContext, symbols []string) {
-	fileMap := walkPythonFiles(ctx.WorkingDir)
+	fileMap := walkPythonFilesWithin(ctx.WorkingDir, scanDeadline())
 	if len(fileMap) > 0 {
 		if idx, ok := resolveProjectSymbols(ctx, fileMap, symbols); ok && len(idx.Matched) > 0 {
 			body := formatProjectContextMessage(idx.Matched)

@@ -819,7 +819,7 @@ func (s *runState) routeContractGate(ctx *AgentContext) (string, string) {
 	// this run's contract to keep, and bouncing that answer three times would
 	// be a false positive the user cannot act on.
 	if sessionWroteWebFiles(ctx) {
-		if broken := assetlint.RouteContractFindings(ctx.WorkingDir); len(broken) > 0 {
+		if broken := assetlint.RouteContractFindingsWithin(ctx.WorkingDir, scanDeadline()); len(broken) > 0 {
 			if s.chargeBounce("route_contract_gate") {
 				log.Printf("[agent] route contract gate: %d unmatched submit target(s) at exit (bounce %d/%d)",
 					len(broken), s.gateBounces["route_contract_gate"], maxGateBounces)
