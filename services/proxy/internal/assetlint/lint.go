@@ -70,44 +70,78 @@ func assetLintFiles(workingDir string) ([]lintFile, bool) {
 // entry, and a walk that runs out returns false: a lint over half a project
 // would report an orphan that the half it never read defines.
 func collectLintFiles(workingDir string, expired func() bool) ([]lintFile, bool) {
-	var files []lintFile
-	ranOut := false
-	count := 0
 	dir := workspacefs.OpenConfinedDir(workingDir) // reads stay inside the workspace
 	defer dir.Close()
-	_ = dir.Walk(func(rel string, entry fs.DirEntry, err error) error { // its one error, "too large", is in count
-		if err != nil {
-			return nil
-		}
-		if expired != nil && expired() {
-			ranOut = true
-			return fs.SkipAll
-		}
-		name := entry.Name()
-		if entry.IsDir() {
-			return lintWalkDir(name)
-		}
-		count++
-		if count > assetLintMaxFiles {
-			return fmt.Errorf("project too large")
-		}
-		if info, ierr := entry.Info(); ierr != nil || info.Size() > assetLintMaxFileBytes {
-			return nil
-		}
-		switch strings.ToLower(filepath.Ext(name)) {
-		case ".py", ".html", ".htm", ".js", ".css", ".jinja", ".jinja2":
-			data, rerr := dir.ReadFile(rel)
-			if rerr != nil {
-				return nil
-			}
-			files = append(files, lintFile{rel: filepath.ToSlash(rel), content: string(data)})
-		}
-		return nil
-	})
-	if ranOut || count > assetLintMaxFiles {
+	walk := &lintWalk{dir: dir, expired: expired}
+	_ = dir.Walk(walk.visit) // its one error, "too large", is in count
+	if walk.ranOut || walk.count > assetLintMaxFiles {
 		return nil, false
 	}
-	return files, true
+	return walk.files, true
+}
+
+// lintWalk is one pass over the project: the folder it reads through, the
+// budget it stops at, and what it has collected so far.
+type lintWalk struct {
+	dir     workspacefs.ConfinedDir
+	expired func() bool
+	files   []lintFile
+	count   int
+	ranOut  bool
+}
+
+// visit answers one walked entry. The only error it returns is "too large",
+// which stops the walk where SkipAll would have, and the count then says why.
+func (w *lintWalk) visit(rel string, entry fs.DirEntry, err error) error {
+	if err != nil {
+		return nil
+	}
+	if w.spent() {
+		return fs.SkipAll
+	}
+	if entry.IsDir() {
+		return lintWalkDir(entry.Name())
+	}
+	w.count++
+	if w.count > assetLintMaxFiles {
+		return fmt.Errorf("project too large")
+	}
+	if info, ierr := entry.Info(); ierr != nil || info.Size() > assetLintMaxFileBytes {
+		return nil
+	}
+	w.collect(rel, entry.Name())
+	return nil
+}
+
+// spent reports whether the budget ran out before this entry, and remembers
+// that it did, so the caller can answer "cannot judge" rather than half a lint.
+func (w *lintWalk) spent() bool {
+	if w.expired == nil || !w.expired() {
+		return false
+	}
+	w.ranOut = true
+	return true
+}
+
+// collect reads a source file the lint reasons about, if its name is one.
+func (w *lintWalk) collect(rel, name string) {
+	if !lintReadsName(name) {
+		return
+	}
+	data, err := w.dir.ReadFile(rel)
+	if err != nil {
+		return
+	}
+	w.files = append(w.files, lintFile{rel: filepath.ToSlash(rel), content: string(data)})
+}
+
+// lintReadsName reports whether a name has an extension the lint reads.
+func lintReadsName(name string) bool {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".py", ".html", ".htm", ".js", ".css", ".jinja", ".jinja2":
+		return true
+	}
+	return false
 }
 
 // lintWalkDir is the lint walk's answer for a directory: skip a hidden one and
