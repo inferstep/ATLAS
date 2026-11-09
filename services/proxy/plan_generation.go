@@ -48,7 +48,7 @@ func generatePlan(ctx *AgentContext, userMessage string) *wire.Plan {
 	if ctx.V3URL == "" {
 		return nil
 	}
-	pctx := projectcontext.Sample(ctx.WorkingDir, 6, 2000)
+	pctx := projectcontext.SampleWithin(ctx.WorkingDir, 6, 2000, scanDeadline())
 	req := wire.V3PlanRequest{
 		UserMessage:    userMessage,
 		WorkingDir:     ctx.WorkingDir,

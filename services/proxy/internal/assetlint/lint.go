@@ -63,13 +63,25 @@ type lintFile struct {
 // assetLintFiles loads the files the lint reasons about. false means the
 // project is too large to judge, and every lint answer is then "nothing".
 func assetLintFiles(workingDir string) ([]lintFile, bool) {
+	return collectLintFiles(workingDir, nil)
+}
+
+// collectLintFiles is the one walk. expired, when set, is asked before every
+// entry, and a walk that runs out returns false: a lint over half a project
+// would report an orphan that the half it never read defines.
+func collectLintFiles(workingDir string, expired func() bool) ([]lintFile, bool) {
 	var files []lintFile
+	ranOut := false
 	count := 0
 	dir := workspacefs.OpenConfinedDir(workingDir) // reads stay inside the workspace
 	defer dir.Close()
 	_ = dir.Walk(func(rel string, entry fs.DirEntry, err error) error { // its one error, "too large", is in count
 		if err != nil {
 			return nil
+		}
+		if expired != nil && expired() {
+			ranOut = true
+			return fs.SkipAll
 		}
 		name := entry.Name()
 		if entry.IsDir() {
@@ -92,7 +104,7 @@ func assetLintFiles(workingDir string) ([]lintFile, bool) {
 		}
 		return nil
 	})
-	if count > assetLintMaxFiles {
+	if ranOut || count > assetLintMaxFiles {
 		return nil, false
 	}
 	return files, true

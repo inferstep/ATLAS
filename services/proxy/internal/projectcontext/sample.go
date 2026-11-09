@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
@@ -23,6 +24,13 @@ import (
 // front; the budget is small (~5 files × 2KB) and the planning quality
 // jump is large.
 func Sample(workingDir string, maxFiles, maxBytes int) map[string]string {
+	return SampleWithin(workingDir, maxFiles, maxBytes, time.Time{})
+}
+
+// SampleWithin is Sample with a deadline: the scan stops at it and returns the
+// files it collected before it ran out, so a deep tree cannot hold a session
+// start. A zero deadline means no limit.
+func SampleWithin(workingDir string, maxFiles, maxBytes int, deadline time.Time) map[string]string {
 	if workingDir == "" {
 		return nil
 	}
@@ -42,7 +50,7 @@ func Sample(workingDir string, maxFiles, maxBytes int) map[string]string {
 	// points somewhere else is skipped like a file that cannot be read.
 	dir := workspacefs.OpenConfinedDir(workingDir)
 	defer dir.Close()
-	sample := planSample{dir: dir, out: out, maxFiles: maxFiles, maxBytes: maxBytes}
+	sample := planSample{dir: dir, out: out, maxFiles: maxFiles, maxBytes: maxBytes, deadline: deadline}
 	sample.readPriorityFiles("", priority)
 	// If priority files yielded nothing at the workspace root, the
 	// project may live one level down -- common when the user's
@@ -77,6 +85,12 @@ type planSample struct {
 	dir                workspacefs.ConfinedDir
 	out                map[string]string
 	maxFiles, maxBytes int
+	deadline           time.Time // when the scan must stop; zero means no limit
+}
+
+// expired reports whether the scan has spent its budget.
+func (s planSample) expired() bool {
+	return !s.deadline.IsZero() && time.Now().After(s.deadline)
 }
 
 // readPriorityFiles adds the priority files under subdir, keyed by the path the
@@ -84,7 +98,7 @@ type planSample struct {
 // doesn't need a 50KB README.
 func (s planSample) readPriorityFiles(subdir string, priority []string) {
 	for _, rel := range priority {
-		if len(s.out) >= s.maxFiles {
+		if len(s.out) >= s.maxFiles || s.expired() {
 			return
 		}
 		s.add(filepath.Join(subdir, rel))
@@ -94,7 +108,7 @@ func (s planSample) readPriorityFiles(subdir string, priority []string) {
 // readSourceFiles adds the source-looking files among entries.
 func (s planSample) readSourceFiles(entries []fs.DirEntry) {
 	for _, e := range entries {
-		if len(s.out) >= s.maxFiles {
+		if len(s.out) >= s.maxFiles || s.expired() {
 			return
 		}
 		name := e.Name()
@@ -108,6 +122,9 @@ func (s planSample) readSourceFiles(entries []fs.DirEntry) {
 // add puts one file into the sample, cut to the bytes a request carries for it.
 // A file over four times that is skipped.
 func (s planSample) add(rel string) {
+	if s.expired() {
+		return
+	}
 	if body, ok := s.dir.ReadUpTo(rel, s.maxBytes*4); ok {
 		s.out[rel] = Entry(body, s.maxBytes)
 	}

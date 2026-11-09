@@ -397,7 +397,7 @@ func revisePlan(ctx *AgentContext, originalUserMessage string, reason string) {
 	// Carry forward what the agent has read so far — it's the most
 	// concrete signal of "what the agent knows now" beyond the
 	// original priority-files sample.
-	pctx := projectcontext.Sample(ctx.WorkingDir, 6, 2000)
+	pctx := projectcontext.SampleWithin(ctx.WorkingDir, 6, 2000, scanDeadline())
 	projectcontext.AddFilesRead(pctx, ctx.SnapshotFilesRead(), ctx.WorkingDir, 8)
 
 	req := wire.V3PlanRequest{
