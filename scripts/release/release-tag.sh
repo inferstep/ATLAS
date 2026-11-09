@@ -10,6 +10,8 @@
 #
 # One-time signing setup (per maintainer machine):
 #   ssh-keygen -t ed25519 -f ~/.ssh/atlas_release_signing -C "you@example"
+#   # Give the key a passphrase when ssh-keygen asks for one. To add a
+#   # passphrase to a key that has none: ssh-keygen -p -f ~/.ssh/atlas_release_signing
 #   git config gpg.format ssh
 #   git config user.signingkey ~/.ssh/atlas_release_signing.pub
 #   git config gpg.ssh.allowedSignersFile .github/allowed_signers
