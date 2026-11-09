@@ -19,15 +19,12 @@ Security / trust model (load-bearing — read before "fixing" CodeQL alerts):
     user-controlled paths inside the workspace, or treat agent-supplied
     code as untrusted — that's the container's job.
 
-    CodeQL flags `py/command-line-injection` here. Those alerts are
-    by-design false positives: accepting + executing user-controlled
-    commands is the requirement, and the cmd-list form (no shell=True at
-    the Python layer) prevents Python-level injection. Don't add input
-    validation that would break the sandbox's purpose; dismiss the
-    alerts with rationale instead.
-
-    sonar-project.properties ignores Sonar's pythonsecurity:S6350 and
-    pythonsecurity:S6549 for this file, for the same reason.
+    CodeQL flags `py/command-line-injection` here. Those alerts are by-design false
+    positives: accepting + executing user-controlled commands is the requirement,
+    and the cmd-list form (no shell=True at the Python layer) prevents Python-level
+    injection. Don't add input validation that would break the sandbox's purpose;
+    dismiss the alerts with rationale instead. sonar-project.properties ignores
+    Sonar's S6350 and S6549 for this file, for the same reason.
 
     `py/path-injection` is handled differently: every workspace path
     derived from request data goes through _contained_path(), whose
