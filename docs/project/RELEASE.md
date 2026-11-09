@@ -338,6 +338,8 @@ signed by an unlisted key.
 
 ```bash
 ssh-keygen -t ed25519 -f ~/.ssh/atlas_release_signing -C "you@example"
+# Give the key a passphrase when ssh-keygen asks for one. To add a
+# passphrase to a key that has none: ssh-keygen -p -f ~/.ssh/atlas_release_signing
 git config gpg.format ssh
 git config user.signingkey ~/.ssh/atlas_release_signing.pub
 git config gpg.ssh.allowedSignersFile .github/allowed_signers
@@ -347,6 +349,10 @@ git config gpg.ssh.allowedSignersFile .github/allowed_signers
 gh ssh-key add ~/.ssh/atlas_release_signing.pub --type signing \
     --title "atlas release signing"
 ```
+
+With a passphrase, a person must type it to sign a tag. A passphrase does
+not change the public key. So `.github/allowed_signers` and the key on
+GitHub stay valid when you add one.
 
 Verify any release tag locally:
 
