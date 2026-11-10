@@ -100,34 +100,36 @@ freeze packages that a later installation resolves.
 
 ### Sandbox toolchains
 
-Review date: **2026-11-08**. The [sandbox Dockerfile](../../services/sandbox/Dockerfile)
-records the installation choices. This table describes those choices, not
-an inventory from a running branch image.
+Review date: **2026-11-10**. The [sandbox Dockerfile](../../services/sandbox/Dockerfile)
+records the installation choices. Versions below were observed in the amd64
+branch image built on this date.
 
 The pinned [Python base image source][python-image] uses Debian 13 (`trixie`).
-For distribution packages, the table names the release series and package
-source. Exact installed package revisions remain unknown until the image
-is built. They can differ between builds and architectures.
+For distribution packages, the table records the observed version and package
+source. Package revisions can differ between builds and architectures.
 
 | Toolchain or companion tool | Version and installation source | Support policy and end date |
 |---|---|---|
 | Python | 3.13.18, included in the [base image][python-image]. | Python 3.13 receives security fixes until **2029-10**, under the [Python release schedule][python-support]. |
 | pip, the Python package manager | 26.2.2, bundled through [Python's `ensurepip` module][python-pip]. | The [pip release process][pip-support] schedules regular releases. It gives no fixed support end date for this version. |
-| Node.js | 24.22.0, from the [release archive][node-download]. The Dockerfile records SHA-256 checksums for amd64 and arm64. | Node 24 is in maintenance long-term support (LTS). The [Node schedule][node-support] ends support on **2028-04-30**. |
-| npm and its `npx` command | 11.19.1, included in the [Node 24.22.0 archive][node-npm]. | The [npm version policy][npm-support] describes stable and prerelease channels. It gives no separate fixed support end date. |
-| Corepack, the package-manager launcher | 0.36.0, included in the [Node 24.22.0 archive][node-corepack]. | The [Corepack security policy][corepack-support] gives no fixed support end date. |
+| Node.js | 24.22.2, from the [release archive][node-download]. The Dockerfile records SHA-256 checksums for amd64 and arm64. | Node 24 is in maintenance long-term support (LTS). The [Node schedule][node-support] ends support on **2028-04-30**. |
+| npm and its `npx` command | 11.21.2, installed from the [versioned registry package][npm-package]. This replaces the Node archive's npm to fix vulnerable bundled dependencies. | The [npm version policy][npm-support] describes stable and prerelease channels. It gives no separate fixed support end date. |
+| Corepack, the package-manager launcher | 0.36.0, included in the [Node 24.22.2 archive][node-corepack]. | The [Corepack security policy][corepack-support] gives no fixed support end date. |
 | TypeScript compiler (`tsc`) | 7.0.2, installed through npm from the [versioned registry package][typescript-package]. | The [TypeScript release process][typescript-support] defines regular and patch releases. It gives no fixed support end date. |
 | TypeScript runner (`tsx`) | 4.23.15, installed through npm from the [versioned registry package][tsx-package]. | The [tsx security policy][tsx-support] covers only the latest release. It gives no fixed calendar end date. |
-| Go compiler and module tools | 1.27.2, from the [Go release manifest][go-download]. The Dockerfile records SHA-256 checksums for amd64 and arm64. | The [Go release policy][go-support] supports a release until two newer major releases exist. Go 1.27 support ends with Go 1.29; the date is not fixed. |
+| esbuild compiler, used by `tsx` | 0.28.2, resolved from the [registry package][esbuild-package] during this build. Its version can change on later builds. | The [esbuild security page][esbuild-support] publishes no security policy. The support end date is unknown. |
+| Go compiler and module tools | 1.27.3, from the [Go release manifest][go-download]. The Dockerfile records SHA-256 checksums for amd64 and arm64. | The [Go release policy][go-support] supports a release until two newer major releases exist. Go 1.27 support ends with Go 1.29; the date is not fixed. |
 | Rust compiler (`rustc`) and Cargo package manager | Rust 1.99.1 and Cargo 1.99.1, selected by the [toolchain manifest][rust-download]. rustup installs them. | The [Rust release process][rust-support] produces stable releases every six weeks. It gives no fixed support end date for this toolchain. |
 | rustup, the Rust toolchain installer | 1.29.1, from the [rustup archives][rustup-download]. The Dockerfile checks the installer before execution. | The [rustup security policy][rustup-support] gives no fixed support end date. |
 | Bun runtime, package manager, and `bunx` command | 1.4.3, from the [Bun release][bun-download]. The Dockerfile records SHA-256 checksums for amd64 and arm64. | The [Bun security policy][bun-support] lists 1.x as supported. It gives no fixed support end date. |
-| Java runtime (`java`) and compiler (`javac`) | OpenJDK 21; Debian selects the revision of [`openjdk-21-jdk-headless`][java-package] during the build. | [Debian support][debian-support] applies. The distribution schedule does not promise an individual package support end date. |
+| Java runtime (`java`) and compiler (`javac`) | OpenJDK 21.0.13; Debian package [`openjdk-21-jdk-headless`][java-package] revision `21.0.13+9-1~deb13u2`. | [Debian support][debian-support] applies. The distribution schedule does not promise an individual package support end date. |
 | Kotlin compiler (`kotlinc`) and runner | 2.4.0, from the [Kotlin compiler archive][kotlin-download], checked with SHA-256. It uses the installed Java runtime. | The [Kotlin release process][kotlin-support] defines language, tooling, and bug-fix releases. It gives no fixed support end date. |
-| Ruby and RubyGems (`gem`) | Ruby 3.3; Debian selects revisions of [`ruby`][ruby-package] and [`ruby-rubygems`][rubygems-package] during the build. | [Debian support][debian-support] applies. Separately, the [Ruby schedule][ruby-support] expects upstream Ruby 3.3 support to end on **2027-03-31**. |
-| PHP command-line interpreter | PHP 8.4; Debian selects the revision through [`php-cli`][php-package] during the build. | [Debian support][debian-support] applies. Separately, [upstream PHP 8.4 security support][php-support] ends on **2028-12-31**. |
-| C and C++ compilers, linker, and build tool | GCC 14; Debian selects revisions of [`gcc`][gcc-package], [`g++`][gpp-package], [`binutils`][binutils-package], and [`make`][make-package]. | [Debian support][debian-support] applies. The distribution schedule does not promise individual package support end dates. |
-| Bash interpreter | Bash 5.2; Debian selects the revision of [`bash`][bash-package] during the build. | [Debian support][debian-support] applies. The distribution schedule does not promise an individual package support end date. |
+| Ruby, RubyGems (`gem`), and Rake build tool | [Ruby][ruby-package] 3.3.13 (`ruby3.3` revision `3.3.13-0+deb13u1`), [RubyGems][rubygems-package] 3.6.7-2, and [Rake][rake-package] 13.2.1-1, from Debian. | [Debian support][debian-support] applies. Separately, the [Ruby schedule][ruby-support] expects upstream Ruby 3.3 support to end on **2027-03-31**. |
+| PHP command-line interpreter | PHP 8.4.27, selected through Debian's [`php-cli`][php-package]; `php8.4-cli` revision `8.4.27-1~deb13u1`. | [Debian support][debian-support] applies. Separately, [upstream PHP 8.4 security support][php-support] ends on **2028-12-31**. |
+| C and C++ compilers, linker, and build tool | Debian's [`gcc`][gcc-package] and [`g++`][gpp-package] select 14.2.0-19. [`binutils`][binutils-package] is 2.44-3, and [`make`][make-package] is 4.4.1-2. | [Debian support][debian-support] applies. The distribution schedule does not promise individual package support end dates. |
+| Bash interpreter | 5.2.37; Debian [`bash`][bash-package] revision `5.2.37-2+b10`. | [Debian support][debian-support] applies. The distribution schedule does not promise an individual package support end date. |
+| Perl interpreter, installed as a package dependency | 5.40.1; Debian [`perl`][perl-package] revision `5.40.1-6+deb13u1`. | [Debian support][debian-support] applies. The distribution schedule does not promise an individual package support end date. |
+| Dash interpreter, the base image's `/bin/sh` | Debian [`dash`][dash-package] revision `0.5.12-12`. | [Debian support][debian-support] applies. The distribution schedule does not promise an individual package support end date. |
 | pnpm package manager | 12.14.0, installed through npm from the [versioned registry package][pnpm-package]. | The [pnpm security policy][pnpm-support] lists 12.x as supported. It gives no fixed support end date for 12.x. |
 | Yarn package manager | Classic 1.22.22, installed through npm from the [versioned registry package][yarn-package]. | [Yarn Classic][yarn-support] has been in maintenance mode since January 2020. Its support end date is not fixed. |
 
@@ -147,7 +149,7 @@ Package managers provide different verification boundaries:
 - `apt` checks signed Debian metadata and the package hashes that it records.
   Unpinned packages permit Debian security updates.
 - npm checks registry integrity metadata. The Dockerfile disables installation
-  scripts and pins the four requested tools. Dependencies remain unlocked.
+  scripts and pins npm itself and four global tools. The global tools' dependencies remain unlocked.
 - rustup checks downloads against the selected release manifest.
 - pip checks every installed dependency against the committed requirement
   hashes. It permits only built packages.
@@ -165,16 +167,18 @@ has no known vulnerabilities.
 [python-support]: https://devguide.python.org/versions/
 [python-pip]: https://github.com/python/cpython/blob/v3.13.18/Lib/ensurepip/__init__.py
 [pip-support]: https://pip.pypa.io/en/stable/development/release-process/
-[node-download]: https://nodejs.org/dist/v24.22.0/SHASUMS256.txt
+[node-download]: https://nodejs.org/dist/v24.22.2/SHASUMS256.txt
 [node-support]: https://github.com/nodejs/Release/blob/main/schedule.json
-[node-npm]: https://github.com/nodejs/node/blob/v24.22.0/deps/npm/package.json
+[npm-package]: https://registry.npmjs.org/npm/11.21.2
 [npm-support]: https://docs.npmjs.com/about-npm-versions/
-[node-corepack]: https://github.com/nodejs/node/blob/v24.22.0/deps/corepack/package.json
+[node-corepack]: https://github.com/nodejs/node/blob/v24.22.2/deps/corepack/package.json
 [corepack-support]: https://github.com/nodejs/corepack/security/policy
 [typescript-package]: https://registry.npmjs.org/typescript/7.0.2
 [typescript-support]: https://github.com/microsoft/TypeScript/wiki/TypeScript's-Release-Process
 [tsx-package]: https://registry.npmjs.org/tsx/4.23.15
 [tsx-support]: https://github.com/privatenumber/tsx/security/policy
+[esbuild-package]: https://registry.npmjs.org/esbuild/0.28.2
+[esbuild-support]: https://github.com/evanw/esbuild/security/policy
 [go-download]: https://go.dev/dl/?mode=json&include=all
 [go-support]: https://go.dev/doc/devel/release#policy
 [rust-download]: https://static.rust-lang.org/dist/channel-rust-1.99.1.toml
@@ -188,6 +192,7 @@ has no known vulnerabilities.
 [kotlin-support]: https://kotlinlang.org/docs/releases.html
 [ruby-package]: https://packages.debian.org/trixie/ruby
 [rubygems-package]: https://packages.debian.org/trixie/ruby-rubygems
+[rake-package]: https://packages.debian.org/trixie/rake
 [ruby-support]: https://www.ruby-lang.org/en/downloads/branches/
 [php-package]: https://packages.debian.org/trixie/php-cli
 [php-support]: https://www.php.net/supported-versions.php
@@ -196,6 +201,8 @@ has no known vulnerabilities.
 [binutils-package]: https://packages.debian.org/trixie/binutils
 [make-package]: https://packages.debian.org/trixie/make
 [bash-package]: https://packages.debian.org/trixie/bash
+[perl-package]: https://packages.debian.org/trixie/perl
+[dash-package]: https://packages.debian.org/trixie/dash
 [pnpm-package]: https://registry.npmjs.org/pnpm/12.14.0
 [pnpm-support]: https://github.com/pnpm/pnpm/security/policy
 [yarn-package]: https://registry.npmjs.org/yarn/1.22.22

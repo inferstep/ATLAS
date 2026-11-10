@@ -979,7 +979,7 @@ graph LR
         Py["Python\npylint (0-10) + pytest"]
         JS["JavaScript\nNode.js 24"]
         TS["TypeScript\ntsc --noEmit + tsx"]
-        Go["Go 1.27.2\ngo build + run"]
+        Go["Go 1.27.3\ngo build + run"]
         Java["Java 21\njavac + java -cp"]
         Kotlin["Kotlin 2.4.0\nkotlinc + java -jar"]
         Rust["Rust 1.99.1\nrustc + run"]

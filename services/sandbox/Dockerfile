@@ -41,9 +41,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install Node.js 24 LTS (supported to 2028-04-30) from its release archive,
 # checked against the published SHA-256
-ARG NODE_VERSION=24.22.0
-ARG NODE_SHA256_AMD64=cc2f601cee82d9a5a233302fe307abc600727035fd7d2c3a3571755989e95008
-ARG NODE_SHA256_ARM64=fef00bb4d36e1c50104a9775a10359beee98f162b4104dd12472c75065c6a143
+ARG NODE_VERSION=24.22.2
+ARG NODE_SHA256_AMD64=48cc0e21e048790e54c0cf5749c2725005313d652651c40b7a21feb9697aaf75
+ARG NODE_SHA256_ARM64=eb187837a2230d4047161ac0be008584e16b46f726e9c9490ee35dc6b17d9ba8
 RUN case "$(dpkg --print-architecture)" in \
       amd64) arch=x64; sha="${NODE_SHA256_AMD64}" ;; \
       arm64) arch=arm64; sha="${NODE_SHA256_ARM64}" ;; \
@@ -53,12 +53,15 @@ RUN case "$(dpkg --print-architecture)" in \
     && echo "${sha}  /tmp/node.tar.xz" | sha256sum -c - \
     && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 --no-same-owner \
     && rm /tmp/node.tar.xz \
+    # npm's bundled dependencies need fixes beyond the Node archive.
+    # npm checks registry integrity metadata for this fixed package.
+    && npm install -g --ignore-scripts npm@11.21.2 \
     && node --version && npm --version
 
 # Install Go, checked against the published SHA-256
-ARG GO_VERSION=1.27.2
-ARG GO_SHA256_AMD64=ecbadb99091a3f46e31f5f934b068b1864eafa7995211b39eaddf76996045fe5
-ARG GO_SHA256_ARM64=94f3e30b8e374bc285e7dadc11e0865726b9bc6e85b841ccceaabc0214c6b7c8
+ARG GO_VERSION=1.27.3
+ARG GO_SHA256_AMD64=65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40
+ARG GO_SHA256_ARM64=a06e99309dbcbdca1a8ccd2282c3ee146e55930886e26b4f1193269587165f49
 RUN arch="$(dpkg --print-architecture)" \
     && case "${arch}" in \
       amd64) sha="${GO_SHA256_AMD64}" ;; \
