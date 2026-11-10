@@ -88,25 +88,9 @@ func runBackgroundTool() *ToolDef {
 // backgroundRefusal is the answer to a run_background call that must not start,
 // or nil.
 func backgroundRefusal(ctx *AgentContext, input wire.RunBackgroundInput) *wire.ToolResult {
-	// Trust gate: same contract as run_command — untrusted mode
-	// refuses all command execution, foreground or background.
-	if !ctx.TrustMode.commandsAllowed() {
-		return &wire.ToolResult{Success: false, Error: untrustedRefusal}
-	}
-
-	if strings.TrimSpace(input.Command) == "" {
-		return &wire.ToolResult{Success: false, Error: "run_background: command cannot be empty"}
-	}
-	if reason := validateShellCommand(input.Command); reason != "" {
-		return &wire.ToolResult{Success: false, Error: reason}
-	}
-	if ctx.VerifyOnHost {
-		return &wire.ToolResult{
-			Success: false,
-			Error:   "run_background is only available in sandbox mode (ATLAS_VERIFY_IN=sandbox). On the host, use `run_command` with `nohup ... &` and track the PID yourself.",
-		}
-	}
-	return nil
+	check := backgroundCheckInput{ctx: ctx, input: input}
+	runCheckPhase(proxyChecks.background, &check)
+	return check.result
 }
 
 // settleWindow is the wait after a start: 1.5 s unless the call asks for
@@ -146,9 +130,11 @@ func tailBackgroundTool() *ToolDef {
 			if err := json.Unmarshal(rawInput, &input); err != nil {
 				return nil, fmt.Errorf("invalid input: %w", err)
 			}
-			if strings.TrimSpace(input.JobID) == "" {
-				return &wire.ToolResult{Success: false, Error: "tail_background: job_id required"}, nil
+			check := tailInputCheckInput{input: input}
+			if runCheckPhase(proxyChecks.tailInput, &check).outcome != turnContinues {
+				return check.result, nil
 			}
+
 			lines := 50
 			if input.Lines != nil {
 				lines = *input.Lines
@@ -181,9 +167,11 @@ func stopBackgroundTool() *ToolDef {
 			if err := json.Unmarshal(rawInput, &input); err != nil {
 				return nil, fmt.Errorf("invalid input: %w", err)
 			}
-			if strings.TrimSpace(input.JobID) == "" {
-				return &wire.ToolResult{Success: false, Error: "stop_background: job_id required"}, nil
+			check := stopInputCheckInput{input: input}
+			if runCheckPhase(proxyChecks.stopInput, &check).outcome != turnContinues {
+				return check.result, nil
 			}
+
 			out, err := sandboxStopBackground(ctx, input.JobID)
 			if err != nil {
 				return &wire.ToolResult{Success: false, Error: err.Error()}, nil
@@ -390,4 +378,75 @@ func finishedBackgroundNote(ctx *AgentContext) string {
 			id, truncateStr(cmd, 80), id)
 	}
 	return strings.TrimLeft(sb.String(), "\n")
+}
+
+type backgroundCheckInput struct {
+	toolCheckOutput
+	ctx   *AgentContext
+	input wire.RunBackgroundInput
+}
+
+func (check *backgroundCheckInput) trust() checkResult {
+	ctx := check.ctx
+	// Trust gate: same contract as run_command — untrusted mode
+	// refuses all command execution, foreground or background.
+	if !ctx.TrustMode.commandsAllowed() {
+		return check.accept(checkGuardRefusal, &wire.ToolResult{Success: false, Error: untrustedRefusal})
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *backgroundCheckInput) command() checkResult {
+	input := check.input
+	if strings.TrimSpace(input.Command) == "" {
+		return check.accept(checkModelError, &wire.ToolResult{Success: false, Error: "run_background: command cannot be empty"})
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *backgroundCheckInput) shell() checkResult {
+	input := check.input
+	if reason := validateShellCommand(input.Command); reason != "" {
+		return check.accept(checkGuardRefusal, &wire.ToolResult{Success: false, Error: reason})
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *backgroundCheckInput) host() checkResult {
+	ctx := check.ctx
+	if ctx.VerifyOnHost {
+		return check.accept(checkGuardRefusal, &wire.ToolResult{
+			Success: false,
+			Error:   "run_background is only available in sandbox mode (ATLAS_VERIFY_IN=sandbox). On the host, use `run_command` with `nohup ... &` and track the PID yourself.",
+		})
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+type tailInputCheckInput struct {
+	toolCheckOutput
+	input wire.TailBackgroundInput
+}
+
+func (check *tailInputCheckInput) required() checkResult {
+	input := check.input
+
+	if strings.TrimSpace(input.JobID) == "" {
+		return check.accept(checkModelError, &wire.ToolResult{Success: false, Error: "tail_background: job_id required"})
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+type stopInputCheckInput struct {
+	toolCheckOutput
+	input wire.StopBackgroundInput
+}
+
+func (check *stopInputCheckInput) required() checkResult {
+	input := check.input
+
+	if strings.TrimSpace(input.JobID) == "" {
+		return check.accept(checkModelError, &wire.ToolResult{Success: false, Error: "stop_background: job_id required"})
+	}
+	return checkResult{checkPass, turnContinues}
 }
