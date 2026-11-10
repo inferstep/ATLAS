@@ -241,9 +241,24 @@ class Audit:
         self.add("Ops", "Membership limited to the team", PASS if members <= in_teams else FAIL,
                  f"{len(members)} members, all in a team: {members <= in_teams}")
         self.add("Ops", "Review settings after transfer", MANUAL, "done 2026-09-27 against the pre-transfer snapshot")
-        ir = self.exists("docs/project/INCIDENT_RESPONSE.md") and self.exists(".github/SECURITY.md")
-        self.add("Ops", "Incident response plan", PASS if ir else FAIL,
-                 f".github/SECURITY.md + docs/project/INCIDENT_RESPONSE.md on {self.default}: {ir}")
+        incident_paths = ("docs/project/INCIDENT_RESPONSE.md", "docs/INCIDENT_RESPONSE.md")
+        incident = ""
+        if self.exists(incident_paths[0]):
+            incident = incident_paths[0]
+        elif self.exists(incident_paths[1]):
+            incident = incident_paths[1]
+        security_paths = (".github/SECURITY.md", "SECURITY.md")
+        security = ""
+        if self.exists(security_paths[0]):
+            security = security_paths[0]
+        elif self.exists(security_paths[1]):
+            security = security_paths[1]
+        evidence = [
+            incident or f"Missing incident response plan (checked {', '.join(incident_paths)})",
+            security or f"Missing security policy (checked {', '.join(security_paths)})",
+        ]
+        self.add("Ops", "Incident response plan", PASS if incident and security else FAIL,
+                 f"{' + '.join(evidence)} on {self.default}")
         sa = self.repo_info.get("security_and_analysis") or {}
         scanning = (sa.get("secret_scanning", {}).get("status") == "enabled"
                     and sa.get("secret_scanning_push_protection", {}).get("status") == "enabled"
