@@ -221,7 +221,7 @@ of both kinds.
 |---|---|---|
 | `pr title` is red | The title is not in the form of [section 7](#7-branches-commits-and-pull-request-titles), or its summary has more than 100 characters | Edit the title. The check starts again by itself |
 | A test job is red | A test failed with your change | Open the job and read the first failure. `make verify` ([section 4](#4-run-the-quality-gate)) runs the same gates on your machine |
-| `code health (size)` is red | A function has more than 100 lines or a complexity over 15, or a file more than 1,500 lines, and is not on the baseline; or one on the baseline grew | Split it into named steps |
+| `code health (size)` is red | A function has more than 100 lines or a complexity over 15, or a file more than 1,500 lines, and is not on the baseline; or one on the baseline grew | Split it into named steps. For a Go test table of one form, follow [the table complexity rule](../docs/project/CODE_STYLE.md#go-table-complexity). |
 | `checks ran` is red | What the paragraph above says. On a pull request from a fork it can say "waiting for a maintainer's approval" | Nothing for that one: a maintainer approves the run. For the rest, its output says what to do |
 | `integrity check` has a report | It is the check that reads your change, not the code ([Testing](#testing)) | Give each skip its reason. A maintainer reads the rest |
 | There is no Sonar result | On a pull request from a fork the Sonar check does not run; the change is analysed after the merge. | Nothing |
