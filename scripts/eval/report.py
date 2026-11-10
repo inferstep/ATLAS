@@ -26,8 +26,8 @@ def difference(k1: int, n1: int, k2: int, n2: int) -> tuple:
     l1, u1 = wilson(k1, n1)
     l2, u2 = wilson(k2, n2)
     d = p1 - p2
-    return (d, d - math.sqrt((p1 - l1) ** 2 + (u2 - p2) ** 2),
-            d + math.sqrt((u1 - p1) ** 2 + (p2 - l2) ** 2))
+    return (d, d - math.hypot(p1 - l1, u2 - p2),
+            d + math.hypot(u1 - p1, p2 - l2))
 
 
 def arm_summary(records: list) -> dict:
