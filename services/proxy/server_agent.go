@@ -58,10 +58,11 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 
 	// Create agent context
 	ctx := NewAgentContext(workingDir, tier)
-	if msg := removedSwitchRefusal(req.RemovedBypassV3, req.RemovedV3Mode, req.RemovedFeasibilityMode); msg != "" {
-		writeError(w, http.StatusBadRequest, ErrInvalidInput, msg)
+	configuration := requestServiceCheckInput{writer: w, ctx: ctx, request: req, workingDir: workingDir}
+	if runCheckPhase(proxyChecks.requestConfiguration, &configuration).outcome != turnContinues {
 		return
 	}
+
 	configureAgentContext(ctx, req, workingDir, hostDir)
 	seedPriorHistory(ctx, req)
 
@@ -102,17 +103,8 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 	// rather than dropped, because a client that declared obligations and had
 	// them silently discarded would be told its run finished having proved
 	// none of them.
-	if !applyTaskContract(w, ctx, req, workingDir) {
-		return
-	}
-	// The lens is required (lens_required.go): a request is not started
-	// while it cannot score. After every 400, and before any work or any
-	// streamed byte, so the answer is an ordinary HTTP error the client
-	// shows as such.
-	if ok, why := lensReady(lensURL); !ok {
-		writeError(w, http.StatusServiceUnavailable, ErrDependencyDown,
-			"ATLAS needs the geometric lens for every request, and "+why+
-				". Run `atlas doctor`.")
+	checks := requestServiceCheckInput{writer: w, ctx: ctx, request: req, workingDir: workingDir}
+	if runCheckPhase(proxyChecks.requestServices, &checks).outcome != turnContinues {
 		return
 	}
 
@@ -161,21 +153,11 @@ type agentRequest struct {
 // error that refuses it: a method other than POST, a body that does not
 // decode, or no message.
 func readAgentRequest(w http.ResponseWriter, r *http.Request) (*agentRequest, bool) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, ErrUnsupported, "method not allowed")
+	input := requestCheckInput{writer: w, request: r}
+	if runCheckPhase(proxyChecks.request, &input).outcome != turnContinues {
 		return nil, false
 	}
-	var req agentRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, ErrInvalidInput, "invalid request body")
-		return nil, false
-	}
-
-	if req.Message == "" {
-		writeError(w, http.StatusBadRequest, ErrInvalidInput, "message is required")
-		return nil, false
-	}
-	return &req, true
+	return &input.body, true
 }
 
 // agentWorkingDirs resolves where a request works: the workspace the proxy
@@ -199,10 +181,11 @@ func agentWorkingDirs(w http.ResponseWriter, req *agentRequest) (string, string,
 	// /demo: each pane works inside its own workspace subdir. A non-empty
 	// sandbox_subdir must be one allowed bare name, else HTTP 400 and no turn.
 	if sub := req.SandboxSubdir; sub != "" {
-		if !workspacefs.ValidSandboxSubdir(sub) {
-			writeError(w, http.StatusBadRequest, ErrInvalidInput, workspacefs.SandboxSubdirDetail)
+		check := requestServiceCheckInput{writer: w, request: req}
+		if runCheckPhase(proxyChecks.requestDirectory, &check).outcome != turnContinues {
 			return "", "", false
 		}
+
 		workingDir = filepath.Join(workingDir, sub)
 		if hostDir != "" && hostDir != "." {
 			hostDir = filepath.Join(hostDir, sub)
@@ -312,11 +295,11 @@ func applyTaskContract(w http.ResponseWriter, ctx *AgentContext, req *agentReque
 // HTTP 500 when the connection cannot stream.
 func openEventStream(w http.ResponseWriter, ctx *AgentContext) (http.Flusher, bool) {
 	// Set up SSE streaming
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		writeError(w, http.StatusInternalServerError, ErrInternal, "streaming not supported")
+	check := streamCheckInput{writer: w}
+	if runCheckPhase(proxyChecks.stream, &check).outcome != turnContinues {
 		return nil, false
 	}
+	flusher := check.flusher
 
 	w.Header().Set(headerContentType, "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -422,4 +405,94 @@ func handleCancel(w http.ResponseWriter, r *http.Request) {
 	entry.cancel()
 	log.Printf("[agent] cancelled session %q via /cancel", req.SessionID)
 	_ = json.NewEncoder(w).Encode(map[string]bool{"cancelled": true})
+}
+
+type requestCheckInput struct {
+	writer  http.ResponseWriter
+	request *http.Request
+	body    agentRequest
+}
+
+func (input *requestCheckInput) method() checkResult {
+	if input.request.Method != http.MethodPost {
+		writeError(input.writer, http.StatusMethodNotAllowed, ErrUnsupported, "method not allowed")
+		return checkResult{checkGuardRefusal, runEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *requestCheckInput) decode() checkResult {
+	if err := json.NewDecoder(input.request.Body).Decode(&input.body); err != nil {
+		writeError(input.writer, http.StatusBadRequest, ErrInvalidInput, "invalid request body")
+		return checkResult{checkGuardRefusal, runEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *requestCheckInput) message() checkResult {
+	if input.body.Message == "" {
+		writeError(input.writer, http.StatusBadRequest, ErrInvalidInput, "message is required")
+		return checkResult{checkGuardRefusal, runEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+type requestServiceCheckInput struct {
+	writer     http.ResponseWriter
+	ctx        *AgentContext
+	request    *agentRequest
+	workingDir string
+}
+
+func (input *requestServiceCheckInput) contract() checkResult {
+	if !applyTaskContract(input.writer, input.ctx, input.request, input.workingDir) {
+		return checkResult{checkGuardRefusal, runEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *requestServiceCheckInput) lens() checkResult {
+	// The lens is required (lens_required.go): a request is not started
+	// while it cannot score. After every 400, and before any work or any
+	// streamed byte, so the answer is an ordinary HTTP error the client
+	// shows as such.
+	if ok, why := lensReady(lensURL); !ok {
+		writeError(input.writer, http.StatusServiceUnavailable, ErrDependencyDown,
+			"ATLAS needs the geometric lens for every request, and "+why+
+				". Run `atlas doctor`.")
+		return checkResult{checkInfrastructureError, runEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *requestServiceCheckInput) directory() checkResult {
+	if !workspacefs.ValidSandboxSubdir(input.request.SandboxSubdir) {
+		writeError(input.writer, http.StatusBadRequest, ErrInvalidInput, workspacefs.SandboxSubdirDetail)
+		return checkResult{checkGuardRefusal, runEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *requestServiceCheckInput) configuration() checkResult {
+	req := input.request
+	if msg := removedSwitchRefusal(req.RemovedBypassV3, req.RemovedV3Mode, req.RemovedFeasibilityMode); msg != "" {
+		writeError(input.writer, http.StatusBadRequest, ErrInvalidInput, msg)
+		return checkResult{checkGuardRefusal, runEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+type streamCheckInput struct {
+	writer  http.ResponseWriter
+	flusher http.Flusher
+}
+
+func (input *streamCheckInput) supported() checkResult {
+	flusher, ok := input.writer.(http.Flusher)
+	if !ok {
+		writeError(input.writer, http.StatusInternalServerError, ErrInternal, "streaming not supported")
+		return checkResult{checkInfrastructureError, runEnds}
+	}
+	input.flusher = flusher
+	return checkResult{checkPass, turnContinues}
 }

@@ -28,9 +28,9 @@ func deleteFileTool() *ToolDef {
 				return nil, errNoMutation(fmt.Errorf("invalid input: %w", err))
 			}
 
-			// Reject empty path — same reasoning as read_file.
-			if strings.TrimSpace(input.Path) == "" {
-				return noMutation("delete_file: path cannot be empty. Provide the path of the file you want to delete."), nil
+			check := deleteCheckInput{ctx: ctx, shownPath: input.Path}
+			if runCheckPhase(proxyChecks.deleteInput, &check).outcome != turnContinues {
+				return check.result, nil
 			}
 
 			path := resolveAgentPath(ctx, input.Path)
@@ -43,17 +43,11 @@ func deleteFileTool() *ToolDef {
 			if userApproved {
 				defer approved.release()
 			}
-			info, err := os.Stat(path)
-			if err != nil {
-				return nil, errNoMutation(fmt.Errorf("file not found: %s", input.Path))
+			check.path = path
+			if runCheckPhase(proxyChecks.deleteTarget, &check).outcome != turnContinues {
+				return check.result, check.err
 			}
-			if info.IsDir() {
-				entries, _ := os.ReadDir(path)
-				if len(entries) > 0 {
-					// A guard declining a target it could otherwise remove.
-					return refusedNoCheck(fmt.Sprintf("directory not empty: %s (%d entries) — delete_file only removes files or empty directories", input.Path, len(entries))), nil
-				}
-			}
+
 			return removeDeleteTarget(ctx, rawInput, input.Path, path, approved, userApproved), nil
 		},
 	}
@@ -80,22 +74,11 @@ func removeDeleteTarget(ctx *AgentContext, rawInput json.RawMessage, shownPath, 
 		// comparison and is released with the attempt.
 		now, refusal := inspectDeleteTarget(ctx, rawInput)
 		defer now.release()
-		if refusal != "" || !approved.identityMatches(now) {
-			log.Printf("[delete_file] approval is stale for %s — not deleting", logPath(shownPath))
-			return refusedNoCheck(fmt.Sprintf(
-				"%s changed after you were asked about it, so the approval no longer "+
-					"describes what is on disk and nothing was deleted. Ask again if "+
-					"you still want it removed.", shownPath))
+		check := deleteCheckInput{ctx: ctx, path: path, shownPath: shownPath, approved: approved, current: now, refusal: refusal}
+		if runCheckPhase(proxyChecks.deleteApproval, &check).outcome != turnContinues {
+			return check.result
 		}
-		// Room to account for it, reserved before anything is
-		// removed: a destructive mutation this session could not
-		// track is worse than one it declines.
-		if !reserveDeletionSlot(ctx, path) {
-			log.Printf("[delete_file] no room to track %s — refusing", logPath(shownPath))
-			return refusedNoCheck(fmt.Sprintf(
-				"this session is already tracking as many removals as it can account "+
-					"for, so %s was not deleted.", shownPath))
-		}
+
 	}
 	if rmErr := os.Remove(path); rmErr != nil {
 		// The removal was attempted and the entry may or may not
@@ -153,40 +136,11 @@ func moveFileTool() *ToolDef {
 			if err := json.Unmarshal(rawInput, &input); err != nil {
 				return nil, errNoMutation(fmt.Errorf("invalid input: %w", err))
 			}
-			if strings.TrimSpace(input.Source) == "" || strings.TrimSpace(input.Destination) == "" {
-				return noMutation(`move_file: both source and destination are required. Call with {"source":"<current path>","destination":"<new path>"}.`), nil
+			check := moveCheckInput{ctx: ctx, input: input}
+			if runCheckPhase(proxyChecks.move, &check).outcome != turnContinues {
+				return check.result, nil
 			}
-
-			src := resolveAgentPath(ctx, input.Source)
-			srcInfo, err := os.Stat(src)
-			if err != nil {
-				return noMutation(fmt.Sprintf("move_file: source %s not found. Use list_directory or find_file to confirm the path before moving.", input.Source)), nil
-			}
-
-			// Resolve destination. If it names an existing directory (or ends
-			// with a separator), move INTO it keeping the source basename —
-			// mirrors `mv file dir/`. The relative dest is what we report back
-			// so the model's mental model stays in project-relative terms.
-			relDest := input.Destination
-			dst := resolveAgentPath(ctx, input.Destination)
-			if info, err := os.Stat(dst); (err == nil && info.IsDir()) || strings.HasSuffix(input.Destination, "/") {
-				dst = filepath.Join(dst, filepath.Base(src))
-				relDest = filepath.Join(input.Destination, filepath.Base(src))
-			}
-
-			if src == dst {
-				return noMutation("move_file: source and destination are the same path — nothing to do."), nil
-			}
-
-			// Never clobber an existing destination file: a relocation must not
-			// silently destroy data. Tell the model to pick another name or
-			// delete_file the destination first if the overwrite is intended.
-			if _, err := os.Stat(dst); err == nil {
-				// The clobber guard declining a move it could otherwise make.
-				return refusedNoCheck(fmt.Sprintf("move_file: destination %s already exists. Pick a different name, or delete_file the destination first if you mean to replace it.", relDest)), nil
-			}
-
-			return relocateFile(ctx, input, src, dst, relDest, srcInfo)
+			return relocateFile(ctx, input, check.src, check.dst, check.relDest, check.srcInfo)
 		},
 	}
 }
@@ -252,4 +206,149 @@ func relocateFile(ctx *AgentContext, input wire.MoveFileInput, src, dst, relDest
 		MutationStatus:   wire.MutationApplied,
 		ValidationKind:   wire.ValidationKindNone,
 		ValidationStatus: wire.ValidationNotApplicable}, nil
+}
+
+type deleteCheckInput struct {
+	toolCheckOutput
+	ctx                      *AgentContext
+	path, shownPath, refusal string
+	approved, current        deleteTarget
+	info                     os.FileInfo
+	err                      error
+}
+
+func (check *deleteCheckInput) pathCheck() checkResult {
+
+	// Reject empty path — same reasoning as read_file.
+	if strings.TrimSpace(check.shownPath) == "" {
+		return check.accept(checkModelError, noMutation("delete_file: path cannot be empty. Provide the path of the file you want to delete."))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *deleteCheckInput) exists() checkResult {
+
+	info, err := os.Stat(check.path)
+	if err != nil {
+		check.err = errNoMutation(fmt.Errorf("file not found: %s", check.shownPath))
+		return checkResult{checkToolError, turnEnds}
+	}
+	check.info = info
+
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *deleteCheckInput) empty() checkResult {
+
+	if check.info.IsDir() {
+		entries, _ := os.ReadDir(check.path)
+		if len(entries) > 0 {
+			// A guard declining a target it could otherwise remove.
+			return check.accept(checkGuardRefusal, refusedNoCheck(fmt.Sprintf("directory not empty: %s (%d entries) — delete_file only removes files or empty directories", check.shownPath, len(entries))))
+		}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *deleteCheckInput) identity() checkResult {
+	refusal, approved, now, shownPath := check.refusal, check.approved, check.current, check.shownPath
+
+	if refusal != "" || !approved.identityMatches(now) {
+		log.Printf("[delete_file] approval is stale for %s — not deleting", logPath(shownPath))
+		return check.accept(checkGuardRefusal, refusedNoCheck(fmt.Sprintf(
+			"%s changed after you were asked about it, so the approval no longer "+
+				"describes what is on disk and nothing was deleted. Ask again if "+
+				"you still want it removed.", shownPath)))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *deleteCheckInput) capacity() checkResult {
+	ctx, path, shownPath := check.ctx, check.path, check.shownPath
+
+	// Room to account for it, reserved before anything is
+	// removed: a destructive mutation this session could not
+	// track is worse than one it declines.
+	if !reserveDeletionSlot(ctx, path) {
+		log.Printf("[delete_file] no room to track %s — refusing", logPath(shownPath))
+		return check.accept(checkGuardRefusal, refusedNoCheck(fmt.Sprintf(
+			"this session is already tracking as many removals as it can account "+
+				"for, so %s was not deleted.", shownPath)))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+type moveCheckInput struct {
+	toolCheckOutput
+	ctx               *AgentContext
+	input             wire.MoveFileInput
+	src, dst, relDest string
+	srcInfo           os.FileInfo
+}
+
+func (check *moveCheckInput) paths() checkResult {
+	input := check.input
+
+	if strings.TrimSpace(input.Source) == "" || strings.TrimSpace(input.Destination) == "" {
+		return check.accept(checkModelError, noMutation(`move_file: both source and destination are required. Call with {"source":"<current path>","destination":"<new path>"}.`))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *moveCheckInput) source() checkResult {
+	ctx := check.ctx
+	input := check.input
+
+	src := resolveAgentPath(ctx, input.Source)
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return check.accept(checkToolError, noMutation(fmt.Sprintf("move_file: source %s not found. Use list_directory or find_file to confirm the path before moving.", input.Source)))
+	}
+	check.src, check.srcInfo = src, srcInfo
+
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *moveCheckInput) destination() checkResult {
+	ctx := check.ctx
+	input := check.input
+	src := check.src
+
+	// Resolve destination. If it names an existing directory (or ends
+	// with a separator), move INTO it keeping the source basename —
+	// mirrors `mv file dir/`. The relative dest is what we report back
+	// so the model's mental model stays in project-relative terms.
+	relDest := input.Destination
+	dst := resolveAgentPath(ctx, input.Destination)
+	if info, err := os.Stat(dst); (err == nil && info.IsDir()) || strings.HasSuffix(input.Destination, "/") {
+		dst = filepath.Join(dst, filepath.Base(src))
+		relDest = filepath.Join(input.Destination, filepath.Base(src))
+	}
+	check.dst, check.relDest = dst, relDest
+
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *moveCheckInput) different() checkResult {
+	src := check.src
+	dst := check.dst
+
+	if src == dst {
+		return check.accept(checkModelError, noMutation("move_file: source and destination are the same path — nothing to do."))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *moveCheckInput) absent() checkResult {
+	dst := check.dst
+	relDest := check.relDest
+
+	// Never clobber an existing destination file: a relocation must not
+	// silently destroy data. Tell the model to pick another name or
+	// delete_file the destination first if the overwrite is intended.
+	if _, err := os.Stat(dst); err == nil {
+		// The clobber guard declining a move it could otherwise make.
+		return check.accept(checkGuardRefusal, refusedNoCheck(fmt.Sprintf("move_file: destination %s already exists. Pick a different name, or delete_file the destination first if you mean to replace it.", relDest)))
+	}
+	return checkResult{checkPass, turnContinues}
 }

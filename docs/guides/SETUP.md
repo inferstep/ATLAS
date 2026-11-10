@@ -177,7 +177,7 @@ If you'd rather do each step manually, use Method 1 below.
 |-------------|---------|
 | **GPU** | 8 GB+ VRAM (16 GB recommended). NVIDIA (CUDA, Supported — the published image targets Blackwell; older cards need a one-time [local rebuild](#cuda-compute-capability-dockerfilev31)); AMD (ROCm, Community-tested); Apple Silicon (Metal, macOS hybrid, Supported — see [SETUP_MACOS.md](SETUP_MACOS.md)); Vulkan (Preview) is the cross-vendor fallback; Intel Arc (SYCL) is Roadmap. See [§ Supported GPUs](#supported-gpus). |
 | **GPU drivers** | NVIDIA: proprietary drivers (`nvidia-smi` should show your GPU). AMD: `amdgpu-dkms` kernel driver (`/dev/kfd` must exist; `rocm-smi` should show your GPU). |
-| **Python 3.9+** | With pip, for the CLI. Method 2 runs the services on the host: Python 3.11+ |
+| **Python 3.9+** | With pip, for the CLI. Method 2 runs the services on the host: Python 3.12+ |
 | **curl** | For downloading model weights |
 | **Model weights** | A registry or BYO GGUF that fits the host. `atlas init` recommends one and writes the selection to `.env`. |
 

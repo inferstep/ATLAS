@@ -221,7 +221,7 @@ of both kinds.
 |---|---|---|
 | `pr title` is red | The title is not in the form of [section 7](#7-branches-commits-and-pull-request-titles), or its summary has more than 100 characters | Edit the title. The check starts again by itself |
 | A test job is red | A test failed with your change | Open the job and read the first failure. `make verify` ([section 4](#4-run-the-quality-gate)) runs the same gates on your machine |
-| `code health` is red | A function has more than 100 lines or a complexity over 15, or a file more than 1,500 lines, and is not on the baseline; or one on the baseline grew | Split it into named steps |
+| `code health` is red | A function has more than 100 lines or a complexity over 15, or a file more than 1,500 lines, and is not on the baseline; or one on the baseline grew | Split it into named steps. For a Go test table of one form, follow [the table complexity rule](../docs/project/CODE_STYLE.md#go-table-complexity). |
 | `checks ran` is red | What the paragraph above says. On a pull request from a fork it can say "waiting for a maintainer's approval" | Nothing for that one: a maintainer approves the run. For the rest, its output says what to do |
 | `integrity check` has a report | It is the check that reads your change, not the code ([Testing](#testing)) | Give each skip its reason. A maintainer reads the rest |
 | There is no Sonar result | On a pull request from a fork the Sonar check does not run; the change is analysed after the merge. | Nothing |
@@ -277,7 +277,14 @@ v3-service gets it because no other check can name such a change: no
 recorded request shows that text. Each label says in its own description
 what it is computed from. The numbers, the list of core paths and the list
 of those files of v3-service are in
-[.github/atlas-bot.yml](atlas-bot.yml).
+[.github/atlas-bot.yml](atlas-bot.yml). The bot reads the label settings from
+each pull request's target commit in this repository. This keeps the labels
+aligned with that branch's file layout. It never reads settings from the
+contribution branch or a fork. A settings read failure skips labels only for
+the affected pull requests. The bot finishes other work, including issue
+closure, before it reports failure. Each error names the pull request,
+repository, and commit. The bot reads each distinct target commit once per
+sync, including commits whose settings cannot be read.
 
 ## 10. After your change merges
 

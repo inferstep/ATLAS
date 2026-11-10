@@ -846,3 +846,21 @@ func findingsContaining(findings []string, substr string) bool {
 	}
 	return false
 }
+
+// Two writes find the check service down at the same time. Run it under
+// -race: without serviceHealth's lock, the race detector reports the count.
+func TestServiceFailuresNotedAtTheSameTimeAreBothCounted(t *testing.T) {
+	ctx := &AgentContext{}
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			noteCheckServiceUnavailable(ctx, "unresolved-name", "service unreachable")
+		}()
+	}
+	wg.Wait()
+	if got := ctx.checkServiceFailureSummary(); got != "unresolved-name=2" {
+		t.Errorf("the summary is %q, want unresolved-name=2", got)
+	}
+}
