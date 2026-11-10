@@ -173,16 +173,18 @@ app.add_middleware(_ServiceTokenMiddleware)
 app.add_middleware(_CorrelationIDMiddleware)
 
 from resource_contract import (
-    OUTCOME_UNCLASSIFIED, EXEC_TOKEN_VAR, _apply_child_limits, check_process_supervision)
+    OUTCOME_UNCLASSIFIED, EXEC_TOKEN_VAR, _apply_child_limits)
 
 # The parts of the executor that live in modules beside it (services/sandbox/Dockerfile copies each one).
 from executor_models import (
     ExecuteRequest, ExecuteResponse, ShellObservation, ShellRequest, ShellResponse,
     SyntaxCheckRequest, SyntaxCheckResponse)
+import executor_languages
 from executor_languages import (
     EXEC_CONTRACT,
     LANGUAGE_HANDLERS,
     _CheckNotFinished,
+    _resource_limits_label,
     _run_cmd,
     _safe_overlay_path,
     _syntax_check_impl,
@@ -191,11 +193,6 @@ from start_up import serve
 
 MAX_EXECUTION_TIME = EXEC_CONTRACT.wall_seconds
 WORKSPACE_BASE = Path(os.getenv("WORKSPACE_BASE", "/tmp/sandbox"))
-
-# Check whether this host can govern child processes through /proc.
-SUPERVISION_AVAILABLE, SUPERVISION_REASON = check_process_supervision()
-if not SUPERVISION_AVAILABLE:
-    logger.warning("Resource limits: %s", SUPERVISION_REASON)
 
 SUPPORTED_LANGUAGES = {
     "python", "py", "python3",
@@ -252,19 +249,15 @@ def normalize_language(lang: str) -> str:  # noqa: C901
     return lang
 
 
-def _resource_limits_label() -> str:
-    return "enforced" if SUPERVISION_AVAILABLE else "resource limits not enforced"
-
-
 @app.get("/health")
 def health_check():
     resp = {
         "status": "healthy",
-        "limits_enforced": SUPERVISION_AVAILABLE,
+        "limits_enforced": executor_languages.SUPERVISION_AVAILABLE,
         "resource_limits": _resource_limits_label(),
     }
-    if not SUPERVISION_AVAILABLE:
-        resp["resource_limits_reason"] = SUPERVISION_REASON
+    if not executor_languages.SUPERVISION_AVAILABLE:
+        resp["resource_limits_reason"] = executor_languages.SUPERVISION_REASON
     return resp
 
 
@@ -1050,7 +1043,7 @@ def execute_code(request: ExecuteRequest):
             requirements=request.requirements,
             stdin=request.stdin,
         )
-        result.limits_enforced = SUPERVISION_AVAILABLE
+        result.limits_enforced = executor_languages.SUPERVISION_AVAILABLE
         result.resource_limits = _resource_limits_label()
         return result
     except Exception as e:
@@ -1065,7 +1058,7 @@ def execute_code(request: ExecuteRequest):
             error_type=type(e).__name__,
             error_message=str(e),
             execution_time_ms=0,
-            limits_enforced=SUPERVISION_AVAILABLE,
+            limits_enforced=executor_languages.SUPERVISION_AVAILABLE,
             resource_limits=_resource_limits_label(),
         )
     finally:

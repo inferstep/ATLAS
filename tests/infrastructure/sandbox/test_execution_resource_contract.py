@@ -14,6 +14,7 @@ service, or a container.
 
 from __future__ import annotations
 
+import ast
 import dataclasses
 import os
 import signal
@@ -426,6 +427,52 @@ def test_the_executor_runs_everything_through_the_owner():
         assert banned not in body, f"the executor reaches {banned}"
 
 
+def _called(node: ast.AST) -> list[str]:
+    """The dotted name of every call made inside node."""
+    names = []
+    for call in ast.walk(node):
+        if isinstance(call, ast.Call):
+            names.append(ast.unparse(call.func))
+    return names
+
+
+def test_the_language_runners_spawn_only_through_the_owner():
+    with open(os.path.join(SANDBOX, "executor_languages.py")) as fh:
+        tree = ast.parse(fh.read())
+    # The runners' one spawn site is _run_cmd, and the only thing it starts a
+    # process with is run_bounded under the contract.
+    run_cmd = next(n for n in tree.body
+                   if isinstance(n, ast.FunctionDef) and n.name == "_run_cmd")
+    assert sorted(set(_called(run_cmd))) == [
+        "EXEC_CONTRACT.for_request", "_resource_limits_label", "run_bounded",
+        "stopped_words"], "_run_cmd calls something besides the owner"
+    bounded = [c for c in ast.walk(run_cmd) if isinstance(c, ast.Call)
+               and ast.unparse(c.func) == "run_bounded"]
+    assert len(bounded) == 1
+    assert ast.unparse(bounded[0].args[1]) == "EXEC_CONTRACT.for_request(timeout)"
+    # Every other runner goes through _run_cmd: nothing else in the module
+    # reaches run_bounded or a process API directly.
+    everywhere = _called(tree)
+    assert everywhere.count("run_bounded") == 1, "a runner calls run_bounded around _run_cmd"
+    spawners = [name for name in everywhere
+                if name.startswith(("subprocess.", "os.system", "os.popen",
+                                    "os.spawn", "os.exec", "os.fork", "pty."))]
+    assert spawners == [], f"the language runners reach {spawners}"
+
+
+def test_the_executor_has_one_supervision_result():
+    with open(os.path.join(SANDBOX, "executor_server.py")) as fh:
+        tree = ast.parse(fh.read())
+    # The server reads the runners' supervision result; it neither runs its
+    # own check nor keeps a copy or a second label that could disagree.
+    assert "check_process_supervision" not in _called(tree)
+    assigned = {t.id for n in ast.walk(tree) if isinstance(n, ast.Assign)
+                for t in n.targets if isinstance(t, ast.Name)}
+    assert not assigned & {"SUPERVISION_AVAILABLE", "SUPERVISION_REASON"}
+    defined = {n.name for n in tree.body if isinstance(n, ast.FunctionDef)}
+    assert "_resource_limits_label" not in defined
+
+
 def test_the_executor_result_carries_the_outcome(monkeypatch):
     monkeypatch.syspath_prepend(SANDBOX)
     import executor_server as ex
@@ -500,8 +547,6 @@ def test_health_reports_degraded_state_when_supervision_unavailable(monkeypatch,
     monkeypatch.setattr(ex, "WORKSPACE_BASE", tmp_path)
     monkeypatch.setattr(el, "SUPERVISION_AVAILABLE", False)
     monkeypatch.setattr(el, "SUPERVISION_REASON", rc.SUPERVISION_UNAVAILABLE_REASON)
-    monkeypatch.setattr(ex, "SUPERVISION_AVAILABLE", False)
-    monkeypatch.setattr(ex, "SUPERVISION_REASON", rc.SUPERVISION_UNAVAILABLE_REASON)
 
     health = ex.health_check()
     assert health["status"] == "healthy"
@@ -531,8 +576,6 @@ def test_health_reports_enforced_state_when_supervision_available(monkeypatch, t
     monkeypatch.setattr(ex, "WORKSPACE_BASE", tmp_path)
     monkeypatch.setattr(el, "SUPERVISION_AVAILABLE", True)
     monkeypatch.setattr(el, "SUPERVISION_REASON", "enforced")
-    monkeypatch.setattr(ex, "SUPERVISION_AVAILABLE", True)
-    monkeypatch.setattr(ex, "SUPERVISION_REASON", "enforced")
 
     health = ex.health_check()
     assert health["status"] == "healthy"

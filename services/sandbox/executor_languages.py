@@ -32,7 +32,11 @@ logger = logging.getLogger(__name__)
 # from starting rather than being clamped into something plausible at the
 # moment a command runs.
 EXEC_CONTRACT = contract_from_env()
+# The one supervision result. executor_server reads it through this module at
+# call time rather than copying it, so /health and every result agree.
 SUPERVISION_AVAILABLE, SUPERVISION_REASON = check_process_supervision()
+if not SUPERVISION_AVAILABLE:
+    logger.warning("Resource limits: %s", SUPERVISION_REASON)
 
 
 def _resource_limits_label() -> str:
