@@ -212,7 +212,7 @@ class _PoolCapture:
             try:
                 os.close(fd)
             except OSError:
-                pass
+                pass  # _write_status wrote the last record; no capture error may reach the run.
 
     # -- collection ---------------------------------------------------------
 
