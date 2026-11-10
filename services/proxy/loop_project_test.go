@@ -367,6 +367,51 @@ func TestReadWorkspaceFileReadsRegularWorkspaceFile(t *testing.T) {
 	}
 }
 
+func TestWriteWorkspaceFilePreservesBytesAndMode(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "inside.txt")
+	if err := os.WriteFile(path, []byte("original content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx := &AgentContext{runSetup: runSetup{WorkingDir: root}}
+	if err := writeWorkspaceFile(ctx, "inside.txt", []byte("short\n")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != "short\n" {
+		t.Fatalf("writeWorkspaceFile: bytes = %q, error = %v; want %q", got, err, "short\n")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("file permissions = %o, want 600", info.Mode().Perm())
+	}
+}
+
+func TestWriteWorkspaceFileRejectsEscapes(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "workspace")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(base, "outside.txt")
+	if err := os.WriteFile(outside, []byte("untouched"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx := &AgentContext{runSetup: runSetup{WorkingDir: root}}
+	for _, path := range []string{"../outside.txt", outside} {
+		if err := writeWorkspaceFile(ctx, path, []byte("changed")); err == nil {
+			t.Errorf("writeWorkspaceFile(%q) succeeded, want workspace rejection", path)
+		}
+	}
+	got, err := os.ReadFile(outside)
+	if err != nil || string(got) != "untouched" {
+		t.Errorf("outside file: bytes = %q, error = %v; want %q", got, err, "untouched")
+	}
+}
+
 func TestExecuteToolCallRejectsWorkspaceEscape(t *testing.T) {
 	root := t.TempDir()
 	ctx := &AgentContext{runSetup: runSetup{WorkingDir: root}}

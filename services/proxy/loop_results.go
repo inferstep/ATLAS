@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -388,7 +387,7 @@ func repairToolCallLiterals(ctx *AgentContext, parsed wire.ModelResponse, result
 		return
 	}
 	lp := resolveAgentPath(ctx, wp.Path)
-	body, rerr := os.ReadFile(lp)
+	body, _, rerr := readWorkspaceFile(ctx, wp.Path)
 	if rerr != nil {
 		return
 	}
@@ -396,7 +395,7 @@ func repairToolCallLiterals(ctx *AgentContext, parsed wire.ModelResponse, result
 	if !changed {
 		return
 	}
-	if werr := os.WriteFile(lp, []byte(fixed), 0o644); werr == nil {
+	if werr := writeWorkspaceFile(ctx, wp.Path, []byte(fixed)); werr == nil {
 		reportLiteralRepair(ctx, result, wp.Path, lp, fixed, repairedLits)
 	}
 }
@@ -494,7 +493,7 @@ func (loop *agentLoop) guideEditMiss(parsed wire.ModelResponse, result *wire.Too
 	ext := strings.ToLower(filepath.Ext(mp))
 	if loop.editMissByPath[mp] >= 1 && (ext == ".py" || ext == ".html" || ext == ".htm") {
 		var source string
-		if b, rerr := os.ReadFile(resolveAgentPath(loop.ctx, mp)); rerr == nil {
+		if b, _, rerr := readWorkspaceFile(loop.ctx, mp); rerr == nil {
 			source = string(b)
 		}
 		steers.repeat = editMissSteer(mp, source)

@@ -707,6 +707,38 @@ func readWorkspaceFile(ctx *AgentContext, path string) ([]byte, string, error) {
 	return data, resolved, nil
 }
 
+// writeWorkspaceFile keeps the write confined if a symlink changes after path validation.
+func writeWorkspaceFile(ctx *AgentContext, path string, data []byte) error {
+	resolved, err := resolveWorkspacePath(ctx, path)
+	if err != nil {
+		return err
+	}
+	rootPath, err := filepath.Abs(ctx.WorkingDir)
+	if err != nil {
+		return fmt.Errorf("resolve workspace root: %w", err)
+	}
+	rel, err := filepath.Rel(rootPath, resolved)
+	if err != nil {
+		return fmt.Errorf("resolve workspace-relative path: %w", err)
+	}
+	root, err := os.OpenRoot(rootPath)
+	if err != nil {
+		return fmt.Errorf("open workspace root: %w", err)
+	}
+	// The directory handle has no file data to flush.
+	defer func() { _ = root.Close() }()
+	file, err := root.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	_, writeErr := file.Write(data)
+	closeErr := file.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	return closeErr
+}
+
 // readWorkspaceDir is the directory equivalent of readWorkspaceFile.
 func readWorkspaceDir(ctx *AgentContext, path string) ([]os.DirEntry, error) {
 	resolved, err := resolveWorkspacePath(ctx, path)

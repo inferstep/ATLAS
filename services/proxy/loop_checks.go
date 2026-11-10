@@ -452,7 +452,7 @@ func (loop *agentLoop) screenExistingFileWrite(parsed wire.ModelResponse, intent
 		return turnContinues
 	}
 	existingPath := resolveAgentPath(loop.ctx, wfInput.Path)
-	existing, readErr := os.ReadFile(existingPath)
+	existing, _, readErr := readWorkspaceFile(loop.ctx, wfInput.Path)
 	return loop.guardExistingFileWrite(parsed, intentArgs, wfInput, existingPath, existing, readErr)
 }
 
