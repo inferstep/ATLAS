@@ -111,6 +111,16 @@ and can still change it in a year.
   `pytest.mark.parametrize`, with the name beside its row
   (`pytest.param(..., id="...")`). The body has no condition that picks
   between rows.
+- <a id="go-table-complexity"></a>
+  **A Go table of one form stays one table, even when its checks raise
+  cognitive complexity above 15.** Each check inside `for` and `t.Run`
+  scores 3, so 5 checks score 16 and 4 checks score 13.
+  If the checks make more than one promise, first split the test by promise,
+  as [#862](https://github.com/inferstep/ATLAS/pull/862).
+  Do not split a table of one form into one test per case.
+  Run `python scripts/ci/code_health.py --update` to put the table on the baseline.
+  The pull request names the table, its score and its form; a maintainer approves
+  the baseline change because the integrity check requires approval.
 - **A failure names the input, the result and what was wanted**, so that
   nobody has to run the test again to see what went wrong.
 - **Writing the inputs out in each test is right**, also when two tests

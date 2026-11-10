@@ -143,29 +143,33 @@ func TestGuardVerificationNeverRequiresSettlement(t *testing.T) {
 }
 
 func TestGuardSettlementStaysAfterVerificationAndStaysMandatory(t *testing.T) {
-	body, err := os.ReadFile("loop_end.go")
-	if err != nil {
-		t.Fatal(err)
+	verification, settlement := -1, -1
+	for i, check := range proxyChecks.completion {
+		switch check.name {
+		case "completion.contract":
+			verification = i
+		case "completion.deliverySettlement":
+			settlement = i
+		}
 	}
-	s := string(body)
-	i := strings.Index(s, "func finalizeCompletion(")
-	if i < 0 {
-		t.Fatal("finalizeCompletion is gone")
-	}
-	fn := s[i:]
-	if j := strings.Index(fn[1:], "\nfunc "); j > 0 {
-		fn = fn[:j]
-	}
-	verification := strings.Index(fn, "decideVerificationDemand(")
-	settlement := strings.Index(fn, "postDeliverySettlementOwed(")
 	if verification < 0 || settlement < 0 {
 		t.Fatal("the completion order lost one of its two gates")
 	}
 	if verification > settlement {
 		t.Error("settlement is now decided before verification")
 	}
-	if !strings.Contains(fn, `"post_delivery_settlement_pending"`) {
+	body, err := os.ReadFile("loop_end.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"post_delivery_settlement_pending"`) {
 		t.Error("an unsettled delivery no longer blocks completion")
+	}
+	if !guardCalls(t, "loop_end.go", "contract")["decideVerificationDemand"] {
+		t.Error("the contract row does not ask the verification owner")
+	}
+	if !guardCalls(t, "loop_end.go", "deliverySettlement")["postDeliverySettlementOwed"] {
+		t.Error("the settlement row does not ask the settlement owner")
 	}
 }
 

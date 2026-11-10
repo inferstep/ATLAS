@@ -293,7 +293,7 @@ func TestTheTerminalAsksTheExistingOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := string(src)
-	start := strings.Index(body, "func finalizeCompletion(")
+	start := strings.Index(body, "func (input *completionCheckInput) deliverySettlement(")
 	if start < 0 {
 		t.Fatal("the finalizer is gone")
 	}

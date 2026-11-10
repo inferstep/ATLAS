@@ -26,6 +26,7 @@ instead of making them.
 
 from __future__ import annotations
 
+import base64
 import datetime as dt
 import json
 import os
@@ -68,32 +69,36 @@ without would your support add adds use uses using""".split())
 
 
 def load_config(path: str = CONFIG_PATH) -> dict:
-    """Read the small YAML subset atlas-bot.yml uses: nested mappings of
-    scalars, `#` comments. No dependency on PyYAML."""
+    """Read the settings from a local file."""
+    with open(path, encoding="utf-8") as fh:
+        return parse_config(fh.read())
+
+
+def parse_config(text: str) -> dict:
+    """Read the bot's mapping settings from text."""
     root: dict = {}
     stack: list = [(-1, root)]
-    with open(path, encoding="utf-8") as fh:
-        for raw in fh:
-            line = raw.split(" #", 1)[0].rstrip()
-            if not line.strip() or line.lstrip().startswith("#"):
-                continue
-            indent = len(line) - len(line.lstrip())
-            body = line.strip()
-            if body.endswith(":") and ": " not in body:
-                key, value = body[:-1], None
-            else:
-                key, sep, value = body.partition(": ")
-                if not sep:
-                    raise ValueError(f"atlas-bot.yml: cannot read line: {raw!r}")
-            while stack[-1][0] >= indent:
-                stack.pop()
-            parent = stack[-1][1]
-            if value is None:
-                parent[key] = {}
-                stack.append((indent, parent[key]))
-            else:
-                value = value.strip().strip("\"'")
-                parent[key] = int(value) if value.isdigit() else value
+    for raw in text.splitlines(keepends=True):
+        line = raw.split(" #", 1)[0].rstrip()
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        body = line.strip()
+        if body.endswith(":") and ": " not in body:
+            key, value = body[:-1], None
+        else:
+            key, sep, value = body.partition(": ")
+            if not sep:
+                raise ValueError(f"atlas-bot.yml: cannot read line: {raw!r}")
+        while stack[-1][0] >= indent:
+            stack.pop()
+        parent = stack[-1][1]
+        if value is None:
+            parent[key] = {}
+            stack.append((indent, parent[key]))
+        else:
+            value = value.strip().strip("\"'")
+            parent[key] = int(value) if value.isdigit() else value
     return root
 
 
@@ -186,6 +191,19 @@ class API:
 
     def open_pulls(self) -> list:
         return list(self._pages(f"/repos/{self.repo}/pulls?state=open"))
+
+    def config_at(self, commit: str) -> dict:
+        """Read settings at a target commit in this repository."""
+        query = urllib.parse.urlencode({"ref": commit})
+        try:
+            content = self._call("GET", f"/repos/{self.repo}/contents/.github/atlas-bot.yml?{query}")
+            if content["encoding"] != "base64":
+                raise ValueError("expected base64 file content")
+            return parse_config(base64.b64decode(content["content"]).decode("utf-8"))
+        except (RuntimeError, ValueError, KeyError, urllib.error.URLError) as error:
+            raise RuntimeError(
+                f"Cannot read .github/atlas-bot.yml at {self.repo}@{commit}: {error}"
+            ) from error
 
     def branch_commits(self, branch: str, since: str) -> list:
         """Commits on a branch since an ISO time: [{sha, message}]."""
@@ -512,26 +530,47 @@ class Bot:
                 self.api.add_labels(it["number"], sorted(want - have))
             for label in sorted(have - want):
                 self.api.remove_label(it["number"], label)
-        areas = self.cfg.get("areas", {})
+        failures = self._sync_pulls()
+        self._close_fixed()
+        if failures:
+            raise RuntimeError("\n".join(failures))
+
+    def _sync_pulls(self) -> list[str]:
+        configs: dict[str, dict | RuntimeError] = {}
+        failures = []
         for pr in self.api.open_pulls():
             n = pr["number"]
-            changes = self.api.pull_changes(n)
-            files = [change["filename"] for change in changes]
-            want = {label for prefix, label in areas.items() if any(f.startswith(prefix) for f in files)}
-            have = {x["name"] for x in pr.get("labels") or []}
-            if want - have:
-                self.api.add_labels(n, sorted(want - have))
-            self._size_and_risk(pr, changes, have)
+            commit = pr["base"]["sha"]
+            if commit not in configs:
+                try:
+                    configs[commit] = self.api.config_at(commit)
+                except RuntimeError as error:
+                    configs[commit] = error
+            cfg = configs[commit]
+            if isinstance(cfg, RuntimeError):
+                failures.append(f"Pull request #{n}: {cfg}")
+            else:
+                self._label_pull(pr, cfg)
             if self._first_pr(pr):
                 if not any(self._mine(x) and marker("welcome") in x.get("body", "")
                            for x in self.api.comments(n)):
                     self.api.comment(n, self._welcome_pr(pr["user"]["login"]))
-        self._close_fixed()
+        return failures
 
-    def _size_and_risk(self, pr: dict, changes: list, have: set) -> None:
+    def _label_pull(self, pr: dict, cfg: dict) -> None:
+        n = pr["number"]
+        areas = cfg.get("areas", {})
+        changes = self.api.pull_changes(n)
+        files = [change["filename"] for change in changes]
+        want = {label for prefix, label in areas.items() if any(f.startswith(prefix) for f in files)}
+        have = {x["name"] for x in pr.get("labels") or []}
+        if want - have:
+            self.api.add_labels(n, sorted(want - have))
+        self._size_and_risk(pr, changes, have, cfg.get("pull_requests"))
+
+    def _size_and_risk(self, pr: dict, changes: list, have: set, settings: dict | None) -> None:
         """Give an open pull request its size label and, when the rules say so, the risk label (pr_labels.py).
         Both are computed again each time, so a label that no longer holds is taken off."""
-        settings = self.cfg.get("pull_requests")
         if not settings:
             return
         want = pr_labels.labels_for(changes, self._no_merged_pull_request_yet(pr), settings)

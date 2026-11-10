@@ -1,6 +1,7 @@
 # Settings for the contributor bot (scripts/bot/atlas_bot.py), in one place
 # so the numbers in CONTRIBUTING and GOVERNANCE have a single source.
-# The bot reads this file from the default branch.
+# Pull request labels use this file at each target commit in this repository.
+# Other settings come from the workflow checkout.
 
 bot:
   login: inferstep-atlas-bot[bot]   # only this account's comments count as the bot's

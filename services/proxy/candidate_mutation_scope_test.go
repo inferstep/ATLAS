@@ -403,7 +403,7 @@ func TestOneScopeAuthorityAndOnePathNormalizer(t *testing.T) {
 		case "gates.go:v3RewroteBeyondTheEdit",
 			"candidate_mutation_scope.go:scopeAdmitsCandidate",
 			// The edit route's proposal step (v3DeliveryRouteSteps).
-			"delivery_edit_route.go:proposeEditCandidate":
+			"delivery_edit_route.go:rewrite":
 		default:
 			t.Errorf("%s is a second owner of the edit boundary", site)
 		}

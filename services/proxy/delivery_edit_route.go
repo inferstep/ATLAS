@@ -169,22 +169,9 @@ func proposeEditCandidate(ctx *AgentContext, lifecycle *routeLifecycle, keep *ed
 	// The existing boundary guards, unchanged and still ahead of staging: a
 	// winner that rewrote past the edit or swapped the language is not a
 	// candidate for this attempt and never becomes one.
-	switch {
-	case improved == "":
-		lifecycle.finish(ctx, routingNoCandidate, "", "")
-		return "", V3EditMetadata{}, false
-	case improved == edited:
-		// Nothing materially different was proposed. The caller's own bytes
-		// are what land, through the caller's own path, with no licence.
-		lifecycle.finish(ctx, routingBaselineRetained, "", "")
-		return "", V3EditMetadata{}, false
-	case v3RewroteBeyondTheEdit(original, edited, improved) != "":
-		log.Printf("[%s] V3 rewrote beyond the edit — keeping the caller's content", tool)
-		lifecycle.finish(ctx, routingRevokedByGate, "", "")
-		return "", V3EditMetadata{}, false
-	case v3SwappedTheLanguage(relPath, edited, improved) != "":
-		log.Printf("[%s] V3 swapped the language — keeping the caller's content", tool)
-		lifecycle.finish(ctx, routingRevokedByGate, "", "")
+	checks := editCandidateCheckInput{ctx: ctx, lifecycle: lifecycle, tool: tool, relPath: relPath,
+		original: original, edited: edited, improved: improved}
+	if runCheckPhase(proxyChecks.editCandidate, &checks).outcome != turnContinues {
 		return "", V3EditMetadata{}, false
 	}
 	return improved, meta, true
@@ -354,4 +341,69 @@ func editDeliveryWriter(tool string) func(string, string, *AgentContext) (*wire.
 		}
 		return res, nil
 	}
+}
+
+type editCandidateCheckInput struct {
+	ctx       *AgentContext
+	lifecycle *routeLifecycle
+	tool      string
+	relPath   string
+	original  string
+	edited    string
+	improved  string
+}
+
+func (input *editCandidateCheckInput) empty() checkResult {
+	ctx := input.ctx
+	lifecycle := input.lifecycle
+	improved := input.improved
+	if improved == "" {
+		lifecycle.finish(ctx, routingNoCandidate, "", "")
+		return checkResult{checkToolError, turnEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *editCandidateCheckInput) unchanged() checkResult {
+	ctx := input.ctx
+	lifecycle := input.lifecycle
+	edited := input.edited
+	improved := input.improved
+	if improved == edited {
+		// Nothing materially different was proposed. The caller's own bytes
+		// are what land, through the caller's own path, with no licence.
+		lifecycle.finish(ctx, routingBaselineRetained, "", "")
+		return checkResult{checkPass, turnEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *editCandidateCheckInput) rewrite() checkResult {
+	ctx := input.ctx
+	lifecycle := input.lifecycle
+	tool := input.tool
+	original := input.original
+	edited := input.edited
+	improved := input.improved
+	if v3RewroteBeyondTheEdit(original, edited, improved) != "" {
+		log.Printf("[%s] V3 rewrote beyond the edit — keeping the caller's content", tool)
+		lifecycle.finish(ctx, routingRevokedByGate, "", "")
+		return checkResult{checkGuardRefusal, turnEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *editCandidateCheckInput) language() checkResult {
+	ctx := input.ctx
+	lifecycle := input.lifecycle
+	tool := input.tool
+	relPath := input.relPath
+	edited := input.edited
+	improved := input.improved
+	if v3SwappedTheLanguage(relPath, edited, improved) != "" {
+		log.Printf("[%s] V3 swapped the language — keeping the caller's content", tool)
+		lifecycle.finish(ctx, routingRevokedByGate, "", "")
+		return checkResult{checkGuardRefusal, turnEnds}
+	}
+	return checkResult{checkPass, turnContinues}
 }
