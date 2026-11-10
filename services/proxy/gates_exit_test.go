@@ -6,9 +6,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
 // A model that verified its work by starting a server and then declares done
@@ -132,5 +137,116 @@ func (l *backgroundGateLog) observe(et string, data interface{}) {
 		for k, v := range m {
 			l.terminal[k] = v
 		}
+	}
+}
+
+func TestCheckTableInitializesEveryPhase(t *testing.T) {
+	table := reflect.ValueOf(proxyChecks)
+	names := map[string]bool{}
+	for i := 0; i < table.NumField(); i++ {
+		phase := table.Field(i)
+		if phase.Len() == 0 {
+			t.Errorf("phase %s has no checks", table.Type().Field(i).Name)
+		}
+		for j := 0; j < phase.Len(); j++ {
+			row := phase.Index(j)
+			name := row.FieldByName("name").String()
+			if name == "" || names[name] || row.FieldByName("run").IsNil() {
+				t.Errorf("invalid or duplicate check %q", name)
+			}
+			if !strings.HasPrefix(name, table.Type().Field(i).Name+".") {
+				t.Errorf("check %q does not name its phase", name)
+			}
+			names[name] = true
+		}
+	}
+}
+
+func TestArgumentChecksClassifyModelErrors(t *testing.T) {
+	move := moveCheckInput{src: "note.txt", dst: "note.txt"}
+	edit := matchedEditCheckInput{input: wire.EditFileInput{OldStr: "same", NewStr: "same"}}
+	structural := structuralContentCheckInput{input: wire.StructuralEditInput{Content: " "}}
+	for _, row := range []struct {
+		name   string
+		result checkResult
+	}{
+		{"identical move paths", move.different()},
+		{"identical edit text", edit.changed()},
+		{"empty structural content", structural.empty()},
+	} {
+		if row.result != (checkResult{checkModelError, turnEnds}) {
+			t.Errorf("%s returned %+v, want model error and turn end", row.name, row.result)
+		}
+	}
+}
+
+func TestCheckCategoryDoesNotChooseTheControlOutcome(t *testing.T) {
+	for _, category := range []checkCategory{checkPass, checkGuardRefusal, checkToolError, checkModelError, checkInfrastructureError} {
+		for _, outcome := range []turnOutcome{turnContinues, turnEnds, runEnds} {
+			visited := 0
+			checks := []orderedCheck[int]{
+				{"first", func(*int) checkResult { visited++; return checkResult{category, outcome} }},
+				{"next", func(*int) checkResult { visited++; return checkResult{checkPass, turnContinues} }},
+			}
+			result := runCheckPhase(checks, new(int))
+			if outcome == turnContinues {
+				if visited != 2 || result != (checkResult{checkPass, turnContinues}) {
+					t.Errorf("category %d stopped a continuing phase: %+v, visits=%d", category, result, visited)
+				}
+			} else if visited != 1 || result != (checkResult{category, outcome}) {
+				t.Errorf("stopping result changed: %+v, visits=%d", result, visited)
+			}
+		}
+	}
+}
+
+func TestDispatchChecksKeepCompetingFailuresInOrder(t *testing.T) {
+	ctx := NewAgentContext(t.TempDir(), Tier0Conversational)
+	ctx.HumanTask = "Explain the files without changing them."
+	for _, tc := range []struct {
+		name, tool, args, message string
+		category                  checkCategory
+	}{
+		{"unknown before arguments", "missing_tool", "", "unknown tool", checkModelError},
+		{"arguments before read-only", "write_file", "", "no arguments", checkModelError},
+		{"read-only before execution", "write_file", `{"path":"fresh.txt","content":"hello"}`, "request", checkGuardRefusal},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			check := dispatchCheckInput{name: tc.tool, args: json.RawMessage(tc.args), ctx: ctx, tool: getTool(tc.tool)}
+			result := runCheckPhase(proxyChecks.dispatch, &check)
+			if result != (checkResult{tc.category, turnEnds}) || check.result == nil {
+				t.Fatalf("dispatch result = %+v, tool result = %+v", result, check.result)
+			}
+			if !strings.Contains(check.result.Error, tc.message) {
+				t.Fatalf("first refusal = %q, want %q", check.result.Error, tc.message)
+			}
+			actual := executeToolCall(tc.tool, json.RawMessage(tc.args), ctx)
+			if actual.Success || actual.Error != check.result.Error {
+				t.Errorf("direct dispatch changed the refusal: %+v", actual)
+			}
+		})
+	}
+	if _, err := os.Stat(filepath.Join(ctx.WorkingDir, "fresh.txt")); !os.IsNotExist(err) {
+		t.Fatalf("a refused dispatch touched the file: %v", err)
+	}
+}
+
+func TestFailureCeilingStopsBeforeUpdatingThePathWindow(t *testing.T) {
+	ctx := NewAgentContext(t.TempDir(), Tier0Conversational)
+	ctx.RecentFailurePaths = []string{"previous.txt"}
+	ctx.LastRejectionClass = rejectionClass("unclassified failure")
+	loop := &agentLoop{ctx: ctx, st: &runState{}, totalFailures: maxTotalFailures - 1}
+	parsed := wire.ModelResponse{Name: "read_file", Args: json.RawMessage(`{"path":"missing.txt"}`)}
+	if !loop.countFailure(4, parsed, &wire.ToolResult{Error: "unclassified failure"}) {
+		t.Fatal("the last allowed failure did not stop the run")
+	}
+	if loop.totalFailures != maxTotalFailures || loop.consecutiveErrors != 1 {
+		t.Fatalf("failure counters = %d, %d", loop.totalFailures, loop.consecutiveErrors)
+	}
+	if !reflect.DeepEqual(ctx.RecentFailurePaths, []string{"previous.txt"}) {
+		t.Errorf("the later path check ran: %v", ctx.RecentFailurePaths)
+	}
+	if ctx.TerminalReason != "failure_ceiling" {
+		t.Errorf("terminal reason = %q", ctx.TerminalReason)
 	}
 }

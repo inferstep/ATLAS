@@ -2,9 +2,9 @@
 
 `gradle-wrapper.jar` is a program that jobs of the pipeline run, and it is a binary file: a change of it shows in
 a pull request as a new size and nothing more. So its SHA-256 is held here against the sum that Gradle published
-for the Gradle version of the wrapper. The published sums stand in `gradle_wrapper_jar_sums.txt` beside this file,
-one line for a version. A change of that list is a change of a file that configures the checks, and the integrity
-check names it to a maintainer.
+for the Gradle version of the wrapper. The published sums stand in `tests/infrastructure/gradle_wrapper_jar_sums.txt`,
+in the folder above this one, one line for a version. A change of that list is a change of a file that configures
+the checks, and the integrity check names it to a maintainer.
 
 The settings of the wrapper are held as they are today: the distribution comes from Gradle's own address, its sum
 is set, and the wrapper checks the address.

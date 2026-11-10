@@ -141,70 +141,78 @@ def _filter_models(models: List[Model], args: argparse.Namespace,
 def _emit_list(args: argparse.Namespace, color: bool) -> int:
     models_dir = _resolve_models_dir(args.models_dir)
     models = _filter_models(model_registry.all_models(), args, models_dir)
-
     if args.json:
-        out = []
-        for m in models:
-            d = model_registry.as_dict(m)
-            d["installed"] = model_registry.is_installed(m, models_dir)
-            d["installed_size_gb"] = model_registry.installed_size_gb(m, models_dir)
-            out.append(d)
-        print(json.dumps({"models_dir": models_dir, "models": out},
-                         indent=2, ensure_ascii=not UNICODE_OK))
-        return 0
+        _emit_list_json(models, models_dir)
+    else:
+        _emit_list_table(models, models_dir, color)
+    return 0
 
+
+def _emit_list_json(models: List[Model], models_dir: str) -> None:
+    out = []
+    for m in models:
+        d = model_registry.as_dict(m)
+        d["installed"] = model_registry.is_installed(m, models_dir)
+        d["installed_size_gb"] = model_registry.installed_size_gb(m, models_dir)
+        out.append(d)
+    print(json.dumps({"models_dir": models_dir, "models": out},
+                     indent=2, ensure_ascii=not UNICODE_OK))
+
+
+def _emit_list_table(models: List[Model], models_dir: str, color: bool) -> None:
     hdr = f"{BOLD}ATLAS model registry{RESET}" if color else "ATLAS model registry"
     _safe_print(f"{hdr} {DASH} models dir: {models_dir}")
     _safe_print()
     if not models:
         _safe_print("  (no models match these filters)")
-        return 0
+        return
 
-    # Compact table. Columns: lens-icon, name, tier, size, install-state.
-    # PC-056.1 install-state precedence:
-    #   installed? → "installed"
-    #   no URL at all? → "(no download URL)"
-    #   gated + no token? → "(requires HF_TOKEN)"
-    #   gated + token present? → "(gated, HF_TOKEN OK)"
-    #   else → "not installed"
     have_token = bool(_hf_token())
     for m in models:
-        installed = model_registry.is_installed(m, models_dir)
-        if installed:
-            inst_marker = (f"{GREEN}installed{RESET}" if color else "installed")
-        elif not m.can_install:
-            inst_marker = (f"{DIM}(no download URL){RESET}" if color
-                           else "(no download URL)")
-        elif m.requires_hf_token and not have_token:
-            inst_marker = (f"{YELL}(requires HF_TOKEN){RESET}" if color
-                           else "(requires HF_TOKEN)")
-        elif m.requires_hf_token and have_token:
-            inst_marker = (f"{DIM}gated, HF_TOKEN present{RESET}" if color
-                           else "gated, HF_TOKEN present")
-        else:
-            inst_marker = (f"{DIM}not installed{RESET}" if color
-                           else "not installed")
-        icon = _lens_icon(m.lens_status, color)
-        name_col = f"{BOLD}{m.name}{RESET}" if color else m.name
-        _safe_print(f"  {icon}  {name_col}")
-        _safe_print(f"      tier: {m.tier:6s}  size: {m.model_size_gb:5.1f} GB  "
-                    f"{_lens_label(m.lens_status)}  {DASH}  {inst_marker}")
-        if m.lens_status == "supported" and not m.lens_calibrated:
-            _safe_print(f"      {YELL if color else ''}Lens calibration: "
-                        f"legacy bundle; run `atlas lens build` before "
-                        f"production use{RESET if color else ''}")
-        if installed:
-            cur = model_registry.installed_size_gb(m, models_dir)
-            if cur is not None and abs(cur - m.model_size_gb) > 0.5:
-                _safe_print(f"      {YELL if color else ''}note: on-disk size "
-                            f"{cur:.1f} GB differs from registered "
-                            f"{m.model_size_gb:.1f} GB{RESET if color else ''}")
-        _safe_print()
+        _emit_list_model(m, models_dir, have_token, color)
     _safe_print(f"  {DIM if color else ''}Run `atlas model install <name>` "
                 f"to download. A model marked Lens no-artifacts installs only "
                 f"with --no-lens, and ATLAS stops agent work on it until it "
                 f"has its own Lens bundle ({BUILD}).{RESET if color else ''}")
-    return 0
+
+
+def _emit_list_model(m: Model, models_dir: str, have_token: bool, color: bool) -> None:
+    installed = model_registry.is_installed(m, models_dir)
+    inst_marker = _list_install_marker(m, installed, have_token, color)
+    icon = _lens_icon(m.lens_status, color)
+    name_col = f"{BOLD}{m.name}{RESET}" if color else m.name
+    _safe_print(f"  {icon}  {name_col}")
+    _safe_print(f"      tier: {m.tier:6s}  size: {m.model_size_gb:5.1f} GB  "
+                f"{_lens_label(m.lens_status)}  {DASH}  {inst_marker}")
+    if m.lens_status == "supported" and not m.lens_calibrated:
+        _safe_print(f"      {YELL if color else ''}Lens calibration: "
+                    f"legacy bundle; run `atlas lens build` before "
+                    f"production use{RESET if color else ''}")
+    if installed:
+        _emit_list_size_warning(m, models_dir, color)
+    _safe_print()
+
+
+def _list_install_marker(m: Model, installed: bool, have_token: bool, color: bool) -> str:
+    if installed:
+        marker, tone = "installed", GREEN
+    elif not m.can_install:
+        marker, tone = "(no download URL)", DIM
+    elif m.requires_hf_token and not have_token:
+        marker, tone = "(requires HF_TOKEN)", YELL
+    elif m.requires_hf_token:
+        marker, tone = "gated, HF_TOKEN present", DIM
+    else:
+        marker, tone = "not installed", DIM
+    return f"{tone}{marker}{RESET}" if color else marker
+
+
+def _emit_list_size_warning(m: Model, models_dir: str, color: bool) -> None:
+    cur = model_registry.installed_size_gb(m, models_dir)
+    if cur is not None and abs(cur - m.model_size_gb) > 0.5:
+        _safe_print(f"      {YELL if color else ''}note: on-disk size "
+                    f"{cur:.1f} GB differs from registered "
+                    f"{m.model_size_gb:.1f} GB{RESET if color else ''}")
 
 
 # ---------------------------------------------------------------------------
