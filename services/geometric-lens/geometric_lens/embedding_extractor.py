@@ -6,19 +6,11 @@ import math
 import os
 import struct
 from typing import Dict, List, Optional, Tuple
-from .embed_capacity import (EmbeddingCapacityError, observe_rejection,
-                             parse_capacity_rejection)
+from .embed_capacity import (EmbeddingCapacityError, EmbeddingContractError,
+                             observe_rejection, parse_capacity_rejection)
 from .model_transport import ModelServerHTTPError, model_request
 
 logger = logging.getLogger(__name__)
-
-
-class EmbeddingContractError(RuntimeError):
-    """The embed server's response violates the loaded artifact's
-    embedding contract (wrong response shape or vector norm). Raised
-    instead of silently adapting — the two conventions produce vectors
-    from different distributions and only one matches the trained
-    weights."""
 
 
 # Contract of the currently loaded artifacts, installed by
