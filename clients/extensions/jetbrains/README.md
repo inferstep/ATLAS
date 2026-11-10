@@ -156,7 +156,7 @@ src/main/kotlin/com/inferstep/atlas/ui/AtlasActions.kt             # commands re
 
 **The tool window draws its own icon.** `plugin.xml`'s `<toolWindow>` names `icons/toolwindow.svg`, a 13 x 13 mark — the size the platform draws a stripe button at — with a `_dark` file beside it that the platform selects by suffix, the same light/dark split as the 40 x 40 plugin icons. `AtlasToolWindowIconTest` holds the descriptor entry, both files at 13 x 13 with the mark's four steps, stem and dot, and the pair's shared geometry, so an edit to one theme cannot leave the other drawing a different mark. `scripts/check-distribution.sh` audits only the two `META-INF` plugin icons, so this test is what stands between a renamed file and the platform's default square.
 
-**Not seen on screen.** The descriptor test checks that the settings page, the status bar factory, the notification group and the actions are registered; `AtlasStatusTest` covers the `/ready` rules, and `AtlasConfigurableTest` and `AtlasProjectServiceTest` exercise the settings/service wiring under the platform test framework. The status bar's polling loop, the popup menus and notification actions themselves, and every surface's actual appearance are covered by no test in a running IDE. A `runPyCharm` session that opens Settings, saves a token, watches the status bar go ready, allows a prompt from the notification and opens its diff is the check that would close that gap.
+**Partly checked on screen.** The manual PyCharm run confirmed token storage, status changes, cancellation, and the incomplete-result banner. The notification actions and the diff remain unverified. See [Smoke-test status](#smoke-test-status) for the environment and the remaining checks. The descriptor and platform tests still cover registration and the settings/service wiring.
 
 ## Hardening and release (Stage 6)
 
@@ -257,11 +257,21 @@ platform bump would need a hand regeneration and review.
 
 ### What Stage 6 does not prove
 
-Four-way binary compatibility is checked (Plugin Verifier, in
-`.github/workflows/jetbrains-plugin.yml`). The **on-screen** behaviour is
-unverified: no check launches an IDE against a live atlas-proxy, and Windows is
-untried. A `runPyCharm` run against a live proxy is the check that would close
-the UI half ([Smoke-test status](#smoke-test-status)).
+Plugin Verifier checks binary compatibility in four products through
+`.github/workflows/jetbrains-plugin.yml`. The partial PyCharm run on 2026-11-10
+does not complete Stage 6. It used build `PY-261.22158.340` on Ubuntu 26.04.1,
+with a virtual display and proxy commit `7bb86537`.
+
+Assistant-text streaming, write approval, the native notification, the diff,
+and the approved file appearing in the project view remain unverified.
+The proxy produced no write request, so the run could not exercise these paths.
+The [smoke-test record](#smoke-test-status) separates observations from missing evidence.
+
+This run excludes Windows, macOS, a physical desktop, and on-screen checks in
+IDEA, WebStorm, and GoLand. It also excludes Marketplace publishing and signing,
+release archive distribution, workspace alignment, Kotlin limits
+([#981](https://github.com/inferstep/ATLAS/issues/981)), dependency verification,
+and automated interface tests in continuous integration.
 
 ## Tests
 
@@ -388,9 +398,63 @@ outside the lock entirely, so a verifier run resolves those from the platform's 
 
 ## Smoke-test status
 
-Each `runIde`-family task launches a sandboxed IDE with the built plugin, so the tool window can be checked in that product by hand. These are manual runs, not tests, and none of them is wired into CI.
+Each `runIde`-family task launches a sandboxed development environment with the
+plugin. These manual runs are separate from the automated tests.
 
-The on-screen behaviour is unverified: the panel, its streaming, its prompt cards, its Cancel button, the diff window, the settings page, the status bar and the notification actions are covered by the platform, JVM and descriptor tests above and by nothing else. A `runPyCharm` session against a live proxy, with settings opened, a token saved, an edit allowed from the notification and its diff opened, is the check that would close that gap. Four-way **binary** compatibility is checked by Plugin Verifier. Treat the UI as unverified until each run task has been smoke-tested.
+The 2026-11-10 run used `runPyCharm` against an isolated live proxy.
+The open project and the proxy used the same directory on disk.
+
+| Item | Recorded value |
+|---|---|
+| Plugin source on `dev` | `3c8fd48ae67eb8e7a5fe9d023f874aa572addad5` |
+| Proxy and stack image source | `7bb86537fd98a8ed6bc63d551502482c722aa60a` |
+| Product | PyCharm 2026.1, build `PY-261.22158.340` |
+| Operating systems | Ubuntu 26.04.1 desktop container on Red Hat Enterprise Linux 9.7 |
+| Display | Xvfb virtual display, 1600 by 1000 pixels, with Openbox |
+| Runtime | JetBrains Runtime `25.0.2+10-b329.72`, amd64 |
+| Credential store | KeePass, selected in the platform password settings |
+| Model | `gemma-4-12b-it-Q4_K_M`; strict grammar; installed steering vector active |
+| Context | 131072 tokens across four slots |
+| Readiness | All dependencies reported ready through `/ready` |
+| Protocol | `/version` reported protocol 1 and strict grammar |
+
+`./gradlew --no-daemon ktlintCheck test buildPlugin` passed with JDK 21.
+All 277 tests passed across 24 suites, with no skipped tests.
+`bash scripts/check-distribution.sh` passed for version 0.1.0 with 19 archives.
+Plugin Verifier was not repeated in this run.
+
+| Acceptance check | Observation |
+|---|---|
+| Settings saves the token | Passed. Reopening Settings retained the stored-token message; the KeePass database existed. Persistence across an application restart was not checked. |
+| Ready and wrong-token status | Passed. The status changed from `ATLAS` to `ATLAS · token` after saving an incorrect token. |
+| Work streams assistant text | Unverified. The panel showed progress and a plan, but no assistant-text event arrived. |
+| Default write opens the card and notification | Not exercised. No write permission request arrived. |
+| View Diff opens the native diff | Not exercised. No write permission request arrived. |
+| Allow Once writes and refreshes the project view | Not exercised. No write permission request arrived; the requested file remained absent. |
+| Cancel stops a running turn | Passed. The panel showed `Turn cancelled.`; the proxy and planning service logged cancellation. |
+| Done banner shows status and reason | Passed for an incomplete result. It showed `incomplete` and `deliverables_not_demonstrated`, meaning no requested file change was demonstrated. |
+
+The first Work request asked for `math_utils.py` with an `add(a, b)` function.
+A second request explicitly named the `write_file` operation and the function body.
+Both ended with the incomplete result shown below. Neither created the file.
+
+![PyCharm shows the plan and the incomplete-result banner](docs/2026-11-10-incomplete.png)
+
+The screenshot was captured after the test stack stopped, so its status reads offline.
+
+One direct request to `POST /v1/agent`, outside PyCharm, reproduced the second result.
+It used default permissions, Work mode, a fresh session, and the same project.
+The response contained eight model calls, seven verification gates, and one completion event.
+It contained no `text`, `tool_call`, or `permission_request` event.
+The requested file remained absent. The proxy classified all eight model responses as `type=done`.
+
+This confirms that the failure also occurs outside the plugin. Its cause remains unknown.
+[#1072](https://github.com/inferstep/ATLAS/issues/1072) tracks the failure.
+Stage 6 and [#35](https://github.com/inferstep/ATLAS/issues/35) remain incomplete.
+Defer further reliability investigation until the refactor and organization work in
+[#262](https://github.com/inferstep/ATLAS/issues/262) finishes, as the roadmap requires.
+Then compare the raw response with the parsed completion under fixed settings.
+Repeat the missing acceptance checks after resolving the failure.
 
 ## Kotlin style
 
