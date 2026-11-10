@@ -254,13 +254,7 @@ func undoneApprovedDeletion(ctx *AgentContext) bool {
 	if ctx == nil {
 		return false
 	}
-	ctx.mu.Lock()
-	keys := make([]string, 0, len(ctx.fulfilledDeletions))
-	for k := range ctx.fulfilledDeletions {
-		keys = append(keys, k)
-	}
-	ctx.mu.Unlock()
-	for _, k := range keys {
+	for _, k := range ctx.fulfilledDeletionPaths() {
 		if _, err := os.Lstat(k); err == nil {
 			return true
 		}

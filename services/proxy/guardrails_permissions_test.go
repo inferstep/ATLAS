@@ -1546,7 +1546,7 @@ func TestDeletionCompletionHasNoLanguageDependency(t *testing.T) {
 // reach it.
 func TestTheDeletionGrantIsWrittenInOnePlace(t *testing.T) {
 	perms, _ := os.ReadFile("guardrails_permissions.go")
-	if n := strings.Count(string(perms), "ctx.approvedDelete = &approvedDeletion{"); n != 1 {
+	if n := strings.Count(string(perms), "w.approvedDelete = &approvedDeletion{"); n != 1 {
 		t.Errorf("%d writers of the approval grant, want exactly one", n)
 	}
 	for _, n := range nonTestGoFiles(t) {
@@ -1583,5 +1583,24 @@ func TestTheDeletionRecordNeverReachesTheWire(t *testing.T) {
 				t.Errorf("the internal deletion record reached the wire in %s: %s", file, leak)
 			}
 		}
+	}
+}
+
+// Two answers grant a deletion at the same time. Run it under -race: without
+// workspaceSafety's lock, the race detector reports the approval writes.
+func TestDeleteApprovalsGrantedAtTheSameTimeLeaveTheLastOne(t *testing.T) {
+	ctx := &AgentContext{}
+	var wg sync.WaitGroup
+	for _, callID := range []string{"call_a", "call_b"} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			grantDeleteApproval(ctx, callID, deleteTarget{})
+		}()
+	}
+	wg.Wait()
+	held := ctx.clearDeleteApproval()
+	if held == nil || held.callID != permCallIDFor(ctx) {
+		t.Errorf("the approval held is %+v, but the last grant was for %q", held, permCallIDFor(ctx))
 	}
 }
