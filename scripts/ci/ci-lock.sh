@@ -27,13 +27,13 @@ uv tool run --no-build --python 3.12 --from 'pip-tools==7.6.1' --with 'click==8.
 uv pip compile --quiet --python-version 3.12 --python-platform x86_64-unknown-linux-gnu --generate-hashes \
     --emit-index-url --index-strategy unsafe-best-match --output-file=lens.txt lens.in
 
-# Lock v3-service (Python 3.13) and geometric-lens (Python 3.11) Dockerfile requirements
+# Lock v3-service (Python 3.13) and geometric-lens (Python 3.13) Dockerfile requirements
 uv pip compile --quiet --python-version 3.13 --python-platform x86_64-unknown-linux-gnu --generate-hashes \
     --output-file=../../services/v3-service/requirements-lock.txt ../../services/v3-service/requirements.txt
 # The sandbox (Python 3.13): its service and its check tools, in one lock.
 uv pip compile --quiet --python-version 3.13 --python-platform x86_64-unknown-linux-gnu --generate-hashes \
     --output-file=../../services/sandbox/requirements-lock.txt ../../services/sandbox/requirements-runtime.txt ../../services/sandbox/requirements-verify.txt
-uv pip compile --quiet --python-version 3.11 --python-platform x86_64-unknown-linux-gnu --generate-hashes \
+uv pip compile --quiet --python-version 3.13 --python-platform x86_64-unknown-linux-gnu --generate-hashes \
     --emit-index-url --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple \
     --index-strategy unsafe-best-match --output-file=../../services/geometric-lens/requirements-lock.txt ../../services/geometric-lens/requirements.txt
 

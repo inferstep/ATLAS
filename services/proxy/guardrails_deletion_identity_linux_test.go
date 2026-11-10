@@ -439,12 +439,12 @@ var approvalLifeEnds = map[string]func(t *testing.T, dir, sess string){
 		ctx, cancel := deletePermCtx(t, sess, dir)
 		defer cancel()
 		ctx.StreamFn = func(string, interface{}) {}
-		ctx.mu.Lock()
+		ctx.workspaceSafety.mu.Lock()
 		ctx.deletionAttempts = map[string]*deletionAttempt{}
 		for i := 0; i < maxTrackedDeletions; i++ {
 			ctx.deletionAttempts[fmt.Sprintf("/x/%d", i)] = &deletionAttempt{Removed: true}
 		}
-		ctx.mu.Unlock()
+		ctx.workspaceSafety.mu.Unlock()
 		done := askToDelete(t, ctx, sess, "c", mkFile(dir))
 		answerDeletePrompt(t, sess, "c", "allow")
 		if !<-done {

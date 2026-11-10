@@ -215,7 +215,7 @@ It cannot judge these, and says so when it meets one:
 | CodeScene | on CodeScene | Analyses `dev` |
 | Dockerfile lint | `.github/workflows/hadolint.yml`, `scripts/ci/dockerfile_lint.py` | hadolint v2.15.1, its release binary held against the checksum the workflow records. Dependabot does not update this version; a maintainer moves it. Every rule is on. The findings in a Dockerfile a change touches are annotations; all counts are in the job summary |
 | Hashed installs | `.github/requirements/ci.in`, `ci.txt`, `lens.in`, `lens.txt`, `scripts/ci/ci-lock.sh` | The pytest jobs, the lint jobs and the e2e job install from one lock that has a hash for every file, with `pip install --require-hashes`: pip refuses a file whose hash is not in the lock. The lock holds the tools and the packages of the product that the tests need. It is made by pip-compile under Python 3.12, and its header says so; Dependabot reads the header and makes the lock again the same way. Thirteen pins of `ci.in` are copies of pins in `services/sandbox/requirements-runtime.txt`, `services/sandbox/requirements-verify.txt` and `services/v3-service/requirements.txt`; a contract test holds each copy the same as its product file, and every line of `ci.in` against the lock. The lens job and the `tests/atlas` job also install a second lock, `lens.txt` (the CPU-only torch, the lens packages, and huggingface_hub for the CLI's publish commands, made by the same script with uv for the Linux runners), and a contract test holds it to `services/geometric-lens/requirements.txt`. The extension's job runs `npm ci --ignore-scripts`. |
-| Image scan | `.github/workflows/container-scan.yml` | Trivy, weekly and by hand, on the six images CI publishes with the tag `dev`: proxy, v3, lens, sandbox, llama (CUDA) and llama-vulkan. Critical and high findings that have a fix. It reports and does not fail. The ROCm image is built on the user's machine and is not scanned |
+| Image scan | `.github/workflows/container-scan.yml` | Trivy scans images weekly and by hand. It scans six published images: proxy, v3, lens, sandbox, llama (CUDA) and llama-vulkan, each with `dev` and the newest release tag. The job also builds and scans the ROCm image for AMD graphics processors without publishing it. A CRITICAL finding that has a fix turns the run red and opens or updates one issue. HIGH findings that have a fix appear in the scan log |
 | Integrity check | `scripts/integrity_check.py` | Suppression markers are read by kind of file: Go, Python, TypeScript and JavaScript, shell, workflow files, Dockerfiles. In a workflow file `continue-on-error: true` and `persist-credentials: true` are named. The script holds the lists of files that need a maintainer's approval: the files that decide what a check accepts, and the scripts a workflow runs with a credential that can write. A skip with its reason asks for approval; a size baseline that only goes down and a test renamed in place are listed for information. The forms by which a test stops running are one table for each runner (pytest, unittest, Go, vitest). A form that stops more than one test says how far it reaches: the class, the group, the file, every other test of the file, whole test files, or the number of uses of a skip marker that has a name of its own. Such a name is one that the file sets at its top level or takes from a module by an import; a reason that is given by a name is shown as the text of that name |
 
 ## Baselines on `dev`
@@ -726,9 +726,9 @@ in one place.
 
 ## Docker Hub and the checks
 
-10 jobs build or run an image of Docker Hub: the five of the install matrix,
-`sandbox tests (containerized)` and the four
-`PR build check` jobs. When Docker Hub refuses a pull for its limit, or its
+11 jobs build or run an image of Docker Hub.
+They are the five install jobs, `sandbox tests (containerized)`, the four
+`PR build check` jobs, and `rocm` in `container-scan.yml`. When Docker Hub refuses a pull for its limit, or its
 token service does not answer, such a job is red and the change is not at
 fault. Five of them are required checks, so that red also takes a pull
 request out of the merge queue.
@@ -767,9 +767,8 @@ What follows from it:
 - A test reads the workflow files: every job that builds or runs an image for
   a pull request or in the merge queue has the step after its checkout and
   before its first docker command, and the step is given the very images
-  that the job runs. The jobs that publish images or start on a schedule are
-  listed in that test, each with the condition that keeps it from a pull
-  request.
+  that the job runs. The test lists jobs without the step and checks why
+  each cannot run for a pull request.
 - The step does not help on a day when the mirror and Docker Hub both give no
   answer.
 
@@ -1493,3 +1492,182 @@ only, so the weekly run starts when `main` has the file. That copy is only
 the starter: both jobs check out `dev` and run the script of `dev`. On a
 pull request that changes the workflow file or the script, the first job
 runs with the pull request's copy and shows the text on the page of its run.
+
+### Weekly maintainer checklist
+
+A maintainer completes this checklist each Monday after the cleanup run ends.
+Record the results in a dated comment on [issue #315](https://github.com/inferstep/ATLAS/issues/315).
+Use the [record template](#weekly-review-record) below.
+
+#### Check the cleanup
+
+1. Open the [weekly cleanup runs](https://github.com/inferstep/ATLAS/actions/workflows/weekly-cleanup.yml).
+   Select the latest scheduled run from `main`.
+   Record its link, date, source branch, and the `dev` commit named in its generated text.
+2. Inspect both `weekly cleanup (make the text)` and `weekly cleanup (write the issue)`.
+   Record each job's conclusion and the issue job's message.
+   A successful generation alone does not prove that the issue was updated.
+3. Open [cleanup issue #445](https://github.com/inferstep/ATLAS/issues/445).
+   Compare its `Made on` date and commit with the generated text.
+   Use that date for the eight-day freshness warning, rather than the issue's last activity date.
+   Text older than eight days requires investigation of the run and the issue state.
+4. Classify the result with this table.
+   Keep held Go pieces held until a maintainer removes the hold through a reviewed change.
+
+| Result | Evidence and action |
+|---|---|
+| Text generated and issue updated | Both jobs succeed. The issue job reports replacement of #445. Its date and commit match the generated text. |
+| Nothing to clean | The generated text explicitly says that nothing needs cleaning. An open issue receives that dated text. Without an existing issue, none is created. |
+| Issue closed | The issue job reports that it wrote nothing because the marked issue is closed. Reopen #445 when weekly updates should resume. |
+| Failed or not judged | Read the failed step and its error. Record the cause only when the evidence establishes it. Do not treat unchanged issue text as a clean result. |
+| Skipped, cancelled, missing, or still running | Record the incomplete check. A pull request deliberately skips the issue job, so it cannot prove that weekly publication works. |
+
+No offered patch does not mean nothing needs cleaning: pieces can be held or left out.
+A `not judged` result means the script could not assess the run.
+Neither failure nor `not judged` counts as successful generation or publication.
+
+Keep the two jobs separate.
+The `text` job runs fixers with `contents: read` only.
+The `issue` job has `issues: write` and consumes the generated text as data.
+It runs no fixer, build, or test.
+Do not grant write permission to the fixer job.
+
+#### Correct the schedule's Go version
+
+The scheduled workflow comes from `main`, although both jobs check out `dev`.
+On 2026-11-08, `main` still selects Go `1.26.6` in `.github/workflows/weekly-cleanup.yml`.
+The `dev` copy and the test workflows select `1.26.10`.
+The terminal module, `clients/tui/go.mod`, requires `1.26.10`.
+The [November 2 run](https://github.com/inferstep/ATLAS/actions/runs/41433225661)
+failed at `go vet` for that module with this version mismatch.
+The issue job did not run.
+
+1. Prepare a separate, reviewed change based on `main`.
+   In `.github/workflows/weekly-cleanup.yml`, change `go-version: '1.26.6'` to `go-version: '1.26.10'`.
+   Keep this correction limited to that workflow line.
+   Do not promote the complete `dev` branch for this maintenance task.
+2. Compare the selected version with `.github/workflows/test.yml` and the module requirements on `dev`.
+   Check both `services/proxy/go.mod` and `clients/tui/go.mod`.
+   Repeat this comparison after each Go upgrade, including the workflow copy on `main`.
+3. Use a temporary `dev` checkout for the Go-version check.
+   Replace its weekly cleanup workflow with the corrected `main` file.
+   Run these checks from that checkout:
+
+   ```bash
+   python -m pytest tests/infrastructure/nightly/test_weekly_workflows.py -k go_of_the_weekly_cleanup
+   actionlint -shellcheck= -pyflakes= .github/workflows/weekly-cleanup.yml
+   zizmor .github/workflows/weekly-cleanup.yml
+   ```
+
+   The focused test compares the Go versions without requiring matching action pins.
+4. Obtain the release owner's approval for [the release step](RELEASE.md#the-release-step) into `main`.
+   This workflow correction does not require a runtime release.
+   A push to `main` starts `build-images.yml` and waits for `production` approval before moving `:latest`.
+   The release owner decides whether to approve that waiting deployment.
+5. Merge `main` back into `dev` with step 3 of the [Hotfixes procedure](RELEASE.md#hotfixes).
+   This keeps the next promotion a fast-forward.
+6. After publication, start `weekly cleanup` manually with `main` selected.
+   Confirm that setup selects Go `1.26.10` and both jobs succeed.
+   Confirm that #445 receives the new date and commit.
+7. Check the next Monday scheduled run in the same way.
+   Record both run links in #315.
+
+#### Review the branch rules
+
+Review `dev` and `main` separately for the preceding complete week.
+Use Monday 00:00 to Monday 00:00 in Coordinated Universal Time (UTC).
+Include the start and exclude the end.
+Record both timestamps before the review.
+Review any missed weeks separately, without gaps.
+
+1. Open **Settings → Rules → Insights** with repository administration read access.
+   Select one branch and a time range that includes the full review period.
+   List every ruleset and rule that applied during the period.
+   Include all actors, all rulesets, and all results, including failed and bypassed events.
+2. Inspect every event in the period, across every page.
+   Expand each event's rulesets to inspect every individual rule result.
+   Record every failed or bypassed rule, even when the overall event passed.
+   Record whether each rule was active or in evaluation mode.
+   An evaluation-mode failure alone does not establish an enforced-rule bypass.
+3. Separate rejected updates from accepted updates that bypassed a rule.
+   Compare release exceptions with the pull request and the release owner's approval.
+   Use [the release-step procedure](RELEASE.md#the-release-step) to check which rules the step can temporarily open.
+   Inspect the ruleset history for changes during the period, including rules temporarily removed for release steps.
+   Do not assume that a release owner's action is an approved exception.
+4. Repeat the review for the other branch.
+   Record the coverage and results with the template below.
+   Record an empty bypass list only after both branches and every rule have been reviewed for the full period.
+   Record missing access, expired evidence, or incomplete pages as unavailable evidence.
+
+[GitHub's Rule Insights guide](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/managing-rulesets-for-a-repository#viewing-insights-for-rulesets)
+describes the event details.
+For command-line evidence, use the GitHub command-line tool (`gh`) and the JavaScript Object Notation (JSON) processor `jq`.
+Replace the example timestamps with the review period.
+Run these commands in an empty evidence folder:
+
+```bash
+set -euo pipefail
+review_start='2026-10-26T00:00:00Z'
+review_end='2026-11-02T00:00:00Z'
+for branch in dev main; do
+  gh api --method GET --paginate \
+    repos/inferstep/ATLAS/rulesets/rule-suites \
+    -f ref="refs/heads/$branch" -f time_period=month \
+    -f rule_suite_result=all -f evaluate_status=all -F per_page=100 -F page=1 \
+    > "$branch-pages.json"
+  jq -s --arg start "$review_start" --arg end "$review_end" \
+    '[.[][] | select(.pushed_at >= $start and .pushed_at < $end)]' \
+    "$branch-pages.json" > "$branch-suites.json"
+  jq -r '.[].id' "$branch-suites.json" | while read -r suite; do
+    gh api "repos/inferstep/ATLAS/rulesets/rule-suites/$suite" \
+      > "$branch-$suite.json"
+  done
+done
+```
+
+The [rule-suite interface](https://docs.github.com/en/rest/repos/rule-suites)
+returns event summaries and individual rule evaluations.
+The month query includes the preceding complete week; the local filter selects the recorded period.
+Check that the requested period remains within the available history.
+The [pagination option](https://cli.github.com/manual/gh_api) retrieves all pages; `jq -s` collects them into one array.
+The explicit `page=1` prevents the first page from appearing twice.
+Read each suite's event-level `result` before classifying its rule results.
+`fail` means the update was rejected; `bypass` means the update was accepted through a bypass.
+`pass` means the update passed the enforced rules.
+An accepted bypass can contain individual rule evaluations with `result: fail`.
+Inspect every saved suite's `rule_evaluations`, including its rule source, type, enforcement, result, and details.
+A failed request or missing detail means incomplete evidence, even if a partial file exists.
+The commands collect evidence only; the maintainer still reviews each result and the ruleset history.
+
+#### Weekly review record
+
+Copy this template into a dated comment on #315.
+Replace each placeholder with evidence or an explicit coverage gap.
+Use one event row per rule that failed or required a bypass.
+For an event link, use the Rule Insights detail or its rule-suite interface address.
+
+```markdown
+Weekly review: <date>
+Reviewer: <name>
+Period: <start UTC, inclusive> to <end UTC, exclusive>
+Cleanup: <run link; source branch; generated date and commit; both job conclusions>
+Issue #445: <open/closed; Made on date and commit; update/no changes/closed/failed/not judged/incomplete>
+Go correction: <review and merge-back links; deployment decision; manual run result; next scheduled run result; or pending>
+
+| Branch | Rulesets and rules reviewed | Pages and event details complete? | Ruleset history checked? | Coverage gaps |
+|---|---|---|---|---|
+| dev | <list> | <yes/no, evidence> | <evidence> | <none or details> |
+| main | <list> | <yes/no, evidence> | <evidence> | <none or details> |
+
+| Classification | Branch | Rule and enforcement | Event time and link | Actor | Commit | Explanation | Release approval |
+|---|---|---|---|---|---|---|---|
+| <failed attempt / release exception / unexplained bypass / other explained bypass / evaluation-only failure> | <branch> | <rule> | <time; link> | <account> | <commit> | <accepted or rejected; reason> | <link or not applicable> |
+
+Empty results: <branch and rule scope; complete period checked; or not established>
+Unavailable evidence: <access failure, missing pages, missing details, or expired history; or none>
+Follow-up: <owner, action, and issue link for each unexplained bypass or coverage gap>
+```
+
+Keep #315 open until the corrected `main` workflow completes both jobs and updates #445.
+Also require the next scheduled run to succeed and one complete weekly rule review to be recorded.
+Documentation checks alone do not satisfy these operational checks.

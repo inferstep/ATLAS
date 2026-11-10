@@ -663,7 +663,7 @@ Banked copies of the already-extracted samples are deduped numerically;
 `--no-telemetry` trains on the results dir alone. (A baseline-mode bench
 banks one candidate per task, so the merge adds little there.)
 
-**`--samples` format** — JSON array (or JSONL) of `{"text": "...", "label": 0|1}` where `label=1` means the snippet represents *passing* / correct code and `label=0` means *failing*. Pull the canonical training set (V3 ablation traces with pass/fail labels) from `huggingface.co/datasets/itigges22/ATLAS`.
+**`--samples` format** — JSON array (or JSONL) of `{"text": "...", "label": 0|1}` where `label=1` means the snippet represents *passing* / correct code and `label=0` means *failing*. ATLAS publishes no file in this format. The recommended source is `--from-results` on your own `atlas bench` run.
 
 Minimums: at least 50 samples with both classes present (build refuses below this — a too-small C(x) actively mis-ranks). Test AUC below 0.70 emits a warning suggesting more samples or epochs.
 
