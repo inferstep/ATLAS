@@ -477,6 +477,8 @@ def _apply_child_limits(contract: ResourceContract):
         try:
             resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         except (ValueError, OSError):
+            # A refused core limit keeps the inherited one. The command still
+            # starts, with all its other limits.
             pass
         os.setsid()
 
