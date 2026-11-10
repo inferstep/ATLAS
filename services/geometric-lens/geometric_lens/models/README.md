@@ -52,8 +52,9 @@ All training is CLI-driven — `atlas lens build` trains both halves
 atlas bench --run-id mymodel_lens --tasks 200
 atlas lens build --force --from-results benchmark/results/mymodel_lens/v3_lcb/per_task
 
-# From a labeled sample file ({"text": ..., "label": 0|1} array/JSONL —
-# the canonical set is on the HuggingFace dataset above):
+# From a labeled sample file ({"text": ..., "label": 0|1} array/JSONL).
+# ATLAS publishes no file in this format; --from-results above is the
+# recommended source:
 atlas lens build --samples path/to/labeled.json
 ```
 

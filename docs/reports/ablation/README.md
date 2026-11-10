@@ -15,8 +15,12 @@ Conditions A–D are published on HuggingFace under
 in the same `<condition>/v3_lcb/per_task/*.json` layout described below. Condition E
 is in this directory, at `condition_e_full/`.
 
-Per-run embedding traces for every condition are on HuggingFace under
-[`ablation_traces/`](https://huggingface.co/datasets/itigges22/ATLAS/tree/main/ablation_traces).
+The [`ablation_traces/`](https://huggingface.co/datasets/itigges22/ATLAS/tree/main/ablation_traces)
+folder on HuggingFace does not hold full traces of these conditions. Each
+`ablation_traces/ablation_*_final/embeddings.emb` file holds only 3 PASS
+records, for the tasks LCB/1873_A, LCB/1873_B and LCB/1873_D. The files in
+`ablation_B_final/` to `ablation_F_final/` are identical. You cannot use these
+files to check a condition.
 
 ## Ablation Conditions
 
@@ -37,42 +41,48 @@ Per-run embedding traces for every condition are on HuggingFace under
 
 ## Data Format
 
-Each condition directory contains:
+Each condition directory on HuggingFace contains:
 
 ```
 condition_X/
 ├── summary.json              # Aggregate results: pass_rate, total_tasks, timing
 ├── telemetry/
 │   ├── v3_events.jsonl       # Per-task V3 pipeline events
-│   ├── plan_search_events.jsonl  # PlanSearch constraint/plan details
-│   ├── route_decisions.jsonl     # Routing decisions per task
-│   └── ...                       # Additional per-component telemetry
+│   └── <stage>_events.jsonl  # Events of each stage that ran, for example plan_search_events.jsonl
 └── v3_lcb/
+    ├── results.json          # Pass rate and phase breakdown
     └── per_task/
-        ├── task_001.json     # Per-task result: passed, code, phase_solved, candidates
-        ├── task_002.json
+        ├── LCB_1873_A.json   # Per-task result: passed, code, phase_solved, candidates
+        ├── LCB_1873_B.json
         └── ...               # 599 files per condition
 ```
 
+`condition_e_full/` in this directory holds only `v3_lcb/per_task/`, with 94 files.
+
 ### Per-Task JSON Format
+
+This is `LCB_1873_A.json` from condition D, with the code shortened:
 
 ```json
 {
-  "task_id": "livecodebench_v5_001",
+  "task_id": "LCB/1873_A",
   "passed": true,
-  "code": "def solution()...",
+  "code": "# YOUR CODE HERE\nt = int(input())\n...",
   "phase_solved": "phase1",       // "phase1", "pr_cot", "refinement", "derivation", "none"
   "candidates_generated": 3,
-  "total_tokens": 4521,
-  "total_time_ms": 12340.5,
+  "total_tokens": 1159,
+  "total_time_ms": 18086.100578308105,
   "telemetry": {
-    "probe_sandbox_passed": false,
     "adaptive_k": 3,
-    "plansearch_constraints": [...],
-    "candidate_energies": [...]
+    "budget_tier": "standard",
+    "plansearch_tokens": 1004
   }
 }
 ```
+
+The `telemetry` keys are different in each condition. Every file has
+`adaptive_k` and `budget_tier`. In conditions A and B, every failed task has
+empty `code`.
 
 ## Reproduction
 

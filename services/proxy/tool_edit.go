@@ -13,7 +13,6 @@ import (
 	"strings"
 
 	"github.com/itigges22/atlas-proxy/internal/wire"
-	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
 // ---------------------------------------------------------------------------
@@ -104,14 +103,11 @@ func executeEditFile(rawInput json.RawMessage, ctx *AgentContext) (res *wire.Too
 	// content already fails to parse, a still-failing result is a
 	// permitted repair-in-progress (fixing one error at a time),
 	// so the gate only blocks healthy→broken transitions.
-	observed, refusal := editSyntaxObservation(ctx, "edit_file", path, input.Path,
-		content, newContent, editFileSyntaxMessage(input.Path))
+	observed, refusal := editGateRefusal(ctx, path, input.Path, content, newContent)
 	if refusal != nil {
 		return refusal, nil
 	}
-	if refusal := editGateRefusal(ctx, path, input.Path, content, newContent); refusal != nil {
-		return refusal, nil
-	}
+
 	logMandatoryChecks(ctx, "edit_file", input.Path, "")
 
 	if err := writeEditedFile(path, input.Path, newContent, observed); err != nil {
@@ -138,48 +134,9 @@ func executeEditFile(rawInput json.RawMessage, ctx *AgentContext) (res *wire.Too
 
 // editInputRefusal refuses a call whose arguments cannot name an edit.
 func editInputRefusal(input wire.EditFileInput, rawInput json.RawMessage) *wire.ToolResult {
-	// Reject empty path — same reasoning as read_file.
-	if strings.TrimSpace(input.Path) == "" {
-		return noMutation("edit_file: path cannot be empty. Use read_file first on the target, then edit_file with the same path.")
-	}
-
-	// Malformed-args check, BEFORE the read-staleness check: a call
-	// with an empty old_str, a key literally named "", and write_file's
-	// `content` field needs to hear that, not "file not read yet", which
-	// is true and says nothing about what is wrong with the call.
-	if strings.TrimSpace(input.OldStr) == "" {
-		hint := ""
-		if bytes.Contains(rawInput, []byte(`"content"`)) {
-			hint = " You sent `content`, which is write_file's field — edit_file does not take it."
-		}
-		return noMutation("edit_file: old_str is required and cannot be empty." + hint +
-			" The call is edit_file {\"path\":..., \"old_str\":<one unique line copied from the file>, " +
-			"\"new_str\":<what replaces it>}. To ADD lines rather than replace any, use " +
-			"insert_after {\"path\":..., \"line\":<number from read_file>, \"content\":...} — that one does " +
-			"take `content`.")
-	}
-	return nil
-}
-
-// readFileToEdit reads the file an edit names, if the model has seen what is
-// there now.
-func readFileToEdit(ctx *AgentContext, path, relPath string) (string, error) {
-	// Require file was read first (staleness protection)
-	if !editViewIsCurrent(ctx, path) {
-		return "", errNoMutation(fmt.Errorf("file not read yet — use read_file first before editing: %s", relPath))
-	}
-
-	// Read current content
-	data, err := workspacefs.ReadRegularFile(path)
-	if err != nil {
-		return "", errNoMutation(fmt.Errorf("cannot read %s: %w", relPath, err))
-	}
-
-	// Check for staleness
-	if modifiedSinceSessionView(ctx, path, data) {
-		return "", errNoMutation(fmt.Errorf("file modified since last read — read it again before editing: %s", relPath))
-	}
-	return string(data), nil
+	check := editInputCheckInput{input: input, rawInput: rawInput}
+	runCheckPhase(proxyChecks.editInput, &check)
+	return check.result
 }
 
 // locateOldStr finds the text of the file that old_str names, and a note for
@@ -339,36 +296,9 @@ func oldStrMismatchError(content string, input wire.EditFileInput) error {
 // matchedEditError refuses an edit whose old_str was found but cannot be applied
 // as sent.
 func matchedEditError(content, actualOldStr string, input wire.EditFileInput) error {
-	// Check uniqueness
-	count := strings.Count(content, actualOldStr)
-	if count > 1 && !input.ReplaceAll {
-		return errNoMutation(fmt.Errorf("found %d matches of the string to replace. Set replace_all=true to replace all, or provide more context to uniquely identify the instance", count))
-	}
-
-	// No-op check. The bare diagnosis is a dead end: the model
-	// copies old_str into new_str precisely because it cannot
-	// reproduce a span with a change applied, so telling it only
-	// that the two match gives it nothing to do differently and it
-	// re-sends the identical call until the loop breaker kills the
-	// session. Name the tool that removes the
-	// requirement it just failed.
-	if input.OldStr == input.NewStr {
-		alt := "`replace_lines` with the line numbers read_file printed — you assert only the FIRST and LAST line of the range, so there is no span to reproduce"
-		if ext := strings.ToLower(filepath.Ext(input.Path)); ext == ".py" || ext == ".html" || ext == ".htm" {
-			alt = "`structural_edit` with a selector (e.g. `function:update`) and the new body — it needs no old_str at all, so there is nothing to copy"
-		}
-		// The alternative it is being sent to needs line numbers, and
-		// "the line numbers read_file printed" may be many turns and
-		// several successful edits old. Where those bytes sit RIGHT NOW
-		// is something this call already knows, so it is said here.
-		return errNoMutation(fmt.Errorf(
-			"old_str and new_str are identical, so this edit would change nothing. "+
-				"Re-sending it will not help. You are being asked to reproduce a span "+
-				"verbatim AND change it, which is what just failed — use %s.%s "+
-				"If you meant to REPLACE the whole file, use write_file with the "+
-				"complete new contents", alt, currentSpanNote(input.Path, content, actualOldStr)))
-	}
-	return nil
+	check := matchedEditCheckInput{content: content, actualOldStr: actualOldStr, input: input}
+	runCheckPhase(proxyChecks.matchedEdit, &check)
+	return check.err
 }
 
 // applyEdit is the file with the edit applied.
@@ -382,45 +312,9 @@ func applyEdit(content, actualOldStr string, input wire.EditFileInput) string {
 // composedEditRefusal refuses a composed edit that should not go further.
 func composedEditRefusal(ctx *AgentContext, input wire.EditFileInput, content, newContent, actualOldStr,
 	editKey string) *wire.ToolResult {
-	// Shrinkage guard — same shape as structural_edit's. Catches the
-	// "model emitted a stub for old_str" failure where new_str
-	// is implausibly tiny for a substantial old_str. We compare
-	// the local replacement footprint (old_str → new_str), not
-	// whole-file size, so refactors that genuinely shrink the
-	// file aren't false-rejected.
-	if rejection := validateNotSuspiciouslyShrunk("edit_file", input.Path, len(actualOldStr), len(input.NewStr)); rejection != "" {
-		log.Printf("[edit_file] rejecting suspicious shrinkage: %s old_str=%dB new_str=%dB",
-			input.Path, len(actualOldStr), len(input.NewStr))
-		// The shrinkage heuristic declining bytes that were formed.
-		return refusedNoCheck(rejection)
-	}
-
-	// No-op guard — same rationale as structural_edit's. new_str identical
-	// to old_str (or a replacement that leaves the file unchanged)
-	// must not report success: the model believes the fix landed
-	// and moves on while the bug is still on disk.
-	if newContent == content {
-		log.Printf("[edit_file] no-op edit rejected for %s — file content unchanged", input.Path)
-		return noMutation("edit_file: new_str is identical to old_str — nothing was changed and the bug is still there. " +
-			"Look at the current code again and emit a new_str that actually differs from the existing code.")
-	}
-
-	// Already-applied guard. The check above only catches an edit that
-	// leaves the file byte-identical; it cannot see an edit that
-	// applied once and is now being applied AGAIN. A whitespace-only
-	// change is the dangerous shape: after " x" replaces "x", the
-	// original old_str still matches as a substring, so the same call
-	// keeps succeeding and keeps adding whitespace. The repeat
-	// detector does not help — it needs three occurrences, and two
-	// runs of a 75-second edit is already two minutes gone.
-	if ctx.AppliedEdits[editKey] {
-		log.Printf("[edit_file] duplicate edit rejected for %s — already applied this session", input.Path)
-		return refusedNoCheck("edit_file: this exact edit already succeeded earlier in this " +
-			"session, so applying it again would just repeat it — and when the change is whitespace-only, the " +
-			"old_str still matches afterwards, so it can repeat forever. The file already has this change. " +
-			"Read the file to see its current state, then either make a DIFFERENT edit or declare done.")
-	}
-	return nil
+	check := composedEditCheckInput{ctx: ctx, input: input, content: content, newContent: newContent, actualOldStr: actualOldStr, editKey: editKey}
+	runCheckPhase(proxyChecks.composedEdit, &check)
+	return check.result
 }
 
 // editFileSyntaxMessage is edit_file's refusal for a result that does not parse.
@@ -438,30 +332,11 @@ func editFileSyntaxMessage(relPath string) func(string) string {
 	}
 }
 
-// editGateRefusal runs edit_file's gates after the syntax gate.
-func editGateRefusal(ctx *AgentContext, path, relPath, content, newContent string) *wire.ToolResult {
-	// Structural gate: a parse-clean edit can still introduce
-	// an unresolved direct call (render_template with only
-	// render_template_string imported) that 500s at runtime. Block a
-	// write that NEWLY makes a name unresolved; a pre-existing one
-	// (mid-repair) is allowed, mirroring the syntax gate above.
-	if introduced := editIntroducesUnresolved(ctx, path, content, newContent); len(introduced) > 0 {
-		log.Printf("[edit_file] edit introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(relPath))
-		return structuralRefusal(structuralRejection(relPath, introduced))
-	}
-	// checkFallbackSyntax parses the embedded script but has no pre-edit
-	// file to compare against, so the comparative findings — a render
-	// loop that stopped repeating, a lexical binding declared twice —
-	// need this gate, as on every other edit path.
-	if msg := embeddedScriptGate(ctx, path, content, newContent); msg != "" {
-		log.Printf("[edit_file] edit breaks an embedded script in %s — rejecting", logPath(relPath))
-		return structuralRefusal(msg)
-	}
-	if msg := duplicateMainGuard(path, content, newContent); msg != "" {
-		log.Printf("[edit_file] edit duplicates the module entrypoint in %s — rejecting", logPath(relPath))
-		return structuralRefusal(msg)
-	}
-	return nil
+// editGateRefusal checks syntax and structure before the edit lands.
+func editGateRefusal(ctx *AgentContext, path, relPath, content, newContent string) (checkOutcome, *wire.ToolResult) {
+	check := editLandingCheckInput{ctx: ctx, path: path, relPath: relPath, content: content, newContent: newContent}
+	runCheckPhase(proxyChecks.editLanding, &check)
+	return check.observed, check.result
 }
 
 // writeEditedFile replaces the file atomically.
@@ -724,26 +599,16 @@ func insertAfterTool() *ToolDef {
 			if err := json.Unmarshal(input, &in); err != nil {
 				return nil, errNoMutation(fmt.Errorf("invalid input: %w", err))
 			}
-			if strings.TrimSpace(in.Path) == "" {
-				// Naming only the missing field sends the model back with a
-				// different field missing.
-				return noMutation("insert_after: path is required. The call is " +
-					"insert_after {\"path\":\"app.py\", \"line\":<1-based number from read_file, 0 for top of file>, " +
-					"\"content\":<the new lines>}."), nil
-			}
-			if in.Content == "" {
-				return noMutation("insert_after: content is empty — nothing would be inserted"), nil
+			check := insertInputCheckInput{in: in}
+			if runCheckPhase(proxyChecks.insertInput, &check).outcome != turnContinues {
+				return check.result, nil
 			}
 			path := resolveAgentPath(ctx, in.Path)
-			if !editViewIsCurrent(ctx, path) {
-				return nil, errNoMutation(fmt.Errorf("file not read yet — use read_file first so the line numbers are current: %s", in.Path))
+			read := lineReadCheckInput{ctx: ctx, path: path, relPath: in.Path}
+			if runCheckPhase(proxyChecks.lineRead, &read).outcome != turnContinues {
+				return read.result, read.err
 			}
-			data, err := workspacefs.ReadRegularFile(path)
-			if err != nil {
-				return noMutation(fmt.Sprintf("cannot read %s: %v", in.Path, err)), nil
-			}
-			original := string(data)
-			return insertLinesAfter(ctx, in, path, original)
+			return insertLinesAfter(ctx, in, path, read.original)
 		},
 	}
 }
@@ -759,18 +624,12 @@ func insertLinesAfter(ctx *AgentContext, in wire.InsertAfterInput, path, origina
 	if limit > 0 && lines[limit-1] == "" {
 		limit--
 	}
-	if in.Line < 0 || in.Line > limit {
-		return noMutation(fmt.Sprintf(
-			"insert_after: line %d is out of range for %s, which has %d lines. Use the numbers read_file showed you.",
-			in.Line, in.Path, limit)), nil
+	check := insertionCheckInput{in: in, path: path, lines: lines, limit: limit}
+	if runCheckPhase(proxyChecks.insertion, &check).outcome != turnContinues {
+		return check.result, nil
 	}
-	insert := strings.Split(strings.TrimSuffix(in.Content, "\n"), "\n")
-	// Before any pipeline work: an insertion that moves existing
-	// statements into another block is refused outright, however well
-	// the result parses. See insertionReparentsPython.
-	if msg, moved := insertionReparentsPython(path, lines, in.Line, insert); moved {
-		return structuralRefusal(msg), nil
-	}
+	insert := check.insert
+
 	merged := append([]string{}, lines[:in.Line]...)
 	merged = append(merged, insert...)
 	merged = append(merged, lines[in.Line:]...)
@@ -802,22 +661,11 @@ func insertLinesAfter(ctx *AgentContext, in wire.InsertAfterInput, path, origina
 // to land, writes them, and reports the insertion.
 func writeInsertion(ctx *AgentContext, in wire.InsertAfterInput, path, original, updated string,
 	insert []string, v3Out V3EditMetadata) (*wire.ToolResult, error) {
-	observed, refusal := editSyntaxObservation(ctx, "insert_after", in.Path, in.Path,
-		original, updated, func(detail string) string {
-			return fallbackSyntaxRejection(in.Path, updated, detail)
-		})
+	observed, refusal := checkLineEditLanding(ctx, "insert_after", path, in.Path, original, updated)
 	if refusal != nil {
 		return refusal, nil
 	}
-	if introduced := editIntroducesUnresolved(ctx, path, original, updated); len(introduced) > 0 {
-		return structuralRefusal(structuralRejection(in.Path, introduced)), nil
-	}
-	if msg := embeddedScriptGate(ctx, path, original, updated); msg != "" {
-		return structuralRefusal(msg), nil
-	}
-	if msg := duplicateMainGuard(path, original, updated); msg != "" {
-		return structuralRefusal(msg), nil
-	}
+
 	logMandatoryChecks(ctx, "insert_after", in.Path, "")
 
 	if err := os.WriteFile(path, []byte(updated), 0644); err != nil {
@@ -1022,22 +870,16 @@ func replaceLinesTool() *ToolDef {
 			if err := json.Unmarshal(input, &in); err != nil {
 				return nil, errNoMutation(fmt.Errorf("invalid input: %w", err))
 			}
-			if strings.TrimSpace(in.Path) == "" {
-				return noMutation("replace_lines: path is required. The call is " +
-					"replace_lines {\"path\":\"app.py\", \"start_line\":N, \"end_line\":M, " +
-					"\"expected_first_line\":<text of line N>, \"expected_last_line\":<text of line M>, " +
-					"\"content\":<the new lines>}."), nil
+			check := replaceInputCheckInput{in: in}
+			if runCheckPhase(proxyChecks.replaceInput, &check).outcome != turnContinues {
+				return check.result, nil
 			}
 			path := resolveAgentPath(ctx, in.Path)
-			if !editViewIsCurrent(ctx, path) {
-				return nil, errNoMutation(fmt.Errorf("file not read yet — use read_file first so the line numbers are current: %s", in.Path))
+			read := lineReadCheckInput{ctx: ctx, path: path, relPath: in.Path}
+			if runCheckPhase(proxyChecks.lineRead, &read).outcome != turnContinues {
+				return read.result, read.err
 			}
-			data, err := workspacefs.ReadRegularFile(path)
-			if err != nil {
-				return noMutation(fmt.Sprintf("cannot read %s: %v", in.Path, err)), nil
-			}
-			original := string(data)
-			return replaceLineRange(ctx, in, path, original)
+			return replaceLineRange(ctx, in, path, read.original)
 		},
 	}
 }
@@ -1052,55 +894,11 @@ func replaceLineRange(ctx *AgentContext, in wire.ReplaceLinesInput, path, origin
 	if limit > 0 && fileLines[limit-1] == "" {
 		limit--
 	}
-	if in.StartLine < 1 || in.EndLine < in.StartLine || in.EndLine > limit {
-		return noMutation(fmt.Sprintf(
-			"replace_lines: range %d-%d is invalid for %s, which has %d lines. Both bounds are 1-based and "+
-				"inclusive, and start_line must not exceed end_line. Use the numbers read_file showed you.",
-			in.StartLine, in.EndLine, in.Path, limit)), nil
+	check := lineReplacementCheckInput{ctx: ctx, in: in, path: path, original: original, fileLines: fileLines, limit: limit}
+	if runCheckPhase(proxyChecks.lineReplacement, &check).outcome != turnContinues {
+		return check.result, nil
 	}
-	if span := in.EndLine - in.StartLine + 1; span > replaceLinesMaxSpan {
-		// A size policy declining a replacement it never formed.
-		return noMutation(fmt.Sprintf(
-			"replace_lines: %d lines is too large a range (limit %d). A replacement that size is a rewrite rather "+
-				"than an edit. Split it into consecutive replace_lines calls of at most %d lines, working from "+
-				"the BOTTOM of the file upward so the earlier line numbers stay valid. For a whole function "+
-				"or class, structural_edit replaces the node in one call (%s) — but only for real nodes: code "+
-				"inside a string literal (a <script> block in an HTML template, say) is one string to the "+
-				"host grammar and no selector reaches into it, so there the split is the way.",
-			span, replaceLinesMaxSpan, replaceLinesMaxSpan, selectorGuidanceOrOutline(in.Path, original))), nil
-	}
-	// A stale range that simply moved is relocated rather than
-	// refused: the numbers go stale as soon as an earlier edit
-	// changes the file's length, and the model cannot see that.
-	if strings.TrimSpace(in.ExpectedFirstLine) != "" &&
-		strings.TrimSpace(fileLines[in.StartLine-1]) != strings.TrimSpace(in.ExpectedFirstLine) {
-		span := in.EndLine - in.StartLine + 1
-		if moved := relocateStaleRange(fileLines, limit,
-			in.ExpectedFirstLine, in.ExpectedLastLine, span); moved > 0 {
-			log.Printf("[replace_lines] %s: range %d-%d is stale; the same block is at %d-%d — relocating",
-				in.Path, in.StartLine, in.EndLine, moved, moved+span-1)
-			in.StartLine, in.EndLine = moved, moved+span-1
-		}
-	}
-	// The anchors did not match, so no replacement was ever formed.
-	history := lineNumberHistory(ctx, path, in.Path, original)
-	if msg := lineAssertionMismatch(in.ExpectedFirstLine, fileLines[in.StartLine-1], in.StartLine, in.Path, fileLines, history); msg != "" {
-		return noMutation(msg), nil
-	}
-	if msg := lineAssertionMismatch(in.ExpectedLastLine, fileLines[in.EndLine-1], in.EndLine, in.Path, fileLines, history); msg != "" {
-		return noMutation(msg), nil
-	}
-
-	replacement := strings.Split(strings.TrimSuffix(in.Content, "\n"), "\n")
-	merged := append([]string{}, fileLines[:in.StartLine-1]...)
-	merged = append(merged, replacement...)
-	merged = append(merged, fileLines[in.EndLine:]...)
-	updated := strings.Join(merged, "\n")
-
-	if updated == original {
-		return noMutation("replace_lines: the replacement is identical to what is already on " +
-			"those lines — nothing changed and the bug is still there."), nil
-	}
+	in, updated, replacement := check.in, check.updated, check.replacement
 
 	// Same gate chain as insert_after and edit_file, healthy->broken
 	// only so a file mid-repair stays editable.
@@ -1128,22 +926,11 @@ func replaceLineRange(ctx *AgentContext, in wire.ReplaceLinesInput, path, origin
 // about to land, writes them, and reports the lines it replaced.
 func writeLineReplacement(ctx *AgentContext, in wire.ReplaceLinesInput, path, original, updated string,
 	replacement []string, v3Out V3EditMetadata) (*wire.ToolResult, error) {
-	observed, refusal := editSyntaxObservation(ctx, "replace_lines", in.Path, in.Path,
-		original, updated, func(detail string) string {
-			return fallbackSyntaxRejection(in.Path, updated, detail)
-		})
+	observed, refusal := checkLineEditLanding(ctx, "replace_lines", path, in.Path, original, updated)
 	if refusal != nil {
 		return refusal, nil
 	}
-	if introduced := editIntroducesUnresolved(ctx, path, original, updated); len(introduced) > 0 {
-		return structuralRefusal(structuralRejection(in.Path, introduced)), nil
-	}
-	if msg := embeddedScriptGate(ctx, path, original, updated); msg != "" {
-		return structuralRefusal(msg), nil
-	}
-	if msg := duplicateMainGuard(path, original, updated); msg != "" {
-		return structuralRefusal(msg), nil
-	}
+
 	logMandatoryChecks(ctx, "replace_lines", in.Path, "")
 
 	if err := os.WriteFile(path, []byte(updated), 0644); err != nil {
@@ -1210,41 +997,6 @@ func editSyntaxObservation(ctx *AgentContext, tool, checkPath, relPath, original
 // the content parses, and something about its structure does not. Syntax ran
 // first and did not fail on these bytes, so the structural failure is the
 // decisive one and recording it as syntax/failed would assert the opposite.
-// fencedCallIsExecutable answers one question before any generation is spent:
-// would this call survive the checks it has to survive anyway?
-//
-// The fenced channel exists to carry a file body around the JSON encoding, and
-// it costs a full unconstrained generation per attempt. Starting one for a
-// call that cannot execute -- no path, a path outside the workspace, a
-// deny-listed target -- spends a minute of the session budget to produce
-// content that is then thrown away, and a model that keeps re-sending the
-// malformed call spends the whole session that way.
-//
-// It runs the SAME checks executeToolCall runs, by calling them, so the set of
-// calls refused here is a subset of the set refused there. That is what lets
-// the caller simply decline to resolve and hand the call to the tool, whose
-// own producer owns the refusal, its wording and its MutationNone.
-func fencedCallIsExecutable(name string, args json.RawMessage, ctx *AgentContext) (bool, string) {
-	trimmed := strings.TrimSpace(string(args))
-	if trimmed == "" || trimmed == "null" {
-		return false, "the call carried no arguments"
-	}
-	var in wire.WriteFileInput
-	if err := json.Unmarshal(args, &in); err != nil {
-		return false, "the arguments are not the shape " + name + " takes"
-	}
-	if strings.TrimSpace(in.Path) == "" {
-		return false, "the call names no path"
-	}
-	if reason := validateToolWorkspacePaths(name, args, ctx); reason != "" {
-		return false, reason
-	}
-	if denied, reason := shouldDenyToolCall(name, args); denied {
-		return false, reason
-	}
-	return true, ""
-}
-
 func structuralRefusal(msg string) *wire.ToolResult {
 	return &wire.ToolResult{
 		Success:          false,
@@ -1343,4 +1095,266 @@ func currentSpanNote(path, content, text string) string {
 		note += "."
 	}
 	return note
+}
+
+type editInputCheckInput struct {
+	toolCheckOutput
+	input    wire.EditFileInput
+	rawInput json.RawMessage
+}
+
+func (check *editInputCheckInput) path() checkResult {
+	input := check.input
+	// Reject empty path — same reasoning as read_file.
+	if strings.TrimSpace(input.Path) == "" {
+		return check.accept(checkModelError, noMutation("edit_file: path cannot be empty. Use read_file first on the target, then edit_file with the same path."))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *editInputCheckInput) oldString() checkResult {
+	input := check.input
+	rawInput := check.rawInput
+	// Malformed-args check, BEFORE the read-staleness check: a call
+	// with an empty old_str, a key literally named "", and write_file's
+	// `content` field needs to hear that, not "file not read yet", which
+	// is true and says nothing about what is wrong with the call.
+	if strings.TrimSpace(input.OldStr) == "" {
+		hint := ""
+		if bytes.Contains(rawInput, []byte(`"content"`)) {
+			hint = " You sent `content`, which is write_file's field — edit_file does not take it."
+		}
+		return check.accept(checkModelError, noMutation("edit_file: old_str is required and cannot be empty."+hint+
+			" The call is edit_file {\"path\":..., \"old_str\":<one unique line copied from the file>, "+
+			"\"new_str\":<what replaces it>}. To ADD lines rather than replace any, use "+
+			"insert_after {\"path\":..., \"line\":<number from read_file>, \"content\":...} — that one does "+
+			"take `content`."))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+type composedEditCheckInput struct {
+	toolCheckOutput
+	ctx          *AgentContext
+	input        wire.EditFileInput
+	content      string
+	newContent   string
+	actualOldStr string
+	editKey      string
+}
+
+func (check *composedEditCheckInput) shrinkage() checkResult {
+	input := check.input
+	actualOldStr := check.actualOldStr
+	// Shrinkage guard — same shape as structural_edit's. Catches the
+	// "model emitted a stub for old_str" failure where new_str
+	// is implausibly tiny for a substantial old_str. We compare
+	// the local replacement footprint (old_str → new_str), not
+	// whole-file size, so refactors that genuinely shrink the
+	// file aren't false-rejected.
+	if rejection := validateNotSuspiciouslyShrunk("edit_file", input.Path, len(actualOldStr), len(input.NewStr)); rejection != "" {
+		log.Printf("[edit_file] rejecting suspicious shrinkage: %s old_str=%dB new_str=%dB",
+			input.Path, len(actualOldStr), len(input.NewStr))
+		// The shrinkage heuristic declining bytes that were formed.
+		return check.accept(checkGuardRefusal, refusedNoCheck(rejection))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *composedEditCheckInput) unchanged() checkResult {
+	input := check.input
+	content := check.content
+	newContent := check.newContent
+	// No-op guard — same rationale as structural_edit's. new_str identical
+	// to old_str (or a replacement that leaves the file unchanged)
+	// must not report success: the model believes the fix landed
+	// and moves on while the bug is still on disk.
+	if newContent == content {
+		log.Printf("[edit_file] no-op edit rejected for %s — file content unchanged", input.Path)
+		return check.accept(checkGuardRefusal, noMutation("edit_file: new_str is identical to old_str — nothing was changed and the bug is still there. "+
+			"Look at the current code again and emit a new_str that actually differs from the existing code."))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *composedEditCheckInput) alreadyApplied() checkResult {
+	ctx := check.ctx
+	input := check.input
+	editKey := check.editKey
+	// Already-applied guard. The check above only catches an edit that
+	// leaves the file byte-identical; it cannot see an edit that
+	// applied once and is now being applied AGAIN. A whitespace-only
+	// change is the dangerous shape: after " x" replaces "x", the
+	// original old_str still matches as a substring, so the same call
+	// keeps succeeding and keeps adding whitespace. The repeat
+	// detector does not help — it needs three occurrences, and two
+	// runs of a 75-second edit is already two minutes gone.
+	if ctx.AppliedEdits[editKey] {
+		log.Printf("[edit_file] duplicate edit rejected for %s — already applied this session", input.Path)
+		return check.accept(checkGuardRefusal, refusedNoCheck("edit_file: this exact edit already succeeded earlier in this "+
+			"session, so applying it again would just repeat it — and when the change is whitespace-only, the "+
+			"old_str still matches afterwards, so it can repeat forever. The file already has this change. "+
+			"Read the file to see its current state, then either make a DIFFERENT edit or declare done."))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+type editLandingCheckInput struct {
+	observed checkOutcome
+	toolCheckOutput
+	ctx        *AgentContext
+	path       string
+	relPath    string
+	content    string
+	newContent string
+}
+
+func (check *editLandingCheckInput) unresolvedCalls() checkResult {
+	ctx := check.ctx
+	path := check.path
+	relPath := check.relPath
+	content := check.content
+	newContent := check.newContent
+	// Structural gate: a parse-clean edit can still introduce
+	// an unresolved direct call (render_template with only
+	// render_template_string imported) that 500s at runtime. Block a
+	// write that NEWLY makes a name unresolved; a pre-existing one
+	// (mid-repair) is allowed, mirroring the syntax gate above.
+	if introduced := editIntroducesUnresolved(ctx, path, content, newContent); len(introduced) > 0 {
+		log.Printf("[edit_file] edit introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(relPath))
+		return check.accept(checkGuardRefusal, structuralRefusal(structuralRejection(relPath, introduced)))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *editLandingCheckInput) embeddedScript() checkResult {
+	ctx := check.ctx
+	path := check.path
+	relPath := check.relPath
+	content := check.content
+	newContent := check.newContent
+	// checkFallbackSyntax parses the embedded script but has no pre-edit
+	// file to compare against, so the comparative findings — a render
+	// loop that stopped repeating, a lexical binding declared twice —
+	// need this gate, as on every other edit path.
+	if msg := embeddedScriptGate(ctx, path, content, newContent); msg != "" {
+		log.Printf("[edit_file] edit breaks an embedded script in %s — rejecting", logPath(relPath))
+		return check.accept(checkGuardRefusal, structuralRefusal(msg))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *editLandingCheckInput) entrypoint() checkResult {
+	path := check.path
+	relPath := check.relPath
+	content := check.content
+	newContent := check.newContent
+	if msg := duplicateMainGuard(path, content, newContent); msg != "" {
+		log.Printf("[edit_file] edit duplicates the module entrypoint in %s — rejecting", logPath(relPath))
+		return check.accept(checkGuardRefusal, structuralRefusal(msg))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *editLandingCheckInput) syntax() checkResult {
+	observed, refusal := editSyntaxObservation(check.ctx, "edit_file", check.path, check.relPath,
+		check.content, check.newContent, editFileSyntaxMessage(check.relPath))
+	check.observed = observed
+	return check.accept(checkGuardRefusal, refusal)
+}
+
+func checkLineEditLanding(ctx *AgentContext, tool, path, relPath, original, updated string) (checkOutcome, *wire.ToolResult) {
+	check := lineLandingCheckInput{ctx: ctx, tool: tool, path: path, relPath: relPath, original: original, updated: updated}
+	runCheckPhase(proxyChecks.lineLanding, &check)
+	return check.observed, check.result
+}
+
+type lineLandingCheckInput struct {
+	toolCheckOutput
+	ctx                                    *AgentContext
+	tool, path, relPath, original, updated string
+	observed                               checkOutcome
+}
+
+func (check *lineLandingCheckInput) syntax() checkResult {
+	observed, refusal := editSyntaxObservation(check.ctx, check.tool, check.relPath, check.relPath,
+		check.original, check.updated, func(detail string) string {
+			return fallbackSyntaxRejection(check.relPath, check.updated, detail)
+		})
+	check.observed = observed
+	return check.accept(checkGuardRefusal, refusal)
+}
+
+func (check *lineLandingCheckInput) unresolved() checkResult {
+	if introduced := editIntroducesUnresolved(check.ctx, check.path, check.original, check.updated); len(introduced) > 0 {
+		return check.accept(checkGuardRefusal, structuralRefusal(structuralRejection(check.relPath, introduced)))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *lineLandingCheckInput) embedded() checkResult {
+	if msg := embeddedScriptGate(check.ctx, check.path, check.original, check.updated); msg != "" {
+		return check.accept(checkGuardRefusal, structuralRefusal(msg))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *lineLandingCheckInput) entrypoint() checkResult {
+	if msg := duplicateMainGuard(check.path, check.original, check.updated); msg != "" {
+		return check.accept(checkGuardRefusal, structuralRefusal(msg))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+type matchedEditCheckInput struct {
+	content, actualOldStr string
+	input                 wire.EditFileInput
+	err                   error
+}
+
+func (check *matchedEditCheckInput) unique() checkResult {
+	content := check.content
+	actualOldStr := check.actualOldStr
+	input := check.input
+
+	// Check uniqueness
+	count := strings.Count(content, actualOldStr)
+	if count > 1 && !input.ReplaceAll {
+		check.err = errNoMutation(fmt.Errorf("found %d matches of the string to replace. Set replace_all=true to replace all, or provide more context to uniquely identify the instance", count))
+		return checkResult{checkGuardRefusal, turnEnds}
+	}
+
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *matchedEditCheckInput) changed() checkResult {
+	content := check.content
+	actualOldStr := check.actualOldStr
+	input := check.input
+
+	// No-op check. The bare diagnosis is a dead end: the model
+	// copies old_str into new_str precisely because it cannot
+	// reproduce a span with a change applied, so telling it only
+	// that the two match gives it nothing to do differently and it
+	// re-sends the identical call until the loop breaker kills the
+	// session. Name the tool that removes the
+	// requirement it just failed.
+	if input.OldStr == input.NewStr {
+		alt := "`replace_lines` with the line numbers read_file printed — you assert only the FIRST and LAST line of the range, so there is no span to reproduce"
+		if ext := strings.ToLower(filepath.Ext(input.Path)); ext == ".py" || ext == ".html" || ext == ".htm" {
+			alt = "`structural_edit` with a selector (e.g. `function:update`) and the new body — it needs no old_str at all, so there is nothing to copy"
+		}
+		// The alternative it is being sent to needs line numbers, and
+		// "the line numbers read_file printed" may be many turns and
+		// several successful edits old. Where those bytes sit RIGHT NOW
+		// is something this call already knows, so it is said here.
+		check.err = errNoMutation(fmt.Errorf(
+			"old_str and new_str are identical, so this edit would change nothing. "+
+				"Re-sending it will not help. You are being asked to reproduce a span "+
+				"verbatim AND change it, which is what just failed — use %s.%s "+
+				"If you meant to REPLACE the whole file, use write_file with the "+
+				"complete new contents", alt, currentSpanNote(input.Path, content, actualOldStr)))
+		return checkResult{checkModelError, turnEnds}
+	}
+	return checkResult{checkPass, turnContinues}
 }

@@ -17,6 +17,7 @@ tooling), planning.py (/v3/plan), and pipeline.py (the orchestrator).
 """
 
 import json
+import math
 import uuid
 import threading
 import socket
@@ -58,9 +59,9 @@ sys.stdout.reconfigure(line_buffering=True)
 
 import adapters
 import contract
-import scoring
 from pipeline import V3PipelineService, _build_problem_from_request
 from planning import generate_plan
+from scoring import LensUnavailable
 from symbols import (structural_edit, structural_score, build_project_symbols,
                      symbol_index, cyclomatic_complexity, embedded_script_check,
                      embedded_region_outline, orphaned_new_symbols,
@@ -231,7 +232,9 @@ def _positive_budget_ms(value):
     """
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    if value != value or value in (float("inf"), float("-inf")) or value <= 0:
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    if value in (float("inf"), float("-inf")) or value <= 0:
         return None
     return float(value)
 
@@ -422,7 +425,7 @@ class V3Handler(BaseHTTPRequestHandler):
         except (adapters.ClientDisconnected, adapters.Cancelled) as e:
             print(f"[generate] pipeline aborted: {e}", flush=True)
             return
-        except scoring.LensUnavailable as e:
+        except LensUnavailable as e:
             self._write_lens_unavailable(e)
             return
         finally:
