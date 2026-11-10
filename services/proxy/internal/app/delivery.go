@@ -435,22 +435,14 @@ func deliverCandidateBytes(ctx *AgentContext,
 		write = writeFileRecorded
 	}
 	out := deliveryOutcome{}
-	if ctx == nil || g == nil {
-		out.Reason = "no authorization"
-		return nil, out, errNoMutation(errDeliveryUnauthorized)
-	}
-	resolved := resolveAgentPath(ctx, path)
-
 	// (4) and (5), before anything is spent: the bytes must be the grant's,
 	// and the target must be the one it was minted for.
-	if contentSHA256(code) != g.CandidateHash {
-		out.Reason = "candidate_hash_mismatch"
+	checks := deliveryCheckInput{ctx: ctx, request: req}
+	if runCheckPhase(proxyChecks.delivery, &checks).outcome != turnContinues {
+		out.Reason = checks.reason
 		return nil, out, errNoMutation(errDeliveryUnauthorized)
 	}
-	if resolved != g.TargetPath {
-		out.Reason = "target_mismatch"
-		return nil, out, errNoMutation(errDeliveryUnauthorized)
-	}
+	resolved := checks.resolved
 
 	// (2) and (6): read the workspace and the target as they are NOW. A grant
 	// froze a moment; this is a later one, and the claim has to describe it.
@@ -552,15 +544,9 @@ func grantClaimNow(ctx *AgentContext, g *authorizationGrant, code, resolved stri
 // settlementRefusal is why the bytes a delivery wrote do not settle it, or ""
 // when they were read back, are the authorized ones and were not shown broken.
 func settlementRefusal(readable bool, landedHash, authorizedHash string, observed checkOutcome) string {
-	switch {
-	case !readable:
-		return "delivered_bytes_unreadable"
-	case landedHash != authorizedHash:
-		return "delivered_bytes_are_not_the_authorized_ones"
-	case observed.Status == wire.ValidationFailed:
-		return "post_write_validation_failed"
-	}
-	return ""
+	check := settlementCheckInput{readable: readable, landedHash: landedHash, authorizedHash: authorizedHash, observed: observed}
+	runCheckPhase(proxyChecks.settlement, &check)
+	return check.reason
 }
 
 // errDeliveryUnauthorized is what a refused delivery returns. It names no
@@ -645,4 +631,65 @@ func (o checkOutcome) kind() wire.ValidationKind {
 	default:
 		return wire.ValidationKindSyntax
 	}
+}
+
+type deliveryCheckInput struct {
+	ctx              *AgentContext
+	request          candidateDeliveryRequest
+	resolved, reason string
+}
+
+func (input *deliveryCheckInput) authorization() checkResult {
+	if input.ctx == nil || input.request.Grant == nil {
+		input.reason = "no authorization"
+		return checkResult{checkGuardRefusal, turnEnds}
+	}
+	input.resolved = resolveAgentPath(input.ctx, input.request.Path)
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *deliveryCheckInput) hash() checkResult {
+	if contentSHA256(input.request.Code) != input.request.Grant.CandidateHash {
+		input.reason = "candidate_hash_mismatch"
+		return checkResult{checkGuardRefusal, turnEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *deliveryCheckInput) target() checkResult {
+	if input.resolved != input.request.Grant.TargetPath {
+		input.reason = "target_mismatch"
+		return checkResult{checkGuardRefusal, turnEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+type settlementCheckInput struct {
+	readable                           bool
+	landedHash, authorizedHash, reason string
+	observed                           checkOutcome
+}
+
+func (check *settlementCheckInput) read() checkResult {
+	if !check.readable {
+		check.reason = "delivered_bytes_unreadable"
+		return checkResult{checkToolError, turnEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *settlementCheckInput) identity() checkResult {
+	if check.landedHash != check.authorizedHash {
+		check.reason = "delivered_bytes_are_not_the_authorized_ones"
+		return checkResult{checkGuardRefusal, turnEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *settlementCheckInput) validation() checkResult {
+	if check.observed.Status == wire.ValidationFailed {
+		check.reason = "post_write_validation_failed"
+		return checkResult{checkGuardRefusal, turnEnds}
+	}
+	return checkResult{checkPass, turnContinues}
 }

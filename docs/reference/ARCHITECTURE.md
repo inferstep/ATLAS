@@ -193,6 +193,141 @@ flowchart LR
     style V3 fill:#2d5016,color:#fff
 ```
 
+### Ordered request checks
+
+[`proxyChecks`](../../services/proxy/internal/app/loop.go) is the executable check table.
+Its typed phase lists own check order. The callers keep preparation, external calls, and state updates at their existing boundaries.
+The table preserves the existing order. It does not sort checks by cost.
+
+Each row returns a `checkResult`. Its `category` identifies a known cause or a failed operation. Its `outcome` controls continuation, turn termination, or run termination.
+`runCheckPhase` runs rows in declaration order. It stops when a row returns a stopping outcome.
+A caller can translate that outcome at its existing boundary. For example, a cached read stops selection but continues the tool turn.
+
+Categories are internal. They do not replace the public mutation and validation fields.
+The categories below are pass (P), guard refusal (G), tool error (T), model error (M), and infrastructure error (I).
+A row that does not refuse returns P. The listed categories describe its stopping results.
+Preparation rows also return P. Warning writes and unchanged candidates can stop with P.
+Rows that call another phase retain that phase's category. Error text does not determine these categories.
+
+The categories describe known causes or the operation that failed. They do not establish a root cause when the operation cannot identify one.
+A failed file read uses T, including the read rows, `deleteTarget.exists`, and `move.source`.
+These rows do not distinguish invalid paths, permissions, missing files, or storage faults beyond the operation's result.
+Cancellation rows use I because the execution context stopped. They do not infer whether a client, deadline, or another owner caused cancellation.
+`commandMemory.memory` uses I for deployment memory limits. Identical move paths, identical edit text, and empty required content use M.
+
+The inventory below names every row. Arrows describe the table's order within each phase.
+The caller column identifies the ordering site and the adapter file. Follow each row's callable in `loop.go` to its implementation.
+
+| Phase | Rows and stopping categories | Caller and adapter file | Conditions and effects |
+| --- | --- | --- | --- |
+| `request` | `request.method` (G) → `request.decode` (G) → `request.message` (G) | `readAgentRequest`; [server_agent.go](../../services/proxy/internal/app/server_agent.go) | Method, body decoding, and required message. |
+| `requestDirectory` | `requestDirectory.directory` (G) | `agentWorkingDirs`; [server_agent.go](../../services/proxy/internal/app/server_agent.go) | A supplied sandbox subdirectory must be valid. Joining paths follows this check. |
+| `requestConfiguration` | `requestConfiguration.configuration` (G) | `handleAgent`; [server_agent.go](../../services/proxy/internal/app/server_agent.go) | Reject removed switches after context creation. |
+| `requestServices` | `requestServices.contract` (G) → `requestServices.lens` (I) | `handleAgent`; [server_agent.go](../../services/proxy/internal/app/server_agent.go) | Validate the contract before checking lens availability. |
+| `stream` | `stream.supported` (I) | `openEventStream`; [server_agent.go](../../services/proxy/internal/app/server_agent.go) | Check streaming support before headers or events. |
+| `conversation` | `conversation.verifyWorkspaceAlignment` (I) | `openConversation`; [loop_turn.go](../../services/proxy/internal/app/loop_turn.go) | Check workspace alignment after planning and prompt construction. |
+| `modelStart` | `modelStart.cancellation` (I) | `takeModelTurn`; [loop_turn.go](../../services/proxy/internal/app/loop_turn.go) | Cancellation precedes inference. |
+| `modelInference` | `modelInference.inference` (I) | `takeModelTurn`; [loop_turn.go](../../services/proxy/internal/app/loop_turn.go) | Handle the inference error before recording its reply. |
+| `modelReply` | `modelReply.parse` (M) → `modelReply.swallowedContent` (M) → `modelReply.ambiguousContent` (M) | `takeModelTurn`; [loop_turn.go](../../services/proxy/internal/app/loop_turn.go) | Parse the recorded reply before content checks. Preserve recovery counters. |
+| `beforeWorkspace` | `beforeWorkspace.permission` (G) → `beforeWorkspace.refuseTruncatedArgs` (M) | `screenBeforeWorkspaceCheck`; [loop_checks.go](../../services/proxy/internal/app/loop_checks.go) | Non-deletion permission precedes truncated arguments. |
+| `workspace` | `workspace.workspace` (G) | `runAgentLoop`; [loop_checks.go](../../services/proxy/internal/app/loop_checks.go) | Canonicalize workspace paths before intent recording or path reads. |
+| `afterWorkspace` | `afterWorkspace.noteMutationIntent` (P) → `afterWorkspace.permission` (G) → `afterWorkspace.runFirstGateForEdits` (G) → `afterWorkspace.prepareWriteFile` (G/M/I) | `screenAfterWorkspaceCheck`; [loop_checks.go](../../services/proxy/internal/app/loop_checks.go) | Record intent, request deletion permission, check pending runs, then prepare writes. |
+| `writePreparation` | `writePreparation.runFirstGateForWrite` (G) → `writePreparation.resolveFencedContent` (G/M/I) | `prepareWriteFile`; [loop_checks.go](../../services/proxy/internal/app/loop_checks.go) | Only write_file enters. Check pending runs before fenced resolution. |
+| `warnedWrite` | `warnedWrite.recovery` (G) → `warnedWrite.bounce` (G) | `runFirstGateForWrite`; [loop_checks.go](../../services/proxy/internal/app/loop_checks.go) | Only pending warnings enter. Offer recovery before bouncing. |
+| `fencedCall` | `fencedCall.arguments` (M) → `fencedCall.decode` (M) → `fencedCall.path` (M) → `fencedCall.workspace` (G) → `fencedCall.denyList` (G) | `fencedCallIsExecutable`; [tool_args.go](../../services/proxy/internal/app/tool_args.go) | Validate executable arguments before the fenced sub-call can read a path. |
+| `fencedFetch` | `fencedFetch.channel` (G) → `fencedFetch.allowance` (G) → `fencedFetch.budget` (G) | `fencedFetchRefusal`; [model_fenced_channel.go](../../services/proxy/internal/app/model_fenced_channel.go) | Check channel, path allowance, and remaining time before inference. |
+| `fencedResolution` | `fencedResolution.recoverChannel` (G) → `fencedResolution.replaceFencedSentinel` (G/M/I) | `resolveFencedContent`; [loop_checks.go](../../services/proxy/internal/app/loop_checks.go) | After preflight, offer recovery before resolving the body. Keep failure charges. |
+| `existingWrite` | `existingWrite.unread` (G) → `existingWrite.rewrite` (G) | `guardExistingFileWrite`; [loop_checks.go](../../services/proxy/internal/app/loop_checks.go) | After the existing-file read, reject unread overwrites before rewrite requests. |
+| `beforeDispatch` | `beforeDispatch.redirectForegroundServer` (G) → `beforeDispatch.refuseUnsafeRunCommand` (G) → `beforeDispatch.refuseUnsafeRunBackground` (G) → `beforeDispatch.countWholeFileWrites` (P) → `beforeDispatch.refuseBannedTool` (G) → `beforeDispatch.answerRejectedProposal` (G) → `beforeDispatch.answerBrokenArtifact` (G) → `beforeDispatch.refuseIdenticalRetry` (G) | `refuseBeforeDispatch`; [loop_checks.go](../../services/proxy/internal/app/loop_checks.go) | Keep command policy before write counts and repeated-refusal checks. |
+| `toolHealth` | `toolHealth.repetition` (G) → `toolHealth.reasoning` (P) → `toolHealth.lens` (I) | `runToolCall`; [loop_results.go](../../services/proxy/internal/app/loop_results.go) | Repetition precedes reasoning observation and lens scoring. |
+| `dispatchSelection` | `dispatchSelection.cachedRead` (P) → `dispatchSelection.rerun` (G) | `dispatchToolCall`; [loop_results.go](../../services/proxy/internal/app/loop_results.go) | A cached read or blocked rerun skips execution and its cancellation check. |
+| `dispatch` | `dispatch.knownTool` (M) → `dispatch.arguments` (M) → `dispatch.denyList` (G) → `dispatch.readOnly` (G) | `executeToolCallInner`; [tools.go](../../services/proxy/internal/app/tools.go) | Keep known-tool, argument, deny-list, and read-only precedence. |
+| `dispatchAfter` | `dispatchAfter.cancelled` (I) | `dispatchToolCall`; [loop_results.go](../../services/proxy/internal/app/loop_results.go) | Check cancellation after execution, before debt settlement. |
+| `toolReported` | `toolReported.reportedLensFailure` (I) | `runToolCall`; [loop_results.go](../../services/proxy/internal/app/loop_results.go) | Check lens failure after result recording and streaming. |
+| `failure` | `failure.ceiling` (G) → `failure.samePath` (G) | `countFailure`; [loop_results.go](../../services/proxy/internal/app/loop_results.go) | Increment failure counters first. The ceiling precedes the path-window update. |
+| `readFile` | `readFile.pathCheck` (M) → `readFile.read` (T) → `readFile.binary` (G) | `readFileTool`; [tool_read.go](../../services/proxy/internal/app/tool_read.go) | Reject an empty path, read the file, then reject binary content. |
+| `outlineInput` | `outlineInput.required` (M) | `outlineFileTool`; [tool_read.go](../../services/proxy/internal/app/tool_read.go) | Require a path before reading the file. |
+| `searchInput` | `searchInput.required` (M) | `searchFilesTool`; [tool_read.go](../../services/proxy/internal/app/tool_read.go) | Require a pattern before regex compilation and traversal. |
+| `findInput` | `findInput.required` (M) | `findFileTool`; [tool_read.go](../../services/proxy/internal/app/tool_read.go) | Require a pattern; retain the swapped-argument diagnostic. |
+| `writeInput` | `writeInput.pathCheck` (M) | `writeFileTool`; [tool_write.go](../../services/proxy/internal/app/tool_write.go) | Require a path before content sanitation. |
+| `writeEarly` | `writeEarly.sibling` (G) → `writeEarly.echo` (G) → `writeEarly.stub` (G) | `writeFileEarlyRefusal`; [tool_write.go](../../services/proxy/internal/app/tool_write.go) | Sanitized content meets sibling, echo, and stub checks before tier selection. |
+| `fastWrite` | `fastWrite.syntax` (G) → `fastWrite.unresolved` (G) | `writeFastPathGates`; [tool_write.go](../../services/proxy/internal/app/tool_write.go) | Read the baseline once. Compare syntax before unresolved calls. |
+| `directWrite` | `directWrite.directUnresolved` (G) | `writeFileDirectRoute`; [tool_write.go](../../services/proxy/internal/app/tool_write.go) | Only non-iterating direct writes enter this unresolved-call check. |
+| `directLanding` | `directLanding.newFileWarning` (P/T) → `directLanding.rewriteWarning` (P/T) → `directLanding.readBaseline` (P) → `directLanding.embedded` (G) → `directLanding.entrypoint` (G) | `landDirectWrite`; [tool_write.go](../../services/proxy/internal/app/tool_write.go) | Warning writes stop early. Otherwise read the baseline before structural checks. |
+| `editInput` | `editInput.path` (M) → `editInput.oldString` (M) | `editInputRefusal`; [tool_edit.go](../../services/proxy/internal/app/tool_edit.go) | Require the path before the old string. |
+| `editRead` | `editRead.currentView` (G) → `editRead.read` (T) → `editRead.staleness` (G) | `readFileToEdit`; [tool_read.go](../../services/proxy/internal/app/tool_read.go) | Require the current view, read bytes, then check staleness. |
+| `matchedEdit` | `matchedEdit.unique` (G) → `matchedEdit.changed` (M) | `matchedEditError`; [tool_edit.go](../../services/proxy/internal/app/tool_edit.go) | After matching, require uniqueness before rejecting an identical replacement. |
+| `composedEdit` | `composedEdit.shrinkage` (G) → `composedEdit.unchanged` (G) → `composedEdit.alreadyApplied` (G) | `composedEditRefusal`; [tool_edit.go](../../services/proxy/internal/app/tool_edit.go) | After composition, check shrinkage, unchanged bytes, and prior application. |
+| `editLanding` | `editLanding.syntax` (G) → `editLanding.unresolvedCalls` (G) → `editLanding.embeddedScript` (G) → `editLanding.entrypoint` (G) | `editGateRefusal`; [tool_edit.go](../../services/proxy/internal/app/tool_edit.go) | Check syntax and structure on the final edit before writing. |
+| `insertInput` | `insertInput.path` (M) → `insertInput.content` (M) | `insertAfterTool`; [tool_args.go](../../services/proxy/internal/app/tool_args.go) | Require a path before content. |
+| `replaceInput` | `replaceInput.path` (M) | `replaceLinesTool`; [tool_args.go](../../services/proxy/internal/app/tool_args.go) | Require a path before reading. |
+| `lineRead` | `lineRead.currentView` (G) → `lineRead.read` (T) | `insertAfterTool; replaceLinesTool`; [tool_read.go](../../services/proxy/internal/app/tool_read.go) | Require a current view before reading bytes. |
+| `insertion` | `insertion.bounds` (M) → `insertion.reparenting` (G) | `insertLinesAfter`; [tool_args.go](../../services/proxy/internal/app/tool_args.go) | Check bounds before checking whether insertion moves existing statements. |
+| `lineReplacement` | `lineReplacement.boundsCheck` (M) → `lineReplacement.spanCheck` (G) → `lineReplacement.relocateCheck` (P) → `lineReplacement.firstLineCheck` (G) → `lineReplacement.lastLineCheck` (G) → `lineReplacement.replacementCheck` (G) | `replaceLineRange`; [tool_args.go](../../services/proxy/internal/app/tool_args.go) | Check bounds and span. Relocate stale lines before assertions and composition. |
+| `lineLanding` | `lineLanding.syntax` (G) → `lineLanding.unresolved` (G) → `lineLanding.embedded` (G) → `lineLanding.entrypoint` (G) | `writeInsertion; writeLineReplacement`; [tool_edit.go](../../services/proxy/internal/app/tool_edit.go) | Check syntax and structure before either line-edit write. |
+| `structuralInput` | `structuralInput.path` (M) → `structuralInput.selector` (M) | `structuralInputRefusal`; [tool_structural_edit.go](../../services/proxy/internal/app/tool_structural_edit.go) | Require a path before a selector. |
+| `structuralRead` | `structuralRead.currentView` (G) → `structuralRead.read` (T) → `structuralRead.empty` (M) → `structuralRead.runaway` (G) → `structuralRead.staleness` (G) | `executeStructuralEdit`; [tool_structural_edit.go](../../services/proxy/internal/app/tool_structural_edit.go) | Check the view, read bytes, check replacement content, then check staleness. |
+| `structuralSplice` | `structuralSplice.service` (T) → `structuralSplice.shrinkage` (G) → `structuralSplice.unchanged` (G) | `spliceRefusal`; [tool_structural_edit.go](../../services/proxy/internal/app/tool_structural_edit.go) | Inspect the service result before shrinkage and unchanged-content checks. |
+| `structuralLanding` | `structuralLanding.syntax` (G) → `structuralLanding.unresolvedCalls` (G) → `structuralLanding.embeddedScript` (G) → `structuralLanding.entrypoint` (G) | `structuralGateRefusal`; [tool_structural_edit.go](../../services/proxy/internal/app/tool_structural_edit.go) | Check syntax and structure on the routed splice before writing. |
+| `deleteInput` | `deleteInput.pathCheck` (M) | `deleteFileTool`; [tool_files.go](../../services/proxy/internal/app/tool_files.go) | Require a path before consuming approval. |
+| `deleteTarget` | `deleteTarget.exists` (T) → `deleteTarget.empty` (G) | `deleteFileTool`; [tool_files.go](../../services/proxy/internal/app/tool_files.go) | After approval consumption, require an existing file or empty directory. |
+| `deleteApproval` | `deleteApproval.identity` (G) → `deleteApproval.capacity` (G) | `removeDeleteTarget`; [tool_files.go](../../services/proxy/internal/app/tool_files.go) | For approved calls, recheck identity before reserving deletion capacity. |
+| `move` | `move.paths` (M) → `move.source` (T) → `move.destination` (P) → `move.different` (M) → `move.absent` (G) | `moveFileTool`; [tool_files.go](../../services/proxy/internal/app/tool_files.go) | Check paths and source. Resolve the destination before identical-path and clobber checks. |
+| `commandTrust` | `commandTrust.trust` (G) | `runCommandTool`; [tools.go](../../services/proxy/internal/app/tools.go) | Check trust before timeout and directory preparation. |
+| `commandMemory` | `commandMemory.memory` (I) | `runCommandTool`; [tools.go](../../services/proxy/internal/app/tools.go) | Check deployment memory limits after preparation, before execution. |
+| `background` | `background.trust` (G) → `background.command` (M) → `background.shell` (G) → `background.host` (G) | `backgroundRefusal`; [tool_background.go](../../services/proxy/internal/app/tool_background.go) | Check trust, command, shell policy, and execution mode before starting a job. |
+| `tailInput` | `tailInput.required` (M) | `tailBackgroundTool`; [tool_background.go](../../services/proxy/internal/app/tool_background.go) | Require the job identifier before preparing the line limit. |
+| `stopInput` | `stopInput.required` (M) | `stopBackgroundTool`; [tool_background.go](../../services/proxy/internal/app/tool_background.go) | Require the job identifier before stopping the job. |
+| `editCandidate` | `editCandidate.empty` (T) → `editCandidate.unchanged` (P) → `editCandidate.rewrite` (G) → `editCandidate.language` (G) | `proposeEditCandidate`; [delivery_edit_route.go](../../services/proxy/internal/app/delivery_edit_route.go) | After the producer reply, inspect content and edit scope. Unchanged content stops successfully. |
+| `candidate` | `candidate.withdrawRefusedCandidate` (G) → `candidate.refuseContentThatDoesNotParse` (G) → `candidate.refuseUnresolvedCalls` (G) → `candidate.refuseBrokenEmbeddedScript` (G) → `candidate.refuseDuplicateEntrypoint` (G) → `candidate.refuseCancelledWrite` (I) | `applyWriteGates`; [tool_write_v3.go](../../services/proxy/internal/app/tool_write_v3.go) | Apply authorization, syntax, structure, and cancellation checks before delivery. |
+| `delivery` | `delivery.authorization` (G) → `delivery.hash` (G) → `delivery.target` (G) | `deliverCandidateBytes`; [delivery.go](../../services/proxy/internal/app/delivery.go) | Check authorization, candidate hash, and target before consuming the grant. |
+| `settlement` | `settlement.read` (T) → `settlement.identity` (G) → `settlement.validation` (G) | `settlementRefusal`; [delivery.go](../../services/proxy/internal/app/delivery.go) | After delivery, check readable bytes, authorized identity, and validation. |
+| `exit` | `exit.repairGate` (G) → `exit.promisedContentGate` (G) → `exit.announcedToolGate` (G) → `exit.deferredReplyGate` (G) → `exit.handoffGate` (G) → `exit.unreadCitationGate` (G) → `exit.unshownSymbolGate` (G) → `exit.scopeGate` (G) → `exit.runFirstGateAtExit` (G) → `exit.routeContractGate` (G) → `exit.prepareContract` (P) → `exit.backgroundGate` (G) → `exit.redirectGate` (G) → `exit.artifactGate` (G) → `exit.verificationGate` (G) → `exit.staleProbeGate` (G) → `exit.contractVerificationGate` (G) → `exit.orphanGate` (G) → `exit.planGate` (G) → `exit.actionGate` (G) → `exit.outputGate` (G) → `exit.claimCheckGate` (G) | `runState.exitGates`; [gates_exit.go](../../services/proxy/internal/app/gates_exit.go) | Both done and text exits use these rows. Keep bounce budgets and unresolved findings. |
+| `completion` | `completion.repairs` (G) → `completion.deliverables` (G) → `completion.action` (G) → `completion.verification` (G) → `completion.contract` (G) → `completion.deliverySettlement` (G) → `completion.declaredCompletion` (G) → `completion.reply` (G) → `completion.background` (G) → `completion.mutationDebt` (G) → `completion.unresolvedGates` (G) | `finalizeCompletion`; [loop_end.go](../../services/proxy/internal/app/loop_end.go) | Settle background effects first. Preserve refusal precedence for both exit kinds. |
+
+The table has 188 rows in 64 phases. The rows include preparation steps where later checks need their results.
+The initializers stay separate to meet the function-size limit. They assign one table; they do not register or sort checks dynamically.
+
+#### Validation that remains local
+
+These functions derive one value or perform one operation. Their internal branches do not declare another request-check sequence.
+
+| Local work | Owners and reason |
+| --- | --- |
+| Argument decoding and canonicalization | Tool decoders, `canonicalToolArgs`, and `judgeWorkspacePathArg` construct one validated argument object. Both loop and direct dispatch retain this trust boundary. |
+| Reply and fence parsing | `extractModelResponse`, fence parsers, and content sanitation derive one reply or body. The table rejects their results. |
+| Matching and line relocation | `locateOldStr`, fuzzy matching, `relocateStaleRange`, and diagnostic selection find one edit location. Independent uniqueness and replacement guards are table rows. |
+| Comparative syntax checks | `writeRegressionGate`, `writeFileThroughV3`, `editSyntaxObservation`, and syntax helpers compare a proposal with its baseline. Their branches preserve repair and warning policies. |
+| Structural analysis | Unresolved-call, embedded-script, entrypoint, orphan, and claim algorithms derive one finding. Their request-path precedence belongs to the table. |
+| Evidence and authorization proofs | `decideAuthorization`, `scopeAdmitsCandidate`, grant identity checks, `settlementStatus`, and ledger predicates derive one proof result. They retain their evidence owners. |
+| Grant consumption and file operations | `consumeAuthorizationGrant`, atomic writes, `relocateFile`, and deletion retain their transaction and error boundaries. Approval references remain held until removal returns. |
+| Fenced retry protocol | `fencedFetch.ask` and `settle` retain attempt charging, retry eligibility, and event emission. Admission guards belong to `fencedFetch`. |
+| Service protocols | Request construction, transport errors, decoding, and producer fallback routing remain beside each external call. They preserve the existing error and mutation records. |
+| Read and search algorithms | Read windows, byte caps, outline fallback, regex compilation, traversal filters, and directory operations construct one tool result. Scalar input guards are table rows. |
+| Completion evidence | `replyIncompleteReason`, `terminalCompletionAllowed`, cancellation finalization, and terminal emission keep their internal classification and cleanup rules. The table preserves completion precedence. |
+| Result observations | Ledger updates, mutation debt, literal repair, warning discharge, and corrective messages stay after their original execution or streaming boundaries. Failure-limit guards are table rows. |
+
+#### Behavior checks and replay reach
+
+The starting revision has 12 recordings. All 75 replay tests pass without changed recordings or comparison rules.
+The starting reach report covers 4,304 of 14,811 proxy statements (29.1%). Replay coverage alone cannot verify this refactor.
+The following focused suites cover migrated paths outside that baseline reach.
+
+| Coverage gap or boundary | Focused behavior tests |
+| --- | --- |
+| Phase initialization, short circuits, categories, and competing failures | `gates_exit_test.go`: `TestCheckTableInitializesEveryPhase`, `TestCheckCategoryDoesNotChooseTheControlOutcome`, and `TestDispatchChecksKeepCompetingFailuresInOrder`. |
+| Stateful failure limits | `TestFailureCeilingStopsBeforeUpdatingThePathWindow`; `loop_ban_blackbox_test.go`; existing failure-loop tests in `loop_detectors_test.go`. |
+| Fenced admission, failed resolution, and cancellation | `model_fenced_channel_test.go`; `model_reply_test.go`: `TestFencedFetchCategoriesPreserveTheErrorAndFailureCharge` and `TestCancelledModelPhaseDoesNotCallInference`. |
+| Unread overwrites and repeated proposals | `gates_edit_requests_test.go`; `loop_detector_write_steering_test.go`; `candidate_advisory_bounds_test.go`. |
+| Structural splices and syntax refusals | `tool_structural_edit_test.go`, including `TestStructuralSpliceChecksKeepTheFirstFailure`; `gates_check_outcome_test.go`; `tool_edit_replace_lines_test.go`. |
+| Direct writes, warning writes, and validation overlays | `tools_test.go`; `tool_write_validation_overlay_test.go`; `tool_write_v3_offending_line_test.go`; candidate delivery tests. |
+| Candidate gate order and delivery boundaries | `delivery_registry_test.go` checks row names and adapter calls. `delivery_test.go` and `delivery_settlement_test.go` check resulting files and settlement. |
+| Done and text exits, spent budgets, and completion claims | `loop_detectors_test.go`; `guardrails_test.go`; `gates_exit_spent_test.go`; `gates_completion_test.go`. |
+| Direct dispatch, permission order, deletion, and moves | `task_readonly_enforcement_test.go`; `guardrails_permissions_test.go`; `tool_effect_deletion_test.go`; tool behavior tests. |
+
+These tests keep existing refusal text, mutation facts, validation facts, and counter effects observable.
+The full verification also runs proxy race tests, end-to-end tests, static checks, and code-health checks.
+
 ### Grammar Enforcement
 
 Every model output is constrained toward one of three valid JSON shapes:

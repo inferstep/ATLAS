@@ -8,9 +8,8 @@ it. Run 9 was caught only because that run happened to reach for
 `replace_lines`; run 10 made the identical dead-loop edit through `edit_file`
 and it landed, with the page still returning 200.
 
-A check wired into four of five write paths reads as covered and is not. This
-asserts the wiring directly, because nothing else does: each tool builds its
-own chain and Go cannot tell you one is missing a call.
+A check wired into four of five write paths reads as covered and is not.
+Each write route must reach every required gate through its function calls and check phases.
 """
 import re
 from pathlib import Path
@@ -18,7 +17,10 @@ from pathlib import Path
 import pytest
 
 PROXY = Path(__file__).resolve().parents[3] / "services" / "proxy" / "internal" / "app"
-TOOL_FILES = ("tool_write_v3.go", "tool_write.go", "tool_edit.go", "tool_structural_edit.go")
+TOOL_FILES = (
+    "tool_write_v3.go", "tool_write.go", "tool_edit.go", "tool_structural_edit.go",
+    "tool_args.go", "tool_read.go", "loop.go",
+)
 
 # Gates every write path must run, and why skipping one is not cosmetic.
 REQUIRED = {
@@ -35,8 +37,8 @@ WRITE_TOOLS = ["writeFile", "editFile", "structuralEdit", "insertAfter", "replac
 
 # Each way a write tool lands bytes, named by the function that takes it. Each
 # way must run every gate itself: a gate on another way of the same tool does
-# not run on this one. writeFile's V3 route is checked from applyWriteGates's
-# list, below.
+# not run on this one. writeFile's V3 route is checked through applyWriteGates
+# and its check phase, below.
 LANDING_PATHS = {
     "writeFile": ("writeFileDirectRoute", "writeAfterV3Failure"),
     "editFile": ("executeEditFile",),
@@ -63,21 +65,34 @@ def _tool_source() -> str:
 
 
 def _function(src: str, name: str) -> str:
-    """One function of the tool files, from its `func` line to its closing brace."""
-    assert f"func {name}(" in src, f"the tool files have no function {name} — was it renamed?"
-    return src[src.index(f"func {name}("):].split("\n}\n", 1)[0]
+    """One function, typed adapter, or check phase, up to its closing brace."""
+    end = "\n}\n"
+    if name.startswith("proxyChecks."):
+        pattern = rf"^\t{re.escape(name)} = \[\]orderedCheck\[\w+\]\{{"
+        end = "\n\t}\n"
+    elif "." in name:
+        receiver, method = name.split(".")
+        pattern = rf"^func \(\w+ \*{receiver}\) {method}\("
+    else:
+        pattern = rf"^func {re.escape(name)}\("
+    found = re.search(pattern, src, re.M)
+    assert found, f"the tool files have no function or phase {name} — was it renamed?"
+    return src[found.start():].split(end, 1)[0]
 
 
 def _reached(src: str, start: str, stops=frozenset()) -> list:
-    """The names of `start` and of every function of the tool files that it names, and that those name
-    in turn. A function in `stops` is not entered."""
+    """Follow function calls, executed check phases, and their typed adapters. Do not enter names in `stops`."""
     defined = set(re.findall(r"^func (\w+)\(", src, re.M))
     seen, todo = [], [start]
     while todo:
         name = todo.pop()
         if name not in seen and name not in stops:
             seen.append(name)
-            todo += [n for n in re.findall(r"\w+", _function(src, name)) if n in defined]
+            body = _function(src, name)
+            todo += [n for n in re.findall(r"\b(\w+)\(", body) if n in defined]
+            todo += re.findall(r"\bExecute:\s+(\w+),", body)
+            todo += re.findall(r"runCheckPhase\((proxyChecks\.\w+),", body)
+            todo += [f"{receiver}.{method}" for receiver, method in re.findall(r"\(\*(\w+)\)\.(\w+)", body)]
     return seen
 
 
@@ -124,21 +139,29 @@ def test_every_write_path_goes_through_the_pipeline(bodies, tool):
     )
 
 
-def _steps_of_the_write_route() -> str:
-    """The bodies of the gates that applyWriteGates runs. A gate's name anywhere else in the tool runs nothing."""
-    src = _tool_source()
-    listed = re.search(r"func applyWriteGates\(.*?\[\]func\(\*v3Write\) \*wire\.ToolResult\{(.*?)\n\t\} \{", src, re.S)
-    assert listed, "applyWriteGates has no list of gates — did the write route get restructured?"
-    names = re.findall(r"\w+", listed.group(1))
-    assert names, "applyWriteGates lists no gate"
-    return "\n".join(_function(src, name) for name in names)
-
-
 @pytest.mark.parametrize("gate,consequence", sorted(REQUIRED.items()))
 def test_the_write_route_runs_every_gate_from_its_list(gate, consequence):
-    assert gate in _steps_of_the_write_route(), (
+    assert gate in _reach(_tool_source(), "applyWriteGates"), (
         f"no gate on applyWriteGates's list calls {gate} — {consequence}."
     )
+
+
+@pytest.mark.parametrize("start,original,replacement", [
+    pytest.param("applyWriteGates", "refuseBrokenEmbeddedScript(input.write)", "nil", id="inline-adapter"),
+    pytest.param("writeFileDirectRoute", "(*directLandingCheckInput).embedded",
+                 "(*directLandingCheckInput).entrypoint", id="typed-adapter"),
+    pytest.param("writeFileDirectRoute", "runCheckPhase(proxyChecks.directLanding, &check)",
+                 "skippedPhase(&check)", id="disconnected-phase"),
+])
+def test_a_disconnected_gate_is_not_counted_on_its_write_path(start, original, replacement):
+    src = _tool_source()
+    assert src.count(original) == 1, f"the fault must replace one occurrence of {original}"
+    assert "embeddedScriptGate" in _reach(src, start)
+
+    disconnected = src.replace(original, replacement)
+
+    assert "embeddedScriptGate" in _reach(disconnected, "executeEditFile"), "the edit path still runs the gate"
+    assert "embeddedScriptGate" not in _reach(disconnected, start)
 
 
 def test_every_write_tool_names_the_ways_it_lands_bytes():
@@ -148,14 +171,31 @@ def test_every_write_tool_names_the_ways_it_lands_bytes():
 @pytest.mark.parametrize("tool", WRITE_TOOLS)
 def test_no_write_tool_lands_bytes_outside_its_named_ways(tool):
     src = _tool_source()
-    writers = {name for name in re.findall(r"^func (\w+)\(", src, re.M)
-               if any(write in _function(src, name) for write in DISK_WRITES)}
     named = {path for paths in LANDING_PATHS.values() for path in paths} | {V3_ROUTE, UNGATED_WAY}
-    outside = sorted(set(_reached(src, f"{tool}Tool", stops=named)) & writers)
+    outside = sorted(name for name in _reached(src, f"{tool}Tool", stops=named)
+                     if any(write in _function(src, name) for write in DISK_WRITES))
     assert not outside, (
         f"{tool}Tool reaches {outside}, which change the disk, on a way that LANDING_PATHS does not name. "
         f"Name the way, so its gates are checked, or make it run them."
     )
+
+
+@pytest.mark.parametrize("marker,fault", [
+    pytest.param("func (check *writeEarlyCheckInput) sibling() checkResult {",
+                 '\n\tos.WriteFile("unexpected.txt", nil, 0600)', id="typed-adapter"),
+    pytest.param("\tproxyChecks.writeEarly = []orderedCheck[writeEarlyCheckInput]{",
+                 '\n\t\t{"writeEarly.unexpectedWrite", func(check *writeEarlyCheckInput) checkResult {\n'
+                 '\t\t\tos.WriteFile("unexpected.txt", nil, 0600)\n'
+                 '\t\t\treturn checkResult{checkPass, turnContinues}\n\t\t}},', id="inline-adapter"),
+])
+def test_the_disk_write_check_catches_writes_inside_adapters(monkeypatch, marker, fault):
+    src = _tool_source()
+    assert src.count(marker) == 1, f"the fault must change one occurrence of {marker}"
+    changed = src.replace(marker, marker + fault)
+    monkeypatch.setattr(f"{__name__}._tool_source", lambda: changed)
+
+    with pytest.raises(AssertionError, match="which change the disk"):
+        test_no_write_tool_lands_bytes_outside_its_named_ways("writeFile")
 
 
 @pytest.mark.parametrize("tool, path", LANDINGS)

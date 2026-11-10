@@ -506,14 +506,7 @@ func investigationScopeUnmet(ctx *AgentContext, userMessage, claimText string,
 // bodiesSeenInRun lists the base names of files whose contents this run was
 // actually shown, sorted, so a message about them reads the same way twice.
 func bodiesSeenInRun(ctx *AgentContext) []string {
-	seen := map[string]bool{}
-	ctx.mu.Lock()
-	for path, ok := range ctx.BodySeen {
-		if ok {
-			seen[filepath.Base(path)] = true
-		}
-	}
-	ctx.mu.Unlock()
+	seen := ctx.bodySeenBaseNames()
 	out := make([]string, 0, len(seen))
 	for name := range seen {
 		out = append(out, name)
@@ -537,14 +530,7 @@ func bodiesSeenInRun(ctx *AgentContext) []string {
 // guard is a floor against answering for one file out of several, not a test
 // of whether an answer is correct.
 func answerNamesSymbolFrom(ctx *AgentContext, base, claimText string) bool {
-	ctx.mu.Lock()
-	sources := map[string]string{}
-	for p, content := range ctx.FilesRead {
-		if filepath.Base(p) == base {
-			sources[p] = content
-		}
-	}
-	ctx.mu.Unlock()
+	sources := ctx.readsNamed(base)
 	for path, source := range sources {
 		for _, sym := range outlineByRegex(path, source) {
 			// Short names ("get", "id") appear in ordinary prose; requiring four

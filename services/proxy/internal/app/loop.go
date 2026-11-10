@@ -15,6 +15,759 @@ import (
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
 
+// checkCategory records a known cause or failed operation, separately from turn control.
+type checkCategory uint8
+
+const (
+	checkPass checkCategory = iota + 1
+	checkGuardRefusal
+	checkToolError
+	checkModelError
+	checkInfrastructureError
+)
+
+type checkResult struct {
+	category checkCategory
+	outcome  turnOutcome
+}
+
+type orderedCheck[T any] struct {
+	name string
+	run  func(*T) checkResult
+}
+
+func runCheckPhase[T any](checks []orderedCheck[T], input *T) checkResult {
+	for _, check := range checks {
+		result := check.run(input)
+		if result.outcome != turnContinues {
+			return result
+		}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+// proxyChecks owns the order within each existing execution phase.
+// Preparation rows preserve the boundaries between checks with shared state.
+var proxyChecks struct {
+	request              []orderedCheck[requestCheckInput]
+	requestDirectory     []orderedCheck[requestServiceCheckInput]
+	requestConfiguration []orderedCheck[requestServiceCheckInput]
+	requestServices      []orderedCheck[requestServiceCheckInput]
+	stream               []orderedCheck[streamCheckInput]
+	conversation         []orderedCheck[AgentContext]
+	modelStart           []orderedCheck[modelCheckInput]
+	modelInference       []orderedCheck[modelCheckInput]
+	modelReply           []orderedCheck[modelCheckInput]
+	beforeWorkspace      []orderedCheck[toolCheckInput]
+	workspace            []orderedCheck[toolCheckInput]
+	afterWorkspace       []orderedCheck[toolCheckInput]
+	writePreparation     []orderedCheck[writePreparationCheckInput]
+	warnedWrite          []orderedCheck[warnedWriteCheckInput]
+	fencedCall           []orderedCheck[fencedCallCheckInput]
+	fencedFetch          []orderedCheck[fencedFetchCheckInput]
+	fencedResolution     []orderedCheck[writePreparationCheckInput]
+	existingWrite        []orderedCheck[existingWriteCheckInput]
+	beforeDispatch       []orderedCheck[toolCheckInput]
+	toolHealth           []orderedCheck[toolHealthCheckInput]
+	dispatchSelection    []orderedCheck[dispatchSelectionCheckInput]
+	dispatch             []orderedCheck[dispatchCheckInput]
+	dispatchAfter        []orderedCheck[dispatchSelectionCheckInput]
+	toolReported         []orderedCheck[toolHealthCheckInput]
+	failure              []orderedCheck[failureCheckInput]
+	readFile             []orderedCheck[readFileCheckInput]
+	outlineInput         []orderedCheck[outlineInputCheckInput]
+	searchInput          []orderedCheck[searchInputCheckInput]
+	findInput            []orderedCheck[findInputCheckInput]
+	writeInput           []orderedCheck[writeEarlyCheckInput]
+	writeEarly           []orderedCheck[writeEarlyCheckInput]
+	fastWrite            []orderedCheck[fastWriteCheckInput]
+	directWrite          []orderedCheck[fastWriteCheckInput]
+	directLanding        []orderedCheck[directLandingCheckInput]
+	editInput            []orderedCheck[editInputCheckInput]
+	editRead             []orderedCheck[editReadCheckInput]
+	matchedEdit          []orderedCheck[matchedEditCheckInput]
+	composedEdit         []orderedCheck[composedEditCheckInput]
+	editLanding          []orderedCheck[editLandingCheckInput]
+	insertInput          []orderedCheck[insertInputCheckInput]
+	replaceInput         []orderedCheck[replaceInputCheckInput]
+	lineRead             []orderedCheck[lineReadCheckInput]
+	insertion            []orderedCheck[insertionCheckInput]
+	lineReplacement      []orderedCheck[lineReplacementCheckInput]
+	lineLanding          []orderedCheck[lineLandingCheckInput]
+	structuralInput      []orderedCheck[structuralInputCheckInput]
+	structuralRead       []orderedCheck[structuralReadCheckInput]
+	structuralSplice     []orderedCheck[structuralSpliceCheckInput]
+	structuralLanding    []orderedCheck[structuralLandingCheckInput]
+	deleteInput          []orderedCheck[deleteCheckInput]
+	deleteTarget         []orderedCheck[deleteCheckInput]
+	deleteApproval       []orderedCheck[deleteCheckInput]
+	move                 []orderedCheck[moveCheckInput]
+	commandTrust         []orderedCheck[commandCheckInput]
+	commandMemory        []orderedCheck[commandCheckInput]
+	background           []orderedCheck[backgroundCheckInput]
+	tailInput            []orderedCheck[tailInputCheckInput]
+	stopInput            []orderedCheck[stopInputCheckInput]
+	editCandidate        []orderedCheck[editCandidateCheckInput]
+	candidate            []orderedCheck[candidateCheckInput]
+	delivery             []orderedCheck[deliveryCheckInput]
+	settlement           []orderedCheck[settlementCheckInput]
+	exit                 []orderedCheck[exitCheckInput]
+	completion           []orderedCheck[completionCheckInput]
+}
+
+func init() {
+	proxyChecks.request = []orderedCheck[requestCheckInput]{
+		{"request.method", (*requestCheckInput).method},
+		{"request.decode", (*requestCheckInput).decode},
+		{"request.message", (*requestCheckInput).message},
+	}
+}
+
+func init() {
+	proxyChecks.requestDirectory = []orderedCheck[requestServiceCheckInput]{
+		{"requestDirectory.directory", (*requestServiceCheckInput).directory},
+	}
+}
+
+func init() {
+	proxyChecks.requestConfiguration = []orderedCheck[requestServiceCheckInput]{
+		{"requestConfiguration.configuration", (*requestServiceCheckInput).configuration},
+	}
+}
+
+func init() {
+	proxyChecks.requestServices = []orderedCheck[requestServiceCheckInput]{
+		{"requestServices.contract", (*requestServiceCheckInput).contract},
+		{"requestServices.lens", (*requestServiceCheckInput).lens},
+	}
+}
+
+func init() {
+	proxyChecks.stream = []orderedCheck[streamCheckInput]{
+		{"stream.supported", (*streamCheckInput).supported},
+	}
+}
+
+func init() {
+	proxyChecks.conversation = []orderedCheck[AgentContext]{
+		{"conversation.verifyWorkspaceAlignment", func(ctx *AgentContext) checkResult {
+
+			if problem := verifyWorkspaceAlignment(ctx); problem != "" {
+				log.Printf("[agent] refusing to start — proxy and sandbox workspaces are not aligned")
+				emitTerminal(ctx, nil, wire.TerminalFailed, "workspace_misaligned", problem)
+				return checkResult{checkInfrastructureError, runEnds}
+			}
+			return checkResult{checkPass, turnContinues}
+		}},
+	}
+}
+
+func init() {
+	proxyChecks.modelStart = []orderedCheck[modelCheckInput]{
+		{"modelStart.cancellation", (*modelCheckInput).cancellation},
+	}
+}
+
+func init() {
+	proxyChecks.modelInference = []orderedCheck[modelCheckInput]{
+		{"modelInference.inference", (*modelCheckInput).inference},
+	}
+}
+
+func init() {
+	proxyChecks.modelReply = []orderedCheck[modelCheckInput]{
+		{"modelReply.parse", (*modelCheckInput).parse},
+		{"modelReply.swallowedContent", (*modelCheckInput).swallowedContent},
+		{"modelReply.ambiguousContent", (*modelCheckInput).ambiguousContent},
+	}
+}
+
+func init() {
+	proxyChecks.beforeWorkspace = []orderedCheck[toolCheckInput]{
+		// Check permissions. In default and accept-edits modes a
+		// destructive tool pauses the loop until the client approves or
+		// denies it (via POST /v1/permission). Yolo mode and pre-approved
+		// tools short-circuit needsPermission and never reach here. The
+		// legacy PermissionFn is still honored for non-interactive callers.
+		//
+		// Deletion runs this LATER -- see below. It has to be asked after
+		// the path is canonicalised and its structured intent is on the
+		// record, or a refusal leaves nothing owed and a run whose only
+		// act was a refused deletion reports completed.
+		{"beforeWorkspace.permission", func(input *toolCheckInput) checkResult {
+			if input.parsed.Name != "delete_file" {
+				return input.permission()
+			}
+			return checkResult{checkPass, turnContinues}
+		}},
+		{"beforeWorkspace.refuseTruncatedArgs", func(input *toolCheckInput) checkResult {
+			return turnCheckResult(checkModelError, input.loop.refuseTruncatedArgs(input.turn, *input.parsed))
+		}},
+	}
+}
+
+func init() {
+	proxyChecks.workspace = []orderedCheck[toolCheckInput]{
+		{"workspace.workspace", (*toolCheckInput).workspace},
+	}
+}
+
+func init() {
+	proxyChecks.afterWorkspace = []orderedCheck[toolCheckInput]{
+		// The intent is on the record from here: the arguments parse, the
+		// path is inside the workspace, and for every tool but delete_file
+		// permission was granted (deletion asks just below). Every later
+		// refusal -- a gate, a failed fenced resolution, a failed write --
+		// leaves the debt standing, so these pre-dispatch failures do not
+		// disappear from the record.
+		{"afterWorkspace.noteMutationIntent", func(input *toolCheckInput) checkResult {
+			noteMutationIntent(input.loop.ctx, input.loop.st, input.parsed.Name, input.parsed.Args)
+			return checkResult{checkPass, turnContinues}
+		}},
+		// Deletion asks here, not with the others. By this point the path
+		// has parsed, canonicalised and cleared the workspace boundary,
+		// and the structured intent is recorded -- so a refusal, a denial,
+		// a timeout or a cancel all leave the debt standing and the run
+		// cannot call itself finished. Asked any earlier, a refused deletion
+		// would owe nothing, and a run whose only act was that refused
+		// deletion would report completed.
+		{"afterWorkspace.permission", func(input *toolCheckInput) checkResult {
+			if input.parsed.Name == "delete_file" {
+				return input.permission()
+			}
+			return checkResult{checkPass, turnContinues}
+		}},
+		{"afterWorkspace.runFirstGateForEdits", func(input *toolCheckInput) checkResult {
+			return turnCheckResult(checkGuardRefusal, input.loop.runFirstGateForEdits(*input.parsed))
+		}},
+		{"afterWorkspace.prepareWriteFile", func(input *toolCheckInput) checkResult {
+			return input.loop.prepareWriteFile(input.turn, input.parsed, input.intentArgs)
+		}},
+	}
+}
+
+func init() {
+	proxyChecks.writePreparation = []orderedCheck[writePreparationCheckInput]{
+		{"writePreparation.runFirstGateForWrite", func(input *writePreparationCheckInput) checkResult {
+			return turnCheckResult(checkGuardRefusal, input.loop.runFirstGateForWrite(input.write))
+		}},
+		{"writePreparation.resolveFencedContent", func(input *writePreparationCheckInput) checkResult {
+			return input.loop.resolveFencedContent(input.turn, input.parsed, input.intentArgs, input.write)
+		}},
+	}
+}
+
+func init() {
+	proxyChecks.warnedWrite = []orderedCheck[warnedWriteCheckInput]{
+		{"warnedWrite.recovery", (*warnedWriteCheckInput).recovery},
+		{"warnedWrite.bounce", (*warnedWriteCheckInput).bounce},
+	}
+}
+
+func init() {
+	proxyChecks.fencedCall = []orderedCheck[fencedCallCheckInput]{
+		{"fencedCall.arguments", (*fencedCallCheckInput).arguments},
+		{"fencedCall.decode", (*fencedCallCheckInput).decode},
+		{"fencedCall.path", (*fencedCallCheckInput).path},
+		{"fencedCall.workspace", (*fencedCallCheckInput).workspace},
+		{"fencedCall.denyList", (*fencedCallCheckInput).denyList},
+	}
+}
+
+func init() {
+	proxyChecks.fencedFetch = []orderedCheck[fencedFetchCheckInput]{
+		{"fencedFetch.channel", (*fencedFetchCheckInput).channel},
+		{"fencedFetch.allowance", (*fencedFetchCheckInput).allowance},
+		{"fencedFetch.budget", (*fencedFetchCheckInput).budget},
+	}
+}
+
+func init() {
+	proxyChecks.fencedResolution = []orderedCheck[writePreparationCheckInput]{
+		{"fencedResolution.recoverChannel", (*writePreparationCheckInput).recoverChannel},
+		{"fencedResolution.replaceFencedSentinel", func(input *writePreparationCheckInput) checkResult {
+			return input.loop.replaceFencedSentinel(input.turn, input.parsed, input.intentArgs, input.write, input.trimmed)
+		}},
+	}
+}
+
+func init() {
+	proxyChecks.existingWrite = []orderedCheck[existingWriteCheckInput]{
+		{"existingWrite.unread", (*existingWriteCheckInput).unread},
+		{"existingWrite.rewrite", (*existingWriteCheckInput).rewrite},
+	}
+}
+
+func init() {
+	proxyChecks.beforeDispatch = []orderedCheck[toolCheckInput]{
+		{"beforeDispatch.redirectForegroundServer", func(input *toolCheckInput) checkResult {
+			return turnCheckResult(checkGuardRefusal, input.loop.redirectForegroundServer(*input.parsed, input.intentArgs))
+		}},
+		{"beforeDispatch.refuseUnsafeRunCommand", func(input *toolCheckInput) checkResult {
+			return turnCheckResult(checkGuardRefusal, input.loop.refuseUnsafeRunCommand(*input.parsed, input.intentArgs))
+		}},
+		{"beforeDispatch.refuseUnsafeRunBackground", func(input *toolCheckInput) checkResult {
+			return turnCheckResult(checkGuardRefusal, input.loop.refuseUnsafeRunBackground(*input.parsed, input.intentArgs))
+		}},
+		{"beforeDispatch.countWholeFileWrites", func(input *toolCheckInput) checkResult {
+			input.runawayWrite = input.loop.countWholeFileWrites(*input.parsed)
+			return checkResult{checkPass, turnContinues}
+		}},
+		{"beforeDispatch.refuseBannedTool", func(input *toolCheckInput) checkResult {
+			return turnCheckResult(checkGuardRefusal, input.loop.refuseBannedTool(input.turn, *input.parsed))
+		}},
+		{"beforeDispatch.answerRejectedProposal", func(input *toolCheckInput) checkResult {
+			return turnCheckResult(checkGuardRefusal, input.loop.answerRejectedProposal(*input.parsed, input.intentArgs))
+		}},
+		{"beforeDispatch.answerBrokenArtifact", func(input *toolCheckInput) checkResult {
+			return turnCheckResult(checkGuardRefusal, input.loop.answerBrokenArtifact(*input.parsed, input.intentArgs))
+		}},
+		{"beforeDispatch.refuseIdenticalRetry", func(input *toolCheckInput) checkResult {
+			return turnCheckResult(checkGuardRefusal, input.loop.refuseIdenticalRetry(input.turn, *input.parsed, input.intentArgs))
+		}},
+	}
+}
+
+func init() {
+	proxyChecks.toolHealth = []orderedCheck[toolHealthCheckInput]{
+		{"toolHealth.repetition", (*toolHealthCheckInput).repetition},
+		{"toolHealth.reasoning", (*toolHealthCheckInput).reasoning},
+		{"toolHealth.lens", (*toolHealthCheckInput).lens},
+	}
+}
+
+func init() {
+	proxyChecks.dispatchSelection = []orderedCheck[dispatchSelectionCheckInput]{
+		{"dispatchSelection.cachedRead", (*dispatchSelectionCheckInput).cachedRead},
+		{"dispatchSelection.rerun", (*dispatchSelectionCheckInput).rerun},
+	}
+}
+
+func init() {
+	proxyChecks.dispatch = []orderedCheck[dispatchCheckInput]{
+		{"dispatch.knownTool", (*dispatchCheckInput).knownTool},
+		{"dispatch.arguments", (*dispatchCheckInput).arguments},
+		{"dispatch.denyList", (*dispatchCheckInput).denyList},
+		{"dispatch.readOnly", (*dispatchCheckInput).readOnly},
+	}
+}
+
+func init() {
+	proxyChecks.dispatchAfter = []orderedCheck[dispatchSelectionCheckInput]{
+		{"dispatchAfter.cancelled", (*dispatchSelectionCheckInput).cancelled},
+	}
+}
+
+func init() {
+	proxyChecks.toolReported = []orderedCheck[toolHealthCheckInput]{
+		{"toolReported.reportedLensFailure", (*toolHealthCheckInput).reportedLensFailure},
+	}
+}
+
+func init() {
+	proxyChecks.failure = []orderedCheck[failureCheckInput]{
+		{"failure.ceiling", (*failureCheckInput).ceiling},
+		{"failure.samePath", (*failureCheckInput).samePath},
+	}
+}
+
+func init() {
+	proxyChecks.readFile = []orderedCheck[readFileCheckInput]{
+		{"readFile.pathCheck", (*readFileCheckInput).pathCheck},
+		{"readFile.read", (*readFileCheckInput).read},
+		{"readFile.binary", (*readFileCheckInput).binary},
+	}
+}
+
+func init() {
+	proxyChecks.outlineInput = []orderedCheck[outlineInputCheckInput]{
+		{"outlineInput.required", (*outlineInputCheckInput).required},
+	}
+}
+
+func init() {
+	proxyChecks.searchInput = []orderedCheck[searchInputCheckInput]{
+		{"searchInput.required", (*searchInputCheckInput).required},
+	}
+}
+
+func init() {
+	proxyChecks.findInput = []orderedCheck[findInputCheckInput]{
+		{"findInput.required", (*findInputCheckInput).required},
+	}
+}
+
+func init() {
+	proxyChecks.writeInput = []orderedCheck[writeEarlyCheckInput]{
+		{"writeInput.pathCheck", (*writeEarlyCheckInput).pathCheck},
+	}
+}
+
+func init() {
+	proxyChecks.writeEarly = []orderedCheck[writeEarlyCheckInput]{
+		{"writeEarly.sibling", (*writeEarlyCheckInput).sibling},
+		{"writeEarly.echo", (*writeEarlyCheckInput).echo},
+		{"writeEarly.stub", (*writeEarlyCheckInput).stub},
+	}
+}
+
+func init() {
+	proxyChecks.fastWrite = []orderedCheck[fastWriteCheckInput]{
+		{"fastWrite.syntax", (*fastWriteCheckInput).syntax},
+		{"fastWrite.unresolved", (*fastWriteCheckInput).unresolved},
+	}
+}
+
+func init() {
+	proxyChecks.directWrite = []orderedCheck[fastWriteCheckInput]{
+		{"directWrite.directUnresolved", (*fastWriteCheckInput).directUnresolved},
+	}
+}
+
+func init() {
+	proxyChecks.directLanding = []orderedCheck[directLandingCheckInput]{
+		{"directLanding.newFileWarning", (*directLandingCheckInput).newFileWarning},
+		{"directLanding.rewriteWarning", (*directLandingCheckInput).rewriteWarning},
+		// The two comparative gates the V3 route applies to the bytes it
+		// writes (writeFileWithV3). They are checks on the write, not part
+		// of candidate generation, so a write that does not generate --
+		// small, mid-iteration, or with nothing deliverable -- must not skip
+		// them. Healthy->broken and fail-soft, as there.
+		{"directLanding.readBaseline", (*directLandingCheckInput).readBaseline},
+		{"directLanding.embedded", (*directLandingCheckInput).embedded},
+		{"directLanding.entrypoint", (*directLandingCheckInput).entrypoint},
+	}
+}
+
+func init() {
+	proxyChecks.editInput = []orderedCheck[editInputCheckInput]{
+		{"editInput.path", (*editInputCheckInput).path},
+		{"editInput.oldString", (*editInputCheckInput).oldString},
+	}
+}
+
+func init() {
+	proxyChecks.editRead = []orderedCheck[editReadCheckInput]{
+		{"editRead.currentView", (*editReadCheckInput).currentView},
+		{"editRead.read", (*editReadCheckInput).read},
+		{"editRead.staleness", (*editReadCheckInput).staleness},
+	}
+}
+
+func init() {
+	proxyChecks.matchedEdit = []orderedCheck[matchedEditCheckInput]{
+		{"matchedEdit.unique", (*matchedEditCheckInput).unique},
+		{"matchedEdit.changed", (*matchedEditCheckInput).changed},
+	}
+}
+
+func init() {
+	proxyChecks.composedEdit = []orderedCheck[composedEditCheckInput]{
+		{"composedEdit.shrinkage", (*composedEditCheckInput).shrinkage},
+		{"composedEdit.unchanged", (*composedEditCheckInput).unchanged},
+		{"composedEdit.alreadyApplied", (*composedEditCheckInput).alreadyApplied},
+	}
+}
+
+func init() {
+	proxyChecks.editLanding = []orderedCheck[editLandingCheckInput]{
+		{"editLanding.syntax", (*editLandingCheckInput).syntax},
+		{"editLanding.unresolvedCalls", (*editLandingCheckInput).unresolvedCalls},
+		{"editLanding.embeddedScript", (*editLandingCheckInput).embeddedScript},
+		{"editLanding.entrypoint", (*editLandingCheckInput).entrypoint},
+	}
+}
+
+func init() {
+	proxyChecks.insertInput = []orderedCheck[insertInputCheckInput]{
+		{"insertInput.path", (*insertInputCheckInput).path},
+		{"insertInput.content", (*insertInputCheckInput).content},
+	}
+}
+
+func init() {
+	proxyChecks.replaceInput = []orderedCheck[replaceInputCheckInput]{
+		{"replaceInput.path", (*replaceInputCheckInput).path},
+	}
+}
+
+func init() {
+	proxyChecks.lineRead = []orderedCheck[lineReadCheckInput]{
+		{"lineRead.currentView", (*lineReadCheckInput).currentView},
+		{"lineRead.read", (*lineReadCheckInput).read},
+	}
+}
+
+func init() {
+	proxyChecks.insertion = []orderedCheck[insertionCheckInput]{
+		{"insertion.bounds", (*insertionCheckInput).bounds},
+		{"insertion.reparenting", (*insertionCheckInput).reparenting},
+	}
+}
+
+func init() {
+	proxyChecks.lineReplacement = []orderedCheck[lineReplacementCheckInput]{
+		{"lineReplacement.boundsCheck", (*lineReplacementCheckInput).boundsCheck},
+		{"lineReplacement.spanCheck", (*lineReplacementCheckInput).spanCheck},
+		{"lineReplacement.relocateCheck", (*lineReplacementCheckInput).relocateCheck},
+		{"lineReplacement.firstLineCheck", (*lineReplacementCheckInput).firstLineCheck},
+		{"lineReplacement.lastLineCheck", (*lineReplacementCheckInput).lastLineCheck},
+		{"lineReplacement.replacementCheck", (*lineReplacementCheckInput).replacementCheck},
+	}
+}
+
+func init() {
+	proxyChecks.lineLanding = []orderedCheck[lineLandingCheckInput]{
+		{"lineLanding.syntax", (*lineLandingCheckInput).syntax},
+		{"lineLanding.unresolved", (*lineLandingCheckInput).unresolved},
+		{"lineLanding.embedded", (*lineLandingCheckInput).embedded},
+		{"lineLanding.entrypoint", (*lineLandingCheckInput).entrypoint},
+	}
+}
+
+func init() {
+	proxyChecks.structuralInput = []orderedCheck[structuralInputCheckInput]{
+		{"structuralInput.path", (*structuralInputCheckInput).path},
+		{"structuralInput.selector", (*structuralInputCheckInput).selector},
+	}
+}
+
+func init() {
+	proxyChecks.structuralRead = []orderedCheck[structuralReadCheckInput]{
+		{"structuralRead.currentView", (*structuralReadCheckInput).currentView},
+		{"structuralRead.read", (*structuralReadCheckInput).read},
+		{"structuralRead.empty", func(c *structuralReadCheckInput) checkResult { return c.empty() }},
+		{"structuralRead.runaway", func(c *structuralReadCheckInput) checkResult { return c.runaway() }},
+		{"structuralRead.staleness", (*structuralReadCheckInput).staleness},
+	}
+}
+
+func init() {
+	proxyChecks.structuralSplice = []orderedCheck[structuralSpliceCheckInput]{
+		{"structuralSplice.service", (*structuralSpliceCheckInput).service},
+		{"structuralSplice.shrinkage", (*structuralSpliceCheckInput).shrinkage},
+		{"structuralSplice.unchanged", (*structuralSpliceCheckInput).unchanged},
+	}
+}
+
+func init() {
+	proxyChecks.structuralLanding = []orderedCheck[structuralLandingCheckInput]{
+		{"structuralLanding.syntax", (*structuralLandingCheckInput).syntax},
+		{"structuralLanding.unresolvedCalls", (*structuralLandingCheckInput).unresolvedCalls},
+		{"structuralLanding.embeddedScript", (*structuralLandingCheckInput).embeddedScript},
+		{"structuralLanding.entrypoint", (*structuralLandingCheckInput).entrypoint},
+	}
+}
+
+func init() {
+	proxyChecks.deleteInput = []orderedCheck[deleteCheckInput]{
+		{"deleteInput.pathCheck", (*deleteCheckInput).pathCheck},
+	}
+}
+
+func init() {
+	proxyChecks.deleteTarget = []orderedCheck[deleteCheckInput]{
+		{"deleteTarget.exists", (*deleteCheckInput).exists},
+		{"deleteTarget.empty", (*deleteCheckInput).empty},
+	}
+}
+
+func init() {
+	proxyChecks.deleteApproval = []orderedCheck[deleteCheckInput]{
+		{"deleteApproval.identity", (*deleteCheckInput).identity},
+		{"deleteApproval.capacity", (*deleteCheckInput).capacity},
+	}
+}
+
+func init() {
+	proxyChecks.move = []orderedCheck[moveCheckInput]{
+		{"move.paths", (*moveCheckInput).paths},
+		{"move.source", (*moveCheckInput).source},
+		{"move.destination", (*moveCheckInput).destination},
+		{"move.different", (*moveCheckInput).different},
+		{"move.absent", (*moveCheckInput).absent},
+	}
+}
+
+func init() {
+	proxyChecks.commandTrust = []orderedCheck[commandCheckInput]{
+		{"commandTrust.trust", (*commandCheckInput).trust},
+	}
+}
+
+func init() {
+	proxyChecks.commandMemory = []orderedCheck[commandCheckInput]{
+		{"commandMemory.memory", (*commandCheckInput).memory},
+	}
+}
+
+func init() {
+	proxyChecks.background = []orderedCheck[backgroundCheckInput]{
+		{"background.trust", (*backgroundCheckInput).trust},
+		{"background.command", (*backgroundCheckInput).command},
+		{"background.shell", (*backgroundCheckInput).shell},
+		{"background.host", (*backgroundCheckInput).host},
+	}
+}
+
+func init() {
+	proxyChecks.tailInput = []orderedCheck[tailInputCheckInput]{
+		{"tailInput.required", (*tailInputCheckInput).required},
+	}
+}
+
+func init() {
+	proxyChecks.stopInput = []orderedCheck[stopInputCheckInput]{
+		{"stopInput.required", (*stopInputCheckInput).required},
+	}
+}
+
+func init() {
+	proxyChecks.editCandidate = []orderedCheck[editCandidateCheckInput]{
+		{"editCandidate.empty", (*editCandidateCheckInput).empty},
+		{"editCandidate.unchanged", (*editCandidateCheckInput).unchanged},
+		{"editCandidate.rewrite", (*editCandidateCheckInput).rewrite},
+		{"editCandidate.language", (*editCandidateCheckInput).language},
+	}
+}
+
+func init() {
+	proxyChecks.candidate = []orderedCheck[candidateCheckInput]{
+		{"candidate.withdrawRefusedCandidate", func(input *candidateCheckInput) checkResult {
+			return input.accept(checkGuardRefusal, withdrawRefusedCandidate(input.write))
+		}},
+		{"candidate.refuseContentThatDoesNotParse", func(input *candidateCheckInput) checkResult {
+			return input.accept(checkGuardRefusal, refuseContentThatDoesNotParse(input.write))
+		}},
+		{"candidate.refuseUnresolvedCalls", func(input *candidateCheckInput) checkResult {
+			return input.accept(checkGuardRefusal, refuseUnresolvedCalls(input.write))
+		}},
+		{"candidate.refuseBrokenEmbeddedScript", func(input *candidateCheckInput) checkResult {
+			return input.accept(checkGuardRefusal, refuseBrokenEmbeddedScript(input.write))
+		}},
+		{"candidate.refuseDuplicateEntrypoint", func(input *candidateCheckInput) checkResult {
+			return input.accept(checkGuardRefusal, refuseDuplicateEntrypoint(input.write))
+		}},
+		{"candidate.refuseCancelledWrite", func(input *candidateCheckInput) checkResult {
+			return input.accept(checkInfrastructureError, refuseCancelledWrite(input.write))
+		}},
+	}
+}
+
+func init() {
+	proxyChecks.delivery = []orderedCheck[deliveryCheckInput]{
+		{"delivery.authorization", (*deliveryCheckInput).authorization},
+		{"delivery.hash", (*deliveryCheckInput).hash},
+		{"delivery.target", (*deliveryCheckInput).target},
+	}
+}
+
+func init() {
+	proxyChecks.settlement = []orderedCheck[settlementCheckInput]{
+		{"settlement.read", (*settlementCheckInput).read},
+		{"settlement.identity", (*settlementCheckInput).identity},
+		{"settlement.validation", (*settlementCheckInput).validation},
+	}
+}
+
+func init() {
+	proxyChecks.exit = []orderedCheck[exitCheckInput]{
+		{"exit.repairGate", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.repairGate(input.ctx))
+		}},
+		// The intent rows hold a reply that is not an answer yet: one that promises the
+		// content, announces a tool call it never made, or closes by deferring the
+		// work. A reply that says it cannot do the work is marked, not sent back.
+		{"exit.promisedContentGate", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.promisedContentGate(input.ctx, input.claimText))
+		}},
+		{"exit.announcedToolGate", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.announcedToolGate(input.ctx, input.claimText))
+		}},
+		{"exit.deferredReplyGate", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.deferredReplyGate(input.ctx, input.claimText))
+		}},
+		{"exit.handoffGate", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.handoffGate(input.ctx, input.claimText))
+		}},
+		// The evidence rows hold a reply that cites a file the run never read, or code
+		// that no read showed.
+		{"exit.unreadCitationGate", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.unreadCitationGate(input.ctx, input.claimText))
+		}},
+		{"exit.unshownSymbolGate", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.unshownSymbolGate(input.ctx, input.claimText))
+		}},
+		{"exit.scopeGate", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.scopeGate(input.ctx, input.userMessage, input.claimText))
+		}},
+		{"exit.runFirstGateAtExit", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.runFirstGateAtExit(input.ctx))
+		}},
+		{"exit.routeContractGate", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.routeContractGate(input.ctx))
+		}},
+		{"exit.prepareContract", (*exitCheckInput).prepareContract},
+		{"exit.backgroundGate", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.backgroundGate(input.ctx, input.contractOwed))
+		}},
+		// The verification rows hold an exit whose verification is missing, out of date
+		// or partial, in this order: a run only ever fed through stdin, bytes that
+		// changed after the run that verified them, no verifying run at all, a probe
+		// of older code, and a work contract that nothing current shows working.
+		{"exit.redirectGate", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.redirectGate(input.ctx))
+		}},
+		{"exit.artifactGate", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.artifactGate(input.ctx))
+		}},
+		{"exit.verificationGate", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.verificationGate(input.ctx))
+		}},
+		{"exit.staleProbeGate", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.staleProbeGate(input.ctx))
+		}},
+		{"exit.contractVerificationGate", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.contractVerificationGate(input.ctx, input.contractDemand, input.contractOwed))
+		}},
+		// The completion rows hold an exit that leaves the work unfinished, in this
+		// order: code nothing calls, plan steps never carried out, no change where
+		// the request asked for one, a named deliverable not on disk, and a claim of
+		// completeness the files do not bear out.
+		{"exit.orphanGate", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.orphanGate(input.ctx))
+		}},
+		{"exit.planGate", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.planGate(input.ctx))
+		}},
+		{"exit.actionGate", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.actionGate(input.ctx, input.userMessage))
+		}},
+		{"exit.outputGate", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.outputGate(input.ctx))
+		}},
+		{"exit.claimCheckGate", func(input *exitCheckInput) checkResult {
+			return input.result(input.state.claimCheckGate(input.ctx, input.userMessage, input.claimText))
+		}},
+	}
+}
+
+func init() {
+	proxyChecks.completion = []orderedCheck[completionCheckInput]{
+		{"completion.repairs", (*completionCheckInput).repairs},
+		{"completion.deliverables", (*completionCheckInput).deliverables},
+		{"completion.action", (*completionCheckInput).action},
+		{"completion.verification", (*completionCheckInput).verification},
+		{"completion.contract", (*completionCheckInput).contract},
+		{"completion.deliverySettlement", (*completionCheckInput).deliverySettlement},
+		{"completion.declaredCompletion", (*completionCheckInput).declaredCompletion},
+		{"completion.reply", (*completionCheckInput).reply},
+		{"completion.background", (*completionCheckInput).background},
+		{"completion.mutationDebt", (*completionCheckInput).mutationDebt},
+		{"completion.unresolvedGates", (*completionCheckInput).unresolvedGates},
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Agent loop — iterative tool-calling loop between model and executors
 // ---------------------------------------------------------------------------
@@ -75,11 +828,12 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 
 			// Enforce the workspace boundary before any pre-execution gate reads
 			// a path. executeToolCall repeats this check for parallel dispatch.
-			if rejection := enforceWorkspacePaths(&parsed, ctx); rejection != "" {
-				if loop.refuseOutsideWorkspace(parsed, intentArgs, rejection) {
-					return nil
-				}
+			workspaceCheck := toolCheckInput{loop: loop, turn: turn, parsed: &parsed, intentArgs: intentArgs}
+			switch runCheckPhase(proxyChecks.workspace, &workspaceCheck).outcome {
+			case turnEnds:
 				continue
+			case runEnds:
+				return nil
 			}
 
 			switch loop.screenAfterWorkspaceCheck(turn, response, &parsed, intentArgs) {
@@ -88,18 +842,11 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			case runEnds:
 				return nil
 			}
-			if parsed.Name == "write_file" {
-				var wfInput wire.WriteFileInput
-				if json.Unmarshal(parsed.Args, &wfInput) == nil {
-					existingPath := resolveAgentPath(ctx, wfInput.Path)
-					existing, readErr := os.ReadFile(existingPath)
-					switch loop.guardExistingFileWrite(parsed, intentArgs, wfInput, existingPath, existing, readErr) {
-					case turnEnds:
-						continue
-					case runEnds:
-						return nil
-					}
-				}
+			switch loop.screenExistingWrite(parsed, intentArgs) {
+			case turnEnds:
+				continue
+			case runEnds:
+				return nil
 			}
 
 			result, steers, callOutcome, callErr := loop.runToolCall(turn, parsed, intentArgs)
@@ -189,7 +936,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 // happened.
 func fetchFencedContent(ctx *AgentContext, rawCall, path string) (string, error) {
 	if err := fencedFetchRefusal(ctx, path); err != nil {
-		return "", err
+		return "", &fencedCheckError{err, checkGuardRefusal}
 	}
 	tag := fenceTagForPath(path)
 	note := wire.AgentMessage{Role: "user", Content: fmt.Sprintf(
@@ -232,13 +979,13 @@ func fetchFencedContent(ctx *AgentContext, rawCall, path string) (string, error)
 		}
 	}
 	if fetch.lastErr != nil {
-		return "", fmt.Errorf("fenced resolution for %s was cut after %d attempt(s) "+
+		return "", &fencedCheckError{fmt.Errorf("fenced resolution for %s was cut after %d attempt(s) "+
 			"this session (%v); send the file inline or edit it instead",
-			path, ctx.FencedFailures[fencedKey(ctx, path)], fetch.lastErr)
+			path, ctx.FencedFailures[fencedKey(ctx, path)], fetch.lastErr), checkInfrastructureError}
 	}
-	return "", fmt.Errorf("no fenced block after %d attempt(s) for %s this session; "+
+	return "", &fencedCheckError{fmt.Errorf("no fenced block after %d attempt(s) for %s this session; "+
 		"send the file inline or edit it instead",
-		ctx.FencedFailures[fencedKey(ctx, path)], path)
+		ctx.FencedFailures[fencedKey(ctx, path)], path), checkModelError}
 }
 
 // Toolchain describes one language ecosystem detected in the project.

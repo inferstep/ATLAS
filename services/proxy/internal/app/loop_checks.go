@@ -48,23 +48,8 @@ func announceToolCall(ctx *AgentContext, turn int, parsed wire.ModelResponse) js
 // workspace check: permission (a deletion asks after the check) and arguments
 // that do not parse.
 func (loop *agentLoop) screenBeforeWorkspaceCheck(turn int, response string, parsed wire.ModelResponse, intentArgs json.RawMessage) turnOutcome {
-	// Check permissions. In default and accept-edits modes a
-	// destructive tool pauses the loop until the client approves or
-	// denies it (via POST /v1/permission). Yolo mode and pre-approved
-	// tools short-circuit needsPermission and never reach here. The
-	// legacy PermissionFn is still honored for non-interactive callers.
-	//
-	// Deletion runs this LATER -- see below. It has to be asked after
-	// the path is canonicalised and its structured intent is on the
-	// record, or a refusal leaves nothing owed and a run whose only
-	// act was a refused deletion reports completed.
-	if parsed.Name != "delete_file" {
-		if outcome := loop.askPermission(turn, response, parsed, intentArgs); outcome != turnContinues {
-			return outcome
-		}
-	}
-
-	return loop.refuseTruncatedArgs(turn, parsed)
+	input := toolCheckInput{loop: loop, turn: turn, response: response, parsed: &parsed, intentArgs: intentArgs}
+	return runCheckPhase(proxyChecks.beforeWorkspace, &input).outcome
 }
 
 // refuseOutsideWorkspace answers a call the workspace check refused, counts the
@@ -91,32 +76,8 @@ func (loop *agentLoop) refuseOutsideWorkspace(parsed wire.ModelResponse, intentA
 // put a fetched body in place of a fenced sentinel; nothing else here changes
 // *parsed.
 func (loop *agentLoop) screenAfterWorkspaceCheck(turn int, response string, parsed *wire.ModelResponse, intentArgs json.RawMessage) turnOutcome {
-	ctx, st := loop.ctx, loop.st
-	// The intent is on the record from here: the arguments parse, the
-	// path is inside the workspace, and for every tool but delete_file
-	// permission was granted (deletion asks just below). Every later
-	// refusal -- a gate, a failed fenced resolution, a failed write --
-	// leaves the debt standing, so these pre-dispatch failures do not
-	// disappear from the record.
-	noteMutationIntent(ctx, st, parsed.Name, parsed.Args)
-
-	// Deletion asks here, not with the others. By this point the path
-	// has parsed, canonicalised and cleared the workspace boundary,
-	// and the structured intent is recorded -- so a refusal, a denial,
-	// a timeout or a cancel all leave the debt standing and the run
-	// cannot call itself finished. Asked any earlier, a refused deletion
-	// would owe nothing, and a run whose only act was that refused
-	// deletion would report completed.
-	if parsed.Name == "delete_file" {
-		if outcome := loop.askPermission(turn, response, *parsed, intentArgs); outcome != turnContinues {
-			return outcome
-		}
-	}
-
-	if outcome := loop.runFirstGateForEdits(*parsed); outcome != turnContinues {
-		return outcome
-	}
-	return loop.prepareWriteFile(turn, parsed, intentArgs)
+	input := toolCheckInput{loop: loop, turn: turn, response: response, parsed: parsed, intentArgs: intentArgs}
+	return runCheckPhase(proxyChecks.afterWorkspace, &input).outcome
 }
 
 // askPermission asks whether this tool call may run, when it needs asking. A
@@ -244,52 +205,33 @@ func (loop *agentLoop) runFirstGateForEdits(parsed wire.ModelResponse) turnOutco
 //
 // Order matters: "@fenced" resolution costs a full model sub-call, and
 // paying that for a write the gate is about to bounce is pure waste.
-func (loop *agentLoop) prepareWriteFile(turn int, parsed *wire.ModelResponse, intentArgs json.RawMessage) turnOutcome {
-	if parsed.Name == "write_file" {
-		var wfInput wire.WriteFileInput
-		if json.Unmarshal(parsed.Args, &wfInput) == nil {
-			if outcome := loop.runFirstGateForWrite(wfInput); outcome != turnContinues {
-				return outcome
-			}
-			return loop.resolveFencedContent(turn, parsed, intentArgs, wfInput)
-		}
+func (loop *agentLoop) prepareWriteFile(turn int, parsed *wire.ModelResponse, intentArgs json.RawMessage) checkResult {
+	if parsed.Name != "write_file" {
+		return checkResult{checkPass, turnContinues}
 	}
-	return turnContinues
+	input := writePreparationCheckInput{loop: loop, turn: turn, parsed: parsed, intentArgs: intentArgs}
+	if json.Unmarshal(parsed.Args, &input.write) != nil {
+		return checkResult{checkPass, turnContinues}
+	}
+	return runCheckPhase(proxyChecks.writePreparation, &input)
 }
 
 // runFirstGateForWrite holds back a write_file over a file whose warned version
 // on disk has never been run: the first recurrence is shown the file as it is,
 // later ones are told to run it first, within the gate's bounce budget.
 func (loop *agentLoop) runFirstGateForWrite(wfInput wire.WriteFileInput) turnOutcome {
-	ctx, st := loop.ctx, loop.st
-	if st.pendingWarnedRun[wfInput.Path] {
-		// The gate has already said this once. Repeating it while the
-		// same call stays available only spends its bounce budget, and
-		// then the identical writes resume. On the recurrence the
-		// model gets what it has been unable to get for itself -- the
-		// file as it actually is -- and the call that made no progress
-		// is held back until it changes.
-		if msg := fencedRunFirstRecovery(ctx, st, wfInput.Path, wfInput.Content); msg != "" {
-			st.bounceToolCall(ctx, "write_file", msg)
-			return turnEnds
-		}
-		if st.chargeBounce("run_first_gate") {
-			log.Printf("[agent] run-first gate: %s has a warned, unexecuted version on disk (bounce %d/%d)",
-				wfInput.Path, st.gateBounces["run_first_gate"], maxGateBounces)
-			st.bounceToolCall(ctx, "write_file", fmt.Sprintf(
-				"The version of %s you wrote is on disk with a parse warning and has never been run. Run it first — %s — before writing again. A rewrite that has not seen the runtime error is a guess.",
-				wfInput.Path, runFirstInstruction(ctx, wfInput.Path)))
-			return turnEnds
-		}
+	if !loop.st.pendingWarnedRun[wfInput.Path] {
+		return turnContinues
 	}
-	return turnContinues
+	input := warnedWriteCheckInput{loop: loop, write: wfInput}
+	return runCheckPhase(proxyChecks.warnedWrite, &input).outcome
 }
 
 // resolveFencedContent sees to a write_file whose content is the fenced
 // sentinel. The channel opens only for a call that can execute, and a spent
 // channel is offered its way out once, before any resolution.
-func (loop *agentLoop) resolveFencedContent(turn int, parsed *wire.ModelResponse, intentArgs json.RawMessage, wfInput wire.WriteFileInput) turnOutcome {
-	ctx, st := loop.ctx, loop.st
+func (loop *agentLoop) resolveFencedContent(turn int, parsed *wire.ModelResponse, intentArgs json.RawMessage, wfInput wire.WriteFileInput) checkResult {
+	ctx := loop.ctx
 	// Fenced-content resolution: everything downstream (the
 	// remaining gates, tier classification, execution) must see
 	// real bytes. "@fenced" is the model routing the file body
@@ -307,26 +249,18 @@ func (loop *agentLoop) resolveFencedContent(turn int, parsed *wire.ModelResponse
 	if !fencedUsable {
 		log.Printf("[agent] not opening the fenced channel for an unusable write_file call: %s", fencedWhy)
 	}
-	// The channel can be spent while the model keeps asking
-	// for it. Offer the way out ONCE, before anything tries
-	// another resolution, so the turn costs no generation.
-	if fencedUsable && fencing.IsSentinel(trimmed) {
-		if msg := fencedChannelRecovery(ctx, st, wfInput.Path); msg != "" {
-			st.bounceToolCall(ctx, "write_file", msg)
-			return turnEnds
-		}
+	if !fencedUsable || !fencing.IsSentinel(trimmed) {
+		return checkResult{checkPass, turnContinues}
 	}
-	if fencedUsable && fencing.IsSentinel(trimmed) {
-		return loop.replaceFencedSentinel(turn, parsed, intentArgs, wfInput, trimmed)
-	}
-	return turnContinues
+	input := writePreparationCheckInput{loop: loop, turn: turn, parsed: parsed, intentArgs: intentArgs, write: wfInput, trimmed: trimmed}
+	return runCheckPhase(proxyChecks.fencedResolution, &input)
 }
 
 // replaceFencedSentinel puts the file body in place of the sentinel: a body
 // that arrived inline and proves its own completion, or else one a fenced
 // sub-call fetches. The body becomes the call's arguments. A fetch that fails
 // is refused and counted.
-func (loop *agentLoop) replaceFencedSentinel(turn int, parsed *wire.ModelResponse, intentArgs json.RawMessage, wfInput wire.WriteFileInput, trimmed string) turnOutcome {
+func (loop *agentLoop) replaceFencedSentinel(turn int, parsed *wire.ModelResponse, intentArgs json.RawMessage, wfInput wire.WriteFileInput, trimmed string) checkResult {
 	ctx := loop.ctx
 	// Anything after the sentinel is the model inlining
 	// the file anyway. Exactly one of two things arrived,
@@ -359,7 +293,7 @@ func (loop *agentLoop) replaceFencedSentinel(turn int, parsed *wire.ModelRespons
 		stallsBefore := ctx.FencedStalls
 		fetched, ferr := fetchFencedContent(ctx, rawResponseForFence(*parsed), wfInput.Path)
 		if ferr != nil {
-			return loop.refuseFencedFetch(turn, *parsed, intentArgs, wfInput, ferr, stallsBefore)
+			return turnCheckResult(fencedErrorCategory(ferr), loop.refuseFencedFetch(turn, *parsed, intentArgs, wfInput, ferr, stallsBefore))
 		}
 		wfInput.Content = fetched
 		log.Printf("[agent] fenced content resolved for %s (%d bytes via sub-call)", wfInput.Path, len(fetched))
@@ -367,7 +301,7 @@ func (loop *agentLoop) replaceFencedSentinel(turn int, parsed *wire.ModelRespons
 	if rebuilt, merr := json.Marshal(wfInput); merr == nil {
 		parsed.Args = rebuilt
 	}
-	return turnContinues
+	return checkResult{checkPass, turnContinues}
 }
 
 // refuseFencedFetch answers a write_file whose fenced content could not be
@@ -485,11 +419,10 @@ func (loop *agentLoop) guardExistingFileWrite(parsed wire.ModelResponse, intentA
 		// A model that recognises a small input can otherwise
 		// write the textbook example over the real file without
 		// reading it, and solve the wrong data.
-		if isUnreadOverwrite(ctx, existingPath, corrupted, sessionOwned) {
-			return loop.refuseUnreadOverwrite(parsed, intentArgs, wfInput, existingPath, existingLines)
-		}
-		if existingLines > 5 && !corrupted && !sessionOwned {
-			return loop.refuseWholeFileRewrite(parsed, intentArgs, wfInput, existingPath, existingLines)
+		input := existingWriteCheckInput{loop: loop, parsed: parsed, intentArgs: intentArgs, write: wfInput,
+			path: existingPath, lines: existingLines, corrupted: corrupted, sessionOwned: sessionOwned}
+		if result := runCheckPhase(proxyChecks.existingWrite, &input); result.outcome != turnContinues {
+			return result.outcome
 		}
 		if existingLines > 5 {
 			// Name the actual carveout: the corrupted-file message on a
@@ -575,26 +508,9 @@ func (loop *agentLoop) refuseWholeFileRewrite(parsed wire.ModelResponse, intentA
 // a repeated rejected proposal or a repeated no-op edit, and the identical
 // re-send ban. It reports whether this call is a runaway write, and the outcome.
 func (loop *agentLoop) refuseBeforeDispatch(turn int, parsed wire.ModelResponse, intentArgs json.RawMessage) (bool, turnOutcome) {
-	if outcome := loop.redirectForegroundServer(parsed, intentArgs); outcome != turnContinues {
-		return false, outcome
-	}
-	if outcome := loop.refuseUnsafeRunCommand(parsed, intentArgs); outcome != turnContinues {
-		return false, outcome
-	}
-	if outcome := loop.refuseUnsafeRunBackground(parsed, intentArgs); outcome != turnContinues {
-		return false, outcome
-	}
-	runawayWrite := loop.countWholeFileWrites(parsed)
-	if outcome := loop.refuseBannedTool(turn, parsed); outcome != turnContinues {
-		return runawayWrite, outcome
-	}
-	if outcome := loop.answerRejectedProposal(parsed, intentArgs); outcome != turnContinues {
-		return runawayWrite, outcome
-	}
-	if outcome := loop.answerBrokenArtifact(parsed, intentArgs); outcome != turnContinues {
-		return runawayWrite, outcome
-	}
-	return runawayWrite, loop.refuseIdenticalRetry(turn, parsed, intentArgs)
+	input := toolCheckInput{loop: loop, turn: turn, parsed: &parsed, intentArgs: intentArgs}
+	result := runCheckPhase(proxyChecks.beforeDispatch, &input)
+	return input.runawayWrite, result.outcome
 }
 
 // redirectForegroundServer refuses a run_command that would start a server in
@@ -928,4 +844,115 @@ func workspaceRefusalPath(ctx *AgentContext, name string, args json.RawMessage) 
 	// No usable path field: the tool itself is the identity, so repeated
 	// refusals of the same tool still converge on one failure target.
 	return name
+}
+
+type toolCheckInput struct {
+	loop         *agentLoop
+	turn         int
+	response     string
+	parsed       *wire.ModelResponse
+	intentArgs   json.RawMessage
+	runawayWrite bool
+}
+
+func turnCheckResult(category checkCategory, outcome turnOutcome) checkResult {
+	if outcome == turnContinues {
+		return checkResult{checkPass, outcome}
+	}
+	return checkResult{category, outcome}
+}
+
+func (input *toolCheckInput) permission() checkResult {
+	return turnCheckResult(checkGuardRefusal, input.loop.askPermission(input.turn, input.response, *input.parsed, input.intentArgs))
+}
+
+type writePreparationCheckInput struct {
+	loop       *agentLoop
+	turn       int
+	parsed     *wire.ModelResponse
+	intentArgs json.RawMessage
+	write      wire.WriteFileInput
+	trimmed    string
+}
+
+func (input *writePreparationCheckInput) recoverChannel() checkResult {
+	if msg := fencedChannelRecovery(input.loop.ctx, input.loop.st, input.write.Path); msg != "" {
+		input.loop.st.bounceToolCall(input.loop.ctx, "write_file", msg)
+		return checkResult{checkGuardRefusal, turnEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+type warnedWriteCheckInput struct {
+	loop  *agentLoop
+	write wire.WriteFileInput
+}
+
+func (input *warnedWriteCheckInput) recovery() checkResult {
+	ctx, st, wfInput := input.loop.ctx, input.loop.st, input.write
+	if msg := fencedRunFirstRecovery(ctx, st, wfInput.Path, wfInput.Content); msg != "" {
+		st.bounceToolCall(ctx, "write_file", msg)
+		return checkResult{checkGuardRefusal, turnEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *warnedWriteCheckInput) bounce() checkResult {
+	ctx, st, wfInput := input.loop.ctx, input.loop.st, input.write
+	if st.chargeBounce("run_first_gate") {
+		log.Printf("[agent] run-first gate: %s has a warned, unexecuted version on disk (bounce %d/%d)",
+			wfInput.Path, st.gateBounces["run_first_gate"], maxGateBounces)
+		st.bounceToolCall(ctx, "write_file", fmt.Sprintf(
+			"The version of %s you wrote is on disk with a parse warning and has never been run. Run it first — %s — before writing again. A rewrite that has not seen the runtime error is a guess.",
+			wfInput.Path, runFirstInstruction(ctx, wfInput.Path)))
+		return checkResult{checkGuardRefusal, turnEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+type existingWriteCheckInput struct {
+	loop                    *agentLoop
+	parsed                  wire.ModelResponse
+	intentArgs              json.RawMessage
+	write                   wire.WriteFileInput
+	path                    string
+	lines                   int
+	corrupted, sessionOwned bool
+}
+
+func (input *existingWriteCheckInput) unread() checkResult {
+	if isUnreadOverwrite(input.loop.ctx, input.path, input.corrupted, input.sessionOwned) {
+		return turnCheckResult(checkGuardRefusal, input.loop.refuseUnreadOverwrite(input.parsed, input.intentArgs, input.write, input.path, input.lines))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *existingWriteCheckInput) rewrite() checkResult {
+	if input.lines > 5 && !input.corrupted && !input.sessionOwned {
+		return turnCheckResult(checkGuardRefusal, input.loop.refuseWholeFileRewrite(input.parsed, input.intentArgs, input.write, input.path, input.lines))
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *toolCheckInput) workspace() checkResult {
+	if rejection := enforceWorkspacePaths(check.parsed, check.loop.ctx); rejection != "" {
+		if check.loop.refuseOutsideWorkspace(*check.parsed, check.intentArgs, rejection) {
+			return checkResult{checkGuardRefusal, runEnds}
+		}
+		return checkResult{checkGuardRefusal, turnEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (loop *agentLoop) screenExistingWrite(parsed wire.ModelResponse, intentArgs json.RawMessage) turnOutcome {
+	if parsed.Name != "write_file" {
+		return turnContinues
+	}
+	var input wire.WriteFileInput
+	if json.Unmarshal(parsed.Args, &input) != nil {
+		return turnContinues
+	}
+	path := resolveAgentPath(loop.ctx, input.Path)
+	existing, err := os.ReadFile(path)
+	return loop.guardExistingFileWrite(parsed, intentArgs, input, path, existing, err)
 }

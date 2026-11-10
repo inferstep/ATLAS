@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
@@ -86,10 +87,6 @@ type AgentContext struct {
 	serviceHealth
 	routeEntries
 	runOutcome
-
-	// mu stays here because four groups share it: AllowedTools, the file history,
-	// the deletion records and CheckServiceFailures are read and written under it.
-	mu sync.Mutex
 }
 
 // runSetup is what the request fixed when the run started: its limits and
@@ -119,6 +116,7 @@ type runSetup struct {
 	// approves with session scope during this turn. A named tool skips the
 	// interactive permission prompt. Guarded by mu.
 	AllowedTools map[string]bool
+	mu           sync.Mutex // guards AllowedTools
 
 	// Service URLs
 	InferenceURL string
@@ -250,6 +248,9 @@ type planProgress struct {
 // fileHistory is what the run has done with files: what it read and when,
 // what it showed the model, what it wrote and which edits it applied.
 type fileHistory struct {
+	// mu guards FilesRead, FileReadTimes, OriginalContent, LastReadPath, SessionWrites, BodySeen and BodyShown.
+	mu sync.Mutex
+
 	FileReadTimes map[string]time.Time // for staleness detection
 	FilesRead     map[string]string    // cache of read file contents
 
@@ -500,6 +501,9 @@ type workspaceSafety struct {
 	// user answered.
 	lastDeleteCallID string
 
+	// mu guards approvedDelete, lastDeleteCallID, deletionAttempts and fulfilledDeletions.
+	mu sync.Mutex
+
 	deletionAttempts   map[string]*deletionAttempt
 	fulfilledDeletions map[string]*fulfilledDeletion
 }
@@ -540,6 +544,7 @@ type serviceHealth struct {
 	// Mandatory checks that could not run because their service did not
 	// answer, by check name. Guarded by mu. See noteCheckServiceUnavailable.
 	CheckServiceFailures map[string]int
+	mu                   sync.Mutex // guards CheckServiceFailures
 }
 
 // routeEntries counts this request's entries into the candidate-generation
@@ -596,71 +601,114 @@ func (c *AgentContext) Stream(eventType string, data interface{}) {
 }
 
 // RecordFileRead tracks when a file was last read (for staleness detection).
-func (c *AgentContext) RecordFileRead(path, content string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.FileReadTimes[path] = time.Now()
+func (f *fileHistory) RecordFileRead(path, content string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.FileReadTimes[path] = time.Now()
 	// First sighting wins: FilesRead is overwritten after every edit, so it
 	// tracks current state. Comparing what the RUN changed needs the state it
 	// started from, which is only available the first time a path is seen.
-	if c.OriginalContent == nil {
-		c.OriginalContent = make(map[string]string)
+	if f.OriginalContent == nil {
+		f.OriginalContent = make(map[string]string)
 	}
-	if _, seen := c.OriginalContent[path]; !seen {
-		c.OriginalContent[path] = content
+	if _, seen := f.OriginalContent[path]; !seen {
+		f.OriginalContent[path] = content
 	}
-	c.FilesRead[path] = content
-	c.LastReadPath = path
+	f.FilesRead[path] = content
+	f.LastReadPath = path
 }
 
 // OriginalOf returns a file's content as the run first saw it, and whether the
 // run has seen it at all.
-func (c *AgentContext) OriginalOf(path string) (string, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	v, ok := c.OriginalContent[path]
+func (f *fileHistory) OriginalOf(path string) (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	v, ok := f.OriginalContent[path]
 	return v, ok
 }
 
 // LastRead returns the most recently read file and its content, for restating
 // just before the generation point. Empty when nothing has been read.
-func (c *AgentContext) LastRead() (string, string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.LastReadPath, c.FilesRead[c.LastReadPath]
+func (f *fileHistory) LastRead() (string, string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.LastReadPath, f.FilesRead[f.LastReadPath]
 }
 
 // WasFileRead returns true if the file was read during this agent session.
-func (c *AgentContext) WasFileRead(path string) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	_, ok := c.FileReadTimes[path]
+func (f *fileHistory) WasFileRead(path string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, ok := f.FileReadTimes[path]
 	return ok
 }
 
-// GetFileRead returns the cached content for path under the context lock.
-func (c *AgentContext) GetFileRead(path string) (string, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	content, ok := c.FilesRead[path]
+// lastReadTime returns when path was last read, or the zero time.
+func (f *fileHistory) lastReadTime(path string) time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.FileReadTimes[path]
+}
+
+// lineNumberFacts returns, under one lock, what lineNumberHistory weighs:
+// whether the session wrote relPath, when path was last read, and what the
+// first read of path showed.
+func (f *fileHistory) lineNumberFacts(path, relPath string) (wrote bool, lastRead time.Time, read bool, original string, seen bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	wrote = f.SessionWrites[relPath]
+	lastRead, read = f.FileReadTimes[path]
+	original, seen = f.OriginalContent[path]
+	return wrote, lastRead, read, original, seen
+}
+
+// GetFileRead returns the cached content for path under its lock.
+func (f *fileHistory) GetFileRead(path string) (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	content, ok := f.FilesRead[path]
 	return content, ok
 }
 
-// ForgetFileRead drops the read-cache entry for path under the context
-// lock. Used when a file is moved away from path.
-func (c *AgentContext) ForgetFileRead(path string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	delete(c.FilesRead, path)
+// cachedRead returns the read-cache entry for path, and how many entries the
+// cache holds.
+func (f *fileHistory) cachedRead(path string) (content string, ok bool, entries int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	content, ok = f.FilesRead[path]
+	entries = len(f.FilesRead)
+	return content, ok, entries
 }
 
-// SnapshotFilesRead returns a copy of the session read-cache under the
-// context lock, for callers that iterate over it.
-func (c *AgentContext) SnapshotFilesRead() map[string]string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	out := make(map[string]string, len(c.FilesRead))
-	for k, v := range c.FilesRead {
+// readsNamed returns the read-cache entries of the files whose base name is
+// base.
+func (f *fileHistory) readsNamed(base string) map[string]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	sources := map[string]string{}
+	for p, content := range f.FilesRead {
+		if filepath.Base(p) == base {
+			sources[p] = content
+		}
+	}
+	return sources
+}
+
+// ForgetFileRead drops the read-cache entry for path under its lock. Used
+// when a file is moved away from path.
+func (f *fileHistory) ForgetFileRead(path string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.FilesRead, path)
+}
+
+// SnapshotFilesRead returns a copy of the session read-cache under its lock,
+// for callers that iterate over it.
+func (f *fileHistory) SnapshotFilesRead() map[string]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[string]string, len(f.FilesRead))
+	for k, v := range f.FilesRead {
 		out[k] = v
 	}
 	return out
@@ -668,20 +716,20 @@ func (c *AgentContext) SnapshotFilesRead() map[string]string {
 
 // allowToolForTurn records a tool the user approved with session scope so
 // later calls to it in this turn skip the permission prompt.
-func (c *AgentContext) allowToolForTurn(toolName string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.AllowedTools == nil {
-		c.AllowedTools = map[string]bool{}
+func (r *runSetup) allowToolForTurn(toolName string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.AllowedTools == nil {
+		r.AllowedTools = map[string]bool{}
 	}
-	c.AllowedTools[toolName] = true
+	r.AllowedTools[toolName] = true
 }
 
 // isToolAllowed reports whether a tool has been pre-approved for the session.
-func (c *AgentContext) isToolAllowed(toolName string) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.AllowedTools[toolName]
+func (r *runSetup) isToolAllowed(toolName string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.AllowedTools[toolName]
 }
 
 // ---------------------------------------------------------------------------

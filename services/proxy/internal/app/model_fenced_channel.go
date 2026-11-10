@@ -244,22 +244,9 @@ func fencedFitsRemainingBudget(ctx *AgentContext) bool {
 // at all, or nil: the channel is off for the session, the path has spent its
 // allowance, or too little of the session is left to fetch a file and check it.
 func fencedFetchRefusal(ctx *AgentContext, path string) error {
-	if fencedChannelDisabledForSession(ctx) {
-		// The channel already stalled this session; a sub-call would only
-		// stall again. Fail without making it, so no watchdog time is spent.
-		return fmt.Errorf("the fenced channel stalled earlier this session "+
-			"and is off for the rest of the run; send %s inline or edit it instead", path)
-	}
-	if fencedBudgetExhausted(ctx, path) {
-		return fmt.Errorf("fenced resolution for %s has already failed %d times "+
-			"this session; send the file inline or edit it instead", path,
-			ctx.FencedFailures[fencedKey(ctx, path)])
-	}
-	if !fencedFitsRemainingBudget(ctx) {
-		return fmt.Errorf("not enough session budget left to resolve %s "+
-			"and still validate the result", path)
-	}
-	return nil
+	input := fencedFetchCheckInput{ctx: ctx, path: path}
+	runCheckPhase(proxyChecks.fencedFetch, &input)
+	return input.err
 }
 
 // fencedFetch is one fenced fetch across its attempts: the conversation the
@@ -380,7 +367,7 @@ func (f *fencedFetch) settle(a fencedAnswer, attempt int) (string, bool, error) 
 		// the one permitted retry may still follow, bounded by the
 		// allowance the loop already counted.
 		if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
-			return "", true, err
+			return "", true, &fencedCheckError{err, checkInfrastructureError}
 		}
 		// A watchdog-cut zero-content fetch. Counted session-wide (not just
 		// per-path) because the next file's fetch will stall the same way;
@@ -503,4 +490,60 @@ func fencedChannelRecovery(ctx *AgentContext, st *runState, relPath string) stri
 		"replace_lines; read it with read_file; or run it with run_command and read the "+
 		"real error. Pick one of those.", relPath)
 	return sb.String()
+}
+
+type fencedFetchCheckInput struct {
+	ctx  *AgentContext
+	path string
+	err  error
+}
+
+func (input *fencedFetchCheckInput) channel() checkResult {
+	ctx := input.ctx
+	path := input.path
+	if fencedChannelDisabledForSession(ctx) {
+		// The channel already stalled this session; a sub-call would only
+		// stall again. Fail without making it, so no watchdog time is spent.
+		input.err = fmt.Errorf("the fenced channel stalled earlier this session "+
+			"and is off for the rest of the run; send %s inline or edit it instead", path)
+		return checkResult{checkGuardRefusal, turnEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *fencedFetchCheckInput) allowance() checkResult {
+	ctx := input.ctx
+	path := input.path
+	if fencedBudgetExhausted(ctx, path) {
+		input.err = fmt.Errorf("fenced resolution for %s has already failed %d times "+
+			"this session; send the file inline or edit it instead", path,
+			ctx.FencedFailures[fencedKey(ctx, path)])
+		return checkResult{checkGuardRefusal, turnEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *fencedFetchCheckInput) budget() checkResult {
+	ctx := input.ctx
+	path := input.path
+	if !fencedFitsRemainingBudget(ctx) {
+		input.err = fmt.Errorf("not enough session budget left to resolve %s "+
+			"and still validate the result", path)
+		return checkResult{checkGuardRefusal, turnEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+type fencedCheckError struct {
+	error
+	category checkCategory
+}
+
+func (err *fencedCheckError) Unwrap() error { return err.error }
+
+func fencedErrorCategory(err error) checkCategory {
+	if classified, ok := err.(*fencedCheckError); ok {
+		return classified.category
+	}
+	return checkInfrastructureError
 }

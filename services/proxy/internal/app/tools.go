@@ -190,52 +190,9 @@ func classifyByEffect(effect wire.ToolEffect, result *wire.ToolResult) {
 
 func executeToolCallInner(name string, args json.RawMessage, ctx *AgentContext) *wire.ToolResult {
 	tool := getTool(name)
-	if tool == nil {
-		return &wire.ToolResult{
-			Success: false,
-			Error:   fmt.Sprintf("unknown tool: %s", name),
-			// Refused before dispatch: no handler ran, so nothing could have
-			// started or mutated. This is provable, not conservative.
-			MutationStatus: wire.MutationNone,
-			ValidationKind: wire.ValidationKindNone, ValidationStatus: wire.ValidationNotApplicable,
-		}
-	}
-
-	// Distinguish "no args field at all" from "malformed args". The model
-	// sometimes emits a tool_call with no args key, which lands here as
-	// nil or empty bytes, and json.Unmarshal on that returns "unexpected
-	// end of JSON input", the same error a truncated response produces,
-	// which says nothing about the shape the call needs. Catch the empty
-	// case here and return a per-tool hint that tells the model exactly
-	// what shape to send.
-	trimmed := strings.TrimSpace(string(args))
-	if trimmed == "" || trimmed == "null" {
-		return &wire.ToolResult{
-			Success: false,
-			Error:   missingArgsHint(name),
-			// Pre-dispatch: no handler ran.
-			MutationStatus: wire.MutationNone,
-			ValidationKind: wire.ValidationKindNone, ValidationStatus: wire.ValidationNotApplicable,
-		}
-	}
-	// Safety deny-list — sensitive targets (.env, *.pem, *credentials*,
-	// destructive shell patterns) are refused in every permission mode.
-	if denied, reason := shouldDenyToolCall(name, args); denied {
-		return &wire.ToolResult{Success: false, Error: fmt.Sprintf("%s refused: %s", name, reason),
-			MutationStatus: wire.MutationNone,
-			ValidationKind: wire.ValidationKindNone, ValidationStatus: wire.ValidationNotApplicable}
-	}
-	// The user forbade changing anything. Enforced here, at the one dispatch
-	// every tool passes through, and keyed on the tool's declared effect, not
-	// on a tool-name list (which goes stale) and not on the system prompt,
-	// which a model can simply not follow. That makes the guarantee hold for
-	// arbitrary shell and background jobs (ToolEffectCommandUnobserved:
-	// `sed -i`, `rm`, a `>` redirect) exactly as it does for write_file.
-	if reason := readOnlyRequestRefusal(tool, ctx); reason != "" {
-		log.Printf("[tools] %s refused: the request forbids changing the workspace", name)
-		return &wire.ToolResult{Success: false, Error: reason,
-			MutationStatus: wire.MutationNone,
-			ValidationKind: wire.ValidationKindNone, ValidationStatus: wire.ValidationNotApplicable}
+	input := dispatchCheckInput{name: name, args: args, ctx: ctx, tool: tool}
+	if runCheckPhase(proxyChecks.dispatch, &input).outcome != turnContinues {
+		return input.result
 	}
 
 	result, err := tool.Execute(args, ctx)
@@ -316,8 +273,9 @@ func runCommandTool() *ToolDef {
 			// Trust gate: untrusted mode refuses command execution;
 			// host execution is honored only under fully-trusted (else
 			// downgraded to the sandbox below).
-			if !ctx.TrustMode.commandsAllowed() {
-				return &wire.ToolResult{Success: false, Error: untrustedRefusal}, nil
+			check := commandCheckInput{ctx: ctx}
+			if runCheckPhase(proxyChecks.commandTrust, &check).outcome != turnContinues {
+				return check.result, nil
 			}
 
 			timeoutSec := 30
@@ -339,15 +297,8 @@ func runCommandTool() *ToolDef {
 			// kernel picks a victim, which is exactly how the inference server
 			// died. Refusing here rather than at startup keeps the diagnosis
 			// readable: reading a file was never the unsafe part.
-			if refusal := memoryenvelope.ExecutionRefusal(declaredMemoryEnvelope()); refusal != "" {
-				log.Printf("[run_command] %s", refusal)
-				return &wire.ToolResult{
-					Success: false,
-					Error: "commands cannot be run in this deployment: its memory " +
-						"limits add up to more than the machine has, so a command " +
-						"that used too much could take down another service. Ask " +
-						"the operator to fix the configured limits.",
-				}, nil
+			if runCheckPhase(proxyChecks.commandMemory, &check).outcome != turnContinues {
+				return check.result, nil
 			}
 
 			out := runCommandOutput(ctx, input, cwd, timeoutSec)
@@ -1258,4 +1209,116 @@ func hostAddressSpaceKiB() int64 {
 	// reserved before it is touched, and a ceiling set AT the resident number
 	// refuses reservations a command never grows into.
 	return int64(float64(bytes) * 1.5 / 1024)
+}
+
+type dispatchCheckInput struct {
+	name   string
+	args   json.RawMessage
+	ctx    *AgentContext
+	tool   *ToolDef
+	result *wire.ToolResult
+}
+
+func (input *dispatchCheckInput) knownTool() checkResult {
+	tool := input.tool
+	name := input.name
+	if tool == nil {
+		input.result = &wire.ToolResult{
+			Success: false,
+			Error:   fmt.Sprintf("unknown tool: %s", name),
+			// Refused before dispatch: no handler ran, so nothing could have
+			// started or mutated. This is provable, not conservative.
+			MutationStatus: wire.MutationNone,
+			ValidationKind: wire.ValidationKindNone, ValidationStatus: wire.ValidationNotApplicable,
+		}
+		return checkResult{checkModelError, turnEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *dispatchCheckInput) arguments() checkResult {
+	name := input.name
+	args := input.args
+	// Distinguish "no args field at all" from "malformed args". The model
+	// sometimes emits a tool_call with no args key, which lands here as
+	// nil or empty bytes, and json.Unmarshal on that returns "unexpected
+	// end of JSON input", the same error a truncated response produces,
+	// which says nothing about the shape the call needs. Catch the empty
+	// case here and return a per-tool hint that tells the model exactly
+	// what shape to send.
+	trimmed := strings.TrimSpace(string(args))
+	if trimmed == "" || trimmed == "null" {
+		input.result = &wire.ToolResult{
+			Success: false,
+			Error:   missingArgsHint(name),
+			// Pre-dispatch: no handler ran.
+			MutationStatus: wire.MutationNone,
+			ValidationKind: wire.ValidationKindNone, ValidationStatus: wire.ValidationNotApplicable,
+		}
+		return checkResult{checkModelError, turnEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *dispatchCheckInput) denyList() checkResult {
+	name := input.name
+	args := input.args
+	// Safety deny-list — sensitive targets (.env, *.pem, *credentials*,
+	// destructive shell patterns) are refused in every permission mode.
+	if denied, reason := shouldDenyToolCall(name, args); denied {
+		input.result = &wire.ToolResult{Success: false, Error: fmt.Sprintf("%s refused: %s", name, reason),
+			MutationStatus: wire.MutationNone,
+			ValidationKind: wire.ValidationKindNone, ValidationStatus: wire.ValidationNotApplicable}
+		return checkResult{checkGuardRefusal, turnEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *dispatchCheckInput) readOnly() checkResult {
+	tool := input.tool
+	name := input.name
+	ctx := input.ctx
+	// The user forbade changing anything. Enforced here, at the one dispatch
+	// every tool passes through, and keyed on the tool's declared effect, not
+	// on a tool-name list (which goes stale) and not on the system prompt,
+	// which a model can simply not follow. That makes the guarantee hold for
+	// arbitrary shell and background jobs (ToolEffectCommandUnobserved:
+	// `sed -i`, `rm`, a `>` redirect) exactly as it does for write_file.
+	if reason := readOnlyRequestRefusal(tool, ctx); reason != "" {
+		log.Printf("[tools] %s refused: the request forbids changing the workspace", name)
+		input.result = &wire.ToolResult{Success: false, Error: reason,
+			MutationStatus: wire.MutationNone,
+			ValidationKind: wire.ValidationKindNone, ValidationStatus: wire.ValidationNotApplicable}
+		return checkResult{checkGuardRefusal, turnEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+type commandCheckInput struct {
+	toolCheckOutput
+	ctx *AgentContext
+}
+
+func (check *commandCheckInput) trust() checkResult {
+	ctx := check.ctx
+
+	if !ctx.TrustMode.commandsAllowed() {
+		return check.accept(checkGuardRefusal, &wire.ToolResult{Success: false, Error: untrustedRefusal})
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *commandCheckInput) memory() checkResult {
+
+	if refusal := memoryenvelope.ExecutionRefusal(declaredMemoryEnvelope()); refusal != "" {
+		log.Printf("[run_command] %s", refusal)
+		return check.accept(checkInfrastructureError, &wire.ToolResult{
+			Success: false,
+			Error: "commands cannot be run in this deployment: its memory " +
+				"limits add up to more than the machine has, so a command " +
+				"that used too much could take down another service. Ask " +
+				"the operator to fix the configured limits.",
+		})
+	}
+	return checkResult{checkPass, turnContinues}
 }

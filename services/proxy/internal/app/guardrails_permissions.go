@@ -749,14 +749,20 @@ func grantDeleteApproval(ctx *AgentContext, callID string, t deleteTarget) {
 		t.release()
 		return
 	}
-	ctx.mu.Lock()
-	previous := ctx.approvedDelete
-	ctx.approvedDelete = &approvedDeletion{target: t, callID: callID}
-	ctx.lastDeleteCallID = callID
-	ctx.mu.Unlock()
-	if previous != nil {
+	if previous := ctx.replaceDeleteApproval(callID, t); previous != nil {
 		previous.target.release()
 	}
+}
+
+// replaceDeleteApproval puts the approval for t in place of the outstanding
+// one, and returns the one it replaced.
+func (w *workspaceSafety) replaceDeleteApproval(callID string, t deleteTarget) *approvedDeletion {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	previous := w.approvedDelete
+	w.approvedDelete = &approvedDeletion{target: t, callID: callID}
+	w.lastDeleteCallID = callID
+	return previous
 }
 
 // releaseDeleteApproval lets go of an approval no tool ever consumed. It runs
@@ -767,13 +773,18 @@ func releaseDeleteApproval(ctx *AgentContext) {
 	if ctx == nil {
 		return
 	}
-	ctx.mu.Lock()
-	held := ctx.approvedDelete
-	ctx.approvedDelete = nil
-	ctx.mu.Unlock()
-	if held != nil {
+	if held := ctx.clearDeleteApproval(); held != nil {
 		held.target.release()
 	}
+}
+
+// clearDeleteApproval removes the outstanding approval, and returns it.
+func (w *workspaceSafety) clearDeleteApproval() *approvedDeletion {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	held := w.approvedDelete
+	w.approvedDelete = nil
+	return held
 }
 
 // takeDeleteApproval consumes the grant for a canonical path. It returns the
@@ -785,10 +796,7 @@ func takeDeleteApproval(ctx *AgentContext, canonical string) (deleteTarget, bool
 	if ctx == nil {
 		return deleteTarget{}, false
 	}
-	ctx.mu.Lock()
-	held := ctx.approvedDelete
-	ctx.approvedDelete = nil
-	ctx.mu.Unlock()
+	held := ctx.clearDeleteApproval()
 	if held == nil {
 		return deleteTarget{}, false
 	}
@@ -844,15 +852,21 @@ func reserveDeletionSlot(ctx *AgentContext, canonical string) bool {
 	if ctx == nil {
 		return false
 	}
-	ctx.mu.Lock()
-	defer ctx.mu.Unlock()
-	if ctx.deletionAttempts == nil {
-		ctx.deletionAttempts = map[string]*deletionAttempt{}
+	return ctx.roomForDeletionRecord(canonical)
+}
+
+// roomForDeletionRecord reports whether canonical has a slot for its record:
+// one it already holds, or a free one.
+func (w *workspaceSafety) roomForDeletionRecord(canonical string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.deletionAttempts == nil {
+		w.deletionAttempts = map[string]*deletionAttempt{}
 	}
-	if _, exists := ctx.deletionAttempts[canonical]; exists {
+	if _, exists := w.deletionAttempts[canonical]; exists {
 		return true // this path already has its slot
 	}
-	if len(ctx.deletionAttempts)+len(ctx.fulfilledDeletions) >= maxTrackedDeletions {
+	if len(w.deletionAttempts)+len(w.fulfilledDeletions) >= maxTrackedDeletions {
 		return false
 	}
 	return true
@@ -863,12 +877,17 @@ func noteDeletionAttempt(ctx *AgentContext, callID string, t deleteTarget) {
 	if ctx == nil {
 		return
 	}
-	ctx.mu.Lock()
-	defer ctx.mu.Unlock()
-	if ctx.deletionAttempts == nil {
-		ctx.deletionAttempts = map[string]*deletionAttempt{}
+	ctx.recordDeletionAttempt(callID, t)
+}
+
+// recordDeletionAttempt is noteDeletionAttempt for a context that is not nil.
+func (w *workspaceSafety) recordDeletionAttempt(callID string, t deleteTarget) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.deletionAttempts == nil {
+		w.deletionAttempts = map[string]*deletionAttempt{}
 	}
-	ctx.deletionAttempts[t.Canonical] = &deletionAttempt{
+	w.deletionAttempts[t.Canonical] = &deletionAttempt{
 		CallID: callID, Target: t.withoutHandle(), Removed: true,
 	}
 }
@@ -886,9 +905,7 @@ func promoteFulfilledDeletion(ctx *AgentContext, canonical string) {
 	if ctx == nil {
 		return
 	}
-	ctx.mu.Lock()
-	attempt := ctx.deletionAttempts[canonical]
-	ctx.mu.Unlock()
+	attempt := ctx.deletionAttemptFor(canonical)
 	if attempt == nil || !attempt.Removed {
 		return
 	}
@@ -907,17 +924,31 @@ func promoteFulfilledDeletion(ctx *AgentContext, canonical string) {
 	if !ok {
 		return
 	}
-	ctx.mu.Lock()
-	defer ctx.mu.Unlock()
-	if ctx.fulfilledDeletions == nil {
-		ctx.fulfilledDeletions = map[string]*fulfilledDeletion{}
+	ctx.recordFulfilledDeletion(canonical, attempt, gen)
+}
+
+// deletionAttemptFor returns the recorded attempt for canonical, or nil.
+func (w *workspaceSafety) deletionAttemptFor(canonical string) *deletionAttempt {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.deletionAttempts[canonical]
+}
+
+// recordFulfilledDeletion turns the attempt for canonical into a fulfilled
+// deletion of ledger generation gen. Only promoteFulfilledDeletion calls it,
+// after it has checked every fact.
+func (w *workspaceSafety) recordFulfilledDeletion(canonical string, attempt *deletionAttempt, gen int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.fulfilledDeletions == nil {
+		w.fulfilledDeletions = map[string]*fulfilledDeletion{}
 	}
-	ctx.fulfilledDeletions[canonical] = &fulfilledDeletion{
+	w.fulfilledDeletions[canonical] = &fulfilledDeletion{
 		CallID: attempt.CallID, Canonical: canonical, Kind: attempt.Target.Kind,
 		SHA256: attempt.Target.SHA256, LinkText: attempt.Target.LinkText,
 		Generation: gen,
 	}
-	delete(ctx.deletionAttempts, canonical)
+	delete(w.deletionAttempts, canonical)
 }
 
 // permCallIDFor returns the tool-call id the outstanding approval was granted
@@ -927,9 +958,14 @@ func permCallIDFor(ctx *AgentContext) string {
 	if ctx == nil {
 		return ""
 	}
-	ctx.mu.Lock()
-	defer ctx.mu.Unlock()
-	return ctx.lastDeleteCallID
+	return ctx.deleteCallID()
+}
+
+// deleteCallID returns the tool-call id of the last approval granted.
+func (w *workspaceSafety) deleteCallID() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.lastDeleteCallID
 }
 
 // fulfilledDeletionFor returns the record for a path, if the user approved that
@@ -938,8 +974,24 @@ func fulfilledDeletionFor(ctx *AgentContext, canonical string) (*fulfilledDeleti
 	if ctx == nil {
 		return nil, false
 	}
-	ctx.mu.Lock()
-	defer ctx.mu.Unlock()
-	f, ok := ctx.fulfilledDeletions[canonical]
+	return ctx.fulfilledDeletionOf(canonical)
+}
+
+// fulfilledDeletionOf is fulfilledDeletionFor for a context that is not nil.
+func (w *workspaceSafety) fulfilledDeletionOf(canonical string) (*fulfilledDeletion, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	f, ok := w.fulfilledDeletions[canonical]
 	return f, ok
+}
+
+// fulfilledDeletionPaths returns the canonical path of each fulfilled deletion.
+func (w *workspaceSafety) fulfilledDeletionPaths() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	keys := make([]string, 0, len(w.fulfilledDeletions))
+	for k := range w.fulfilledDeletions {
+		keys = append(keys, k)
+	}
+	return keys
 }

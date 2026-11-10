@@ -367,6 +367,11 @@ func TestACommandIsRefusedWhenTheMemoryEnvelopeCannotHold(t *testing.T) {
 	t.Setenv("ATLAS_SANDBOX_MEM", "11g")
 	t.Setenv("ATLAS_EXEC_MEMORY_BYTES", "1g")
 
+	check := commandCheckInput{ctx: ctx}
+	if result := runCheckPhase(proxyChecks.commandMemory, &check); result != (checkResult{checkInfrastructureError, turnEnds}) {
+		t.Fatalf("invalid deployment limits returned %+v, want infrastructure error and turn end", result)
+	}
+
 	args, _ := json.Marshal(wire.RunCommandInput{Command: "touch ran.txt"})
 	res := executeToolCall("run_command", args, ctx)
 

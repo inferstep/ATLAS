@@ -3,7 +3,9 @@ package app
 import (
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/itigges22/atlas-proxy/internal/taskcontract"
 	"github.com/itigges22/atlas-proxy/internal/wire"
@@ -569,5 +571,44 @@ func TestNoProductionCallerConsultsProvenanceYet(t *testing.T) {
 		if strings.Count(wireV3, fn) != 1 {
 			t.Errorf("internal/wire/v3.go calls %s; wiring authorization is the next slice", fn)
 		}
+	}
+}
+
+// Two goroutines approve a tool for the turn at the same time. Run it under
+// -race: without runSetup's lock, the race detector reports the map writes.
+func TestToolsApprovedAtTheSameTimeAreAllAllowed(t *testing.T) {
+	ctx := &AgentContext{}
+	var wg sync.WaitGroup
+	for _, tool := range []string{"run_command", "delete_file"} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx.allowToolForTurn(tool)
+		}()
+	}
+	wg.Wait()
+	if !ctx.isToolAllowed("run_command") || !ctx.isToolAllowed("delete_file") {
+		t.Error("an approval made at the same time as another one is lost")
+	}
+}
+
+// Two goroutines record a read at the same time. Run it under -race: without
+// fileHistory's lock, the race detector reports the map writes.
+func TestFilesReadAtTheSameTimeAreAllRecorded(t *testing.T) {
+	ctx := &AgentContext{fileHistory: fileHistory{
+		FilesRead:     map[string]string{},
+		FileReadTimes: map[string]time.Time{},
+	}}
+	var wg sync.WaitGroup
+	for _, path := range []string{"/w/a.py", "/w/b.py"} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx.RecordFileRead(path, "A = 1\n")
+		}()
+	}
+	wg.Wait()
+	if !ctx.WasFileRead("/w/a.py") || !ctx.WasFileRead("/w/b.py") {
+		t.Error("a read recorded at the same time as another one is lost")
 	}
 }

@@ -157,6 +157,8 @@ def _service_headers(rid: str = "", invocation_id: str = "") -> dict:
             rid = rid or get_request_id()
             invocation_id = invocation_id or get_invocation_id()
         except ImportError:
+            # Without structured_log there is no request context to read, so
+            # the headers carry only the IDs that the caller gave.
             pass
     if rid:
         headers[REQUEST_ID_HEADER] = rid

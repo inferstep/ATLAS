@@ -1247,13 +1247,7 @@ func noteCheckServiceUnavailable(ctx *AgentContext, check, detail string) {
 	if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
 		return
 	}
-	ctx.mu.Lock()
-	if ctx.CheckServiceFailures == nil {
-		ctx.CheckServiceFailures = map[string]int{}
-	}
-	ctx.CheckServiceFailures[check]++
-	first := ctx.CheckServiceFailures[check] == 1
-	ctx.mu.Unlock()
+	first := ctx.countCheckServiceFailure(check)
 	log.Printf("[gates] %s check could not run: %s — the write continues without it", check, detail)
 	if first {
 		ctx.Stream("text", map[string]string{"content": fmt.Sprintf(
@@ -1261,24 +1255,41 @@ func noteCheckServiceUnavailable(ctx *AgentContext, check, detail string) {
 	}
 }
 
+// countCheckServiceFailure counts one more failure of a check's service, and
+// reports whether it is the first.
+func (s *serviceHealth) countCheckServiceFailure(check string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.CheckServiceFailures == nil {
+		s.CheckServiceFailures = map[string]int{}
+	}
+	s.CheckServiceFailures[check]++
+	return s.CheckServiceFailures[check] == 1
+}
+
 // checkServiceFailureSummary is "embedded-script=2, unresolved-name=1", or "".
 func (c *AgentContext) checkServiceFailureSummary() string {
 	if c == nil {
 		return ""
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if len(c.CheckServiceFailures) == 0 {
+	return c.serviceHealth.failureSummary()
+}
+
+// failureSummary is checkServiceFailureSummary for a context that is not nil.
+func (s *serviceHealth) failureSummary() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.CheckServiceFailures) == 0 {
 		return ""
 	}
-	names := make([]string, 0, len(c.CheckServiceFailures))
-	for k := range c.CheckServiceFailures {
+	names := make([]string, 0, len(s.CheckServiceFailures))
+	for k := range s.CheckServiceFailures {
 		names = append(names, k)
 	}
 	sort.Strings(names)
 	parts := make([]string, 0, len(names))
 	for _, k := range names {
-		parts = append(parts, fmt.Sprintf("%s=%d", k, c.CheckServiceFailures[k]))
+		parts = append(parts, fmt.Sprintf("%s=%d", k, s.CheckServiceFailures[k]))
 	}
 	return strings.Join(parts, ", ")
 }
