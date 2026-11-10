@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Findings is every finding, advisory and contract alike, in one
@@ -15,7 +16,13 @@ import (
 // It walks the project under workingDir, and returns nil for a project too
 // large to judge.
 func Findings(workingDir string) []string {
-	files, ok := assetLintFiles(workingDir)
+	return FindingsWithin(workingDir, time.Time{})
+}
+
+// FindingsWithin is Findings with a deadline, for a gate that must not hold a
+// session on a deep tree. A zero deadline means no limit.
+func FindingsWithin(workingDir string, deadline time.Time) []string {
+	files, ok := assetLintFilesWithin(workingDir, deadline)
 	if !ok {
 		return nil
 	}
@@ -28,12 +35,25 @@ func Findings(workingDir string) []string {
 // These are not advice. A user clicking that form gets a 404 whatever else the
 // project does right, so the exit gate asks for this list by itself.
 func RouteContractFindings(workingDir string) []string {
-	files, ok := assetLintFiles(workingDir)
+	return RouteContractFindingsWithin(workingDir, time.Time{})
+}
+
+// RouteContractFindingsWithin is RouteContractFindings with a deadline. A zero
+// deadline means no limit.
+func RouteContractFindingsWithin(workingDir string, deadline time.Time) []string {
+	files, ok := assetLintFilesWithin(workingDir, deadline)
 	if !ok {
 		return nil
 	}
 	_, contract := findingsFor(workingDir, files)
 	return contract
+}
+
+// assetLintFilesWithin is the walk with the deadline it stops at.
+func assetLintFilesWithin(workingDir string, deadline time.Time) ([]lintFile, bool) {
+	return collectLintFiles(workingDir, func() bool {
+		return !deadline.IsZero() && time.Now().After(deadline)
+	})
 }
 
 // findingsFor separates what is advice (an orphaned template, a

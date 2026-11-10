@@ -120,7 +120,7 @@ func completionClaimGaps(workingDir string) []string {
 		return nil
 	}
 	var gaps []string
-	for _, f := range assetlint.Findings(workingDir) {
+	for _, f := range assetlint.FindingsWithin(workingDir, scanDeadline()) {
 		if strings.Contains(f, "references template ") {
 			gaps = append(gaps, f)
 		}

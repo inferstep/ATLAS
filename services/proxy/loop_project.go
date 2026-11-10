@@ -18,6 +18,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/itigges22/atlas-proxy/internal/scanbudget"
 	"github.com/itigges22/atlas-proxy/internal/workspacefs"
 )
 
@@ -58,6 +59,26 @@ const (
 	// the index lookup.
 	symbolMaxCandidates = 10
 )
+
+// The start scan's stated budget and the watch that reports a slow one live in
+// internal/scanbudget, with the rest of that subject. These names keep the
+// call sites reading as they did.
+const (
+	workspaceStage      = scanbudget.Stage
+	workspaceScanBudget = scanbudget.Budget
+	workspaceScanSlow   = scanbudget.Slow
+)
+
+// scanDeadline is the instant a start scan that begins now must stop at.
+func scanDeadline() time.Time { return scanbudget.Deadline() }
+
+// scanExpired reports whether a scan that began with deadline has run out.
+func scanExpired(deadline time.Time) bool { return scanbudget.Expired(deadline) }
+
+// beginScanWatch reports a start scan that runs longer than slow.
+func beginScanWatch(stage string, slow time.Duration) *scanbudget.Watch {
+	return scanbudget.Begin(stage, slow, Emit)
+}
 
 // symbolStopwords filters out common English words that happen to look
 // like identifiers. Without this, a message like "fix the route" would
@@ -144,49 +165,86 @@ func extractCandidateSymbols(message string) []string {
 // node_modules) so a typical project doesn't blow the budget on
 // vendored dependencies. Returns map[relativePath]source.
 func walkPythonFiles(root string) map[string]string {
+	return walkPythonFilesWithin(root, scanDeadline())
+}
+
+// walkPythonFilesWithin collects .py files under root until the deadline. A
+// spent budget returns the partial map: the symbol index is best-effort, and
+// half a picture beats a start that never reaches the model. A zero deadline
+// means no limit.
+func walkPythonFilesWithin(root string, deadline time.Time) map[string]string {
 	result := map[string]string{}
 	if root == "" {
 		return result
-	}
-	totalBytes := 0
-	skipDirs := map[string]bool{
-		".git": true, ".venv": true, "venv": true, "env": true,
-		"__pycache__": true, "node_modules": true, ".tox": true,
-		"dist": true, "build": true, ".mypy_cache": true,
-		".pytest_cache": true, ".idea": true, ".vscode": true,
 	}
 	// The walk and every read go through the folder, so a name in it that
 	// points somewhere else is skipped like an unreadable entry.
 	dir := workspacefs.OpenConfinedDir(root)
 	defer dir.Close()
-	_ = dir.Walk(func(rel string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return nil // skip unreadable entries
-		}
-		if entry.IsDir() {
-			if skipDirs[entry.Name()] {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(strings.ToLower(entry.Name()), ".py") {
-			return nil
-		}
-		if len(result) >= projectScanMaxFiles || totalBytes >= projectScanMaxBytes {
-			return fs.SkipAll
-		}
-		data, err := dir.ReadFile(rel)
-		if err != nil {
-			return nil
-		}
-		if totalBytes+len(data) > projectScanMaxBytes {
-			return fs.SkipAll
-		}
-		result[rel] = string(data)
-		totalBytes += len(data)
-		return nil
-	})
+	scan := &pythonScan{dir: dir, deadline: deadline, files: result}
+	_ = dir.Walk(scan.visit)
 	return result
+}
+
+// pythonSkipDirs are the folders a project's own sources are never in: version
+// control, installed packages, caches and build output.
+var pythonSkipDirs = map[string]bool{
+	".git": true, ".venv": true, "venv": true, "env": true,
+	"__pycache__": true, "node_modules": true, ".tox": true,
+	"dist": true, "build": true, ".mypy_cache": true,
+	".pytest_cache": true, ".idea": true, ".vscode": true,
+}
+
+// pythonScan is one pass over the project's sources: the folder it reads
+// through, the budget it stops at, and the bytes it has taken so far.
+type pythonScan struct {
+	dir      workspacefs.ConfinedDir
+	deadline time.Time
+	files    map[string]string
+	bytes    int
+}
+
+// visit answers one walked entry, and SkipAll is how a spent budget ends the
+// walk wherever it has got to.
+func (s *pythonScan) visit(rel string, entry fs.DirEntry, err error) error {
+	if err != nil {
+		return nil // skip unreadable entries
+	}
+	if scanExpired(s.deadline) {
+		return fs.SkipAll
+	}
+	if entry.IsDir() {
+		return dirWalkDir(entry.Name())
+	}
+	return s.takeFile(rel, entry.Name())
+}
+
+// dirWalkDir skips a directory the walk should not enter.
+func dirWalkDir(name string) error {
+	if pythonSkipDirs[name] {
+		return fs.SkipDir
+	}
+	return nil
+}
+
+// takeFile reads a .py file, stopping the walk at the byte cap.
+func (s *pythonScan) takeFile(rel, name string) error {
+	if !strings.HasSuffix(strings.ToLower(name), ".py") {
+		return nil
+	}
+	if len(s.files) >= projectScanMaxFiles || s.bytes >= projectScanMaxBytes {
+		return fs.SkipAll
+	}
+	data, err := s.dir.ReadFile(rel)
+	if err != nil {
+		return nil
+	}
+	if s.bytes+len(data) > projectScanMaxBytes {
+		return fs.SkipAll
+	}
+	s.files[rel] = string(data)
+	s.bytes += len(data)
+	return nil
 }
 
 // symbolGraphNode mirrors one entry of the v3-service symbol_index "graph"
