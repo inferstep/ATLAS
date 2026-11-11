@@ -79,8 +79,8 @@ in `pyproject.toml`. The distinction matters for syntax that parses on every
 version but is only *evaluated* correctly on newer ones — a PEP 604 annotation
 (`str | None`) is valid syntax on 3.9 and raises `TypeError` at import, which
 `compileall` cannot see and the CI test matrix misses because it never runs
-3.9: it runs the tests of each container on that container's Python (3.11 or
-3.13), the other tests on 3.12, and the separate perf-gate job on 3.11. Adding `from __future__ import annotations` to the file clears it. They do not require a GPU, model
+3.9: it runs the tests of each container on that container's Python (3.13),
+the other tests on 3.12, and the separate perf-gate job on 3.11. Adding `from __future__ import annotations` to the file clears it. They do not require a GPU, model
 download, or running ATLAS services. The developer gate also includes contract
 tests for V3 language-aware syntax verification and sandbox overlay behavior.
 Full project build-command qualification still belongs to the container and

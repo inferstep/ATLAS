@@ -5,7 +5,7 @@
 # holds keeps its version there, because the job installs ci.txt first.
 # The lens's own tests (services/geometric-lens/tests) do not use this lock:
 # they install the image's lock, services/geometric-lens/requirements-lock.txt,
-# on the image's Python 3.11.
+# on the image's Python 3.13.
 # Make lens.txt again with scripts/ci/ci-lock.sh.
 --index-url https://download.pytorch.org/whl/cpu
 --extra-index-url https://pypi.org/simple

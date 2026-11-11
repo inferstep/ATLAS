@@ -4,7 +4,7 @@
 # lens.txt (the lock of the CLI's lens and ASA tests, on Python 3.12), and the
 # service image locks (services/geometric-lens/requirements-lock.txt, services/v3-service/requirements-lock.txt and
 # services/sandbox/requirements-lock.txt). CI's lens tests install the lens
-# image's lock, on the image's Python 3.11.
+# image's lock, on the image's Python 3.13.
 # Run it after a change to ci.in, lens.in, services/geometric-lens/requirements.txt,
 # services/v3-service/requirements.txt or the sandbox's two requirement files. Needs
 # uv, which gets Python 3.12 and pip-tools for the run.
