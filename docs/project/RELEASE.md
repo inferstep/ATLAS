@@ -237,6 +237,54 @@ release commit of 3.1.7 ([#615](https://github.com/inferstep/ATLAS/pull/615)),
 and merged `main` back into `dev`
 ([#626](https://github.com/inferstep/ATLAS/pull/626)).
 
+### Rename the code health check
+
+The `code-health` job changes its displayed name from `code health (size)`
+to `code health`. The check measures size and complexity. Its behavior stays
+the same. This optional organization change does not establish release readiness.
+
+The planned target is dev ruleset **24147429**, **Integration branch:
+required checks**. Its old context is `code health (size)`, bound to GitHub
+Actions application **15368**, with no bypass. Release ruleset **24069122**
+does not require this check. Keep the check required on `dev` only.
+
+Coordinate this transition with the planned ruleset maintenance. Isaac must
+authorize the live change. The release owner performs it. Branch review
+verifies the files and these instructions. It does not verify a live rollout.
+
+1. Re-read the live rulesets and save their current settings.
+   Compare them with the planned target above.
+   Stop if the context, application binding, branch scope, or bypass settings differ.
+2. Wait for existing merge-queue work to finish.
+   Hold new queue admissions until the transition is verified.
+3. Obtain a successful `code health` run on the reviewed rename commit.
+   Keep that commit unchanged through the transition.
+4. Review the complete proposed ruleset difference.
+   Replace only `code health (size)` with `code health` in dev ruleset **24147429**.
+   Preserve application **15368**, every other requirement, and all other settings.
+   Do not use a full `scripts/setup/rulesets.sh` apply for this isolated rename.
+   Keep the separate 3.2.0 pytest-name migration out of this change.
+5. Read the live ruleset again to confirm the name and application binding.
+   Re-run checks that read live requirements, including `checks ran`.
+   Do not merge while the candidate workflow and required-check names differ.
+6. Admit only the reviewed rename commit to the queue.
+   Merge it through the queue.
+   Confirm that `code health` passes on the queue commit.
+7. Refresh affected open branches and the canary branch from the renamed workflow.
+   Confirm that the canary's `code health` check fails and its log names `canary_long_function`.
+   Record the live ruleset difference, check results, and queue commit.
+   Resume queue admissions after these checks pass.
+
+**Rollback before merge:** hold queue admissions and restore only the old
+context in the dev ruleset. Confirm that `dev` still emits
+`code health (size)` and that the other settings remain unchanged.
+
+**Rollback after merge:** prepare a reviewed rollback of the workflow,
+ruleset configuration, and canary names. Coordinate its matching live rule
+change with the same queue hold and verification steps above. Never restore
+only the old requirement while the candidate workflow emits only `code health`.
+Record the rollback results before queue admissions resume.
+
 ## Release process
 
 Publishing is gated by the `production` environment

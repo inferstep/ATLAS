@@ -209,9 +209,9 @@
       ]
     },
     {
-      "id": "code health (size)",
+      "id": "code health",
       "red": [
-        "code health (size)"
+        "code health"
       ],
       "what": "a function of 120 lines in scripts/canary_long_function.py",
       "shows": "canary_long_function",
