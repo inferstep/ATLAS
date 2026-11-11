@@ -21,8 +21,12 @@ classifiers = [
 [project.optional-dependencies]
 # `atlas lens build` / `atlas asa build` (per-model artifact training)
 # hard-require these at runtime — including xgboost + scikit-learn for
-# the G(x) training step. Lower bounds only — the CLI has no reason to
-# pin exact versions.
+# the G(x) training step. These extras keep lower bounds, not exact pins.
+# Users install atlas[train] on their own host. They choose the torch build
+# for their CPU, CUDA or ROCm platform, so one lock cannot fit all of them.
+# CI uses .github/requirements/lens.txt, and the lens image uses
+# services/geometric-lens/requirements-lock.txt. Neither is a lock for
+# atlas[train].
 train = [
     # A lower bound that default PyPI can satisfy: plain `pip install
     # atlas[train]` never consults the pytorch CPU index (a >=2.13.0 floor

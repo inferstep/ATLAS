@@ -70,7 +70,6 @@ jobs:
         # without the lens: its tests are named as not judged.
         run: |
           pip install --require-hashes -r .github/requirements/ci.txt
-          pip install --no-deps -e .
 
       - name: the new tests of a fix, without the fix and with it
         env:
