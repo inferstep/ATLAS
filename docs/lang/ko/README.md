@@ -1,4 +1,4 @@
-<!-- source: README.md synced-through: 69f2deafee29f4669c9fba659cebec683da94630 -->
+<!-- source: README.md synced-through: 7bb86537fd98a8ed6bc63d551502482c722aa60a -->
 > **[English](../../../README.md)** | **[简体中文](../zh-CN/README.md)** | **[日本語](../ja/README.md)** | **한국어**
 
 <p align="center">
@@ -21,6 +21,7 @@
   <a href="https://github.com/inferstep/ATLAS/actions/workflows/codeql.yml"><img src="https://img.shields.io/github/actions/workflow/status/inferstep/ATLAS/codeql.yml?branch=main&label=codeql" alt="CodeQL"/></a>
   <a href="https://github.com/inferstep/ATLAS/actions/workflows/container-scan.yml"><img src="https://img.shields.io/github/actions/workflow/status/inferstep/ATLAS/container-scan.yml?label=container%20scan" alt="컨테이너 스캔"/></a>
   <a href="https://github.com/inferstep/ATLAS/actions/workflows/verify-tags.yml"><img src="https://img.shields.io/github/actions/workflow/status/inferstep/ATLAS/verify-tags.yml?label=release%20signature" alt="릴리스 서명"/></a>
+  <a href="https://scorecard.dev/viewer/?uri=github.com/inferstep/ATLAS"><img src="https://api.scorecard.dev/projects/github.com/inferstep/ATLAS/badge" alt="OpenSSF Scorecard"/></a>
 </p>
 
 
@@ -84,6 +85,7 @@
 4. **[Geometric Lens](../../reference/ARCHITECTURE.md#5-geometric-lens)** - 모델 자체 임베딩 위에서 동작하는 에너지 기반 스코어링. 외부 오라클 불필요. (["Geometric Lens"란?](../../reference/ARCHITECTURE.md#why-geometric-lens))
    - [C(x) Cost Field](../../reference/ARCHITECTURE.md#scoring-models) - 후보 품질을 스코어링하는 모델 hidden-dim→512→128→1 MLP
    - [G(x) Quality Prediction](../../reference/ARCHITECTURE.md#scoring-models) - 생성할 후보 수를 정하는 데 쓰이는 XGBoost 앙상블. 후보 선택 자체는 가장 낮은 C(x)로 합니다
+   - [단계별 스코어링](../../reference/API.md#geometric-lens-port-8099) - 쓰기의 토큰별 C(x)/G(x) 스코어링. 모델별 임계값은 모델 번들이 보정된 경우에만 개입을 이끕니다
 
 5. **[Sandbox](../../reference/ARCHITECTURE.md#6-sandbox)** - 빌드 검증을 위한 격리 실행 환경.
    - 다중 언어 실행: Python, Rust, Go, C, Shell 등. Rust, Go, C는 프로젝트에서 명령으로 실행할 수 있습니다. V3는 구문을 검사하고, 샌드박스의 `/execute`는 컴파일만 하고 아직 실행하지 못합니다 ([#163](https://github.com/inferstep/ATLAS/issues/163))

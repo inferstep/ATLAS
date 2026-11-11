@@ -1,5 +1,5 @@
-# python:3.11-slim — digest-pinned for reproducible builds (Dependabot maintains)
-FROM docker.io/python:3.11-slim@sha256:db20d8506e2f15b6db39b40b6015ca46bae855dec6dd326d462cfe79ae972893
+# python:3.13-slim — digest-pinned for reproducible builds (Dependabot maintains)
+FROM docker.io/python:3.13-slim@sha256:ae14d4ce8771606477a81446e7ef429edd6762305fc50c84507c1041fa8285d1
 WORKDIR /app
 
 # The week of the commit, which build-images.yml passes for a push to dev and

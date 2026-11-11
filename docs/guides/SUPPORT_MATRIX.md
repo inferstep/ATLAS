@@ -196,7 +196,7 @@ fails fast at llama-server startup (fit is off).
 - **HTTP/SSE protocol:** additive event types are non-breaking (clients
   drop unknown types — the TUI does); field removals or renames require
   a major version and one release of deprecation notice.
-- **Python:** ≥3.9 (CLI), 3.13 (sandbox and V3 containers), 3.11 (lens container), CI runs 3.12. The proxy is Go.
+- **Python:** ≥3.9 (CLI), 3.13 (sandbox, V3 and lens containers), CI runs 3.12. The proxy is Go.
   **Go:** proxy 1.24+, TUI 1.26+ (GOTOOLCHAIN auto-fetch).
 - **Docker:** Engine 24+ with Compose v2. **llama.cpp:** pinned by
   revision in all inference Dockerfiles; bumps go through the CI

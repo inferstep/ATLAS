@@ -91,6 +91,14 @@ class NonFiniteScoreError(ValueError):
         super().__init__(f"{field} is not a finite number: {value!r}")
 
 
+class EmbeddingContractError(RuntimeError):
+    """The embed server's response violates the loaded artifact's
+    embedding contract (wrong response shape or vector norm). Raised
+    instead of silently adapting — the two conventions produce vectors
+    from different distributions and only one matches the trained
+    weights."""
+
+
 def finite(value, field: str) -> float:
     """`value` as a float when it is a finite number, else NonFiniteScoreError.
     Every score the service reports passes through here, so the guard has
@@ -179,7 +187,6 @@ def failure_from_exception(exc: BaseException) -> dict:
       nonfinite_score          a score came out NaN or infinite (with the field)
       internal                 anything else; the service log has the traceback
     """
-    from .embedding_extractor import EmbeddingContractError
     from .model_transport import ModelServerHTTPError
 
     if isinstance(exc, EmbeddingCapacityError):
