@@ -7,10 +7,18 @@ writes a note beside it, <queue>/holder.json: what runs, its command, its proces
 expects to end, and whether it yields. The nightly signals a holder's group only when that group's leader still
 runs the noted command, and never a group of 1 or less or its own: a wrong note cannot stop another process.
 
+The lock is also the lock of the graphics card: scripts/nightly_run.py takes <queue>/lock itself (its --lock) before
+it uses the card, so a queued job never holds the card beside a nightly or smoke run. Its timer starts it directly,
+not through this queue: run through the queue, it would find the lock held by the queue itself and run nothing.
+A night of nightly_run.py waits for the lock with wait_for_the_lock below, so it asks a job to yield as the nightly
+does here; it never stops a job itself, and when the job has not yielded in its wait it skips the night.
+
 The order is the nightly, then the smoke, then development jobs:
   - The nightly: when the lock is held, it asks for the queue (it writes <queue>/yield, with the time), so
     that no job takes the lock before it. A job that yields and holds the lock gets up to 20 minutes; then
-    the nightly stops the holder's process group itself with SIGTERM, waits up to 2 more minutes, and runs.
+    the nightly stops the holder's process group itself with SIGTERM and waits up to 2 more minutes. When the
+    holder still holds the lock then, the nightly runs nothing and ends with status 75: it never uses the card
+    beside another run.
     It never stops a smoke run, which is short and bounded. Its request stands until it ends; a request older
     than 12 hours comes from a nightly run that crashed, and is ignored.
   - The smoke: it waits for the lock as many minutes as it is given, and then gives up until its next look.
@@ -139,20 +147,18 @@ def wait_for_the_lock(queue: Path, role: str, give_up_at: datetime | None, poll_
                 print(f"the job did not yield in time: {stop_the_holder(holder, kill)}", flush=True)
                 stopped_at = time.monotonic()
             elif stopped_at is not None and time.monotonic() - stopped_at >= stop_wait_s:
-                print("the stopped job still holds the queue: the nightly runs beside it", flush=True)
+                print("the stopped job still holds the queue: the nightly gives up", flush=True)
                 return None
         time.sleep(poll_s)
 
 
 def run_holding_the_queue(queue: Path, command: list, leader: list, what: str, expected_minutes: float | None,
-                          yields: bool, poll_s: float, floor_bytes: int | None, environment: dict,
-                          holds_the_lock: bool) -> int:
-    """Run the command in a process group of its own; the holder of the lock writes the note. A job that yields
+                          yields: bool, poll_s: float, floor_bytes: int | None, environment: dict) -> int:
+    """Run the command in a process group of its own, and write the note of the holder. A job that yields
     is stopped with SIGTERM when the nightly asks for the queue, or when "/" falls under its floor. The status
     is the command's, or 128 and the signal's number when a signal ended it."""
     child = subprocess.Popen(command, start_new_session=True, env=environment)
-    if holds_the_lock:
-        write_note(queue, what, leader, child.pid, expected_minutes, yields)
+    write_note(queue, what, leader, child.pid, expected_minutes, yields)
     stopping = False
 
     def stop(why: str) -> None:
@@ -172,8 +178,7 @@ def run_holding_the_queue(queue: Path, command: list, leader: list, what: str, e
                 stop(f'"/" has less than {floor_bytes / 1024**3:.0f} GiB free')
             time.sleep(poll_s)
     finally:
-        if holds_the_lock:
-            (queue / "holder.json").unlink(missing_ok=True)
+        (queue / "holder.json").unlink(missing_ok=True)
     return child.returncode if child.returncode >= 0 else 128 - child.returncode
 
 
@@ -218,7 +223,7 @@ def wait_and_run(args, command: list, what: str, floor_bytes: int | None) -> int
         give_up_at = asked + timedelta(minutes=args.wait_minutes)
     handle = wait_for_the_lock(args.queue, args.role, give_up_at, args.poll_seconds,
                                args.yield_wait_minutes * 60, args.stop_wait_minutes * 60)
-    if handle is None and args.role != "nightly":
+    if handle is None:
         print(f"not started: the queue stayed held until {now():%H:%M}Z", flush=True)
         return NOT_STARTED
 
@@ -235,10 +240,9 @@ def wait_and_run(args, command: list, what: str, floor_bytes: int | None) -> int
             print(f"started {late} min late (the queue was held)", flush=True)
     try:
         return run_holding_the_queue(args.queue, command, leader, what, args.expected_minutes, args.role == "dev",
-                                     args.poll_seconds, floor_bytes, environment, handle is not None)
+                                     args.poll_seconds, floor_bytes, environment)
     finally:
-        if handle is not None:
-            handle.close()
+        handle.close()
 
 
 if __name__ == "__main__":

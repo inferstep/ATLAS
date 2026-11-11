@@ -245,7 +245,8 @@ class Night:
     def __init__(self, root, python=sys.executable, from_the_tree=False, github=0, **plan):
         self.root = root
         self.dir = root / "nightly"
-        self.lock = root / "card.lock"
+        # The lock of the card is the lock of a queue whose folder is root, as ~/atlas-queue/lock on the server.
+        self.lock = root / "lock"
         self.script = SCRIPT
         (root / "bin").mkdir()
         (root / "stand-ins").mkdir()
@@ -272,8 +273,9 @@ class Night:
             (tree / "scripts").mkdir()
             (tree / "docker-compose.yml").write_text("services: {}\n")
             self.script = Path(shutil.copy(SCRIPT, tree / "scripts" / "nightly_run.py"))
-            for beside in ("tests_counted.py", "nightly_images.py", "nightly_statuses.py"):
-                shutil.copy(SCRIPT.with_name(beside), tree / "scripts" / beside)
+            for beside in ("tests_counted.py", "nightly_images.py", "nightly_statuses.py", "server/atlas_queue.py"):
+                (tree / "scripts" / beside).parent.mkdir(exist_ok=True)
+                shutil.copy(SCRIPT.parent / beside, tree / "scripts" / beside)
         self.plan = {"head": HEAD, "built_from": {}, "driver_rows": rows(), "tests": {"tests": MODEL_TESTS}, **plan,
                      "answers": {**WHOLE, **plan.get("answers", {})}}
         (root / "plan.json").write_text(json.dumps(self.plan))
@@ -284,7 +286,7 @@ class Night:
         # says nothing about the run.
         return [sys.executable, str(self.script), "--dir", str(self.dir), "--lock", str(self.lock),
                 "--python", str(self.root / "bin" / "python-for-the-run"),
-                "--image-wait-minutes", "0", "--settle-seconds", "0", *self.room(), *more]
+                "--image-wait-minutes", "0", "--yield-wait-minutes", "0", "--settle-seconds", "0", *self.room(), *more]
 
     def room(self):
         return ["--docker-folder", str(self.root), "--first-set-gb", "0", "--reserve-gb", "0"]
@@ -544,16 +546,42 @@ def test_when_the_branch_moves_during_the_wait_the_run_measures_its_new_head(tmp
 
 # --- the card -----------------------------------------------------------------------------------------------------
 
-def test_when_another_run_holds_the_lock_the_run_starts_no_stack_and_says_so(tmp_path):
+def test_when_a_run_that_does_not_give_way_holds_the_lock_the_night_asks_waits_and_names_it(tmp_path):
     night = Night(tmp_path)
+    (tmp_path / "holder.json").write_text(json.dumps({"what": "a planted-fault run", "yields": True}))
     with open(night.lock, "a") as held:
         fcntl.flock(held, fcntl.LOCK_EX)
-        night.run()
+        night.run("--yield-wait-minutes", "0.02")
     assert night.done.returncode == 0
-    assert night.report["result"] == "not run: the card was in use"
+    assert "the queue is held (a planted-fault run): asked for it" in night.done.stdout
+    assert night.report["result"] == "not run: the card was in use (held by a planted-fault run)"
+    assert night.report["held_by"] == "a planted-fault run"
     # What needs no card was done; the card was not read and no stack was started or stopped.
     assert night.did() == ["git clone"] + ONE_HEAD + ["look"] + IMAGES
     assert "stack_stopped" not in night.report
+    # The request of the night ends with the night, so the queue's jobs run again.
+    assert not (tmp_path / "yield").exists()
+
+
+def test_a_queued_job_that_holds_the_lock_gives_way_to_the_night(tmp_path):
+    night = Night(tmp_path)
+    job = subprocess.Popen([sys.executable, str(ROOT / "scripts" / "server" / "atlas_queue.py"), "dev",
+                            "--queue", str(night.lock.parent), "--poll-seconds", "0.1", "--", "sh", "-c",
+                            'trap "touch stopped; exit 0" TERM; touch started; while true; do sleep 0.1; done'],
+                           cwd=tmp_path)
+    try:
+        deadline = time.monotonic() + 20
+        while not (tmp_path / "started").exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        night.run("--yield-wait-minutes", "1")
+        assert job.wait(timeout=20) == 0
+    finally:
+        # SIGTERM, not SIGKILL: the queue passes it on to the job's own process group.
+        job.terminate()
+        job.wait(timeout=20)
+    assert (tmp_path / "stopped").exists()
+    assert night.report["result"] == "passed"
+    assert not (tmp_path / "yield").exists()
 
 
 def test_when_a_process_holds_the_card_the_run_starts_no_stack_and_gives_the_amount(tmp_path):
@@ -924,7 +952,7 @@ def test_the_run_writes_only_inside_its_own_folder(tmp_path):
     night.run()
     after = sorted(str(path.relative_to(tmp_path)) for path in tmp_path.rglob("*") if night.dir not in path.parents and path != night.dir)
     # Outside the folder: the lock file of the card, at the place the run was given, and the stand-ins' own list of calls.
-    assert sorted(set(after) - set(before)) == ["calls.log", "card.lock"]
+    assert sorted(set(after) - set(before)) == ["calls.log", "lock"]
 
 
 def test_the_stand_ins_start_where_the_path_of_python_holds_a_space(tmp_path):

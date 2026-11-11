@@ -862,13 +862,27 @@ def test_in_its_hour_the_night_is_due_and_only_once_a_day(server):
     assert nightly.what_is_due(settings(night, "--night-hour", "23"), at(8, day=9))[0] is None
 
 
-def test_a_look_that_finds_the_lock_of_the_card_held_starts_nothing_and_asks_nothing(server):
+def test_a_night_whose_lock_stayed_held_through_its_wait_is_started_again_by_a_later_look_of_its_hour(server):
+    night, _github = server
+    args = settings(night)
+    # The look of 08:00 started the night. A run that does not yield held the lock through the night's wait,
+    # and ends at 08:30.
+    left(night, "2026-10-08T08:00:03Z", mode="night", held_by="a run that does not yield",
+         result="not run: the card was in use (held by a run that does not yield)")
+    assert nightly.what_is_due(args, at(8, 30)) == ("night", None, "the night is due")
+    # The night that ran then is the night of the day.
+    left(night, "2026-10-08T08:30:03Z", mode="night", result="passed")
+    assert nightly.what_is_due(args, at(8, 45)) == (None, None, "nothing is due")
+
+
+def test_a_look_that_finds_the_lock_of_the_card_held_starts_no_smoke_and_asks_nothing(server):
     night, github = server
     a_smoke_is_there(night, github)
     with open(night.lock, "a") as other:
         fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        assert nightly.what_is_due(settings(night), at(8)) == (None, None, IN_USE)
         assert nightly.what_is_due(settings(night), NOON) == (None, None, IN_USE)
+        # A night is started all the same: its run asks the holder to give way, and waits for it.
+        assert nightly.what_is_due(settings(night), at(8))[0] == "night"
     assert github.seen == []
     assert "git ls-remote" not in night.did()
     # A held lock is a run of another kind that says so: nothing is written down, and the next look asks again.
@@ -882,22 +896,22 @@ def test_after_a_look_that_found_a_process_on_the_card_with_no_lock_the_looks_of
     night, github = server
     a_smoke_is_there(night, github)
     planned(night, smoke_tips=[tip("a-change")], card=["4242, 9000"])
-    assert nightly.what_is_due(settings(night), at(8, 0)) == (None, None, IN_USE)
-    assert (night.dir / nightly.CARD_HELD).read_text() == "2026-10-08T08:00:00Z\n"
+    assert nightly.what_is_due(settings(night), at(12, 0)) == (None, None, IN_USE)
+    assert (night.dir / nightly.CARD_HELD).read_text() == "2026-10-08T12:00:00Z\n"
     # The card is free again. The looks of the hour still start nothing, and ask neither the card nor GitHub: on a
     # server that stops its usual stack for a run, that stack is then not stopped and started at each look.
     planned(night, smoke_tips=[tip("a-change")])
     asked = len(night.calls())
-    quiet = (None, None, "nothing is started: at 2026-10-08T08:00:00Z a process held the card with no lock, and the looks "
+    quiet = (None, None, "nothing is started: at 2026-10-08T12:00:00Z a process held the card with no lock, and the looks "
                          "of the 60 minutes after that start nothing")
     for minute in (0, 15, 30, 45, 59):
-        assert nightly.what_is_due(settings(night), at(8, minute)) == quiet
-        assert nightly.what_is_due(settings(night, "--look"), at(8, minute)) == quiet
+        assert nightly.what_is_due(settings(night), at(12, minute)) == quiet
+        assert nightly.what_is_due(settings(night, "--look"), at(12, minute)) == quiet
     assert len(night.calls()) == asked
     assert github.seen == []
     # After the hour the look asks again.
-    assert nightly.what_is_due(settings(night, "--look"), at(9, 0))[0] == "one commit"
-    assert nightly.what_is_due(settings(night), at(9, 0))[0] == "one commit"
+    assert nightly.what_is_due(settings(night, "--look"), at(13, 0))[0] == "one commit"
+    assert nightly.what_is_due(settings(night), at(13, 0))[0] == "one commit"
     assert nightly.QUIET_MINUTES == 60
 
 
@@ -1409,13 +1423,15 @@ def test_a_look_that_starts_nothing_says_what_is_due_while_the_usual_stack_compu
     planned(night, smoke_tips=[tip("a-change")], card=["4242, 9000"])
     assert nightly.what_is_due(settings(night, "--look"), EIGHT) == ("night", None, "the night is due")
     assert nightly.what_is_due(settings(night, "--look"), NOON) == ("one commit", COMMIT, "the tip of `smoke/a-change` has no result yet")
-    # That look does not ask which processes compute on the card. The look that runs does, and starts nothing.
-    assert "card" not in night.did()
-    assert nightly.what_is_due(settings(night), NOON) == (None, None, IN_USE)
-    # A run of another kind holds the lock of the card: then nothing is due, and the usual stack is not stopped for it.
+    # A run of another kind holds the lock of the card: then no smoke is due, and the usual stack is not stopped for it.
+    # A night is due all the same: its run asks the holder to give way.
     with open(night.lock, "a") as other:
         fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        assert nightly.what_is_due(settings(night, "--look"), EIGHT) == (None, None, IN_USE)
+        assert nightly.what_is_due(settings(night, "--look"), NOON) == (None, None, IN_USE)
+        assert nightly.what_is_due(settings(night, "--look"), EIGHT) == ("night", None, "the night is due")
+    # Those looks do not ask which processes compute on the card. The look that runs does, and starts nothing.
+    assert "card" not in night.did()
+    assert nightly.what_is_due(settings(night), NOON) == (None, None, IN_USE)
 
 
 def test_a_look_that_starts_nothing_ends_with_status_0_when_a_smoke_run_is_due_and_runs_nothing(tmp_path, repository):
