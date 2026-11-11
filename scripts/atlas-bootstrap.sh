@@ -45,6 +45,8 @@
 #   ATLAS_REPO_URL=...                clone source if no local repo (default: GitHub)
 #   ATLAS_INSTALL_DIR=...             where to clone/install (default: /opt/atlas)
 #   ATLAS_GO_VERSION=...              Go toolchain to install for the TUI build (default: 1.26.10)
+#   ATLAS_GO_SHA256=...               SHA-256 of the Go archive (from https://go.dev/dl/); needed
+#                                     when ATLAS_GO_VERSION names another version
 #   ATLAS_DOWNLOAD_TRIES=...          how often a download that fails is tried (default: 3)
 #   ATLAS_DOWNLOAD_WAIT_SECONDS=...   the wait between two tries (default: 5)
 #
@@ -208,6 +210,19 @@ GO_NOT_A_NETWORK_ERROR='checksum mismatch|SECURITY ERROR|errors parsing go\.mod|
 # What curl -f prints when the server answers that the file is not there: the
 # same on every try.
 CURL_NOT_A_NETWORK_ERROR='The requested URL returned error: 4[0-9][0-9]'
+
+# The pinned downloads. The script checks the SHA-256 of each file before it
+# runs or unpacks it. To move a pin, change the version and its SHA-256 together.
+# Docker's convenience script: install.sh of github.com/docker/docker-install at this commit.
+DOCKER_INSTALL_COMMIT='8ad27bd3ac871feabe62f1d926c4067800c1732f'
+# SHA-256 of install.sh at DOCKER_INSTALL_COMMIT.
+DOCKER_INSTALL_SHA256='77f623a9f23857ebc45a50e37696fc406e3a60bda4ef17399444f792ecf8895d'
+# The Go toolchain for the TUI build. Its SHA-256 values are on https://go.dev/dl/.
+GO_VERSION='1.26.10'
+# SHA-256 of go1.26.10.linux-amd64.tar.gz.
+GO_SHA256_AMD64='ccfe7ae822d2c2f41f4fe7c956199967a4dac22d0ee0d2b2bfdb440aab3b20c5'
+# SHA-256 of go1.26.10.linux-arm64.tar.gz.
+GO_SHA256_ARM64='3f4227ce7b206a513e794f1393adb473a07b46e94d18bd15d1c684bbb7319797'
 
 # ---------------------------------------------------------------------------
 # sudo wrapper — uses sudo if we're not root, fails fast if blocked
@@ -489,7 +504,10 @@ install_docker() {
     fi
 
     # Official Docker convenience script — handles repo setup per distro.
-    curl --proto '=https' --tlsv1.2 -fsSL https://get.docker.com -o "$ATLAS_RUN_DIR/get-docker.sh" || die "Failed to download Docker installer."
+    # It is the script of get.docker.com, pinned by commit, and it runs only when its SHA-256 matches.
+    curl --proto '=https' --tlsv1.2 -fsSL "https://raw.githubusercontent.com/docker/docker-install/$DOCKER_INSTALL_COMMIT/install.sh" -o "$ATLAS_RUN_DIR/get-docker.sh" || die "Failed to download Docker installer."
+    echo "$DOCKER_INSTALL_SHA256  $ATLAS_RUN_DIR/get-docker.sh" | sha256sum --check --status \
+        || die "The Docker installer does not match DOCKER_INSTALL_SHA256, so it did not run."
     $SUDO sh "$ATLAS_RUN_DIR/get-docker.sh" >"$ATLAS_RUN_DIR/docker-install.log" 2>&1 || {
         log_err "Docker install failed. Last 20 lines of $ATLAS_RUN_DIR/docker-install.log:"
         tail -20 "$ATLAS_RUN_DIR/docker-install.log" >&2 || true
@@ -571,8 +589,7 @@ install_nvidia_driver_libs() {
 
             # Make sure EPEL is present (dkms lives there).
             if ! rpm -q epel-release &>/dev/null; then
-                $SUDO dnf install -y \
-                    "https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm" \
+                $SUDO dnf install -y epel-release \
                     >/dev/null 2>&1 || log_warn "EPEL install failed (continuing)"
             fi
 
@@ -631,10 +648,10 @@ install_nvidia_toolkit() {
     case "$DISTRO_FAMILY" in
         debian)
             # Add NVIDIA's repo
-            curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+            curl --proto '=https' --tlsv1.2 -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
                 | $SUDO gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg 2>/dev/null \
                 || die "Failed to add NVIDIA GPG key."
-            curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+            curl --proto '=https' --tlsv1.2 -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
                 | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
                 | $SUDO tee /etc/apt/sources.list.d/nvidia-container-toolkit.list >/dev/null
             $SUDO $PKG update -y >/dev/null
@@ -642,7 +659,7 @@ install_nvidia_toolkit() {
                 || die "nvidia-container-toolkit install failed."
             ;;
         rhel)
-            curl -fsSL https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo \
+            curl --proto '=https' --tlsv1.2 -fsSL https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo \
                 | $SUDO tee /etc/yum.repos.d/nvidia-container-toolkit.repo >/dev/null
             $SUDO $PKG install -y nvidia-container-toolkit >/dev/null \
                 || die "nvidia-container-toolkit install failed."
@@ -1277,7 +1294,7 @@ install_go() {
     # toolchain when building tui. We pick 1.24 as the install target
     # since it's the proven floor and the smallest stable download.
     local need_version="1.24"
-    local install_version="${ATLAS_GO_VERSION:-1.26.10}"
+    local install_version="${ATLAS_GO_VERSION:-$GO_VERSION}"
 
     # Already have new-enough Go? A previous bootstrap may have installed it
     # under /usr/local/go while this non-login process still lacks that PATH.
@@ -1309,19 +1326,35 @@ install_go() {
         log_info "Installing Go $install_version (required for atlas-tui)…"
     fi
 
-    local arch
+    local arch go_sha256
     case "$(uname -m)" in
-        x86_64)  arch="amd64" ;;
-        aarch64) arch="arm64" ;;
+        x86_64)  arch="amd64"; go_sha256="$GO_SHA256_AMD64" ;;
+        aarch64) arch="arm64"; go_sha256="$GO_SHA256_ARM64" ;;
         *) log_warn "Unsupported architecture for Go install: $(uname -m). Skipping — atlas-tui will need manual build."; return 1 ;;
     esac
 
-    local go_url="https://go.dev/dl/go${install_version}.linux-${arch}.tar.gz"
+    local go_file="go${install_version}.linux-${arch}.tar.gz"
+    # ATLAS_GO_SHA256 replaces the pin. Another version has no pin, so it needs ATLAS_GO_SHA256.
+    if [[ -n "${ATLAS_GO_SHA256:-}" ]]; then
+        go_sha256="$ATLAS_GO_SHA256"
+    elif [[ "$install_version" != "$GO_VERSION" ]]; then
+        log_warn "ATLAS_GO_VERSION=$install_version has no pinned SHA-256, so the Go download did not start."
+        log_warn "  Fix: set ATLAS_GO_SHA256 to the SHA-256 of $go_file from https://go.dev/dl/ and run this script again."
+        return 1
+    fi
+
+    local go_url="https://go.dev/dl/$go_file"
     local tmp="$ATLAS_RUN_DIR/atlas-go.tar.gz"
     log_info "  Downloading $go_url…"
-    if ! retry_download "The Go download" --not-if "$CURL_NOT_A_NETWORK_ERROR" -- curl -fL -# -o "$tmp" "$go_url"; then
+    if ! retry_download "The Go download" --not-if "$CURL_NOT_A_NETWORK_ERROR" -- curl --proto '=https' --tlsv1.2 -fL -# -o "$tmp" "$go_url"; then
         log_warn "Go download failed — atlas-tui binary will need manual install."
         log_warn "  Recovery: install Go from https://go.dev/dl/ then re-run this script."
+        return 1
+    fi
+    if ! echo "$go_sha256  $tmp" | sha256sum --check --status; then
+        rm -f "$tmp"
+        log_warn "$go_file does not match the SHA-256 $go_sha256, so it was not unpacked."
+        log_warn "  Recovery: compare the SHA-256 with https://go.dev/dl/ and run this script again."
         return 1
     fi
 

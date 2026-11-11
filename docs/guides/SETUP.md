@@ -153,6 +153,7 @@ bash atlas-bootstrap.sh
 | `ATLAS_INSTALL_DIR=/path` | Where to clone (default `/opt/atlas` — see below) |
 | `ATLAS_REPO_URL=https://...` | Alternate repo URL |
 | `ATLAS_GO_VERSION=1.26.10` | Go toolchain version installed for the TUI build (the TUI needs 1.26.10+; older installed toolchains auto-fetch it) |
+| `ATLAS_GO_SHA256=<sha256>` | The SHA-256 of the Go archive, from https://go.dev/dl/. The installer checks the archive before it unpacks it. Set it when `ATLAS_GO_VERSION` names another version, or the Go step stops |
 | `ATLAS_DOWNLOAD_TRIES=3` | How often a download that fails is tried before the install stops (the pip downloads and the Go module download) |
 | `ATLAS_DOWNLOAD_WAIT_SECONDS=5` | The wait between two tries of a download |
 
