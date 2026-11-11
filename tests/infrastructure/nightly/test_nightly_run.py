@@ -235,7 +235,7 @@ TOKEN = "a-token-made-for-this-test-0123456789"
 
 
 def rows(*defects):
-    return [{"task": task, "wall_s": 10.5 + n, "task_passed": True, "defects": ["d"] * count}
+    return [{"task": task, "wall_s": 10.5 + n, "tokens": 2000 + 100 * n, "task_passed": True, "defects": ["d"] * count}
             for n, (task, count) in enumerate(zip(nightly.TASKS, defects or (0, 0, 0)))]
 
 
@@ -272,7 +272,7 @@ class Night:
             (tree / "scripts").mkdir()
             (tree / "docker-compose.yml").write_text("services: {}\n")
             self.script = Path(shutil.copy(SCRIPT, tree / "scripts" / "nightly_run.py"))
-            for beside in ("tests_counted.py", "nightly_images.py", "nightly_statuses.py"):
+            for beside in ("tests_counted.py", "nightly_images.py", "nightly_statuses.py", "nightly_trend.py"):
                 shutil.copy(SCRIPT.with_name(beside), tree / "scripts" / beside)
         self.plan = {"head": HEAD, "built_from": {}, "driver_rows": rows(), "tests": {"tests": MODEL_TESTS}, **plan,
                      "answers": {**WHOLE, **plan.get("answers", {})}}
@@ -393,7 +393,12 @@ def test_a_night_does_its_steps_in_order_and_the_report_holds_what_it_measured(t
         assert about["image"] == f"ghcr.io/inferstep/{nightly.IMAGES[service]}:dev"
         assert about["digest"].startswith("sha256:")
         assert about["commit"] == HEAD
-    assert report["tasks"] == [{"task": task, "seconds": 10.5 + n, "passed": True, "defects": 0} for n, task in enumerate(nightly.TASKS)]
+    assert report["tasks"] == [{"task": task, "seconds": 10.5 + n, "tokens": 2000 + 100 * n, "passed": True, "defects": 0}
+                               for n, task in enumerate(nightly.TASKS)]
+    # The first night has no nights before it to compare with.
+    assert report["trend"] == {"judged": "too few nights", "nights": [report["started"]], "status": "no status: too few nights",
+                               "tasks": {task: {measure: {"judged": "too few nights", "nights_with_a_value": 0}
+                                                for measure in ("seconds", "tokens")} for task in nightly.TASKS}}
     assert report["tests"] == {"expected": MODEL_TESTS, "collected": MODEL_TESTS, "passed": MODEL_TESTS, "failed": 0, "skipped": 0,
                                "failed_tests": [],
                                "skip_reasons": {}}
@@ -1217,6 +1222,8 @@ def test_when_taking_the_head_changes_the_script_or_the_judge_beside_it_the_new_
     assert night.report["result"] == "passed"
     assert night.report["script"] == "the new copy: taking the head changed the script"
     assert len(list(night.dir.glob("reports/*"))) == 1, "the new copy writes into the folder of the run that started it"
+    # The report that the run left there when it started the new copy is not an earlier run of the night.
+    assert night.report["trend"]["judged"] == "too few nights"
     for name in (night.lock, night.dir / "run.lock"):
         with open(name, "a") as other:
             fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)

@@ -788,9 +788,10 @@ it off (the timer is disabled).
 Each night it:
 
 1. takes the head of `dev`. When that changes the script itself or one of
-   the three files beside it (`scripts/tests_counted.py`, the judge,
-   `scripts/nightly_images.py`, the images, and `scripts/nightly_statuses.py`,
-   the sending of the statuses), the new copy does the run, so a repair of
+   the four files beside it (`scripts/tests_counted.py`, the judge,
+   `scripts/nightly_images.py`, the images, `scripts/nightly_statuses.py`,
+   the sending of the statuses, and `scripts/nightly_trend.py`, the
+   comparison of the nights), the new copy does the run, so a repair of
    one of them acts in the night after its merge;
 2. stops a stack of its own name that an earlier run left: a run that was
    killed leaves its stack, and Docker starts that stack again. Then it
@@ -812,13 +813,14 @@ Each night it:
    own, so that it stands beside a stack on the usual ports, and asks the
    services whether they are whole;
 6. runs the driver `scripts/eval/e2e-reliability.py` with three fixed small
-   tasks, once each, and keeps the seconds of each;
+   tasks, once each, and keeps the seconds and the tokens of each;
 7. runs the tests that need a real model, and judges pytest's result file
    with the judge of such runs: all 30 of them are to be collected and to
    pass, and none is to be skipped;
 8. asks the services again, and writes one report: the commit, the digest
-   of each image, what the services said, the seconds of each task, and the
-   tests collected, passed, failed and skipped;
+   of each image, what the services said, the seconds and the tokens of
+   each task, the tests collected, passed, failed and skipped, and the
+   trend (see "The trend" below);
 9. keeps the last 200 lines of each service's log in its report folder
    (`<service>.log`), and stops its stack; both also when a step failed or
    the time ran out. A log that cannot be had is one line of the report
@@ -832,7 +834,7 @@ The first line of the report is its result:
 | Result | When |
 |---|---|
 | `passed` | No fault below was found |
-| `failed: ...` | A step did not end, the time limit was reached, a service was not whole after the start or at the end, the driver found a defect of the harness, a test failed, a test was skipped, the tests collected were not 32 (a missing package skips whole files without another sign), or the stack could not be stopped |
+| `failed: ...` | A step did not end, the time limit was reached, a service was not whole after the start or at the end, the driver found a defect of the harness, a test failed, a test was skipped, the tests collected were not 30 (a missing package skips whole files without another sign), or the stack could not be stopped |
 | `not run: the card was in use` | Another run held the lock of the graphics card, or a process computed on the card; then the result gives how many processes and how much memory |
 | `not run: the images are not of the head of the branch yet` | After the wait an image was still not built from the head of `dev`. Nothing more is done: the numbers would be those of another commit |
 | `not run: too little room for ...` | Before a pull or a build, Docker's disk had less free room than that step needs with the reserve after it. Nothing more is pulled or built, and no stack is started |
@@ -841,7 +843,7 @@ The first line of the report is its result:
   run. That number moves with the model and with chance; one night says
   little.
 - A skipped test fails the night, and the result gives the reasons. A
-  skipped test counts as collected, so the number 32 does not show it. One
+  skipped test counts as collected, so the number 30 does not show it. One
   of the tests compares the served model with the name in
   `ATLAS_MODEL_NAME` and skips without it: the run reads that name from
   `nightly.env` and gives it to the tests. A comment after the value is not
@@ -852,7 +854,8 @@ The first line of the report is its result:
   the 30 tests collected, none failed and none skipped. A night that is
   `not run`, and a night with no report (the server was off), counts
   neither as passed nor as failed. At most one run counts for a night: the
-  first one whose result is not `not run`.
+  first one whose result is not `not run`. The trend (see "The trend"
+  below) counts nights in the same way.
 - Whole: the health check of the lens in the compose file asks whether the
   process serves, so a stack can be healthy for Docker with a lens that
   cannot score. The run asks the proxy's `/ready` (the model server, the
@@ -900,11 +903,12 @@ What a run keeps on disk:
 
 A run puts its result on GitHub as a status of the commit that ran:
 `server/nightly` on the head of `dev` that the night ran, and `server/smoke`
-on the commit of a smoke run.
+on the commit of a smoke run. A night also puts its trend on the same commit
+as `server/trend` (see "The trend" below).
 
 | Result of the run | Status |
 |---|---|
-| `passed`, with no harness defect in the three sessions and, for a night, each of its 32 tests passed, none failed and none skipped | Green |
+| `passed`, with no harness defect in the three sessions and, for a night, each of its 30 tests passed, none failed and none skipped | Green |
 | `failed: ...` | Red |
 | `not run: ...` | None |
 
@@ -939,6 +943,52 @@ on the commit of a smoke run.
 - The folder `to-send` is checked like the key: it is a folder of the user
   of the run, and nobody else can write into it. A file in it is sent only
   then, and only when the file itself is the run's own.
+
+### The trend
+
+A night also compares the seconds and the tokens of each task with the
+nights before it (`scripts/nightly_trend.py`). One slow night says little,
+because the model and chance move these numbers. So only a change that
+stays counts.
+
+- The tokens of a task are the proxy's count for its session: the largest
+  `total_tokens` of the session's `llm_call_end` events. That number grows
+  over a turn, and each task is one turn. The tokens of v3-service are not
+  in this count.
+- The nights are counted as "Counting nights" above says. A task whose
+  session had a harness defect gives no value for that night. A value of 0
+  counts: a session with no call of the model has 0 tokens.
+- For each task and each measure, the run takes the median of the 7
+  counted nights before the last 3 nights. Then it divides the value of
+  each of the last 3 nights by that median, to 2 decimals.
+- A change stayed when all 3 values are more than 1.5 times the median,
+  or all 3 are less than the median divided by 1.5. This rule uses the
+  values, not the rounded ratios. With a median of 0, each value above 0 is
+  a rise, and the report gives no ratios.
+- A median needs the values of at least 5 nights. With fewer, the report
+  says `too few nights` for that task and measure.
+- The report of each night has a part `trend` with the median and the
+  ratios of each task and measure. These limits are a start: the reports
+  keep the ratios, so that the limits can be set from the data later.
+
+The night puts its trend on its commit as a second status, `server/trend`:
+
+| Trend | Status |
+|---|---|
+| A change stayed for a task and a measure | Red |
+| No change stayed | Green |
+| Too few nights for each task and measure, or the run is not the counted run of its night | None |
+
+- The first `server/trend` can come on the 8th counted night: 5 nights for
+  the median, then the last 3.
+- The text of the status has fixed words, the start time of the night,
+  and the first change that stayed with the ratio of this night, as in
+  `a change stayed; started 2026-10-08T08:00:03Z; offbyone seconds: 3 times
+  the median`. After a median of 0, the text says `more than a median of
+  0` in place of the ratio. The report has the others.
+- The trend changes neither the result of the night, nor its exit status,
+  nor its `server/nightly` status. A smoke run gets no trend.
+- The status is kept and sent as the other statuses are.
 
 ### The timer
 

@@ -10,7 +10,9 @@ import json
 import re
 import sys
 import threading
+import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -382,8 +384,11 @@ def test_a_short_outage_of_github_is_waited_out_and_an_answer_that_says_no_is_no
     threading.Thread(target=server.serve_forever, daemon=True).start()
     slept = []
     monkeypatch.setattr(lookup, "API", f"http://127.0.0.1:{server.server_port}")
-    monkeypatch.setattr(lookup.time, "sleep", slept.append)
+    monkeypatch.setattr(lookup, "time", SimpleNamespace(sleep=slept.append))
     try:
+        # Other threads must keep their real wait.
+        time.sleep(0)
+        assert slept == []
         # Two answers 5xx, then the answer: three tries, with a wait that grows.
         monkeypatch.setattr(_GitHub, "statuses", [502, 503, 200])
         assert lookup.api("repos/o/r/actions/runs", "a-token") == [{"total_count": 0}]

@@ -684,6 +684,19 @@ def test_the_identity_and_the_stack_changes_are_kept_with_every_result(rel, tmp_
     assert row["stack_changes"] == ["lens restarted 1 time"]
 
 
+def test_the_tokens_of_a_result_are_the_largest_total_of_the_session(rel, tmp_path):
+    # total_tokens counts the whole turn so far, so the largest one is the count of the session.
+    s = _session(rel, [{"type": "llm_call_end", "data": {"total_tokens": 900}},
+                       {"type": "llm_call_end", "data": {"total_tokens": 1400}},
+                       {"type": "done", "data": {}}], tmp_path)
+    assert rel.result_row(s, {}, {})["tokens"] == 1400
+
+
+def test_a_session_with_no_call_of_the_model_has_no_tokens(rel, tmp_path):
+    s = _session(rel, [{"type": "done", "data": {}}], tmp_path)
+    assert rel.result_row(s, {}, {})["tokens"] == 0
+
+
 # --- A stopped run keeps what it has (#222) -------------------------------
 
 _DETECTORS = ("h1_protocol", "h2_false_rejection", "h3_dead_end_steering", "h4_gate_escape",

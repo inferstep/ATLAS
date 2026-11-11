@@ -29,6 +29,8 @@ REPOSITORY, GITHUB_API = "inferstep/ATLAS", "https://api.github.com"
 # The status that a run writes on the commit that ran, by the kind of run. Each name starts with `server/`: no
 # required check has such a name.
 STATUS = {"night": "server/nightly", "one commit": "server/smoke"}
+# The status that a night writes on its commit when its seconds or tokens are compared with the nights before it.
+TREND = "server/trend"
 # Where a status waits until it is sent, where it lies when it is sent, and where one goes that was tried for too
 # long. All three are folders of the run's own folder.
 WAITING, SENT, GIVEN_UP, KEEP_TRYING_DAYS = "to-send", "sent", "not-sent", 14
@@ -127,7 +129,8 @@ def token_for_statuses(args) -> str:
 
 def is_ours(status) -> bool:
     """Whether a waiting file holds a status as this script writes it. Another file is not sent."""
-    return (isinstance(status, dict) and status.get("context") in STATUS.values() and status.get("state") in ("success", "failure")
+    return (isinstance(status, dict) and status.get("context") in (*STATUS.values(), TREND)
+            and status.get("state") in ("success", "failure")
             and bool(re.fullmatch(r"[0-9a-f]{40}", str(status.get("sha")))) and isinstance(status.get("description"), str)
             and len(status["description"]) <= 140)
 
@@ -224,14 +227,16 @@ def send_waiting(args, now: dt.datetime) -> str:
     return ("; ".join(said) or "nothing waits") + other
 
 
-def send_what_waits(args, status: dict | None = None, stamp: str = "") -> str:
-    """Keep the status of a run for sending, and try once to send each status that waits. Gives what happened.
+def send_what_waits(args, kept=(), stamp: str = "") -> str:
+    """Keep the statuses of a run for sending, and try once to send each status that waits. Gives what happened.
 
+    `kept` holds the statuses of the run, and None for a status that the run does not get.
     A fault of this step itself is given as words too: sending never stops a run, its report or a look of the timer.
     """
     try:
-        if status:
-            keep_for_sending(args, status, stamp)
+        for status in kept:
+            if status:
+                keep_for_sending(args, status, stamp)
         return send_waiting(args, dt.datetime.now(dt.timezone.utc))
     except Exception as error:  # the caller says so, and goes on
         return f"not sent: an error of the sending step itself ({type(error).__name__})"
