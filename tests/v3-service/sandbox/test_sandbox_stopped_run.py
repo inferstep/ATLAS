@@ -18,7 +18,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "services" / "v3-service"))
 sys.path.insert(0, str(PROJECT_ROOT / "services" / "sandbox"))
 
 import adapters
-import pipeline
+import pool_capture
 import resource_contract
 from stages import failure_analysis, pr_cot
 
@@ -64,7 +64,7 @@ def test_a_run_at_its_time_limit_gives_the_repair_step_a_text_that_says_so(monke
 
 def test_a_self_test_at_its_time_limit_is_recorded_as_a_timeout(monkeypatch):
     ok, out, err = through_the_adapter(monkeypatch, stopped("timed_out", "Execution timed out after 15s"))
-    assert pipeline._capture_case(0, CASE, ok, out, err)["outcome"] == "timeout"
+    assert pool_capture._capture_case(0, CASE, ok, out, err)["outcome"] == "timeout"
 
 
 def test_what_the_program_wrote_before_the_limit_stays_after_the_line_for_the_limit(monkeypatch):
@@ -103,7 +103,7 @@ def test_an_answer_with_no_field_for_the_outcome_is_read_as_before(monkeypatch):
     # said: the text is the empty error stream, and the record sorts the case as an error of the run.
     ok, out, err = through_the_adapter(monkeypatch, BEFORE)
     assert (ok, out, err) == (False, "", "")
-    assert pipeline._capture_case(0, CASE, ok, out, err)["outcome"] == "execution_error"
+    assert pool_capture._capture_case(0, CASE, ok, out, err)["outcome"] == "execution_error"
     prompt = pr_cot.PRCoT(pr_cot.PRCoTConfig())._build_analysis_prompt("the problem", "the code", err, "logical_error")
     assert "Error output: \n" in prompt
 

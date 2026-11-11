@@ -254,12 +254,12 @@ def test_operational_record_schema_is_closed():
 def test_private_evidence_still_retains_candidate_bytes():
     """Sanitising operational logs must not destroy the governed evidence
     records, which are required to carry the candidate and its hash."""
-    import pipeline
-    with open(os.path.join(V3, "pipeline.py"), encoding="utf-8") as fh:
+    import pool_capture
+    with open(os.path.join(V3, "pool_capture.py"), encoding="utf-8") as fh:
         src = fh.read()
     assert "code_b64" in src, "the pool capture stopped retaining candidate bytes"
     assert "code_sha256" in src, "the pool capture stopped retaining the content hash"
-    assert hasattr(pipeline, "_PoolCapture")
+    assert hasattr(pool_capture, "_PoolCapture")
 
 
 # --- the SSE progress emitter ------------------------------------------------

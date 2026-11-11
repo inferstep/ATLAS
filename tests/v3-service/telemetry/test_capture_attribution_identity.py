@@ -18,13 +18,21 @@ import pytest
 
 V3 = os.path.join(os.path.dirname(__file__), "..", "..", "..", "services", "v3-service")
 sys.path.insert(0, V3)
-import pipeline
+import pool_capture
+
+# pipeline.py and the modules that were split from it.
+PIPELINE_MODULES = ("pipeline.py", "run_steps.py", "candidate_cases.py", "pool_capture.py")
+
+
+def read_v3(module):
+    with open(os.path.join(V3, module), encoding="utf-8") as fh:
+        return fh.read()
 
 
 def cap(tmp_path, monkeypatch, name="pool.jsonl", trace="req-1", inv="inv-1"):
     path = tmp_path / name
-    monkeypatch.setenv(pipeline.CAPTURE_ENV, str(path))
-    c = pipeline._PoolCapture.from_env()
+    monkeypatch.setenv(pool_capture.CAPTURE_ENV, str(path))
+    c = pool_capture._PoolCapture.from_env()
     c.bind("gen-solve")
     c.identify(trace, inv)
     assert c.enabled, c.write_error
@@ -138,7 +146,7 @@ def test_repair_lineage_resolves_within_the_invocation(tmp_path, monkeypatch):
 def test_instance_ids_are_scoped_to_the_invocation(tmp_path, monkeypatch):
     c, _ = cap(tmp_path, monkeypatch, inv="inv-Z")
     assert c.instance_id("generated", 3).startswith("inv-Z:")
-    other = pipeline._PoolCapture.disabled()
+    other = pool_capture._PoolCapture.disabled()
     other.identify("r", "inv-Y")
     assert other.instance_id("generated", 3) != c.instance_id("generated", 3)
 
@@ -205,47 +213,49 @@ def test_identity_never_reaches_generation_or_selection():
     the packing is never read anywhere that decides anything.
     """
     import ast as _ast
-    with open(os.path.join(V3, "pipeline.py"), encoding="utf-8") as fh:
-        src = fh.read()
-    tree = _ast.parse(src)
-    sink = next(n for n in _ast.walk(tree)
+    sources = {module: read_v3(module) for module in PIPELINE_MODULES}
+    sink = next(n for n in _ast.walk(_ast.parse(sources["pool_capture.py"]))
                 if isinstance(n, _ast.ClassDef) and n.name == "_PoolCapture")
-    run = next(n for n in _ast.walk(tree)
+    run = next(n for n in _ast.walk(_ast.parse(sources["pipeline.py"]))
                if isinstance(n, _ast.FunctionDef) and n.name == "run")
-    lines = src.split("\n")
+    allowed_lines = {
+        "pool_capture.py": range(sink.lineno, (sink.end_lineno or sink.lineno) + 1),
+        "pipeline.py": range(run.lineno, run.lineno + 9),
+    }
+    lines = [(module, idx, line)
+             for module, src in sources.items()
+             for idx, line in enumerate(src.split("\n"), start=1)]
     stray = []
-    for idx, line in enumerate(lines, start=1):
+    for module, idx, line in lines:
         if "trace_request_id" not in line and "v3_invocation_id" not in line:
             continue
-        in_sink = sink.lineno <= idx <= (sink.end_lineno or sink.lineno)
-        in_run_sig = run.lineno <= idx <= run.lineno + 8
+        in_sink_or_run_sig = idx in allowed_lines.get(module, ())
         hands_off = "capture.identify(" in line
         packs_for_transport = ("request_id=trace_request_id" in line
                                or "invocation_id=v3_invocation_id" in line)
-        if not (in_sink or in_run_sig or hands_off or packs_for_transport):
-            stray.append((idx, line.strip()))
+        if not (in_sink_or_run_sig or hands_off or packs_for_transport):
+            stray.append((module, idx, line.strip()))
     assert not stray, f"identity reaches a decision path: {stray}"
 
 
 def test_transport_identity_is_carried_and_never_read():
     """The packed identity is handed to the adapter and read nowhere else.
 
-    Two mentions are allowed in pipeline.py: building it in run(), and the
-    one assignment onto the request-scoped adapter. A third would mean some
-    decision path can now see it -- which is the thing the packing was not
-    allowed to buy.
+    Two mentions are allowed in the pipeline modules: building it in run(),
+    and the one assignment onto the request-scoped adapter. A third would mean
+    some decision path can now see it -- which is the thing the packing was
+    not allowed to buy.
     """
-    import ast as _ast
-    with open(os.path.join(V3, "pipeline.py"), encoding="utf-8") as fh:
-        src = fh.read()
-    mentions = [(i, l.strip()) for i, l in enumerate(src.split("\n"), start=1)
+    mentions = [(module, i, l.strip())
+                for module in PIPELINE_MODULES
+                for i, l in enumerate(read_v3(module).split("\n"), start=1)
                 if "request_identity" in l]
-    assigns = [m for m in mentions if "llm.request_identity =" in m[1]]
-    params = [m for m in mentions if m[1].startswith("request_identity=")
-              or "request_identity=None" in m[1]]
-    builds = [m for m in mentions if "RequestIdentity(" in m[1]]
-    accounted = {m[0] for m in assigns + params + builds}
-    stray = [m for m in mentions if m[0] not in accounted]
+    assigns = [m for m in mentions if "llm.request_identity =" in m[2]]
+    params = [m for m in mentions if m[2].startswith("request_identity=")
+              or "request_identity=None" in m[2]]
+    builds = [m for m in mentions if "RequestIdentity(" in m[2]]
+    accounted = {m[:2] for m in assigns + params + builds}
+    stray = [m for m in mentions if m[:2] not in accounted]
     assert not stray, f"transport identity is read on a decision path: {stray}"
     assert len(assigns) == 1, f"expected one adapter assignment, got {assigns}"
     assert len(builds) == 1, f"expected one construction site, got {builds}"
@@ -263,8 +273,8 @@ def test_transport_identity_is_carried_and_never_read():
 
 
 def test_disabled_capture_records_nothing(tmp_path, monkeypatch):
-    monkeypatch.delenv(pipeline.CAPTURE_ENV, raising=False)
-    c = pipeline._PoolCapture.from_env()
+    monkeypatch.delenv(pool_capture.CAPTURE_ENV, raising=False)
+    c = pool_capture._PoolCapture.from_env()
     c.identify("req", "inv")
     c.note_candidate(role="generated", index=0, code="Z\n", accepted=True,
                      record=None, phase="p")
@@ -304,14 +314,14 @@ def test_short_prefix_collision_does_not_merge_instances(tmp_path, monkeypatch):
     c, p = cap(tmp_path, monkeypatch)
     # Force the collision rather than hunting for one: two DIFFERENT bodies
     # whose short ids are made equal by the fixture.
-    real = pipeline._PoolCapture.candidate_id
-    monkeypatch.setattr(pipeline._PoolCapture, "candidate_id",
+    real = pool_capture._PoolCapture.candidate_id
+    monkeypatch.setattr(pool_capture._PoolCapture, "candidate_id",
                         staticmethod(lambda code: "deadbeefcafe"))
     c.note_candidate(role="generated", index=0, code="one\n", accepted=True,
                      record=None, phase="p")
     c.note_candidate(role="generated", index=1, code="two\n", accepted=True,
                      record=None, phase="p")
-    monkeypatch.setattr(pipeline._PoolCapture, "candidate_id", staticmethod(real))
+    monkeypatch.setattr(pool_capture._PoolCapture, "candidate_id", staticmethod(real))
     c.close({"total_tokens": 0})
     got = [r for r in recs(p) if r["type"] == "candidate_evaluation"]
     assert len(got) == 2, "a prefix collision swallowed a candidate"

@@ -20,7 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "services" / "v3-service"))
 
-import pipeline
+import candidate_cases
 import stage_telemetry
 
 
@@ -69,32 +69,32 @@ def test_the_generator_marks_every_case_it_produces():
 
 
 def test_generated_cases_are_not_an_oracle():
-    assert pipeline._trusted_oracle(_NS(test_cases=[_generated("1", "2")])) is False
+    assert candidate_cases._trusted_oracle(_NS(test_cases=[_generated("1", "2")])) is False
 
 
 def test_trusted_cases_are_an_oracle():
-    assert pipeline._trusted_oracle(_NS(test_cases=[_trusted("1", "2")])) is True
+    assert candidate_cases._trusted_oracle(_NS(test_cases=[_trusted("1", "2")])) is True
 
 
 def test_unknown_provenance_fails_closed():
     """A case that cannot say where it came from gets no authority; a future
     producer opts in deliberately rather than inheriting trust by omission."""
-    assert pipeline._trusted_oracle(
+    assert candidate_cases._trusted_oracle(
         _NS(test_cases=[_NS(input_str="1", expected_output="2")])) is False
-    assert pipeline._trusted_oracle(
+    assert candidate_cases._trusted_oracle(
         _NS(test_cases=[_NS(input_str="1", expected_output="2",
                             provenance=None)])) is False
-    assert pipeline._trusted_oracle(
+    assert candidate_cases._trusted_oracle(
         _NS(test_cases=[_NS(input_str="1", expected_output="2",
                             provenance="looks-trusted")])) is False
     # One untrusted case in an otherwise trusted suite disqualifies it.
-    assert pipeline._trusted_oracle(
+    assert candidate_cases._trusted_oracle(
         _NS(test_cases=[_trusted("1", "2"), _generated("3", "4")])) is False
 
 
 def test_no_suite_at_all_is_not_an_oracle():
-    assert pipeline._trusted_oracle(None) is False
-    assert pipeline._trusted_oracle(_NS(test_cases=[])) is False
+    assert candidate_cases._trusted_oracle(None) is False
+    assert candidate_cases._trusted_oracle(_NS(test_cases=[])) is False
 
 
 def test_a_reasoning_transcript_key_has_no_authority():
@@ -102,10 +102,10 @@ def test_a_reasoning_transcript_key_has_no_authority():
     whole continuation became the expected output."""
     transcript = ("12 a\n\nWait, let me re-calculate Case 5 carefully:\n"
                   "Total rejections = 3.\nCorrect output: 3 a")
-    assert pipeline._trusted_oracle(
+    assert candidate_cases._trusted_oracle(
         _NS(test_cases=[_generated("0 a", transcript)])) is False
 
 
 def test_a_placeholder_input_has_no_authority():
-    assert pipeline._trusted_oracle(
+    assert candidate_cases._trusted_oracle(
         _NS(test_cases=[_generated("(empty file)", "0")])) is False

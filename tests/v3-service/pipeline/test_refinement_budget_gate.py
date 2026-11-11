@@ -22,6 +22,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "services" / "v3-service"))
 
 import adapters
 import pipeline as v3pipeline
+import pool_capture
 import scoring
 from stages.refinement_loop import (
     ITERATION_LLM_CALLS,
@@ -146,7 +147,7 @@ def test_budget_exit_captures_scored_candidates_before_sandbox(
     """
     sink = tmp_path / "pool.jsonl"
     monkeypatch.setenv("ATLAS_V3_TIMEOUT", "1")
-    monkeypatch.setenv(v3pipeline.CAPTURE_ENV, str(sink))
+    monkeypatch.setenv(pool_capture.CAPTURE_ENV, str(sink))
 
     result, refinement = _run_pipeline(monkeypatch)
 

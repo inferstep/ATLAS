@@ -36,6 +36,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "services" / "v3-se
 import adapters as A
 import contract as C
 
+V3DIR = Path(__file__).resolve().parents[3] / "services" / "v3-service"
+# pipeline.py and the modules that were split from it.
+PIPELINE_MODULES = ("pipeline.py", "run_steps.py", "candidate_cases.py", "pool_capture.py")
+
 ALL_FIVE = [
     A.ADAPTER_CSS_SYNTAX,
     A.ADAPTER_PYTHON_COMPILE, A.ADAPTER_JAVASCRIPT_COMPILE,
@@ -169,10 +173,10 @@ def test_repair_candidates_carry_a_contract_record():
     """The sealed run captured three repair candidates with `record=None`:
     adapter None, an empty record, and no way to say what was measured."""
     import ast
-    src = (Path(__file__).resolve().parents[3] / "services" / "v3-service" / "pipeline.py").read_text()
-    tree = ast.parse(src)
+    nodes = [(module, node) for module in PIPELINE_MODULES
+             for node in ast.walk(ast.parse((V3DIR / module).read_text()))]
     offenders = []
-    for node in ast.walk(tree):
+    for module, node in nodes:
         if not isinstance(node, ast.Call):
             continue
         name = getattr(node.func, "attr", None)
@@ -183,7 +187,7 @@ def test_repair_candidates_carry_a_contract_record():
         rec = kw.get("record")
         role_v = getattr(role, "value", None)
         if isinstance(rec, ast.Constant) and rec.value is None:
-            offenders.append((role_v, node.lineno))
+            offenders.append((module, role_v, node.lineno))
     assert not offenders, (
         f"pool members captured with no contract record: {offenders}")
 
@@ -191,10 +195,10 @@ def test_repair_candidates_carry_a_contract_record():
 def test_late_generated_candidates_carry_lens_evidence_into_capture():
     """Repair/refinement candidates must not bypass diagnostic Lens capture."""
     import ast
-    src = (Path(__file__).resolve().parents[3] / "services" / "v3-service" / "pipeline.py").read_text()
-    tree = ast.parse(src)
+    nodes = [(module, node) for module in PIPELINE_MODULES
+             for node in ast.walk(ast.parse((V3DIR / module).read_text()))]
     missing = []
-    for node in ast.walk(tree):
+    for module, node in nodes:
         if not isinstance(node, ast.Call):
             continue
         if getattr(node.func, "attr", None) != "note_candidate":
@@ -202,5 +206,5 @@ def test_late_generated_candidates_carry_lens_evidence_into_capture():
         kw = {k.arg: k.value for k in node.keywords}
         role = getattr(kw.get("role"), "value", None)
         if role in {"repair", "refinement"} and "lens" not in kw:
-            missing.append((role, node.lineno))
+            missing.append((module, role, node.lineno))
     assert not missing, f"late candidates captured without Lens evidence: {missing}"

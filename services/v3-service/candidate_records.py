@@ -3,7 +3,7 @@ the pool: the Lens view of a candidate, the task identity every record is
 measured under, the closure rule and the evidence delivered with a result,
 the incumbent's index and name, the re-typing rule, and contract selection
 over the passing candidates' records. The canonical record itself,
-_evaluate_candidate, is in pipeline.py."""
+_evaluate_candidate, is in candidate_cases.py."""
 
 from typing import Any, Dict, List, Optional
 

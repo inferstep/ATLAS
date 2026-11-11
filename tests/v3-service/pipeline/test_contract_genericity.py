@@ -559,7 +559,9 @@ def test_selection_and_closure_live_only_in_the_contract():
 
 def test_candidates_carry_one_canonical_record():
     """No parallel authoritative fields beside the contract record."""
-    src = (V3DIR / "pipeline.py").read_text()
+    # pipeline.py and the modules that were split from it.
+    src = "\n".join((V3DIR / module).read_text() for module in (
+        "pipeline.py", "run_steps.py", "candidate_cases.py", "pool_capture.py"))
     for banned in ('c["evidence_strength"]', 'c["behavior_score"]',
                    'c["missing_required"]', 'c["evidence"]',
                    '"evidence_strength": probe_result'):
@@ -828,8 +830,8 @@ def test_no_generated_case_observation_reaches_the_wire_or_authorization():
 def test_consensus_defines_no_second_strength_scale():
     """One strength vocabulary, in the contract. A ranking signal that grew
     its own scale is how correlated agreement becomes 'behavioural'."""
-    pipeline_src = (V3DIR / "pipeline.py").read_text()
-    consensus_block = pipeline_src.split("def _consensus_winners(", 1)[1]
+    cases_src = (V3DIR / "candidate_cases.py").read_text()
+    consensus_block = cases_src.split("def _consensus_winners(", 1)[1]
     consensus_block = consensus_block.split("\nclass ", 1)[0].split("\ndef ", 1)[0]
     for forbidden in ("STRENGTH_", "closure_eligible", "verified_winner",
                       "requirements_complete", "evidence_strength"):

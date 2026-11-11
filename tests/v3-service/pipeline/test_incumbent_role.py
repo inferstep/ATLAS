@@ -21,6 +21,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "services" / "v3-service"))
 
 import adapters
+import candidate_cases
 import pipeline as P
 import scoring
 import symbols
@@ -173,8 +174,8 @@ class _Sandbox:
     def __call__(self, code, test_input="", **_):
         if "     assert mean" in code:
             return False, "", "Line 5: unexpected indent"
-        if P._CONSENSUS_MARK in code:
-            return True, P._CONSENSUS_MARK + repr("2") + "\n", ""
+        if candidate_cases._CONSENSUS_MARK in code:
+            return True, candidate_cases._CONSENSUS_MARK + repr("2") + "\n", ""
         return True, "", ""
 
 
@@ -264,8 +265,8 @@ def test_candidates_that_failed_the_role_are_left_out_of_consensus():
     """Agreement among candidates does not outweigh a failed project check."""
     role_failed = {"verification_evidence": [
         {"verifier": "incumbent_role", "status": "failed", "dropped": ["test_mean"]}]}
-    assert P._failed_a_project_check(role_failed) is True
-    assert P._failed_a_project_check({"verification_evidence": [
+    assert candidate_cases._failed_a_project_check(role_failed) is True
+    assert candidate_cases._failed_a_project_check({"verification_evidence": [
         {"verifier": "incumbent_role", "status": "passed"}]}) is False
 
 

@@ -18,6 +18,8 @@ import adapters
 import graph
 import main
 import pipeline as v3pipeline
+import pool_capture
+import run_steps
 import scoring
 from graph.extract import available as graph_extraction_available
 
@@ -63,7 +65,7 @@ def service(monkeypatch):
     repairs nothing and refinement solves nothing."""
     monkeypatch.setenv("ATLAS_V3_TELEMETRY_DIR", "off")
     monkeypatch.delenv("ATLAS_V3_TIMEOUT", raising=False)
-    monkeypatch.delenv(v3pipeline.CAPTURE_ENV, raising=False)
+    monkeypatch.delenv(pool_capture.CAPTURE_ENV, raising=False)
     monkeypatch.setattr(adapters, "LLMAdapter", NoCodeLLM)
     monkeypatch.setattr(adapters, "SandboxAdapter", FailingSandbox)
     monkeypatch.setattr(adapters, "EmbedAdapter", NoEmbed)
@@ -121,7 +123,7 @@ def test_a_budget_spent_before_pr_cot_returns_the_best_so_far_without_repairing(
     """Phase 3 regenerates the self-tests (phase 0 produced none), and that
     call spends the rest of the clock."""
     clock = {"spent": False}
-    monkeypatch.setattr(v3pipeline, "_remaining_budget_ms",
+    monkeypatch.setattr(run_steps, "_remaining_budget_ms",
                         lambda start, cap_ms=None: -1.0 if clock["spent"] else None)
     generations = []
 
