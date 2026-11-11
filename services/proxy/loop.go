@@ -1382,7 +1382,7 @@ func detectProjectVenvPython(workingDir string) string {
 	return ""
 }
 
-func listWorkspaceFiles(workingDir string, max int) []string {
+func listWorkspaceFiles(workingDir string, limit int) []string {
 	if workingDir == "" {
 		return nil
 	}
@@ -1399,7 +1399,7 @@ func listWorkspaceFiles(workingDir string, max int) []string {
 			}
 			return nil
 		}
-		if len(out) >= max {
+		if len(out) >= limit {
 			return fs.SkipAll
 		}
 		if rel, err := filepath.Rel(workingDir, path); err == nil {

@@ -842,12 +842,12 @@ func layoutFullScreen(v fullScreenView, width, height int) (string, int) {
 		// small terminals — renderHelpHint truncates the body to fit.
 		helpLines := strings.Count(slashCommandHelp, "\n") + 1
 		inputH = 6 + 1 + helpLines
-		cap := height / 2
-		if cap < 8 {
-			cap = 8
+		limit := height / 2
+		if limit < 8 {
+			limit = 8
 		}
-		if inputH > cap {
-			inputH = cap
+		if inputH > limit {
+			inputH = limit
 		}
 	}
 	eventsH, pipelineH, permMax, chatH := layoutPaneHeights(v.pipeline, v.perm, v.hidePipeline, v.hideEvents,

@@ -938,12 +938,12 @@ func scanSandbox(root string) []string {
 // bottom-anchored (rows up from the live tail); the output-review file
 // body is top-anchored, so the sign flips there.
 func (m *demoModel) scrollActive(delta int) {
-	clamp := func(v, max int) int {
-		if max < 0 {
-			max = 0
+	clamp := func(v, limit int) int {
+		if limit < 0 {
+			limit = 0
 		}
-		if v > max {
-			v = max
+		if v > limit {
+			v = limit
 		}
 		if v < 0 {
 			v = 0
