@@ -16,6 +16,7 @@ import io
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -193,6 +194,16 @@ def test_h5_corrupt_write(rel, tmp_path, files, must_exist, defect):
     else:
         assert len(found) == 1, found
         assert found[0].startswith(defect), found
+
+
+@pytest.mark.skipif(shutil.which("node") is None,
+                    reason="the JS syntax check runs node and node is not installed here")
+def test_js_parses_reads_the_script_from_stdin(rel):
+    assert rel._js_parses("const x = () => 1;") == (True, "")
+    ok, message = rel._js_parses("function f( {")
+    assert ok is False
+    # node names stdin as the file, so no temporary file sits behind the check.
+    assert message.startswith("[stdin]"), message
 
 
 # --- H6 service fault ------------------------------------------------------
