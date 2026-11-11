@@ -74,14 +74,18 @@ def _anchors(path: Path) -> set:
     return anchors
 
 
-def test_relative_links_and_anchors_resolve():
+def _markdown_files() -> list:
+    """The git-tracked Markdown files of the repository, sorted, without the files in SKIP_DIRS."""
     # Git-tracked Markdown only: local-only files (git-ignored notes) do not exist in CI checkouts
     # and are not part of the published docs.
     tracked = subprocess.run(["git", "ls-files", "*.md"], cwd=REPO, capture_output=True, text=True, check=True)
-    failures = []
-    for path in sorted({REPO / name for name in tracked.stdout.splitlines() if name}):
-        if SKIP_DIRS.intersection(path.parts) or not path.is_file():
-            continue
+    paths = sorted({REPO / name for name in tracked.stdout.splitlines() if name})
+    return [path for path in paths if not SKIP_DIRS.intersection(path.parts) and path.is_file()]
+
+
+def _relative_links():
+    """Yield ("file:line", target, destination path, fragment) for each relative link of the Markdown files."""
+    for path in _markdown_files():
         rel = path.relative_to(REPO)
         for lineno, target in _links(path):
             if target.startswith(("http://", "https://", "mailto:", "ftp://")) or f"{rel}:{target}" in SKIP:
@@ -89,12 +93,25 @@ def test_relative_links_and_anchors_resolve():
             split = urlsplit(target)
             if split.scheme or split.netloc:  # any other scheme or a host is external too
                 continue
-            file_part, fragment = unquote(split.path), unquote(split.fragment)
+            file_part = unquote(split.path)
             dest = (path.parent / file_part).resolve() if file_part else path
-            if not dest.exists():
-                failures.append(f"{rel}:{lineno} → {target} (file not found)")
-            elif fragment and dest.suffix == ".md":
-                anchors = _anchors(dest)
-                if fragment not in anchors and fragment.lower() not in anchors:
-                    failures.append(f"{rel}:{lineno} → {target} (no such anchor)")
-    assert not failures, "broken Markdown links/anchors:\n  " + "\n  ".join(failures)
+            yield f"{rel}:{lineno}", target, dest, unquote(split.fragment)
+
+
+def test_every_relative_link_names_a_file_that_exists():
+    failures = []
+    for where, target, dest, _fragment in _relative_links():
+        if not dest.exists():
+            failures.append(f"{where} → {target} (file not found)")
+    assert not failures, "broken Markdown links:\n  " + "\n  ".join(failures)
+
+
+def test_every_fragment_names_an_anchor_of_its_file():
+    failures = []
+    for where, target, dest, fragment in _relative_links():
+        # A link to a missing file fails in the test above; a fragment of a non-Markdown file is not checked.
+        if fragment and dest.suffix == ".md" and dest.exists():
+            anchors = _anchors(dest)
+            if fragment not in anchors and fragment.lower() not in anchors:
+                failures.append(f"{where} → {target} (no such anchor)")
+    assert not failures, "broken Markdown anchors:\n  " + "\n  ".join(failures)
