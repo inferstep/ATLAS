@@ -63,11 +63,11 @@ jobs:
         if: matrix.language == 'go'
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
-          # 1.26.10 covers both modules (tui's go.mod requires 1.26.10;
+          # 1.26.11 covers both modules (tui's go.mod requires 1.26.11;
           # proxy's 1.24 floor builds fine on it). setup-go pins
           # GOTOOLCHAIN=local, so the version here must satisfy every
           # module — no auto-fetch.
-          go-version: '1.26.10'
+          go-version: '1.26.11'
           # The modules live in services/proxy/ and clients/tui/ (no root go.mod); without
           # this the default cache lookup warns and never caches.
           cache-dependency-path: |

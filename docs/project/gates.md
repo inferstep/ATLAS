@@ -1486,14 +1486,14 @@ Do not grant write permission to the fixer job.
 
 The scheduled workflow comes from `main`, although both jobs check out `dev`.
 On 2026-11-08, `main` still selects Go `1.26.6` in `.github/workflows/weekly-cleanup.yml`.
-The `dev` copy and the test workflows select `1.26.10`.
-The terminal module, `clients/tui/go.mod`, requires `1.26.10`.
+The `dev` copy and the test workflows select `1.26.11`.
+The terminal module, `clients/tui/go.mod`, requires `1.26.11`.
 The [November 2 run](https://github.com/inferstep/ATLAS/actions/runs/41433225661)
 failed at `go vet` for that module with this version mismatch.
 The issue job did not run.
 
 1. Prepare a separate, reviewed change based on `main`.
-   In `.github/workflows/weekly-cleanup.yml`, change `go-version: '1.26.6'` to `go-version: '1.26.10'`.
+   In `.github/workflows/weekly-cleanup.yml`, change `go-version: '1.26.6'` to `go-version: '1.26.11'`.
    Keep this correction limited to that workflow line.
    Do not promote the complete `dev` branch for this maintenance task.
 2. Compare the selected version with `.github/workflows/test.yml` and the module requirements on `dev`.
@@ -1517,7 +1517,7 @@ The issue job did not run.
 5. Merge `main` back into `dev` with step 3 of the [Hotfixes procedure](RELEASE.md#hotfixes).
    This keeps the next promotion a fast-forward.
 6. After publication, start `weekly cleanup` manually with `main` selected.
-   Confirm that setup selects Go `1.26.10` and both jobs succeed.
+   Confirm that setup selects Go `1.26.11` and both jobs succeed.
    Confirm that #445 receives the new date and commit.
 7. Check the next Monday scheduled run in the same way.
    Record both run links in #315.
