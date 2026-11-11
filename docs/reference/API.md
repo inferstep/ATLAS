@@ -1300,7 +1300,7 @@ curl http://localhost:30820/languages
     "python": "Python 3.13.18",
     "javascript": "v24.22.2",
     "typescript": "Version 7.0.2",
-    "go": "go version go1.27.3 linux/amd64",
+    "go": "go version go1.27.4 linux/amd64",
     "java": "javac 21.0.13",
     "kotlin": "",
     "ruby": "ruby 3.3.13 (2026-10-23 revision af48f08f21) [x86_64-linux-gnu]",

@@ -100,7 +100,7 @@ freeze packages that a later installation resolves.
 
 ### Sandbox toolchains
 
-Review date: **2026-11-10**. The [sandbox Dockerfile](../../services/sandbox/Dockerfile)
+Review date: **2026-11-11**. The [sandbox Dockerfile](../../services/sandbox/Dockerfile)
 records the installation choices. Versions below were observed in the amd64
 branch image built on this date.
 
@@ -118,8 +118,8 @@ source. Package revisions can differ between builds and architectures.
 | TypeScript compiler (`tsc`) | 7.0.2, installed through npm from the [versioned registry package][typescript-package]. | The [TypeScript release process][typescript-support] defines regular and patch releases. It gives no fixed support end date. |
 | TypeScript runner (`tsx`) | 4.23.15, installed through npm from the [versioned registry package][tsx-package]. | The [tsx security policy][tsx-support] covers only the latest release. It gives no fixed calendar end date. |
 | esbuild compiler, used by `tsx` | 0.28.2, resolved from the [registry package][esbuild-package] during this build. Its version can change on later builds. | The [esbuild security page][esbuild-support] publishes no security policy. The support end date is unknown. |
-| Go compiler and module tools | 1.27.3, from the [Go release manifest][go-download]. The Dockerfile records SHA-256 checksums for amd64 and arm64. | The [Go release policy][go-support] supports a release until two newer major releases exist. Go 1.27 support ends with Go 1.29; the date is not fixed. |
-| Rust compiler (`rustc`) and Cargo package manager | Rust 1.99.1 and Cargo 1.99.1, selected by the [toolchain manifest][rust-download]. rustup installs them. | The [Rust release process][rust-support] produces stable releases every six weeks. It gives no fixed support end date for this toolchain. |
+| Go compiler and module tools | 1.27.4, from the [Go release manifest][go-download]. The Dockerfile records SHA-256 checksums for amd64 and arm64. | The [Go release policy][go-support] supports a release until two newer major releases exist. Go 1.27 support ends with Go 1.29; the date is not fixed. |
+| Rust compiler (`rustc`) and Cargo package manager | Rust 1.99.1 and Cargo 1.99.1, selected by the [toolchain manifest][rust-download]. rustup installs them. | The [Rust release process][rust-support] gives fixes only to the newest stable release. Rust 1.99 was released on 2026-10-01. It stops getting fixes when the next stable release ships, about six weeks later. |
 | rustup, the Rust toolchain installer | 1.29.1, from the [rustup archives][rustup-download]. The Dockerfile checks the installer before execution. | The [rustup security policy][rustup-support] gives no fixed support end date. |
 | Bun runtime, package manager, and `bunx` command | 1.4.3, from the [Bun release][bun-download]. The Dockerfile records SHA-256 checksums for amd64 and arm64. | The [Bun security policy][bun-support] lists 1.x as supported. It gives no fixed support end date. |
 | Java runtime (`java`) and compiler (`javac`) | OpenJDK 21.0.13; Debian package [`openjdk-21-jdk-headless`][java-package] revision `21.0.13+9-1~deb13u2`. | [Debian support][debian-support] applies. The distribution schedule does not promise an individual package support end date. |
