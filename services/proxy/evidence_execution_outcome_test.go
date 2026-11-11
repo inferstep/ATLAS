@@ -312,7 +312,7 @@ func TestResourceExhaustionReachesNoGrant(t *testing.T) {
 // The wire shape the executor promises, pinned so a rename on either side is
 // a test failure rather than a silent unclassified.
 func TestTheExecutorWireCarriesTheOutcome(t *testing.T) {
-	body, err := os.ReadFile("../sandbox/executor_server.py")
+	body, err := os.ReadFile("../sandbox/executor_languages.py")
 	if err != nil {
 		// A skip here would pass in silence once the sandbox moves.
 		t.Fatalf("the executor this test pins is not at ../sandbox: %v", err)

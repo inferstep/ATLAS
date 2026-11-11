@@ -8,10 +8,9 @@
   "services/geometric-lens/geometric_lens/training.py:train_gx": 132,
   "services/proxy/delivery.go:deliverCandidateBytes": 128,
   "services/proxy/loop.go:runAgentLoop": 151,
-  "services/sandbox/executor_server.py:_syntax_check_impl": 123
+  "services/sandbox/executor_languages.py:_syntax_check_impl": 123
  },
  "files": {
-  "services/sandbox/executor_server.py": 1988,
   "services/v3-service/pipeline.py": 2700
  },
  "proxy_main": {
@@ -160,7 +159,7 @@
   "services/proxy/tools_test.go:TestStructuralEditAnswersEachShapeOfItsCall": 21,
   "services/sandbox/executor_server.py:_bg_janitor": 17,
   "services/sandbox/executor_server.py:_copy_workspace_snapshot": 34,
-  "services/sandbox/executor_server.py:_syntax_check_impl": 52,
+  "services/sandbox/executor_languages.py:_syntax_check_impl": 52,
   "services/sandbox/executor_server.py:normalize_language": 16,
   "services/v3-service/adapters.py:LLMAdapter._send": 54,
   "services/v3-service/adapters.py:check_registry": 23,

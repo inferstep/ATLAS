@@ -450,7 +450,7 @@ def test_jinja2_is_a_baked_sandbox_verify_dependency():
 def _ended(sandbox, outcome, returncode=-15, stdout="", stderr=""):
     def run(cmd, timeout, cwd=None, env=None, stdin=None, cancelled=None):
         return {"success": False, "stdout": stdout, "stderr": stderr,
-                "returncode": returncode, "timed_out": outcome == sandbox.OUTCOME_TIMED_OUT,
+                "returncode": returncode, "timed_out": outcome == "timed_out",
                 "outcome": outcome, "peak_memory_bytes": 0, "peak_processes": 0,
                 "survivors": 0}
     return run
@@ -472,6 +472,8 @@ def _ended(sandbox, outcome, returncode=-15, stdout="", stderr=""):
 @pytest.mark.parametrize("outcome", ["timed_out", "memory_exhausted", "spawn_failed"])
 def test_a_stopped_checker_is_not_a_pass(tmp_path, monkeypatch, lang, code, outcome):
     sandbox = _load_sandbox_module()
+    import executor_languages
+    monkeypatch.setattr(executor_languages, "_run_cmd", _ended(sandbox, outcome))
     monkeypatch.setattr(sandbox, "_run_cmd", _ended(sandbox, outcome))
     monkeypatch.setattr(sandbox, "WORKSPACE_BASE", str(tmp_path))
 
@@ -485,6 +487,8 @@ def test_a_stopped_checker_is_not_a_pass(tmp_path, monkeypatch, lang, code, outc
 
 def test_a_checker_that_finished_still_gives_its_verdict(tmp_path, monkeypatch):
     sandbox = _load_sandbox_module()
+    import executor_languages
+    monkeypatch.setattr(executor_languages, "_run_cmd", _ended(sandbox, "completed", returncode=0))
     monkeypatch.setattr(sandbox, "_run_cmd", _ended(sandbox, "completed", returncode=0))
     monkeypatch.setattr(sandbox, "WORKSPACE_BASE", str(tmp_path))
 
@@ -554,6 +558,8 @@ def test_each_checker_reads_the_file_the_caller_named_and_its_errors_come_back(
         ran.append(cmd)
         return {"success": False, "returncode": 1, "outcome": "completed", "stdout": "", "stderr": "", **said}
 
+    import executor_languages
+    monkeypatch.setattr(executor_languages, "_run_cmd", checker)
     monkeypatch.setattr(sandbox, "_run_cmd", checker)
 
     got = sandbox._syntax_check_impl(lang, "broken (\n", tmp_path, filename)
@@ -628,18 +634,22 @@ def test_javascript_syntax_check_handles_a_subdirectory_path(tmp_path):
 
 def test_typescript_counts_only_syntax_diagnostics(tmp_path, monkeypatch):
     sandbox = _load_sandbox_module()
+    import executor_languages
     unresolvable = ("a.ts(1,21): error TS2307: Cannot find module './math' or its corresponding type declarations.\n"
                     "a.ts(3,7): error TS2322: Type 'string' is not assignable to type 'number'.\n"
                     "a.ts(5,12): error TS7006: Parameter 'a' implicitly has an 'any' type.\n")
+    monkeypatch.setattr(executor_languages, "_run_cmd", _ended(sandbox, "completed", returncode=2, stdout=unresolvable))
     monkeypatch.setattr(sandbox, "_run_cmd", _ended(sandbox, "completed", returncode=2, stdout=unresolvable))
     assert sandbox._syntax_check_impl("typescript", "import { add } from './math';\n", tmp_path) == []
 
     syntax = unresolvable + "a.ts(4,17): error TS1005: ')' expected.\n"
+    monkeypatch.setattr(executor_languages, "_run_cmd", _ended(sandbox, "completed", returncode=2, stdout=syntax))
     monkeypatch.setattr(sandbox, "_run_cmd", _ended(sandbox, "completed", returncode=2, stdout=syntax))
     assert sandbox._syntax_check_impl("typescript", "const x = (1 + 2;\n", tmp_path) == [
         "a.ts(4,17): error TS1005: ')' expected."]
 
     crashed = "Error: Cannot find module 'typescript'"
+    monkeypatch.setattr(executor_languages, "_run_cmd", _ended(sandbox, "completed", returncode=1, stderr=crashed))
     monkeypatch.setattr(sandbox, "_run_cmd", _ended(sandbox, "completed", returncode=1, stderr=crashed))
     assert sandbox._syntax_check_impl("typescript", "const x = 1;\n", tmp_path) == [crashed]
 
