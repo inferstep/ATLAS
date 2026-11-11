@@ -1082,6 +1082,7 @@ attempt ended only when the idle watchdog cut it. In the smoke run on 4403ae8
 The proxy image's build stage is `golang:1.27-alpine`, Go 1.27.3; the 3.1.7
 image is built with Go 1.26.10. Go 1.27.3 has the crypto/x509 fix of Go
 1.26.10. The TUI, CI and the installer use Go 1.26.10, as in 3.1.7.
+For GO-2026-6859 in net/http, the image now uses Go 1.27.4, and the others use Go 1.26.11.
 
 ### Fixed: the model registry said two quants reuse the Q6_K lens, and the lens rejects them
 

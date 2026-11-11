@@ -100,7 +100,7 @@ def main(argv: List[str]) -> int:
         sys.stderr.write(
             "atlas tui: atlas-tui binary not found and Go is not "
             "available to build it.\n"
-            "Install Go 1.26.10+ (https://go.dev/dl/) or build manually:\n"
+            "Install Go 1.26.11+ (https://go.dev/dl/) or build manually:\n"
             "  cd clients/tui && go build -o ~/.local/bin/atlas-tui .\n"
         )
         return 1

@@ -136,7 +136,7 @@ bash atlas-bootstrap.sh
 | `ATLAS_BOOTSTRAP_REF=vX.Y.Z` | `main` を追跡する代わりに git タグ/SHA にインストールを固定。`vX.Y.Z` 形式の値なら `ATLAS_IMAGE_TAG` も対応するイメージに固定されます |
 | `ATLAS_INSTALL_DIR=/path` | クローン先（デフォルト `/opt/atlas` — 下記参照） |
 | `ATLAS_REPO_URL=https://...` | 別のリポジトリ URL |
-| `ATLAS_GO_VERSION=1.26.10` | TUI ビルド用にインストールされる Go ツールチェーンのバージョン（TUI には 1.26.10+ が必要。より古いインストール済みツールチェーンは自動で取得します） |
+| `ATLAS_GO_VERSION=1.26.11` | TUI ビルド用にインストールされる Go ツールチェーンのバージョン（TUI には 1.26.11+ が必要。より古いインストール済みツールチェーンは自動で取得します） |
 
 **なぜ `/opt/atlas` なのか?** システム全体で使うサードパーティソフトウェアの標準的な FHS プレフィックスであり、`$HOME` のクリーンアップを生き残るためです。インストールを所有するユーザーは 1 人で、サービストークンはそのユーザー専用です。ホームディレクトリに置きたい場合は:
 
@@ -226,13 +226,13 @@ case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *)
 # 3. Select/install a model and write model-aware runtime sizing
 atlas init
 
-# 4. Install Go 1.26.10+ — required for the TUI client (atlas tui) and
+# 4. Install Go 1.26.11+ — required for the TUI client (atlas tui) and
 #    optional for the proxy (proxy builds automatically on first run if Go
 #    is present; otherwise it runs in Docker with file access limited to
 #    ATLAS_PROJECT_DIR). Quickest path:
 mkdir -p /tmp/go-install && cd /tmp/go-install
-curl -LO https://go.dev/dl/go1.26.10.linux-amd64.tar.gz
-sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.26.10.linux-amd64.tar.gz
+curl -LO https://go.dev/dl/go1.26.11.linux-amd64.tar.gz
+sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.26.11.linux-amd64.tar.gz
 echo 'export PATH="/usr/local/go/bin:$PATH"' >> ~/.bashrc
 source ~/.bashrc
 cd -
@@ -496,7 +496,7 @@ K3s のインストールでは代わりに `scripts/install/uninstall.sh` を�
 
 | 要件 | 詳細 |
 |-------------|---------|
-| **Go 1.26.10+** | atlas-proxy と atlas-tui クライアントのビルド用（より古い Go ツールチェーンは自動で取得します） |
+| **Go 1.26.11+** | atlas-proxy と atlas-tui クライアントのビルド用（より古い Go ツールチェーンは自動で取得します） |
 | **llama.cpp** | CUDA 付きでソースからビルド（[llama.cpp ビルド手順](https://github.com/ggml-org/llama.cpp?tab=readme-ov-file#build) を参照） |
 | **Node.js 20+** | サンドボックスの JavaScript/TypeScript 実行に必要 |
 | **Rust** | サンドボックスの Rust 実行に必要 |
@@ -589,7 +589,7 @@ cd /path/to/your/project
 atlas    # Checks atlas-proxy is reachable, then launches the TUI
 ```
 
-`atlas` は `atlas-tui` バイナリが見つからない、またはチェックアウトより古い場合に `clients/tui/` から自動的にビルドし（PATH 上に Go 1.26.10+ が必要）、TUI に処理を渡す前に localhost:8090 のプロキシを検証します。
+`atlas` は `atlas-tui` バイナリが見つからない、またはチェックアウトより古い場合に `clients/tui/` から自動的にビルドし（PATH 上に Go 1.26.11+ が必要）、TUI に処理を渡す前に localhost:8090 のプロキシを検証します。
 
 ---
 

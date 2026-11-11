@@ -144,7 +144,7 @@ bash atlas-bootstrap.sh
 | `ATLAS_BOOTSTRAP_REF=vX.Y.Z` | `main`을 추적하는 대신 git 태그/sha에 설치를 고정; `vX.Y.Z` 값은 `ATLAS_IMAGE_TAG`도 대응 이미지에 고정합니다 |
 | `ATLAS_INSTALL_DIR=/path` | 클론 위치(기본 `/opt/atlas` — 아래 참고) |
 | `ATLAS_REPO_URL=https://...` | 대체 저장소 URL |
-| `ATLAS_GO_VERSION=1.26.10` | TUI 빌드에 설치되는 Go 툴체인 버전 (TUI는 1.26.10+가 필요하며, 구형 툴체인이 설치되어 있으면 자동으로 이를 가져옵니다) |
+| `ATLAS_GO_VERSION=1.26.11` | TUI 빌드에 설치되는 Go 툴체인 버전 (TUI는 1.26.11+가 필요하며, 구형 툴체인이 설치되어 있으면 자동으로 이를 가져옵니다) |
 
 **왜 `/opt/atlas`인가?** 시스템 전역 서드파티 소프트웨어의 표준 FHS 접두사이고, `$HOME` 정리에도 살아남기 때문입니다. 설치는 한 사용자가 소유하며, 서비스 토큰은 그 사용자만 사용합니다. 홈 디렉토리에 설치하고 싶다면:
 
@@ -234,13 +234,13 @@ case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *)
 # 3. Select/install a model and write model-aware runtime sizing
 atlas init
 
-# 4. Install Go 1.26.10+ — required for the TUI client (atlas tui) and
+# 4. Install Go 1.26.11+ — required for the TUI client (atlas tui) and
 #    optional for the proxy (proxy builds automatically on first run if Go
 #    is present; otherwise it runs in Docker with file access limited to
 #    ATLAS_PROJECT_DIR). Quickest path:
 mkdir -p /tmp/go-install && cd /tmp/go-install
-curl -LO https://go.dev/dl/go1.26.10.linux-amd64.tar.gz
-sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.26.10.linux-amd64.tar.gz
+curl -LO https://go.dev/dl/go1.26.11.linux-amd64.tar.gz
+sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.26.11.linux-amd64.tar.gz
 echo 'export PATH="/usr/local/go/bin:$PATH"' >> ~/.bashrc
 source ~/.bashrc
 cd -
@@ -503,7 +503,7 @@ K3s 설치는 대신 `scripts/install/uninstall.sh`를 사용합니다. 이 스�
 
 | 요구 사항 | 세부 내용 |
 |-------------|---------|
-| **Go 1.26.10+** | atlas-proxy와 atlas-tui 클라이언트 빌드용 (구형 Go 툴체인은 자동으로 이를 가져옵니다) |
+| **Go 1.26.11+** | atlas-proxy와 atlas-tui 클라이언트 빌드용 (구형 Go 툴체인은 자동으로 이를 가져옵니다) |
 | **llama.cpp** | CUDA로 소스 빌드 ([llama.cpp 빌드 안내](https://github.com/ggml-org/llama.cpp?tab=readme-ov-file#build) 참고) |
 | **Node.js 20+** | 샌드박스의 JavaScript/TypeScript 실행에 필요 |
 | **Rust** | 샌드박스의 Rust 실행에 필요 |
@@ -596,7 +596,7 @@ cd /path/to/your/project
 atlas    # Checks atlas-proxy is reachable, then launches the TUI
 ```
 
-`atlas`는 `atlas-tui` 바이너리가 없거나 체크아웃보다 오래된 경우 `clients/tui/`에서 자동으로 빌드하며(PATH에 Go 1.26.10+ 필요), TUI로 넘어가기 전에 localhost:8090의 프록시를 검증합니다.
+`atlas`는 `atlas-tui` 바이너리가 없거나 체크아웃보다 오래된 경우 `clients/tui/`에서 자동으로 빌드하며(PATH에 Go 1.26.11+ 필요), TUI로 넘어가기 전에 localhost:8090의 프록시를 검증합니다.
 
 ---
 

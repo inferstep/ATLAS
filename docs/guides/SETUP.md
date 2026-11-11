@@ -152,7 +152,7 @@ bash atlas-bootstrap.sh
 | `ATLAS_BOOTSTRAP_REF=vX.Y.Z` | Pin the install to a git tag/sha instead of tracking `main`; a `vX.Y.Z` value also pins `ATLAS_IMAGE_TAG` to the matching images |
 | `ATLAS_INSTALL_DIR=/path` | Where to clone (default `/opt/atlas` — see below) |
 | `ATLAS_REPO_URL=https://...` | Alternate repo URL |
-| `ATLAS_GO_VERSION=1.26.10` | Go toolchain version installed for the TUI build (the TUI needs 1.26.10+; older installed toolchains auto-fetch it) |
+| `ATLAS_GO_VERSION=1.26.11` | Go toolchain version installed for the TUI build (the TUI needs 1.26.11+; older installed toolchains auto-fetch it) |
 | `ATLAS_DOWNLOAD_TRIES=3` | How often a download that fails is tried before the install stops (the pip downloads and the Go module download) |
 | `ATLAS_DOWNLOAD_WAIT_SECONDS=5` | The wait between two tries of a download |
 
@@ -247,12 +247,12 @@ case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *)
 # 3. Select/install a model and write model-aware runtime sizing
 atlas init
 
-# 4. Install Go 1.26.10+ — required for the TUI client (atlas tui). With
+# 4. Install Go 1.26.11+ — required for the TUI client (atlas tui). With
 #    this method the proxy runs in Docker, with file access limited to
 #    ATLAS_PROJECT_DIR. Quickest path:
 mkdir -p /tmp/go-install && cd /tmp/go-install
-curl -LO https://go.dev/dl/go1.26.10.linux-amd64.tar.gz
-sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.26.10.linux-amd64.tar.gz
+curl -LO https://go.dev/dl/go1.26.11.linux-amd64.tar.gz
+sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.26.11.linux-amd64.tar.gz
 echo 'export PATH="/usr/local/go/bin:$PATH"' >> ~/.bashrc
 source ~/.bashrc
 cd -
@@ -546,7 +546,7 @@ Unlike container-based setups (Methods 0, 1, and 3), this method has no containe
 
 | Requirement | Details |
 |-------------|---------|
-| **Go 1.26.10+** | For building atlas-proxy and the atlas-tui client (older Go toolchains auto-fetch it) |
+| **Go 1.26.11+** | For building atlas-proxy and the atlas-tui client (older Go toolchains auto-fetch it) |
 | **llama.cpp** | Built from source with CUDA (see [llama.cpp build instructions](https://github.com/ggml-org/llama.cpp?tab=readme-ov-file#build)) |
 | **Node.js 20+** | Required by sandbox for JavaScript/TypeScript execution |
 | **Rust** | Required by sandbox for Rust execution |
@@ -639,7 +639,7 @@ cd /path/to/your/project
 atlas    # Checks atlas-proxy is reachable, then launches the TUI
 ```
 
-`atlas` builds the `atlas-tui` binary from `clients/tui/` automatically if it is missing or older than the checkout (requires Go 1.26.10+ on PATH), and verifies the proxy on localhost:8090 before handing over to the TUI.
+`atlas` builds the `atlas-tui` binary from `clients/tui/` automatically if it is missing or older than the checkout (requires Go 1.26.11+ on PATH), and verifies the proxy on localhost:8090 before handing over to the TUI.
 
 ---
 

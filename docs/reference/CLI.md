@@ -61,7 +61,7 @@ The top-level `atlas` binary also dispatches to non-TUI subcommands:
 1. **Locates the `atlas-tui` binary** on `$PATH` or in `~/.local/bin`.
 2. **Builds from source** in `clients/tui/` when `go` is on `PATH` and the
    binary is missing or stale (older than the TUI sources). `clients/tui/go.mod`
-   requires Go 1.26.10+; older toolchains auto-fetch the required
+   requires Go 1.26.11+; older toolchains auto-fetch the required
    version.
 3. **Ensures atlas-proxy is running** via `atlas.runtime.ensure_proxy()`. If the
    proxy's or the sandbox's `/workspace` bind-mount doesn't already cover
@@ -813,7 +813,7 @@ auto-realigns on launch.
 
 ### "atlas-tui binary not found and Go is not available"
 
-Install Go 1.26.10+ from [https://go.dev/dl/](https://go.dev/dl/)
+Install Go 1.26.11+ from [https://go.dev/dl/](https://go.dev/dl/)
 (older installed toolchains auto-fetch the required version), or
 build manually:
 
