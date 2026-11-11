@@ -11,16 +11,18 @@ import { describe, expect, it } from 'vitest';
 const ROOT = resolve(__dirname, '..');
 const LINES = 'max-lines-per-function';
 const COMPLEXITY = 'complexity';
+const COGNITIVE = 'sonarjs/cognitive-complexity';
 const NEW_FILE = 'src/aNewFile.ts';
 
-type Limits = { lines: number; complexity: number };
+type Limits = { lines: number; complexity: number; cognitive: number };
 
 /** What a file may hold when the settings do not list it. */
-const LIMITS: Limits = { lines: 100, complexity: 15 };
+const LIMITS: Limits = { lines: 100, complexity: 15, cognitive: 15 };
 
 const sizeRules = (limits: Limits): Linter.RulesRecord => ({
 	[LINES]: ['error', { max: limits.lines }],
 	[COMPLEXITY]: ['error', { max: limits.complexity, variant: 'modified' }],
+	[COGNITIVE]: ['error', limits.cognitive],
 });
 
 /** The size rules `code` breaks as the file `file`; `limits` replaces the file's own. */
@@ -33,7 +35,7 @@ async function broken(code: string, file = NEW_FILE, limits?: Limits): Promise<s
 	return result.messages
 		.filter((message) => message.severity === 2)
 		.map((message) => message.ruleId ?? '')
-		.filter((rule) => rule === LINES || rule === COMPLEXITY);
+		.filter((rule) => rule === LINES || rule === COMPLEXITY || rule === COGNITIVE);
 }
 
 /** A function that spans `lines` lines. */
@@ -48,11 +50,28 @@ function functionOfComplexity(complexity: number): string {
 	return ['export function branchy(value: number): number {', ...ifs, '\treturn value;', '}', ''].join('\n');
 }
 
+/**
+ * A function of the given cognitive complexity, with few paths: each `if`
+ * counts 1, and its `else` counts 1 more and adds no path.
+ */
+function functionOfCognitive(cognitive: number): string {
+	const pairs = Array.from(
+		{ length: Math.floor(cognitive / 2) },
+		(_, i) => `\tif (value === ${i}) { value += 1; } else { value -= 1; }`,
+	);
+	const odd = cognitive % 2 === 1 ? ['\tif (value > 0) { value = 0; }'] : [];
+	return ['export function tangled(value: number): number {', ...pairs, ...odd, '\treturn value;', '}', ''].join('\n');
+}
+
+/** The extension's code: each .ts file under src, and each .js file of the webview in media. */
 function sourceFiles(): string[] {
-	return (readdirSync(join(ROOT, 'src'), { recursive: true }) as string[])
+	const src = (readdirSync(join(ROOT, 'src'), { recursive: true }) as string[])
 		.filter((name) => name.endsWith('.ts'))
-		.map((name) => join('src', name).replaceAll('\\', '/'))
-		.sort();
+		.map((name) => join('src', name));
+	const media = readdirSync(join(ROOT, 'media'))
+		.filter((name) => name.endsWith('.js'))
+		.map((name) => join('media', name));
+	return [...src, ...media].map((name) => name.replaceAll('\\', '/')).sort();
 }
 
 describe('size rules, in a file the settings do not list', () => {
@@ -64,6 +83,11 @@ describe('size rules, in a file the settings do not list', () => {
 	it('accepts a function at the complexity limit and refuses one decision more', async () => {
 		expect(await broken(functionOfComplexity(LIMITS.complexity))).toEqual([]);
 		expect(await broken(functionOfComplexity(LIMITS.complexity + 1))).toEqual([COMPLEXITY]);
+	});
+
+	it('accepts a function at the cognitive complexity limit and refuses one more', async () => {
+		expect(await broken(functionOfCognitive(LIMITS.cognitive))).toEqual([]);
+		expect(await broken(functionOfCognitive(LIMITS.cognitive + 1))).toEqual([COGNITIVE]);
 	});
 
 	it('counts a switch once, however many cases it has', async () => {
@@ -87,13 +111,20 @@ describe('size rules, in the files the settings list', () => {
 		const loose: string[] = [];
 		for (const file of sourceFiles()) {
 			const config = await new ESLint({ cwd: ROOT }).calculateConfigForFile(join(ROOT, file));
-			const own: Limits = { lines: config.rules[LINES][1].max, complexity: config.rules[COMPLEXITY][1].max };
+			const own: Limits = {
+				lines: config.rules[LINES][1].max,
+				complexity: config.rules[COMPLEXITY][1].max,
+				cognitive: config.rules[COGNITIVE][1],
+			};
 			const code = readFileSync(join(ROOT, file), 'utf8');
 			if (own.lines > LIMITS.lines && !(await broken(code, file, { ...own, lines: own.lines - 1 })).includes(LINES)) {
 				loose.push(`${file}: ${LINES} is ${own.lines}, and no function in the file is that long. Lower the number in eslint.config.mjs.`);
 			}
 			if (own.complexity > LIMITS.complexity && !(await broken(code, file, { ...own, complexity: own.complexity - 1 })).includes(COMPLEXITY)) {
 				loose.push(`${file}: ${COMPLEXITY} is ${own.complexity}, and no function in the file is that complex. Lower the number in eslint.config.mjs.`);
+			}
+			if (own.cognitive > LIMITS.cognitive && !(await broken(code, file, { ...own, cognitive: own.cognitive - 1 })).includes(COGNITIVE)) {
+				loose.push(`${file}: ${COGNITIVE} is ${own.cognitive}, and no function in the file is that hard to follow. Lower the number in eslint.config.mjs.`);
 			}
 		}
 		expect(loose).toEqual([]);

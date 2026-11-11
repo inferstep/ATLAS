@@ -35,6 +35,48 @@ def test_go_functions_and_methods_are_measured():
     assert dict(ch.go_functions(src)) == {"plain": 3, "server.handle": 5, "list.Len": 1}
 
 
+def test_shell_functions_are_measured_and_a_one_line_function_counts_one():
+    src = "\n".join([
+        "#!/usr/bin/env bash",
+        'log_ok()    { echo "ok: $*"; }',
+        "main() {",
+        "  log_ok start",
+        "  if true; then",
+        "    echo inner",
+        "  fi",
+        "}",
+        'main "$@"',
+    ])
+    assert dict(ch.shell_functions(src)) == {"log_ok": 1, "main": 6}
+
+
+def test_a_shell_function_of_100_lines_passes_and_one_of_101_fails(tmp_path, monkeypatch):
+    # Each function is its "name() {" line, its body and its "}" line: 1 + 98 + 1 and 1 + 99 + 1 lines.
+    at_limit = "at_limit() {\n" + "  echo line\n" * 98 + "}\n"
+    over = "over() {\n" + "  echo line\n" * 99 + "}\n"
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "run.sh").write_text(at_limit + over)
+    monkeypatch.setattr(ch, "ROOT", str(tmp_path))
+    funcs, files, _ = ch.measure()
+    assert ch.check(funcs, files, {}) == ["new function over 100 lines: scripts/run.sh:over (101)"]
+
+
+def test_shell_kotlin_typescript_and_javascript_files_over_1500_lines_are_measured(tmp_path, monkeypatch):
+    for rel in ["scripts/big.sh", "clients/extensions/jetbrains/src/main/kotlin/Big.kt",
+                "clients/extensions/vscode/src/big.ts", "clients/extensions/vscode/media/big.js",
+                "clients/extensions/jetbrains/src/test/kotlin/BigTest.kt"]:
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text("x\n" * 1501)
+    monkeypatch.setattr(ch, "ROOT", str(tmp_path))
+    _, files, _ = ch.measure()
+    assert files == {  # the Kotlin file in the test folder is left out
+        "scripts/big.sh": 1501,
+        "clients/extensions/jetbrains/src/main/kotlin/Big.kt": 1501,
+        "clients/extensions/vscode/src/big.ts": 1501,
+        "clients/extensions/vscode/media/big.js": 1501,
+    }
+
+
 def test_python_functions_get_qualified_names():
     src = "class A:\n    def m(self):\n        return 1\n\ndef f():\n    def inner():\n        pass\n    return inner\n"
     assert dict(ch.py_functions(src, "x.py")) == {"A.m": 2, "f": 4, "f.inner": 2}

@@ -12,10 +12,14 @@ change one thing without reading everything else.
 ## Size
 
 - **A function does one job.** Aim for under 50 lines. **Over 100 lines
-  fails the code-health check** for new functions. A long function becomes
-  named steps, each with one job.
+  fails the code-health check** for new functions in Go, Python and shell.
+  ESLint sets the same limit for the VS Code extension's TypeScript and
+  `media/*.js`. Kotlin function length is not measured yet (#981). A long
+  function becomes named steps, each with one job.
 - **A file holds one concern.** New files stay under 1,500 lines, or the
-  check fails.
+  check fails. This limit covers Go, Python, shell, Kotlin, and the
+  extension's TypeScript and JavaScript. Test files and test folders are
+  not measured for size.
 - **Oversized code doesn't grow.** A function or file on the baseline
   (`.github/code-health-baseline.json`) may shrink but not grow. If your
   change makes one shorter, lower its number in the same pull request.
@@ -24,8 +28,11 @@ change one thing without reading everything else.
   many paths it has) stay at 15 or under. Over 15 **fails the code-health
   check** for a new function: cognitive for Go and Python, cyclomatic for Go,
   and tests count too, in both. Python's cyclomatic complexity is ruff's C901, at
-  the same 15. A function already over is on the baseline with its score: it
-  may fall but not rise. When your change lowers one, run
+  the same 15. In the VS Code extension, ESLint holds both at 15 for
+  TypeScript and `media/*.js`, and tests count too. Shell has no complexity
+  limit, and Kotlin complexity is not measured yet (#981). A function
+  already over is on the baseline with its score: it may fall but not
+  rise. When your change lowers one, run
   `python scripts/ci/code_health.py --update` and commit the baseline.
   Without Go and its two tools the check skips Go on your machine and names
   the install; CI always measures it.
