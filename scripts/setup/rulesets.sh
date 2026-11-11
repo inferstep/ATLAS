@@ -137,10 +137,11 @@ PULL_REQUEST='{"type":"pull_request","parameters":{
       "dismiss_stale_reviews_on_push":false,"require_last_push_approval":false,
       "required_review_thread_resolution":true,"allowed_merge_methods":["squash","rebase"]}}'
 # The queue runs the required checks on the merged result and squashes each
-# pull request into one commit.
+# pull request into one commit. It builds at most 2 pull requests at once, so
+# fewer runs compete for the runners, and it still merges up to 5 at once.
 MERGE_QUEUE='{"type":"merge_queue","parameters":{
       "merge_method":"SQUASH","grouping_strategy":"ALLGREEN",
-      "max_entries_to_build":5,"min_entries_to_merge":1,"max_entries_to_merge":5,
+      "max_entries_to_build":2,"min_entries_to_merge":1,"max_entries_to_merge":5,
       "min_entries_to_merge_wait_minutes":1,"check_response_timeout_minutes":60}}'
 
 checks_ruleset() {  # name, branch list, strict (true: the branch must be up to date), check names
