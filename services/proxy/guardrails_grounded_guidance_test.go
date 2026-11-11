@@ -74,6 +74,32 @@ func TestAnEditMissNamesSelectorsThatExist(t *testing.T) {
 	}
 }
 
+func TestEditMissGuidanceSurvivesAnInterveningRead(t *testing.T) {
+	body := "def solve():\n    return 1\n"
+	read := toolCall("read_file", map[string]interface{}{"path": "solve.py"})
+	miss := toolCall("edit_file", map[string]interface{}{
+		"path": "solve.py", "old_str": "return 9", "new_str": "return 2",
+	})
+	run := integrityLoopWith(t, "Update solve.py to return 2.", map[string]string{"solve.py": body},
+		[]string{read, miss, read, miss}, nil, func(ctx *AgentContext) { ctx.MaxTurns = 5 })
+	if len(run.prompts) != 5 {
+		t.Fatalf("got %d model requests, want 5; feedback: %s", len(run.prompts), run.feedback())
+	}
+	note := "edit_file's old_str did not match solve.py"
+	if got := strings.Count(run.prompts[2], note); got != 1 {
+		t.Errorf("first miss: got %d guidance notes, want 1; request: %s", got, run.prompts[2])
+	}
+	if got := strings.Count(run.prompts[4], note); got != 2 {
+		t.Errorf("second miss after a read: got %d guidance notes, want 2; request: %s", got, run.prompts[4])
+	}
+	if !strings.Contains(run.prompts[4], "`function:solve`") {
+		t.Errorf("guidance omitted the file's selector; request: %s", run.prompts[4])
+	}
+	if got, _ := run.disk(t, "solve.py"); got != body {
+		t.Errorf("missed edits changed the file: got %q, want %q", got, body)
+	}
+}
+
 // The captured structural_edit: the selector was the placeholder and the
 // content the whole corrected file. The refusal says the content is module
 // level and names the tool that replaces a whole file this session wrote.

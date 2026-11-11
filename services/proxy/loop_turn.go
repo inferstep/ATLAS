@@ -1,4 +1,4 @@
-// One turn of the agent loop: the run opens, the model is called, and its reply is read.
+// Each agent turn calls the model, reads its reply, and processes any tool call.
 
 package main
 
@@ -59,8 +59,10 @@ type agentLoop struct {
 
 	consecutiveReads  int // Track consecutive read-only calls
 	consecutiveErrors int
-	totalFailures     int // Track consecutive tool failures to break error loops
-	repeatDetections  int // hard-stop after the 2nd repeated-identical-call detection
+	// Edit misses survive successful reads between attempts on the same path.
+	editMissByPath   map[string]int
+	totalFailures    int // Track consecutive tool failures to break error loops
+	repeatDetections int // hard-stop after the 2nd repeated-identical-call detection
 	// Runaway backstop for content-varying write loops: the content-fingerprint
 	// repeat detector, by design, does not catch a model that rewrites one file
 	// with materially different content every time and never converges. This
@@ -87,7 +89,10 @@ func newAgentLoop(ctx *AgentContext, userMessage string, outputObligation taskco
 		outputObligation:      outputObligation,
 		userWantsVerification: isFixIntentMessage(userMessage),
 	}
-	return &agentLoop{ctx: ctx, userMessage: userMessage, st: st, writeCountByPath: map[string]int{}}
+	return &agentLoop{
+		ctx: ctx, userMessage: userMessage, st: st,
+		writeCountByPath: map[string]int{}, editMissByPath: map[string]int{},
+	}
 }
 
 // endStream ends the run with its terminal event.
@@ -329,6 +334,60 @@ const (
 	turnEnds                         // the turn is over: the next turn starts
 	runEnds                          // the run is over: runAgentLoop returns
 )
+
+func (loop *agentLoop) handleModelReply(turn int, response string, parsed wire.ModelResponse) (turnOutcome, error) {
+	switch parsed.Type {
+	case "done":
+		if loop.endOnDone(turn, parsed) {
+			return runEnds, nil
+		}
+	case "text":
+		if loop.endOnText(turn, parsed) {
+			return runEnds, nil
+		}
+	case "tool_call":
+		return loop.takeToolTurn(turn, response, parsed)
+	default:
+		askForAKnownResponseType(loop.ctx, parsed)
+	}
+	return turnEnds, nil
+}
+
+func (loop *agentLoop) takeToolTurn(turn int, response string, parsed wire.ModelResponse) (turnOutcome, error) {
+	ctx, st := loop.ctx, loop.st
+	st.toolsRun++
+	st.pendingToolCall = parsed.Name
+	intentArgs := announceToolCall(ctx, turn, parsed)
+	if outcome := loop.screenBeforeWorkspaceCheck(turn, response, parsed, intentArgs); outcome != turnContinues {
+		return outcome, nil
+	}
+
+	// Check the workspace boundary before any gate reads a path.
+	// executeToolCall repeats this check for parallel dispatch.
+	workspaceCheck := toolCheckInput{loop: loop, turn: turn, parsed: &parsed, intentArgs: intentArgs}
+	if outcome := runCheckPhase(proxyChecks.workspace, &workspaceCheck).outcome; outcome != turnContinues {
+		return outcome, nil
+	}
+	if outcome := loop.screenAfterWorkspaceCheck(turn, response, &parsed, intentArgs); outcome != turnContinues {
+		return outcome, nil
+	}
+	if outcome := loop.screenExistingWrite(parsed, intentArgs); outcome != turnContinues {
+		return outcome, nil
+	}
+
+	result, steers, outcome, err := loop.runToolCall(turn, parsed, intentArgs)
+	if outcome != turnContinues {
+		return outcome, err
+	}
+	repairToolCallLiterals(ctx, parsed, result)
+	loop.recordCallEffects(turn, parsed, result)
+	loop.guideEditMiss(parsed, result, &steers)
+	if loop.breakErrorLoop(turn, parsed, result) {
+		return runEnds, nil
+	}
+	loop.answerToolCall(turn, response, parsed, result, steers)
+	return turnEnds, nil
+}
 
 // takeModelTurn runs the start of turn `turn`: it calls the model, then parses
 // and checks the reply. The outcome says whether the turn goes on with the

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -355,6 +356,36 @@ func (loop *agentLoop) dischargeWarnedRuns(parsed wire.ModelResponse, result *wi
 	}
 }
 
+// repairToolCallLiterals restores the user's literal text without changing indentation.
+func repairToolCallLiterals(ctx *AgentContext, parsed wire.ModelResponse, result *wire.ToolResult) {
+	if !result.Success || len(ctx.LiteralBlocks) == 0 {
+		return
+	}
+	switch parsed.Name {
+	case "write_file", "edit_file", "structural_edit", "insert_after", "replace_lines":
+	default:
+		return
+	}
+	var wp struct {
+		Path string `json:"path"`
+	}
+	if json.Unmarshal(parsed.Args, &wp) != nil || wp.Path == "" {
+		return
+	}
+	lp := resolveAgentPath(ctx, wp.Path)
+	body, _, rerr := readWorkspaceFile(ctx, wp.Path)
+	if rerr != nil {
+		return
+	}
+	fixed, repairedLits, changed := repairLiteralDrift(string(body), ctx.LiteralBlocks)
+	if !changed {
+		return
+	}
+	if werr := writeWorkspaceFile(ctx, wp.Path, []byte(fixed)); werr == nil {
+		reportLiteralRepair(ctx, result, wp.Path, lp, fixed, repairedLits)
+	}
+}
+
 // reportLiteralRepair reports the repair of spacing inside lines of a literal
 // the user stated: in the log and the event stream, in the result the model
 // is about to read, and to the ledger, which follows the repaired bytes.
@@ -434,6 +465,25 @@ func (loop *agentLoop) recordCallEffects(turn int, parsed wire.ModelResponse, re
 		revisePlan(ctx, userMessage,
 			fmt.Sprintf("agent went off-plan for %d consecutive tool calls (last: %s)",
 				ctx.PlanOffStreak, parsed.Name))
+	}
+}
+
+// guideEditMiss replaces repeat guidance on the first miss for a structured file.
+func (loop *agentLoop) guideEditMiss(parsed wire.ModelResponse, result *wire.ToolResult, steers *turnCorrectives) {
+	if result.Success || parsed.Name != "edit_file" ||
+		!strings.Contains(result.Error, "string to replace not found") {
+		return
+	}
+	mp := extractFailurePath(parsed.Name, parsed.Args)
+	loop.editMissByPath[mp]++
+	ext := strings.ToLower(filepath.Ext(mp))
+	if loop.editMissByPath[mp] >= 1 && (ext == ".py" || ext == ".html" || ext == ".htm") {
+		var source string
+		if b, _, rerr := readWorkspaceFile(loop.ctx, mp); rerr == nil {
+			source = string(b)
+		}
+		steers.repeat = editMissSteer(mp, source)
+		log.Printf("[agent] edit_file miss on %q — forcing structural_edit steer", mp)
 	}
 }
 
