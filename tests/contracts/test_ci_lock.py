@@ -7,7 +7,11 @@ with no network and no tool: every line of ci.in stands in the lock at a
 version that fits it, every package of the lock has a hash, each pin that is
 a copy of a product file's pin is the same as there, the lock is made for
 the Python version of the jobs, and no workflow installs around the lock.
-The lock of the lens tests (lens.txt) is held to its product file too.
+The lock of the CLI's lens tests (lens.txt) is held to its product file too.
+
+The pytest job is the one exception to the lock's Python: it runs the tests
+of a service on the Python of the service's image, and here each of those
+Pythons is held to its Dockerfile.
 
 A lock that was not made again after a change is red here. Dependabot moves
 a pin in the product file and in ci.in in one pull request and makes the
@@ -154,10 +158,37 @@ def test_the_lock_is_made_for_the_python_version_of_the_jobs_that_install_it():
             found[f"{name}:{job_id}"] = versions
     assert found, "no job installs ci.txt; this test reads the workflows wrongly"
     for job, versions in found.items():
-        assert all(version == header.group(1) for version in versions), (
+        expected = header.group(1)
+        if job == "test.yml:python-tests":
+            # The tests of a service run on the Python of its image (the next test holds each one to its
+            # Dockerfile). Every other subset runs on the default, which must be the lock's Python.
+            expected = "${{ matrix.python || '" + header.group(1) + "' }}"
+        assert all(version == expected for version in versions), (
             f"{job} installs ci.txt under Python {versions}, and the lock is made for Python {header.group(1)}. A lock "
             "can miss a package that another Python version needs. Fix: use the same version in the job and in "
             "scripts/ci/ci-lock.sh.")
+
+
+def test_the_tests_of_each_service_run_on_the_python_of_its_image():
+    """A test that passes in CI passes on the interpreter that ships. The other subsets install ci.txt on its Python."""
+    import yaml
+    images = {
+        "tests/v3-service": "services/v3-service/Dockerfile",
+        "tests/infrastructure": "services/sandbox/Dockerfile",   # it boots the sandbox's executor
+        "services/geometric-lens/tests": "services/geometric-lens/Dockerfile",
+    }
+    workflow = yaml.safe_load(_read(".github", "workflows", "test.yml"))
+    ran = {entry["subset"]: str(entry["python"]) for entry in workflow["jobs"]["python-tests"]["strategy"]["matrix"]["include"]
+           if "python" in entry}
+    assert sorted(ran) == sorted(images), (
+        f"test.yml's python-tests gives its own Python to {sorted(ran)}. It must give one to the tests of each "
+        f"service image, {sorted(images)}, and to no other subset: the others run on the Python that ci.txt is made for.")
+    for subset, dockerfile in images.items():
+        shipped = re.search(r"^FROM docker\.io/python:(\d+\.\d+)-slim", _read(*dockerfile.split("/")), re.MULTILINE)
+        assert shipped, f"{dockerfile} has no `FROM docker.io/python:X.Y-slim` line; this test reads it wrongly"
+        assert ran[subset] == shipped.group(1), (
+            f"test.yml runs {subset} on Python {ran[subset]}, and {dockerfile} ships Python {shipped.group(1)}. "
+            "Fix: set the subset's python in test.yml to the Dockerfile's version.")
 
 
 def test_no_workflow_installs_a_copied_pin_from_its_product_file():

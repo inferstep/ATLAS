@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 # Make .github/requirements/ci.txt again: the hashed lock of what the CI jobs
 # install (the tools, and the packages of the product that the tests need),
-# lens.txt (the lock of the lens tests), and the service image locks
-# (services/geometric-lens/requirements-lock.txt, services/v3-service/requirements-lock.txt and
-# services/sandbox/requirements-lock.txt).
+# lens.txt (the lock of the CLI's lens and ASA tests, on Python 3.12), and the
+# service image locks (services/geometric-lens/requirements-lock.txt, services/v3-service/requirements-lock.txt and
+# services/sandbox/requirements-lock.txt). CI's lens tests install the lens
+# image's lock, on the image's Python 3.13.
 # Run it after a change to ci.in, lens.in, services/geometric-lens/requirements.txt,
 # services/v3-service/requirements.txt or the sandbox's two requirement files. Needs
 # uv, which gets Python 3.12 and pip-tools for the run.
 #
 # The lock is made by pip-compile, under the Python version of the CI jobs,
-# and its header names both. Dependabot reads that header: it compiles the
+# and its header names both. The tests of a service run on the Python of its
+# image (test.yml says which), and they install this lock there too. Dependabot reads that header: it compiles the
 # file again with the same Python version and the same options when it moves
 # a pin, so the tool and its version here are the ones Dependabot runs.
 set -euo pipefail

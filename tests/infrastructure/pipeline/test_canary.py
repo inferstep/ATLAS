@@ -1121,7 +1121,8 @@ def test_each_pytest_plant_is_written_into_the_folder_its_check_runs(manifest):
     # include, as for the lens's tests after their folder moved) runs the
     # folder the label stands for.
     workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "test.yml").read_text(encoding="utf-8"))
-    folders = {entry["label"]: entry["subset"] for entry in workflow["jobs"]["python-tests"]["strategy"]["matrix"]["include"]}
+    folders = {entry["label"]: entry["subset"] for entry in workflow["jobs"]["python-tests"]["strategy"]["matrix"]["include"]
+               if "label" in entry}
     for plant in manifest["plants"]:
         for check in plant.get("red", []):
             named = re.fullmatch(r"pytest \((.+)\)", check)
