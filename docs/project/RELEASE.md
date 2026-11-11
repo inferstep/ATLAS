@@ -245,20 +245,19 @@ the waiting deployment does the pipeline move `:latest` or a version tag.
 `dev` pushes deploy to `dev` and release-candidate tags to `staging`,
 without approval. Each promotion leaves a timestamped deployment record.
 
-**Before the 3.2.0 candidate.** `staging` and `main` still require
-`pytest (tests/v3)` and `pytest (tests/cli)`, the names these test jobs had
-before their folders were renamed on `dev`. A `dev` commit reports
-`pytest (tests/v3-service)` and `pytest (tests/atlas)` instead, so step 2
-would stop: the release step finds no green check under the old names.
-First, in a pull request into `dev`, change `scripts/setup/rulesets.sh`:
-delete the `RELEASE_ONLY_CHECKS` array and its use in the release branches'
-checks (`"${RELEASE_ONLY_CHECKS[@]}"`), because the script runs with
-`set -u` and stops on a name that is no longer set; and move
-`"pytest (tests/atlas)"` from `DEV_ONLY_CHECKS` into `CHECKS`. Change the
-test that pins those lists
-(`tests/infrastructure/pipeline/test_branch_rules_setup.py`) to match, and
-remove the two old names from `not_covered` in `.github/canary.json`. Once
-it is merged, the release owner runs `scripts/setup/rulesets.sh`.
+**Before the 3.2.0 candidate.** The live rules of `staging` and `main`
+may still require `pytest (tests/v3)` and `pytest (tests/cli)`. These are
+the names that the test jobs had before their folders were renamed on
+`dev`. A `dev` commit reports `pytest (tests/v3-service)` and
+`pytest (tests/atlas)` instead. With the old names, step 2 stops, because
+the release step finds no green check under them.
+`scripts/setup/rulesets.sh` on `dev` already writes the new names for all
+three branches. The release owner applies it before step 2. First, from a
+checkout of `dev`, run `scripts/setup/rulesets.sh --dry-run`. Make sure
+that only "Release branches: required checks" changes, and only by those
+check names. Find the cause of any other difference before you continue.
+Then run `scripts/setup/rulesets.sh`. Last, run the dry run again: it must
+say that 10 of 10 are the same as the live rulesets.
 
 1. **Notes.** On `dev`, bump the "Applies to" line at the top of
    [SUPPORT_MATRIX.md](../guides/SUPPORT_MATRIX.md) and write the
