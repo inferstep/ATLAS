@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "fix_tests.py"
+SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "ci" / "fix_tests.py"
 PATH_LINE = "import pathlib, sys\nsys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))\n"
 FAULTY = "def add(a, b):\n    return a - b\n"
 FIXED = "def add(a, b):\n    return a + b\n\n\ndef double(a):\n    return add(a, a)\n"
@@ -305,7 +305,7 @@ def test_a_test_that_asks_the_product_in_a_new_process_gets_the_tree_that_is_tes
 def test_a_run_for_an_edit_of_a_pull_request_cancels_no_run_in_any_workflow():
     # An edit of the text can come while the run of a push is in progress. A workflow that starts for an edit and
     # cancels runs in progress would end that run, and `checks ran` reads a cancelled run as a job that did not run.
-    workflows = sorted((SCRIPT.parents[1] / ".github" / "workflows").glob("*.yml"))
+    workflows = sorted((SCRIPT.parents[2] / ".github" / "workflows").glob("*.yml"))
     starts_for_an_edit = []
     for path in workflows:
         workflow = yaml.safe_load(path.read_text(encoding="utf-8"))

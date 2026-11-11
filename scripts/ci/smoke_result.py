@@ -218,7 +218,7 @@ def judge(base: dict, head: dict, text: str, statuses) -> tuple:
     what, mark = " and ".join(changed), mark_of(head)
     own, others = of_the_server(statuses())
     beside = (f" A status `{STATUS}` by another account (id {', '.join(others)}) is on the commit; it is not counted." if others else "")
-    beside += (" No account is set as the writer of the server's statuses (WRITER in scripts/smoke_result.py), so no "
+    beside += (" No account is set as the writer of the server's statuses (WRITER in scripts/ci/smoke_result.py), so no "
                "status is counted." if not WRITER else "")
     beside += (" A line in the text of the pull request that says a smoke run passed is not read: the result comes "
                "from the server." if TYPED.search(text or "") else "")

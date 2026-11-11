@@ -1,7 +1,7 @@
 """Every path filter of a workflow matches a file of the tree.
 
 A workflow with a `paths:` filter starts only for a change to a file the
-filter matches, and scripts/checks_ran.py expects it on the same terms. A
+filter matches, and scripts/ci/checks_ran.py expects it on the same terms. A
 filter left on a folder that moved matches nothing, so the workflow never
 starts for the code it checks, and no check notices. The filters are read
 here the way checks_ran.py reads them.
@@ -15,7 +15,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
 
-_spec = importlib.util.spec_from_file_location("checks_ran", ROOT / "scripts" / "checks_ran.py")
+_spec = importlib.util.spec_from_file_location("checks_ran", ROOT / "scripts" / "ci" / "checks_ran.py")
 ran = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = ran
 _spec.loader.exec_module(ran)

@@ -103,7 +103,7 @@ def only(found):
 
 def job_names(root=ROOT):
     """Each job of the workflows: the pattern of its names, how many letters of a name it fixes, and its `name:`."""
-    checks = load("checks_ran.py")
+    checks = load("ci/checks_ran.py")
     return [(*checks.name_regex(job_id, job or {}), str((job or {}).get("name") or ""))
             for workflow in checks.read_workflows(root).values() for job_id, job in (workflow.get("jobs") or {}).items()]
 

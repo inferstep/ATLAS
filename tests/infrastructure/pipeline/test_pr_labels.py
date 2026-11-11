@@ -22,7 +22,7 @@ def load(name, path):
 
 rules = load("pr_labels", "scripts/bot/pr_labels.py")
 bot = load("atlas_bot_for_labels", "scripts/bot/atlas_bot.py")
-integrity = load("integrity_check_for_labels", "scripts/integrity_check.py")
+integrity = load("integrity_check_for_labels", "scripts/ci/integrity_check.py")
 SETTINGS = bot.load_config()["pull_requests"]
 # Settings made for the tests, so that a test of a rule holds when the real numbers move.
 MADE = {"sizes": {"S": 0, "M": 10, "L": 40, "XL": 100}, "high_risk_from": "L", "risk_label": "risk:high",
@@ -183,11 +183,11 @@ def test_the_sizes_start_at_zero_and_go_up_and_the_high_risk_size_is_one_of_them
 def test_the_high_risk_size_and_the_files_that_do_not_count_are_the_integrity_checks_own():
     assert SETTINGS["sizes"][SETTINGS["high_risk_from"]] == integrity.LARGE_CHANGE_LINES, (
         "the bot calls a pull request large from another number of lines than the integrity check does. Fix: give "
-        "`sizes` in .github/atlas-bot.yml and LARGE_CHANGE_LINES in scripts/integrity_check.py the same number.")
+        "`sizes` in .github/atlas-bot.yml and LARGE_CHANGE_LINES in scripts/ci/integrity_check.py the same number.")
     lock_files = sorted(entry for entry, kind in SETTINGS["not_counted"].items() if kind == "lock files")
     assert lock_files == sorted(integrity.LOCK_FILES), (
         "the bot and the integrity check take other files for lock files. Fix: give the lock files of `not_counted` "
-        "in .github/atlas-bot.yml and LOCK_FILES in scripts/integrity_check.py the same files.")
+        "in .github/atlas-bot.yml and LOCK_FILES in scripts/ci/integrity_check.py the same files.")
     assert list(dict.fromkeys(SETTINGS["not_counted"].values())) == ["lock files", "tests", "documents"]
 
 

@@ -124,6 +124,14 @@ def test_a_dockerfile_change_shows_the_findings_of_its_own_files(verify, monkeyp
         "note hadolint (reports, does not fail):", "  services/proxy/Dockerfile:2: DL3003 warning: Use WORKDIR"]
 
 
+def test_the_advisory_shows_what_the_integrity_check_finds(verify, monkeypatch):
+    # The advisory skips the integrity check without a word when the script is not at the path that it names.
+    found = "scripts/ci/integrity_check.py: change to the gate list\n"
+    monkeypatch.setattr(verify.subprocess, "run", lambda *args, **kwargs: verify.subprocess.CompletedProcess(args, 0, found, ""))
+    assert verify.advisory(["README.md"], "origin/dev") == [
+        "note integrity check (reports, does not fail):", "  scripts/ci/integrity_check.py: change to the gate list"]
+
+
 def test_a_change_with_no_dockerfile_does_not_run_hadolint(verify):
     assert verify.hadolint_notes(["services/proxy/loop.go", "scripts/ci/check_dockerfile_sources.py"]) == []
 

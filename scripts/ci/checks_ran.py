@@ -471,7 +471,7 @@ def skip_notes(by_condition: list[str], behind: dict[str, list[str]]) -> list[st
 def comparison_base() -> str:
     """The commit the changed files are compared with: the base branch as it is now.
 
-    The workflow reads it with scripts/change_base.py and gives it in
+    The workflow reads it with scripts/ci/change_base.py and gives it in
     CHANGE_BASE. The base the event names is not taken in its place: compared
     with that one, a workflow that starts only for some paths can be expected
     for files that only the base branch changed.
@@ -521,7 +521,7 @@ def main() -> int:
         print(f"checks ran: cannot read the change, its workflows or its runs: {error!r}\n"
               "  fix: this check runs in a pull_request or merge_group job, in a checkout with the full history, "
               "with GITHUB_TOKEN set, `actions: read`, and CHANGE_BASE set to the commit that "
-              "scripts/change_base.py prints.", file=sys.stderr)
+              "scripts/ci/change_base.py prints.", file=sys.stderr)
         return 2
     findings += [Finding(path, f"workflow {path} did not finish in {args.wait_minutes:g} minutes, so its jobs and the "
                                "required checks are not judged. Fix: run this check again after that run ends.")

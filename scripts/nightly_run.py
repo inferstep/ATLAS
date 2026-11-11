@@ -66,7 +66,7 @@ docs/project/gates.md, sections "The result on GitHub" and "The timer". The
 server only calls out: nothing of this listens.
 
 With --commit <id> it is the smoke run of one commit of a branch, for a pull
-request that changes text every request carries (scripts/smoke_result.py
+request that changes text every request carries (scripts/ci/smoke_result.py
 asks for its result). A look of the timer starts it, or a maintainer by
 hand. Then it:
 
@@ -92,7 +92,7 @@ hand. Then it:
   - removes the images that it built, by their own names, and nothing else.
     The copy of the commit's build folders stays in the folder of the run;
   - prints one result line for the person who started it, with the mark
-    from the copy of scripts/smoke_result.py that `dev` has. When the
+    from the copy of scripts/ci/smoke_result.py that `dev` has. When the
     commit's mark is not the one of `dev` and the proxy is not built from
     the commit, the run does not take place: no session would carry the
     text that the line names.
@@ -145,7 +145,7 @@ FROM_DEV = {"scripts/nightly_run.py": "the script of this run",
             "scripts/eval/reliability_detectors.py": "a module of the driver, which runs on the server itself",
             "scripts/eval/reliability_records.py": "a module of the driver, which runs on the server itself",
             "scripts/eval/reliability_sandbox.py": "a module of the driver, which runs on the server itself",
-            "scripts/smoke_result.py": "the script that makes the mark of the result line",
+            "scripts/ci/smoke_result.py": "the script that makes the mark of the result line",
             "services/inference/": "the model server, whose image is never built on the server and whose start script the "
                           "stack mounts from the tree",
             "services/geometric-lens/geometric_lens/models/": "the model files of the lens, which the stack mounts"}
@@ -803,10 +803,10 @@ def carried_by_the_sessions(report: dict) -> None:
 
 def mark_of_the_text(args, commit: str) -> str:
     """The mark of the text that every request carries at the commit, from the copy of the script that `dev` has."""
-    printed = must("the mark of the commit's text", [args.python, "scripts/smoke_result.py", "--mark", commit], 120,
+    printed = must("the mark of the commit's text", [args.python, "scripts/ci/smoke_result.py", "--mark", commit], 120,
                    cwd=args.dir / "tree").strip()
     if not re.fullmatch(r"[0-9a-f]{12}", printed):
-        raise StepFailed(f"the mark of the commit's text: scripts/smoke_result.py printed no mark: {printed[-200:]}")
+        raise StepFailed(f"the mark of the commit's text: scripts/ci/smoke_result.py printed no mark: {printed[-200:]}")
     return printed
 
 

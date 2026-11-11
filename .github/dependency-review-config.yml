@@ -55,7 +55,7 @@ allow-licenses:
 # Packages for which GitHub's data names no licence. Each was read by hand:
 # the licence that the package index names for it is beside it, and every
 # part of it is on the list above. A new package with no named licence fails
-# the review (scripts/licence_names.py) until it is read and added here.
+# the review (scripts/ci/licence_names.py) until it is read and added here.
 # A GitHub Action is not listed: GitHub's data names no licence for any
 # action, and an action is run by a workflow, not shipped with ATLAS.
 allow-dependencies-licenses:

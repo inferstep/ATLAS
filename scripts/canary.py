@@ -65,8 +65,8 @@ def load_manifest(root: Path) -> dict:
 
 
 def load_checks_ran():
-    """scripts/checks_ran.py, for its GitHub reader and its reading of the branch rules."""
-    spec = importlib.util.spec_from_file_location("atlas_checks_ran", Path(__file__).with_name("checks_ran.py"))
+    """scripts/ci/checks_ran.py, for its GitHub reader and its reading of the branch rules."""
+    spec = importlib.util.spec_from_file_location("atlas_checks_ran", Path(__file__).parent / "ci" / "checks_ran.py")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
