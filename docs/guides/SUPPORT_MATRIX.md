@@ -167,7 +167,7 @@ timeouts/output caps; **syntax** = compile/parse check only.
 | Call-graph reasoning (#39) | Preview | Always on, Python files only (the veto, repair context and read/outline edges); hermetic tests; effect on task outcomes not yet measured |
 | Host verification (`ATLAS_VERIFY_IN=host`) | Experimental | Explicit opt-in; removes the container backstop |
 | Benchmark/ablation stack (`ATLAS_V3_*`, lens feedback) | Research-only | Never read by the product runtime (contract-tested) |
-| IDE integration | Preview on `dev`, not in 3.1.7 (VS Code and JetBrains) | VS Code: type-check, lint, unit suite and production bundle in `vscode-extension.yml`; no on-screen acceptance run against a live proxy. JetBrains: Plugin Verifier on IDEA, PyCharm, WebStorm and GoLand (2026.1.5 and 2026.2.3); no on-screen acceptance run against a live proxy yet |
+| IDE integration | Preview on `dev`, not in 3.1.7 (VS Code and JetBrains) | VS Code: type-check, lint, unit suite and production bundle in `vscode-extension.yml`; no on-screen acceptance run against a live proxy. JetBrains: Plugin Verifier covers IDEA, PyCharm, WebStorm and GoLand (2026.1.5 and 2026.2.3). A partial live run used PyCharm `PY-261.22158.340`, Ubuntu 26.04.1 on a virtual display, and proxy commit `7bb86537`. Token storage, status changes, cancellation, and the incomplete-result banner passed. Assistant-text streaming, write approval, the notification, the diff, and file creation remain unverified. See the [smoke-test record](../../clients/extensions/jetbrains/README.md#smoke-test-status). |
 
 ## Context lengths
 
