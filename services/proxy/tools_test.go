@@ -2360,7 +2360,7 @@ func TestLegacyCheckerWrapperInventory(t *testing.T) {
 		if n := strings.Count(fn, "checkFallbackSyntax("); n != 0 {
 			t.Errorf("%s still calls the legacy wrapper %d time(s)", name, n)
 		}
-		if !strings.Contains(fn, "editSyntaxObservation(") {
+		if !strings.Contains(fn, "editGateRefusal(") && !strings.Contains(fn, "checkLineEditLanding(") {
 			t.Errorf("%s does not use the shared structured gate", name)
 		}
 	}

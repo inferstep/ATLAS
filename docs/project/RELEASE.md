@@ -229,6 +229,10 @@ it is done, so that the pull request's head stays the commit that was
 checked. Every use is on record under **Settings → Rules** (the ruleset
 history and the rule insights).
 
+Follow the [weekly maintainer checklist](gates.md#weekly-maintainer-checklist)
+to review the rule results for `dev` and `main`.
+Record each release exception with its release approval and event evidence.
+
 **Status:** on this repository the step has fast-forwarded `main` to the
 release commit of 3.1.7 ([#615](https://github.com/inferstep/ATLAS/pull/615)),
 and merged `main` back into `dev`

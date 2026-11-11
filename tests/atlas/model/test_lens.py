@@ -369,7 +369,7 @@ def test_build_refuses_without_samples_flag(monkeypatch, tmp_path, capsys):
     out = capsys.readouterr().out
     assert rc == 1
     assert "--samples" in out
-    assert "huggingface" in out.lower()
+    assert "--from-results" in out
 
 
 def test_build_refuses_on_unreachable_server(monkeypatch, tmp_path, capsys):
