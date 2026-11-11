@@ -99,7 +99,7 @@ python scripts/ci/staging-integration.py --keep   # leave the executor running
 
 The runner starts `services/sandbox/executor_server.py` on a free port against a
 throwaway workspace, points the proxy at the same directory (the alignment
-production requires), runs `services/proxy/evidence_staging_integration_test.go`, and tears it
+production requires), runs `services/proxy/internal/app/evidence_staging_integration_test.go`, and tears it
 down. Without `ATLAS_STAGING_SANDBOX_URL` and `ATLAS_STAGING_SANDBOX_WORKSPACE`
 those Go tests skip with a reason naming what to set — they never pass silently.
 

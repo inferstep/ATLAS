@@ -17,7 +17,7 @@ yaml = pytest.importorskip("yaml")
 
 REPO = Path(__file__).resolve().parents[2]
 SPEC = REPO / "docs" / "reference" / "schemas" / "proxy_openapi.yaml"
-MAIN = REPO / "services" / "proxy" / "main.go"
+MAIN = REPO / "services" / "proxy" / "internal" / "app" / "server.go"
 
 
 def _registered_routes():

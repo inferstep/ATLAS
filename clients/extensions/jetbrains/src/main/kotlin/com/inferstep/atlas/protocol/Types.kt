@@ -175,7 +175,7 @@ data class TaskContract(
 
 /**
  * POST /v1/agent request body. Field names match the anonymous struct in
- * services/proxy/server_agent.go's handleAgent (see clients/tui/internal/proxyclient/chat.go's agentRequest).
+ * services/proxy/internal/app/server_agent.go's handleAgent (see clients/tui/internal/proxyclient/chat.go's agentRequest).
  */
 @Serializable
 data class AgentRequest(
@@ -320,7 +320,7 @@ data class StatusDimension(
 /**
  * The closed error-code set (`docs/reference/API.md` § Versioning and error codes).
  *
- * Exactly the six codes `AllErrorCodes` in services/proxy/main.go emits, which a
+ * Exactly the six codes `AllErrorCodes` in services/proxy/internal/app/server.go emits, which a
  * contract test asserts. Switch on these, never on `detail`: the human
  * message may change between versions.
  *
@@ -338,7 +338,7 @@ object AtlasErrorCodes {
     const val RESOURCE_LIMIT = "resource_limit"
     const val INTERNAL_ERROR = "internal_error"
 
-    /** Every code, in the order services/proxy/main.go declares them. */
+    /** Every code, in the order services/proxy/internal/app/server.go declares them. */
     val ALL =
         listOf(
             UNAUTHORIZED,

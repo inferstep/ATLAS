@@ -246,7 +246,7 @@ def test_a_change_to_a_workflow_is_not_high_risk_by_the_label_and_the_integrity_
 
 
 @pytest.mark.parametrize("path", ["tests/infrastructure/test_x.py", "services/geometric-lens/tests/test_y.py", "clients/extensions/vscode/test/z.test.ts",
-                                  "services/proxy/main_test.go", "docs/SETUP.md", "docs/images/a.svg", "README.md", "services/proxy/go.sum"])
+                                  "services/proxy/internal/app/server_test.go", "docs/SETUP.md", "docs/images/a.svg", "README.md", "services/proxy/go.sum"])
 def test_the_tests_the_documents_and_the_lock_files_of_this_repository_do_not_count(path):
     assert rules.labels_for([changed(path, 700, 600), changed("atlas/env.py", 5, 1)], False, SETTINGS) == rules.Labels("size/S", 6, ())
 
@@ -274,9 +274,9 @@ def test_the_label_script_gives_each_label_the_description_that_the_settings_giv
 
 
 def test_a_change_to_the_agent_loop_of_this_repository_is_high_risk_and_a_small_change_to_the_docs_is_not():
-    loop = rules.labels_for([changed("services/proxy/loop.go", 3, 1)], False, SETTINGS)
-    assert loop == rules.Labels("size/S", 4, ("it changes the agent loop (services/proxy/loop.go)",))
-    assert rules.labels_for([changed("docs/SETUP.md", 60, 20), changed("services/proxy/main_test.go", 10)], False, SETTINGS) == (
+    loop = rules.labels_for([changed("services/proxy/internal/app/loop.go", 3, 1)], False, SETTINGS)
+    assert loop == rules.Labels("size/S", 4, ("it changes the agent loop (services/proxy/internal/app/loop.go)",))
+    assert rules.labels_for([changed("docs/SETUP.md", 60, 20), changed("services/proxy/internal/app/server_test.go", 10)], False, SETTINGS) == (
         rules.Labels("size/S", 0, ()))
     lock = rules.labels_for([changed(".github/requirements/ci.txt", 900, 800), changed("pyproject.toml", 2, 2)], False, SETTINGS)
     assert lock == rules.Labels("size/S", 4, ())

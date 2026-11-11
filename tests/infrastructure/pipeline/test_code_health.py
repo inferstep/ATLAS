@@ -98,10 +98,10 @@ def test_more_lines_in_the_main_package_are_no_failure():
 
 
 def test_the_main_package_counts_only_its_own_code_files(tmp_path, monkeypatch):
-    (tmp_path / "services" / "proxy" / "internal" / "x").mkdir(parents=True)
-    (tmp_path / "services" / "proxy" / "a.go").write_text("package main\n\nfunc a() {}\n")
-    (tmp_path / "services" / "proxy" / "a_test.go").write_text("package main\n")
-    (tmp_path / "services" / "proxy" / "internal" / "x" / "x.go").write_text("package x\n")
+    (tmp_path / "services" / "proxy" / "internal" / "app" / "x").mkdir(parents=True)
+    (tmp_path / "services" / "proxy" / "internal" / "app" / "a.go").write_text("package main\n\nfunc a() {}\n")
+    (tmp_path / "services" / "proxy" / "internal" / "app" / "a_test.go").write_text("package main\n")
+    (tmp_path / "services" / "proxy" / "internal" / "app" / "x" / "x.go").write_text("package x\n")
     monkeypatch.setattr(ch, "ROOT", str(tmp_path))
     assert ch.main_package_size() == {"files": 1, "lines": 3}
 
@@ -154,9 +154,9 @@ def test_a_go_tool_line_names_the_function_as_the_size_check_does(monkeypatch):
 def test_a_go_tool_that_did_not_run_fails_rather_than_listing_nothing(monkeypatch):
     monkeypatch.setattr(ch, "installed_go_tool", lambda tool: "/home/runner/go/bin/gocognit")
     monkeypatch.setattr(ch.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(
-        args, 1, "", "gocognit: open services/proxy/main.go: no such file or directory\n"))
+        args, 1, "", "gocognit: open services/proxy/internal/app/server.go: no such file or directory\n"))
     with pytest.raises(ch.CannotMeasure, match="did not run"):
-        ch.go_scores(ch.GOCOGNIT, ["services/proxy/main.go"])
+        ch.go_scores(ch.GOCOGNIT, ["services/proxy/internal/app/server.go"])
 
 
 def test_in_ci_a_machine_without_go_fails_and_names_the_install(monkeypatch, capsys):
@@ -212,12 +212,12 @@ def test_tests_are_measured_for_complexity_in_go_and_python_and_the_two_held_fil
     monkeypatch.setattr(ch, "missing_go_tools", lambda: [])
     monkeypatch.setattr(ch, "python_cognitive", record_python)
     ch.measure_complexity({}, update=False)
-    assert "services/proxy/main_test.go" in measured
+    assert "services/proxy/internal/app/server_test.go" in measured
     assert "tests/infrastructure/pipeline/test_code_health.py" in measured
     assert "tests/replay/recording.py" in measured  # a helper in the test folder
     assert "services/geometric-lens/tests/test_asa_prompt_templates.py" in measured
-    assert "services/proxy/tool_args.go" not in measured
-    assert "services/proxy/tool_args_test.go" not in measured
+    assert "services/proxy/internal/app/tool_args.go" not in measured
+    assert "services/proxy/internal/app/tool_args_test.go" not in measured
 
 
 def test_sizes_leave_test_files_and_test_folders_out(tmp_path, monkeypatch):

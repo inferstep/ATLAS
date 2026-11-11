@@ -219,6 +219,6 @@ skills-lock.json
 redteam/
 
 # Exploratory fuzz targets (red-team hunt, not shipped test surface).
-services/proxy/fuzz_redteam_test.go
-services/proxy/fuzz_redteam2_test.go
-services/proxy/testdata/fuzz/
+services/proxy/internal/app/fuzz_redteam_test.go
+services/proxy/internal/app/fuzz_redteam2_test.go
+services/proxy/internal/app/testdata/fuzz/

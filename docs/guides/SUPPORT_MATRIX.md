@@ -75,7 +75,7 @@ interventions are firing. These are **separate** dimensions and every
 status surface (the proxy `/v1/calibration/status` endpoint, the TUI
 badge, `atlas doctor`, `atlas lens check`) reports the same seven so
 they cannot disagree — the CLI/TUI/doctor all read the endpoint, which
-computes them in one place (`services/proxy/lens.go`).
+computes them in one place (`services/proxy/internal/app/lens.go`).
 
 | Dimension | Meaning | Statuses |
 |---|---|---|
@@ -90,7 +90,7 @@ computes them in one place (`services/proxy/lens.go`).
 **Automatic intervention stays neutral or disabled whenever calibration
 is absent** — this is enforced in the runtime, not just displayed: the
 agent applies thresholds only when `calibratedThresholds()` succeeds
-(`services/proxy/loop_results.go`), so an uncalibrated or mismatched lens produces
+(`services/proxy/internal/app/loop_results.go`), so an uncalibrated or mismatched lens produces
 telemetry but never steers with another model's cutoffs.
 
 Reference model (Qwen3.5-9B-Q6_K), current: `model_runtime` supported,

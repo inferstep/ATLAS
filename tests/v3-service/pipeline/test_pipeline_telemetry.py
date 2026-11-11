@@ -756,6 +756,6 @@ def test_no_new_field_reaches_any_public_surface():
     assert wire_files, "services/proxy/internal/wire holds no Go file"
     contract_files = list((proxy / "internal" / "taskcontract").glob("*.go"))
     assert contract_files, "services/proxy/internal/taskcontract holds no Go file"
-    go = "".join(path.read_text() for path in [proxy / "loop_state.go", *wire_files, *contract_files])
+    go = "".join(path.read_text() for path in [proxy / "internal" / "app" / "loop_state.go", *wire_files, *contract_files])
     for leaked in ("incumbent", "Incumbent", "shadow_comparison"):
         assert leaked not in go, leaked

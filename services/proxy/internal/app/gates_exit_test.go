@@ -1,0 +1,252 @@
+package app
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/wire"
+)
+
+// A model that verified its work by starting a server and then declares done
+// is not reported as unfinished with "Still running in the sandbox" in place
+// of its summary. The exit gate names the job and asks for stop_background,
+// and a model that complies finishes with its own account of the work.
+func TestBackgroundGateAsksForTheStopBeforeFinishing(t *testing.T) {
+	const good = "def solve():\n    return 7\n\n\nprint(solve())\n"
+	zero := 0
+	dir := t.TempDir()
+	bg := &bgSandbox{running: true}
+	sandbox := newBgSandbox(t, dir, bg)
+
+	plan := func(i int) map[string]interface{} {
+		switch i {
+		case 0:
+			return writeCall("solve.py", good)
+		case 1:
+			return map[string]interface{}{"type": "tool_call", "name": "run_background",
+				"args": map[string]string{"command": "python3 solve.py"}}
+		case 2:
+			return map[string]interface{}{"type": "done", "summary": "Built solve.py and verified it prints 7."}
+		case 3:
+			// The model complies; the sandbox reports a reaped exit.
+			bg.mu.Lock()
+			bg.running, bg.exitCode = false, &zero
+			bg.mu.Unlock()
+			return map[string]interface{}{"type": "tool_call", "name": "stop_background",
+				"args": map[string]string{"job_id": "job1"}}
+		}
+		return map[string]interface{}{"type": "done", "summary": "Built solve.py and verified it prints 7."}
+	}
+	inference := scriptedModel(t, plan)
+
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.InferenceURL, ctx.SandboxURL = inference.URL, sandbox.URL
+	ctx.PermissionMode = PermissionYolo
+	ctx.TrustMode = trustFullyTrusted
+	ctx.MaxTurns = 0
+	seen := &backgroundGateLog{terminal: map[string]string{}}
+	ctx.StreamFn = seen.observe
+	runAgentLoop(ctx, "Create solve.py so it prints 7.")
+
+	gates, terminal := seen.gates, seen.terminal
+	t.Logf("gates=%d status=%q reason=%q summary=%q stops=%v",
+		len(gates), terminal["status"], terminal["reason"], terminal["summary"], bg.stopped)
+	if len(gates) != 1 {
+		t.Fatalf("expected one background_gate bounce, got %d", len(gates))
+	}
+	if !strings.Contains(gates[0], "job1") || !strings.Contains(gates[0], "stop_background") {
+		t.Errorf("the gate must name the job and the call that resolves it: %s", gates[0])
+	}
+	if bg.stopped == nil || bg.stopped[0] != "job1" {
+		t.Errorf("the model's stop_background did not reach the sandbox: %v", bg.stopped)
+	}
+	if terminal["reason"] == "background_work_unresolved" {
+		t.Errorf("a stopped job still counted as unresolved: %q", terminal["summary"])
+	}
+	if !strings.Contains(terminal["summary"], "Built solve.py") {
+		t.Errorf("the model's own summary was replaced: %q", terminal["summary"])
+	}
+	if strings.Contains(terminal["summary"], "Still running") {
+		t.Errorf("a stopped job is still announced as running: %q", terminal["summary"])
+	}
+}
+
+// scriptedModel is a model server that sends plan(i) on its i-th turn.
+func scriptedModel(t *testing.T, plan func(int) map[string]interface{}) *httptest.Server {
+	t.Helper()
+	var mu sync.Mutex
+	turns := 0
+	inference := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/slots/") {
+			http.NotFound(w, r) // this model server has no slots to erase; the erase and its retry have their own tests (model_slot_erase_test.go)
+			return
+		}
+		if !strings.HasSuffix(r.URL.Path, "/v1/chat/completions") {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		io.Copy(io.Discard, r.Body) // the whole request first, as a real model server reads it
+		mu.Lock()
+		i := turns
+		turns++
+		mu.Unlock()
+		if i >= 12 {
+			http.Error(w, "turn ceiling exceeded", http.StatusInsufficientStorage)
+			return
+		}
+		call, _ := json.Marshal(plan(i))
+		d, _ := json.Marshal(map[string]interface{}{
+			"choices": []map[string]interface{}{{"delta": map[string]string{"content": string(call)}}}})
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+	}))
+	t.Cleanup(inference.Close)
+	return inference
+}
+
+// backgroundGateLog keeps what a run streams about the background gate: the
+// reason of each bounce, and the terminal's fields.
+type backgroundGateLog struct {
+	mu       sync.Mutex
+	gates    []string
+	terminal map[string]string
+}
+
+func (l *backgroundGateLog) observe(et string, data interface{}) {
+	b, _ := json.Marshal(data)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if et == "gate" {
+		var g struct{ Gate, Reason string }
+		if json.Unmarshal(b, &g) == nil && g.Gate == "background_gate" {
+			l.gates = append(l.gates, g.Reason)
+		}
+	}
+	if et == "done" {
+		var m map[string]string
+		json.Unmarshal(b, &m)
+		for k, v := range m {
+			l.terminal[k] = v
+		}
+	}
+}
+
+func TestCheckTableInitializesEveryPhase(t *testing.T) {
+	table := reflect.ValueOf(proxyChecks)
+	names := map[string]bool{}
+	for i := 0; i < table.NumField(); i++ {
+		phase := table.Field(i)
+		if phase.Len() == 0 {
+			t.Errorf("phase %s has no checks", table.Type().Field(i).Name)
+		}
+		for j := 0; j < phase.Len(); j++ {
+			row := phase.Index(j)
+			name := row.FieldByName("name").String()
+			if name == "" || names[name] || row.FieldByName("run").IsNil() {
+				t.Errorf("invalid or duplicate check %q", name)
+			}
+			if !strings.HasPrefix(name, table.Type().Field(i).Name+".") {
+				t.Errorf("check %q does not name its phase", name)
+			}
+			names[name] = true
+		}
+	}
+}
+
+func TestArgumentChecksClassifyModelErrors(t *testing.T) {
+	move := moveCheckInput{src: "note.txt", dst: "note.txt"}
+	edit := matchedEditCheckInput{input: wire.EditFileInput{OldStr: "same", NewStr: "same"}}
+	structural := structuralContentCheckInput{input: wire.StructuralEditInput{Content: " "}}
+	for _, row := range []struct {
+		name   string
+		result checkResult
+	}{
+		{"identical move paths", move.different()},
+		{"identical edit text", edit.changed()},
+		{"empty structural content", structural.empty()},
+	} {
+		if row.result != (checkResult{checkModelError, turnEnds}) {
+			t.Errorf("%s returned %+v, want model error and turn end", row.name, row.result)
+		}
+	}
+}
+
+func TestCheckCategoryDoesNotChooseTheControlOutcome(t *testing.T) {
+	for _, category := range []checkCategory{checkPass, checkGuardRefusal, checkToolError, checkModelError, checkInfrastructureError} {
+		for _, outcome := range []turnOutcome{turnContinues, turnEnds, runEnds} {
+			visited := 0
+			checks := []orderedCheck[int]{
+				{"first", func(*int) checkResult { visited++; return checkResult{category, outcome} }},
+				{"next", func(*int) checkResult { visited++; return checkResult{checkPass, turnContinues} }},
+			}
+			result := runCheckPhase(checks, new(int))
+			if outcome == turnContinues {
+				if visited != 2 || result != (checkResult{checkPass, turnContinues}) {
+					t.Errorf("category %d stopped a continuing phase: %+v, visits=%d", category, result, visited)
+				}
+			} else if visited != 1 || result != (checkResult{category, outcome}) {
+				t.Errorf("stopping result changed: %+v, visits=%d", result, visited)
+			}
+		}
+	}
+}
+
+func TestDispatchChecksKeepCompetingFailuresInOrder(t *testing.T) {
+	ctx := NewAgentContext(t.TempDir(), Tier0Conversational)
+	ctx.HumanTask = "Explain the files without changing them."
+	for _, tc := range []struct {
+		name, tool, args, message string
+		category                  checkCategory
+	}{
+		{"unknown before arguments", "missing_tool", "", "unknown tool", checkModelError},
+		{"arguments before read-only", "write_file", "", "no arguments", checkModelError},
+		{"read-only before execution", "write_file", `{"path":"fresh.txt","content":"hello"}`, "request", checkGuardRefusal},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			check := dispatchCheckInput{name: tc.tool, args: json.RawMessage(tc.args), ctx: ctx, tool: getTool(tc.tool)}
+			result := runCheckPhase(proxyChecks.dispatch, &check)
+			if result != (checkResult{tc.category, turnEnds}) || check.result == nil {
+				t.Fatalf("dispatch result = %+v, tool result = %+v", result, check.result)
+			}
+			if !strings.Contains(check.result.Error, tc.message) {
+				t.Fatalf("first refusal = %q, want %q", check.result.Error, tc.message)
+			}
+			actual := executeToolCall(tc.tool, json.RawMessage(tc.args), ctx)
+			if actual.Success || actual.Error != check.result.Error {
+				t.Errorf("direct dispatch changed the refusal: %+v", actual)
+			}
+		})
+	}
+	if _, err := os.Stat(filepath.Join(ctx.WorkingDir, "fresh.txt")); !os.IsNotExist(err) {
+		t.Fatalf("a refused dispatch touched the file: %v", err)
+	}
+}
+
+func TestFailureCeilingStopsBeforeUpdatingThePathWindow(t *testing.T) {
+	ctx := NewAgentContext(t.TempDir(), Tier0Conversational)
+	ctx.RecentFailurePaths = []string{"previous.txt"}
+	ctx.LastRejectionClass = rejectionClass("unclassified failure")
+	loop := &agentLoop{ctx: ctx, st: &runState{}, totalFailures: maxTotalFailures - 1}
+	parsed := wire.ModelResponse{Name: "read_file", Args: json.RawMessage(`{"path":"missing.txt"}`)}
+	if !loop.countFailure(4, parsed, &wire.ToolResult{Error: "unclassified failure"}) {
+		t.Fatal("the last allowed failure did not stop the run")
+	}
+	if loop.totalFailures != maxTotalFailures || loop.consecutiveErrors != 1 {
+		t.Fatalf("failure counters = %d, %d", loop.totalFailures, loop.consecutiveErrors)
+	}
+	if !reflect.DeepEqual(ctx.RecentFailurePaths, []string{"previous.txt"}) {
+		t.Errorf("the later path check ran: %v", ctx.RecentFailurePaths)
+	}
+	if ctx.TerminalReason != "failure_ceiling" {
+		t.Errorf("terminal reason = %q", ctx.TerminalReason)
+	}
+}

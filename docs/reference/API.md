@@ -288,7 +288,7 @@ Every event is a JSON object with this shape:
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `event_id` | string | yes | Format: `evt_` + 8 hex chars. Session-unique. The Go producer draws the 4 bytes from `crypto/rand` (`services/proxy/server_events.go`); the Python helper truncates a uuid4. |
+| `event_id` | string | yes | Format: `evt_` + 8 hex chars. Session-unique. The Go producer draws the 4 bytes from `crypto/rand` (`services/proxy/internal/app/server_events.go`); the Python helper truncates a uuid4. |
 | `timestamp` | number | yes | Unix seconds with microsecond precision. Producers MUST emit in monotonically non-decreasing order. |
 | `type` | string | yes | One of the seven legal values listed below. |
 | `stage` | string | yes | Logical pipeline stage (`agent`, `llm`, `tool`, `v3:<stage>`, etc.). The proxy's v3 bridge prefixes the v3-service stage name with `v3:` and passes it through verbatim — suffixes like `_pass`/`_done`/`_failed` are kept (e.g. `v3:sandbox_pass`). |
@@ -468,7 +468,7 @@ This describes **v1** of the protocol. Future schema changes:
 
 #### Test contract
 
-The schema is pinned by `tests/atlas/test_events.py` (Python consumer) and `services/proxy/server_events_test.go` (Go producer). Any change to the wire format MUST update both, in lockstep. Producer/consumer drift (proxy emissions ↔ TUI handlers, envelope-type parity across implementations) is pinned by `tests/contracts/api/test_event_contract.py`.
+The schema is pinned by `tests/atlas/test_events.py` (Python consumer) and `services/proxy/internal/app/server_events_test.go` (Go producer). Any change to the wire format MUST update both, in lockstep. Producer/consumer drift (proxy emissions ↔ TUI handlers, envelope-type parity across implementations) is pinned by `tests/contracts/api/test_event_contract.py`.
 
 ---
 
@@ -563,13 +563,13 @@ OpenAI-compatible chat completions, kept for SDK compatibility. The proxy forwar
 
 ### Tools available to the agent loop
 
-Defined in `services/proxy/tools.go` and the `services/proxy/tool_*.go` files beside it. Used by the model when responding `{"type":"tool_call","name":"<tool>","args":{...}}`.
+Defined in `services/proxy/internal/app/tools.go` and the `services/proxy/tool_*.go` files beside it. Used by the model when responding `{"type":"tool_call","name":"<tool>","args":{...}}`.
 
 | Tool | Purpose |
 |------|---------|
 | `read_file` | Read a file and return its contents with line numbers |
 | `outline_file` | Symbol outline of a file (functions/classes with line ranges and call edges, via tree-sitter). Orients inside a file too large to read whole; returns no bodies, so it locates code without showing it. |
-| `write_file` | Create a new file. **Rejected for any existing file >5 lines** (`services/proxy/loop_checks.go`) — use `structural_edit` (whole function/class/element rewrite) or `edit_file` (≤10-line surgical change). Two exemptions: corrupted-looking files (prose preamble, stray markdown fences), so a self-heal full-replace is allowed there; and files the session itself created, so the agent can rewrite its own drafts. |
+| `write_file` | Create a new file. **Rejected for any existing file >5 lines** (`services/proxy/internal/app/loop_checks.go`) — use `structural_edit` (whole function/class/element rewrite) or `edit_file` (≤10-line surgical change). Two exemptions: corrupted-looking files (prose preamble, stray markdown fences), so a self-heal full-replace is allowed there; and files the session itself created, so the agent can rewrite its own drafts. |
 | `edit_file` | Apply targeted `old_str`/`new_str` edits to an existing file. `old_str` and `new_str` are applied exactly as sent. A match that needed quote-style or per-line whitespace tolerance is applied and reported in the result (`content_note`). An `old_str` that matches only once `read_file`'s `N<tab>` display prefixes are removed is refused, with the matched line range and a `replace_lines` call that makes the change. Routes through V3 verification at tier 2+. A `.py` edit that introduces an unresolved direct call (would-be `NameError`) is refused by the structural gate — the error names the call and the file is not modified. The wrong tool for >10 lines of change — switch to `structural_edit`. |
 | `insert_after` | Insert lines into a file after line `line` (1-based, as printed by `read_file`; `0` inserts at the top). Only the new text is supplied — there is no anchor to reproduce, which is what makes it the right tool for ADDING code rather than changing it. Requires the file to have been read, so the line numbers are current. Same syntax, structural and embedded-script gates as `edit_file`. |
 | `replace_lines` | Replace lines `start_line`..`end_line` (1-based, inclusive, as printed by `read_file`) with new content. Instead of reproducing the whole span as an anchor, the model asserts only `expected_first_line` and `expected_last_line` — two lines, compared ignoring leading/trailing whitespace, so a stale range is caught before anything is written: a block that only moved is applied where its two lines now are, and any other mismatch returns the actual lines with a ±3-line numbered window. Capped at `replaceLinesMaxSpan` (60) lines and one hunk per call; requires the file to have been read. Same structural and embedded-script gates as `edit_file`. |
@@ -595,9 +595,9 @@ Defined in `services/proxy/tools.go` and the `services/proxy/tool_*.go` files be
 - `run_command` is capped at 5 minutes. A command the shell cannot parse returns why it could not run: when the cause is a program quoted inline after `-c` or `-e`, the message points to writing it to a file, because a raw `syntax error near unexpected token` gives the model nothing to change.
 - `stop_background` sends SIGTERM, then SIGKILL if the job is still alive.
 
-**Workspace containment.** Before any tool handler touches the filesystem, the proxy validates every path-taking argument (`path`, `source`, `destination`, `cwd`) against the workspace root (`services/proxy/loop_project.go`). Paths that resolve outside the workspace — via `..`, absolute paths, or symlink components — are rejected with an error before execution, in every permission mode.
+**Workspace containment.** Before any tool handler touches the filesystem, the proxy validates every path-taking argument (`path`, `source`, `destination`, `cwd`) against the workspace root (`services/proxy/internal/app/loop_project.go`). Paths that resolve outside the workspace — via `..`, absolute paths, or symlink components — are rejected with an error before execution, in every permission mode.
 
-**Write deny-list.** A safety deny-list applies in every permission mode, including `yolo` (`services/proxy/guardrails_permissions.go`): `write_file`/`edit_file` targets matching `.env`, `*.pem`, `*.key`, or `*credentials*` are refused, as are `run_command` invocations matching destructive patterns (`rm -rf /`, `mkfs*`, `dd if=... of=/dev/...`).
+**Write deny-list.** A safety deny-list applies in every permission mode, including `yolo` (`services/proxy/internal/app/guardrails_permissions.go`): `write_file`/`edit_file` targets matching `.env`, `*.pem`, `*.key`, or `*credentials*` are refused, as are `run_command` invocations matching destructive patterns (`rm -rf /`, `mkfs*`, `dd if=... of=/dev/...`).
 
 ---
 
@@ -1459,7 +1459,7 @@ code set), never on `detail`** (the human message may change):
 Codes: `unauthorized`, `invalid_input`, `unsupported_operation`,
 `dependency_unavailable`, `resource_limit`, `internal_error` — the
 closed set is exactly what live `writeError` calls emit
-(`AllErrorCodes` in `services/proxy/main.go`). Machine-readable schemas live in `docs/reference/schemas/`: the full
+(`AllErrorCodes` in `services/proxy/internal/app/server.go`). Machine-readable schemas live in `docs/reference/schemas/`: the full
 OpenAPI 3.1 spec for this surface (`proxy_openapi.yaml`, parity-checked
 against the registered routes in CI) plus JSON Schemas for the error and
 SSE envelopes.

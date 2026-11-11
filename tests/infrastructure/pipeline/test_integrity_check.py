@@ -93,7 +93,7 @@ def test_a_deleted_test_file_is_reported(ic):
 
 
 @pytest.mark.parametrize("path, line, name", [
-    ("services/proxy/gates_test.go", "func TestGateRefuses(t *testing.T) {", "TestGateRefuses"),
+    ("services/proxy/internal/app/gates_test.go", "func TestGateRefuses(t *testing.T) {", "TestGateRefuses"),
     ("tests/cli/test_doctor.py", "def test_doctor_reports():", "test_doctor_reports"),
     ("clients/extensions/vscode/test/sse.test.ts", "  it('parses a frame', () => {", "parses a frame"),
 ])
@@ -104,7 +104,7 @@ def test_a_removed_test_is_reported_unless_it_moved(ic, path, line, name):
 
 
 def test_a_comment_is_a_reason_only_on_the_line_of_the_skip_or_directly_above_it(ic):
-    path = "services/proxy/gates_test.go"
+    path = "services/proxy/internal/app/gates_test.go"
     above = [f"\t{SLASHES} The runner has no loop device.", "\tt.SkipNow()"]
     assert whats(ic, diff(path, added=above)) == \
         ["new skip or todo marker in a test, with its reason: The runner has no loop device."]
@@ -113,7 +113,7 @@ def test_a_comment_is_a_reason_only_on_the_line_of_the_skip_or_directly_above_it
 
 
 def test_a_comment_on_an_unchanged_line_above_a_new_skip_is_read_from_the_file(ic):
-    path = "services/proxy/gates_test.go"
+    path = "services/proxy/internal/app/gates_test.go"
     source = "\n" * 8 + f"\t{SLASHES} The runner has no loop device.\n\tt.SkipNow()\n"
     assert whats(ic, diff(path, added=["\tt.SkipNow()"]), tree=Files({path: source})) == \
         ["new skip or todo marker in a test, with its reason: The runner has no loop device."]
@@ -126,9 +126,9 @@ def test_fewer_assertions_are_reported(ic):
 
 
 def test_a_rewritten_assertion_is_reported_only_with_a_product_change(ic):
-    rewritten = diff("services/proxy/gates_test.go", removed=['\tt.Fatal("want 3")'], added=['\tt.Fatal("want 4")'])
+    rewritten = diff("services/proxy/internal/app/gates_test.go", removed=['\tt.Fatal("want 3")'], added=['\tt.Fatal("want 4")'])
     assert whats(ic, rewritten) == []
-    with_product = rewritten + diff("services/proxy/gates.go", added=["\treturn 4"])
+    with_product = rewritten + diff("services/proxy/internal/app/gates.go", added=["\treturn 4"])
     assert whats(ic, with_product) == ["1 assertion(s) rewritten while product code changed"]
 
 
@@ -152,11 +152,11 @@ def test_the_same_text_outside_a_comment_or_in_a_document_is_not_history(ic):
 
 def test_an_evaluation_task_named_in_product_code_is_reported(ic):
     line = '\tif task == "flask_pause" {'
-    assert whats(ic, diff("services/proxy/loop.go", added=[line])) == \
+    assert whats(ic, diff("services/proxy/internal/app/loop.go", added=[line])) == \
         ["evaluation task named in product code: 'flask_pause'"]
-    assert whats(ic, diff("services/proxy/loop_test.go", added=[line])) == []
+    assert whats(ic, diff("services/proxy/internal/app/loop_test.go", added=[line])) == []
     assert whats(ic, diff("scripts/eval/e2e-reliability.py", added=['    "flask_pause": Task('])) == [CONFIGURES]
-    assert whats(ic, diff("services/proxy/loop.go", added=['\tname := "flask_pauses"'])) == []
+    assert whats(ic, diff("services/proxy/internal/app/loop.go", added=['\tname := "flask_pauses"'])) == []
 
 
 def test_a_new_document_needs_approval_outside_the_allowed_folders(ic):
@@ -175,14 +175,14 @@ def test_new_dependencies_are_listed_as_notes(ic):
 
 
 def test_a_large_change_is_noted_and_lock_files_do_not_count(ic):
-    big = diff("services/proxy/loop.go", added=[f"\tstep{i}()" for i in range(400)])
+    big = diff("services/proxy/internal/app/loop.go", added=[f"\tstep{i}()" for i in range(400)])
     assert whats(ic, big) == ["large change: 400 changed lines"]
     assert whats(ic, diff("clients/extensions/vscode/package-lock.json", added=["x"] * 900)) == []
 
 
 def test_every_finding_says_why_and_how_to_fix(ic):
     change = (diff("tests/v3/test_plan.py", removed=["def test_plan():"], status="deleted")
-              + diff("services/proxy/loop.go", added=[f'\tif t == "offbyone" {{ {SLASHES} 2026-01-02 nolint'])
+              + diff("services/proxy/internal/app/loop.go", added=[f'\tif t == "offbyone" {{ {SLASHES} 2026-01-02 nolint'])
               + diff("docs/NOTES.md", added=["x"], status="added")
               + diff(".github/workflows/test.yml", added=["x: 1"])
               + diff("services/proxy/go.mod", added=["\tgithub.com/example/retry v1.2.0"]))
@@ -307,7 +307,7 @@ def test_a_base_that_looks_like_an_option_is_not_one(ic, tmp_path):
 @pytest.mark.parametrize("path, old, new, renamed", [
     pytest.param("tests/cli/test_doctor.py", "def test_doctor_reports():", "def test_doctor_names_each_fault():",
                  "test_doctor_reports -> test_doctor_names_each_fault", id="python"),
-    pytest.param("services/proxy/gates_test.go", "func TestGateRefuses(t *testing.T) {", "func TestGateRefusesAWrite(t *testing.T) {",
+    pytest.param("services/proxy/internal/app/gates_test.go", "func TestGateRefuses(t *testing.T) {", "func TestGateRefusesAWrite(t *testing.T) {",
                  "TestGateRefuses -> TestGateRefusesAWrite", id="go"),
     pytest.param("clients/extensions/vscode/test/sse.test.ts", "  it('parses a frame', () => {", "  it('parses one frame', () => {",
                  "parses a frame -> parses one frame", id="typescript"),
@@ -401,17 +401,17 @@ func skipsWithoutSaying(t *testing.T) {
 
 
 @pytest.mark.parametrize("helper_file, added, found", [
-    pytest.param("services/proxy/guardrails_object_hold_test.go",
+    pytest.param("services/proxy/internal/app/guardrails_object_hold_test.go",
                  ["\tneedsObjectHold(t)", "\tneedsObjectHold(t)", "\tneedsNothing(t)", "\tneedsObjectHold(t)"],
                  [("approval", 10, "3 new call(s) to the skip helper needsObjectHold, "
                                    "with its reason: objectHoldSkipReason")],
                  id="the calls are one finding with their number and the reason"),
-    pytest.param("services/proxy/guardrails_object_hold_test.go", ["\tskipsWithoutSaying(t)"],
+    pytest.param("services/proxy/internal/app/guardrails_object_hold_test.go", ["\tskipsWithoutSaying(t)"],
                  [("warning", 10, "1 new call(s) to the skip helper skipsWithoutSaying")], id="a helper with no reason"),
     pytest.param("clients/tui/object_hold_test.go", ["\tneedsObjectHold(t)"], [], id="a helper in another folder is not seen"),
 ])
 def test_a_call_to_a_skip_helper_beside_the_test_is_named_with_its_reason(ic, helper_file, added, found):
-    findings = ic.check(diff("services/proxy/guardrails_permissions_test.go", added=added), TASKS, Files({helper_file: SKIP_HELPER}))
+    findings = ic.check(diff("services/proxy/internal/app/guardrails_permissions_test.go", added=added), TASKS, Files({helper_file: SKIP_HELPER}))
     assert [(f.level, f.line, f.what) for f in findings] == found
 
 
@@ -527,7 +527,7 @@ def test_a_workflow_setting_that_turns_a_guard_off_needs_approval(ic, path, line
 
 def baseline(functions, files=None, limits=None):
     return json.dumps({"limits": limits or {"function_lines": 100, "file_lines": 1500},
-                       "functions": functions, "files": files or {"services/proxy/loop.go": 9929}})
+                       "functions": functions, "files": files or {"services/proxy/internal/app/loop.go": 9929}})
 
 
 def baseline_findings(ic, before, after):
@@ -550,7 +550,7 @@ def test_a_size_baseline_that_only_goes_down_is_a_note(ic):
     pytest.param({"functions": {"a.py:f": 301, "b.py:g": 110}}, id="one number up and one down"),
     pytest.param({"functions": {"a.py:f": 300, "new.py:n": 150}}, id="a new entry"),
     pytest.param({"functions": {"a.py:f": 250, "new.py:n": 150}}, id="a new entry and a lower number"),
-    pytest.param({"functions": {"a.py:f": 300}, "files": {"services/proxy/loop.go": 9930}}, id="a file's number goes up"),
+    pytest.param({"functions": {"a.py:f": 300}, "files": {"services/proxy/internal/app/loop.go": 9930}}, id="a file's number goes up"),
     pytest.param({"functions": {"a.py:f": 300}, "limits": {"function_lines": 120, "file_lines": 1500}},
                  id="a limit goes up"),
     pytest.param({"functions": {"a.py:f": 300}, "limits": {"file_lines": 1500}}, id="a limit is removed"),
@@ -737,7 +737,7 @@ CLASS = "every test of this class stops running"
 GROUP = "every test of this group stops running"
 NEEDS_YAML = ", with its reason: needs the module yaml"
 IN_A_TEST = "1 new call(s) to `pytest.importorskip` in a test"
-PY, GO, TS = "tests/cli/test_doctor.py", "services/proxy/gates_test.go", "clients/extensions/vscode/test/sse.test.ts"
+PY, GO, TS = "tests/cli/test_doctor.py", "services/proxy/internal/app/gates_test.go", "clients/extensions/vscode/test/sse.test.ts"
 STOPPED = [
     (PY, "@pytest.mark.skip", ONE),
     (PY, "@pytest.mark.skipif(sys.platform == 'darwin')", ONE),
@@ -826,7 +826,7 @@ def test_every_row_of_the_table_of_forms_has_a_test(ic):
     (PY, "    (PY, \"    pytest.param(2, marks=pytest.mark.skip),\", ONE),"),
     (PY, "    ('tests/conftest.py', '        item.add_marker(pytest.mark.skip)'),"),
     (PY, "    result = pytest.skipped"),
-    (PY, "    ('services/proxy/gates_test.go', '\tt.Skip()'),"),
+    (PY, "    ('services/proxy/internal/app/gates_test.go', '\tt.Skip()'),"),
     (PY, "    line = 'it.only(\"x\")'"),
     (PY, "//go:build ignore"),
     (GO, "\tline := \"@pytest.mark.skip\""),
@@ -837,7 +837,7 @@ def test_every_row_of_the_table_of_forms_has_a_test(ic):
     (TS, "  it.each([1, 2])('parses frame %i', () => {"),
     (TS, "  it.concurrent('parses a frame', () => {"),
     (TS, "describe('frames that fail', () => {"),
-    ("services/proxy/gates.go", "//go:build linux"),
+    ("services/proxy/internal/app/gates.go", "//go:build linux"),
     ("atlas/cli.py", "collect_ignore = []"),
     ("docs/SETUP.md", "@pytest.mark.skip"),
 ])
@@ -994,7 +994,7 @@ def test_when_the_file_cannot_be_read_as_python_every_line_counts_as_code(ic):
     stops = [f.line for f in ic.check(change, TASKS, Files({path: broken})) if "skip" in f.what or "stops" in f.what]
     assert stops == [4, 6, 8, 12]
     assert ic.text_lines(path, None) == set()
-    assert ic.text_lines("services/proxy/gates_test.go", "x := `\nt.Skip()\n`\n") == set()
+    assert ic.text_lines("services/proxy/internal/app/gates_test.go", "x := `\nt.Skip()\n`\n") == set()
 
 
 CLASS_FILE = """from tests.infrastructure.proc_files import needs_proc

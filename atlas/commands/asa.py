@@ -71,7 +71,7 @@ DEFAULT_LENS_CONTAINER = "atlas-geometric-lens-1"
 
 def _configured_vector_path(atlas_root: Optional[str] = None) -> str:
     """Path the lens / entrypoint use. Matches the env-var conventions
-    in probeASAStatus() in services/proxy/lens.go."""
+    in probeASAStatus() in services/proxy/internal/app/lens.go."""
     configured = os.environ.get("ATLAS_CONTROL_VECTOR")
     if not configured and atlas_root:
         configured = compose_config.read_env_file(atlas_root).get(

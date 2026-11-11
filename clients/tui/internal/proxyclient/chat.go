@@ -47,14 +47,14 @@ type ChatEvent struct {
 
 // HistoryMessage is one prior-turn user/assistant text row sent to the
 // proxy on each /v1/agent call. Field shape MUST match the historyMsg
-// struct in services/proxy/server_agent.go's handleAgent.
+// struct in services/proxy/internal/app/server_agent.go's handleAgent.
 type HistoryMessage struct {
 	Role    string `json:"role"` // "user" or "assistant"
 	Content string `json:"content"`
 }
 
 // agentRequest is the POST body for /v1/agent. Field tags MUST match
-// the anonymous struct in services/proxy/server_agent.go's handleAgent.
+// the anonymous struct in services/proxy/internal/app/server_agent.go's handleAgent.
 type agentRequest struct {
 	Message    string           `json:"message"`
 	WorkingDir string           `json:"working_dir"`
@@ -628,7 +628,7 @@ func InstallTokenTransport() {
 
 // PC-062: SSE event consumer for the TUI.
 //
-// Mirrors the Envelope struct in services/proxy/server_events.go and the Python
+// Mirrors the Envelope struct in services/proxy/internal/app/server_events.go and the Python
 // dataclass in atlas/events.py. The schema contract is documented
 // in docs/reference/API.md — any change here MUST be made in lockstep
 // across all three implementations.
@@ -638,7 +638,7 @@ func InstallTokenTransport() {
 // resumable: if /events drops, we reconnect with exponential backoff.
 
 // Envelope is the wire-format event. Field tags MUST match
-// atlas/events.py and services/proxy/server_events.go exactly.
+// atlas/events.py and services/proxy/internal/app/server_events.go exactly.
 type Envelope struct {
 	EventID    string                 `json:"event_id"`
 	Timestamp  float64                `json:"timestamp"`

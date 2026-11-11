@@ -1,0 +1,293 @@
+package app
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"github.com/itigges22/atlas-proxy/internal/taskcontract"
+	"github.com/itigges22/atlas-proxy/internal/wire"
+)
+
+// typedCommandObligation returns the world's declared-command obligation.
+func typedCommandObligation(t *testing.T, w *matrixWorld) taskcontract.TaskObligation {
+	t.Helper()
+	for _, o := range w.obligations() {
+		if o.Kind == taskcontract.ObligationDeclaredCommand {
+			return o
+		}
+	}
+	t.Fatal("no declared-command obligation derived")
+	return taskcontract.TaskObligation{}
+}
+
+// Required strength comes from what the client declared and from nothing else.
+// The same command reaches different floors when it is declared in different
+// ways. Commands of different shapes reach the same floor when they are
+// declared in the same way.
+func TestDeclaredStrengthComesFromTheDeclaration(t *testing.T) {
+	const code = "print(7)\n"
+	for _, tc := range []struct {
+		name     string
+		contract string
+		want     string
+	}{
+		{
+			name: "untyped list is runtime",
+			contract: `{"task_mode":"work","verification_knowledge":"declared",` +
+				`"verification":["pytest -q"]}`,
+			want: taskcontract.VerificationKindRuntime,
+		},
+		{
+			name: "untyped parse check is runtime",
+			contract: `{"task_mode":"work","verification_knowledge":"declared",` +
+				`"verification":["python3 -c \"import ast;ast.parse(open('solve.py').read())\""]}`,
+			want: taskcontract.VerificationKindRuntime,
+		},
+		{
+			name: "untyped true is runtime",
+			contract: `{"task_mode":"work","verification_knowledge":"declared",` +
+				`"verification":["true"]}`,
+			want: taskcontract.VerificationKindRuntime,
+		},
+		{
+			name: "typed syntax is syntax",
+			contract: `{"task_mode":"work","verification_knowledge":"declared",` +
+				`"verification_requirements_version":1,"verification_requirements":[` +
+				`{"command":"pytest -q","kind":"syntax","expects":"exit_zero",` +
+				`"asset_authority":"client_supplied"}]}`,
+			want: taskcontract.VerificationKindSyntax,
+		},
+		{
+			name: "typed runtime is runtime",
+			contract: `{"task_mode":"work","verification_knowledge":"declared",` +
+				`"verification_requirements_version":1,"verification_requirements":[` +
+				`{"command":"pytest -q","kind":"runtime","expects":"exit_zero",` +
+				`"asset_authority":"client_supplied"}]}`,
+			want: taskcontract.VerificationKindRuntime,
+		},
+		{
+			name: "typed behavioral is behavioral",
+			contract: `{"task_mode":"work","verification_knowledge":"declared",` +
+				`"verification_requirements_version":1,"verification_requirements":[` +
+				`{"command":"pytest -q","kind":"behavioral","expects":"exit_zero",` +
+				`"asset_authority":"client_supplied"}]}`,
+			want: taskcontract.VerificationKindBehavioral,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newMatrixWorld(t, tc.contract, "solve.py", code, true)
+			o := typedCommandObligation(t, w)
+			if o.RequiredStrength != tc.want {
+				t.Errorf("required strength %q, want %q", o.RequiredStrength, tc.want)
+			}
+			if got := taskcontract.AuthorizationFloor(w.obligations()); got != tc.want {
+				t.Errorf("floor %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// A passing run is recorded at the weaker of what the client declared and what
+// its assets can support.
+func TestObservedStrengthIsCappedByAssetAuthority(t *testing.T) {
+	const code = "print(7)\n"
+
+	t.Run("client-supplied assets support behavioral", func(t *testing.T) {
+		w := newMatrixWorld(t, `{"task_mode":"work","verification_knowledge":"declared",`+
+			`"verification_requirements_version":1,"verification_requirements":[`+
+			`{"command":"python3 solve.py","kind":"behavioral","expects":"exit_zero",`+
+			`"asset_authority":"client_supplied"}]}`, "solve.py", code, true)
+		o := typedCommandObligation(t, w)
+		ev, ok := produceDeclaredVerificationEvidence(w.ctx,
+			w.stagedRun(o, stagingExitedZero, false, false))
+		if !ok {
+			t.Fatal("a typed behavioral command produced no evidence")
+		}
+		if ev.Provenance.ObservedStrength != taskcontract.VerificationKindBehavioral {
+			t.Errorf("observed %q, want behavioral", ev.Provenance.ObservedStrength)
+		}
+		if authorized, why := ev.Authorizes(); !authorized {
+			t.Errorf("behavioral evidence did not close its own obligation: %s", why)
+		}
+	})
+
+	t.Run("an asset this session wrote caps at runtime", func(t *testing.T) {
+		w := newMatrixWorld(t, `{"task_mode":"work","verification_knowledge":"declared",`+
+			`"verification_requirements_version":1,"verification_requirements":[`+
+			`{"command":"python3 solve.py","kind":"behavioral","expects":"exit_zero",`+
+			`"assets":["test_solve.py"],"asset_authority":"client_supplied"}]}`,
+			"solve.py", code, true)
+		// The model wrote the file the command is measured against. The
+		// contract's claim about it is not the fact about it.
+		asset := resolveAgentPath(w.ctx, "test_solve.py")
+		if w.ctx.Ledger == nil {
+			w.ctx.Ledger = map[string]*taskcontract.DeliverableState{}
+		}
+		w.ctx.Ledger[ledgerKey(w.ctx, asset)] = &taskcontract.DeliverableState{
+			Path: asset, CurrentHash: contentSHA256("assert True\n"), Generation: 1,
+		}
+		o := typedCommandObligation(t, w)
+		ev, ok := produceDeclaredVerificationEvidence(w.ctx,
+			w.stagedRun(o, stagingExitedZero, false, false))
+		if !ok {
+			t.Fatal("the run produced no evidence at all")
+		}
+		if ev.Provenance.ObservedStrength != taskcontract.VerificationKindRuntime {
+			t.Errorf("observed %q, want runtime", ev.Provenance.ObservedStrength)
+		}
+		// And it does not reach the floor the client declared, so it cannot
+		// authorize. A request may not write its own oracle.
+		if authorized, _ := ev.Authorizes(); authorized {
+			t.Error("a self-authored oracle produced behavioral authority")
+		}
+	})
+}
+
+// The two lists are independent, and a command in both is answered by its
+// typed declaration.
+func TestTypedAndUntypedCommandsCoexist(t *testing.T) {
+	w := newMatrixWorld(t, `{"task_mode":"work","verification_knowledge":"declared",`+
+		`"verification":["ruff check .","python3 solve.py"],`+
+		`"verification_requirements_version":1,"verification_requirements":[`+
+		`{"command":"python3 solve.py","kind":"behavioral","expects":"exit_zero",`+
+		`"asset_authority":"client_supplied"}]}`, "solve.py", "print(7)\n", true)
+	strengths := map[string]string{}
+	for _, o := range w.obligations() {
+		if o.Kind == taskcontract.ObligationDeclaredCommand {
+			strengths[o.Subject] = o.RequiredStrength
+		}
+	}
+	if len(strengths) != 2 {
+		t.Fatalf("derived %d command obligations, want 2: %v", len(strengths), strengths)
+	}
+	if strengths["python3 solve.py"] != taskcontract.VerificationKindBehavioral {
+		t.Errorf("the typed command reached %q", strengths["python3 solve.py"])
+	}
+	if strengths["ruff check ."] != taskcontract.VerificationKindRuntime {
+		t.Errorf("the untyped command reached %q", strengths["ruff check ."])
+	}
+	// Both are owed: the floor is the strongest of them.
+	if got := taskcontract.AuthorizationFloor(w.obligations()); got != taskcontract.VerificationKindBehavioral {
+		t.Errorf("floor %q, want behavioral", got)
+	}
+}
+
+// The boundary refuses a typed declaration it cannot read, rather than
+// defaulting it. A question declares nothing, so typed requirements are no way
+// in for one.
+func TestTypedVerificationBoundaryRefusesTheUnreadable(t *testing.T) {
+	dir := t.TempDir()
+	for _, tc := range []struct{ name, contract string }{
+		{"unknown kind", `{"task_mode":"work","verification_knowledge":"declared",` +
+			`"verification_requirements_version":1,"verification_requirements":[` +
+			`{"command":"x","kind":"semantic","expects":"exit_zero",` +
+			`"asset_authority":"client_supplied"}]}`},
+		{"oracle is not declarable", `{"task_mode":"work","verification_knowledge":"declared",` +
+			`"verification_requirements_version":1,"verification_requirements":[` +
+			`{"command":"x","kind":"oracle","expects":"exit_zero",` +
+			`"asset_authority":"client_supplied"}]}`},
+		{"unknown expectation", `{"task_mode":"work","verification_knowledge":"declared",` +
+			`"verification_requirements_version":1,"verification_requirements":[` +
+			`{"command":"x","kind":"runtime","expects":"prints_ok",` +
+			`"asset_authority":"client_supplied"}]}`},
+		{"unknown asset authority", `{"task_mode":"work","verification_knowledge":"declared",` +
+			`"verification_requirements_version":1,"verification_requirements":[` +
+			`{"command":"x","kind":"runtime","expects":"exit_zero",` +
+			`"asset_authority":"trust_me"}]}`},
+		{"unknown version", `{"task_mode":"work","verification_knowledge":"declared",` +
+			`"verification_requirements_version":2,"verification_requirements":[` +
+			`{"command":"x","kind":"runtime","expects":"exit_zero",` +
+			`"asset_authority":"client_supplied"}]}`},
+		{"no version at all", `{"task_mode":"work","verification_knowledge":"declared",` +
+			`"verification_requirements":[` +
+			`{"command":"x","kind":"runtime","expects":"exit_zero",` +
+			`"asset_authority":"client_supplied"}]}`},
+		{"version without requirements", `{"task_mode":"work",` +
+			`"verification_requirements_version":1}`},
+		{"empty command", `{"task_mode":"work","verification_knowledge":"declared",` +
+			`"verification_requirements_version":1,"verification_requirements":[` +
+			`{"command":"  ","kind":"runtime","expects":"exit_zero",` +
+			`"asset_authority":"client_supplied"}]}`},
+		{"question mode", `{"task_mode":"question",` +
+			`"verification_requirements_version":1,"verification_requirements":[` +
+			`{"command":"pytest -q","kind":"behavioral","expects":"exit_zero",` +
+			`"asset_authority":"client_supplied"}]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var in taskcontract.TaskContract
+			if err := json.Unmarshal([]byte(tc.contract), &in); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := validateTaskContract(&in, dir); err == nil {
+				t.Fatal("the boundary accepted a contract it cannot read")
+			}
+		})
+	}
+}
+
+// The declaration is metadata about a command, and none of it travels into
+// evidence: no command text, no asset path, no kind prose beyond the closed
+// strength value.
+func TestTypedRequirementCarriesNoContentIntoEvidence(t *testing.T) {
+	w := newMatrixWorld(t, `{"task_mode":"work","verification_knowledge":"declared",`+
+		`"verification_requirements_version":1,"verification_requirements":[`+
+		`{"command":"python3 solve.py --secret hunter2","kind":"behavioral",`+
+		`"expects":"exit_zero","assets":["fixtures/golden_hunter2.json"],`+
+		`"asset_authority":"client_supplied"}]}`, "solve.py", "print(7)\n", true)
+	o := typedCommandObligation(t, w)
+	ev, ok := produceDeclaredVerificationEvidence(w.ctx,
+		w.stagedRun(o, stagingExitedZero, false, false))
+	if !ok {
+		t.Fatal("no evidence produced")
+	}
+	blob, err := json.Marshal(ev.Provenance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"hunter2", "golden_hunter2.json", "--secret"} {
+		if strings.Contains(string(blob), secret) {
+			t.Errorf("the evidence carries %q", secret)
+		}
+	}
+}
+
+// Nothing but a passing run produces authority, whatever the declaration says.
+func TestTypedBehavioralStillNeedsACleanRun(t *testing.T) {
+	contract := `{"task_mode":"work","verification_knowledge":"declared",` +
+		`"verification_requirements_version":1,"verification_requirements":[` +
+		`{"command":"python3 solve.py","kind":"behavioral","expects":"exit_zero",` +
+		`"asset_authority":"client_supplied"}]}`
+	for _, tc := range []struct {
+		name             string
+		outcome          stagingCommandOutcome
+		mutatedTarget    bool
+		mutatedWorkspace bool
+	}{
+		{"non-zero exit", stagingExitedNonZero, false, false},
+		{"timeout", stagingTimedOut, false, false},
+		{"budget exceeded", stagingBudgetExceeded, false, false},
+		{"cancelled", stagingCancelled, false, false},
+		{"refused", stagingRefused, false, false},
+		{"unavailable", stagingUnavailable, false, false},
+		{"unobservable", stagingUnobservable, false, false},
+		{"mutated the candidate", stagingExitedZero, true, false},
+		{"mutated the workspace", stagingExitedZero, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newMatrixWorld(t, contract, "solve.py", "print(7)\n", true)
+			o := typedCommandObligation(t, w)
+			ev, ok := produceDeclaredVerificationEvidence(w.ctx,
+				w.stagedRun(o, tc.outcome, tc.mutatedTarget, tc.mutatedWorkspace))
+			if !ok {
+				return // no record at all is the strongest form of no authority
+			}
+			if ev.Outcome == wire.ValidationPassed {
+				t.Errorf("%s was recorded as a pass", tc.name)
+			}
+			if authorized, _ := ev.Authorizes(); authorized {
+				t.Errorf("%s produced authority", tc.name)
+			}
+		})
+	}
+}

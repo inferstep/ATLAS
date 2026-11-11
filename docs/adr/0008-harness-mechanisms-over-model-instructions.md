@@ -15,7 +15,7 @@ A mechanism acts the same way whatever the model. Whether an instruction
 is followed depends on the model: a model can answer a rejection that
 names the file, the line, the cause and two concrete fixes with the same
 call, byte for byte (a recorded case is in the comment of
-`identicalRetryRefusal` in `services/proxy/loop_detectors.go`).
+`identicalRetryRefusal` in `services/proxy/internal/app/loop_detectors.go`).
 
 Two 2026 results frame the same split. arXiv:2605.00334 (AgentFloor, 16
 open-weight models 0.27B-32B, 16k+ runs) found no prompt-side lever that
@@ -42,7 +42,7 @@ assumed to be free of side effects.
 Three changes follow from it directly, all model-agnostic:
 
 1. **A byte-identical re-send of a rejected tool call is refused before
-   it executes** (`identicalRetryRefusal` in `services/proxy/loop_detectors.go`). The
+   it executes** (`identicalRetryRefusal` in `services/proxy/internal/app/loop_detectors.go`). The
    harness is deterministic, so the same call against the same workspace
    produces the same rejection. Only failed calls are remembered, and a
    call that succeeds clears them all, because a success may have changed
@@ -51,18 +51,18 @@ Three changes follow from it directly, all model-agnostic:
    file after an edit. Polling a background job (`tail_background`) is
    exempt. This replaces nothing: the repetition detector needs three
    occurrences of a call and steers the following turn (`recordToolCall`
-   and `toolRepeatThreshold` in `services/proxy/loop_detectors.go`), which an identical
+   and `toolRepeatThreshold` in `services/proxy/internal/app/loop_detectors.go`), which an identical
    pair never reaches.
 
 2. **A completion claim the run cannot support is replaced by a
    harness-authored summary** (`unverifiedSummary` in
-   `services/proxy/guardrails_summaries.go`). The verification gate bounces `done` three
-   times and then lets it through (`maxGateBounces` in `services/proxy/gates_exit.go`),
+   `services/proxy/internal/app/guardrails_summaries.go`). The verification gate bounces `done` three
+   times and then lets it through (`maxGateBounces` in `services/proxy/internal/app/gates_exit.go`),
    so without this the user would read the model's claim unchanged. The
    harness states whether anything was written and that nothing verified
    it. When the run counts as completed, it keeps the model's account,
    labelled as unverified; otherwise it drops it (`modelProseIfAuthorized`
-   in `services/proxy/loop_end.go`).
+   in `services/proxy/internal/app/loop_end.go`).
 
 3. **`outline_file` reports embedded-language regions**
    (`embedded_region_outline` in `services/v3-service/symbols.py`), reusing the
@@ -71,7 +71,7 @@ Three changes follow from it directly, all model-agnostic:
    app whose UI is one template would name `function:index` and nothing
    else. The outline names the `<script>` region, its line range, and the
    functions inside it, together with the fact that no selector reaches
-   them (`embeddedRegionNote` in `services/proxy/tool_read.go`).
+   them (`embeddedRegionNote` in `services/proxy/internal/app/tool_read.go`).
 
 `done` is not made ungrammatical. That needs strict schema-GBNF, and the
 gemma entry runs with `ATLAS_GRAMMAR_MODE=loose` (its `grammar_mode` in

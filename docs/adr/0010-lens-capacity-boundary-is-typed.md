@@ -28,7 +28,7 @@ bytes: 4.4 GB at 4,096 on a 3,840-dim model), so no configuration on the
 reference hardware scores every candidate ATLAS can generate
 (`services/v3-service/stages/plan_search.py`; `get_max_tokens` in
 `services/v3-service/stages/budget_forcing.py`; `agentMaxTokens` in
-`services/proxy/model_prompt.go`; `fit_runtime_knobs` in `atlas/commands/fit.py`).
+`services/proxy/internal/app/model_prompt.go`; `fit_runtime_knobs` in `atlas/commands/fit.py`).
 
 Splitting the input is not a score either. Tokens in a later piece are
 embedded without the context of the earlier ones, so the pooled vector and

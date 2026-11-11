@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run the candidate-staging integration test against a real executor.
 
-The Go test in `services/proxy/evidence_staging_integration_test.go` needs a live
+The Go test in `services/proxy/internal/app/evidence_staging_integration_test.go` needs a live
 `services/sandbox/executor_server.py`: the whole point of it is to check that the real
 executor's snapshot is isolated, its `finally` really deletes, and its
 observation really describes the tree either side. A stub cannot answer any of
@@ -106,7 +106,7 @@ def run_tests(args: argparse.Namespace, proc: subprocess.Popen, url: str, stage:
         return 0
     result = subprocess.run(
         ["go", "test", "-count=1", "-timeout", args.timeout, "-v",
-         "-run", TESTS, "."],
+         "-run", TESTS, "./..."],
         cwd=PROXY,
         env=dict(stage, ATLAS_STAGING_SANDBOX_URL=url))
     return result.returncode

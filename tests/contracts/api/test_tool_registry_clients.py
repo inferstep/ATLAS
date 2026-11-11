@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[3]
-TOOL_FILES = [REPO / "services" / "proxy" / name for name in
+TOOL_FILES = [REPO / "services" / "proxy" / "internal" / "app" / name for name in
               ("tools.go", "tool_read.go", "tool_background.go", "tool_schema.go", "tool_files.go",
                "tool_write.go", "tool_write_v3.go", "tool_edit.go", "tool_structural_edit.go")]
 EXT_PREVIEW = REPO / "clients" / "extensions" / "vscode" / "src" / "session" / "editPreview.ts"

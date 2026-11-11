@@ -668,7 +668,7 @@ func (m *tuiModel) onV3LLMEnd(ev proxyclient.ChatEvent) {
 
 // onV3Progress adds a row of V3 pipeline narration.
 func (m *tuiModel) onV3Progress(ev proxyclient.ChatEvent) {
-	// V3 pipeline narration emitted by services/proxy/tool_write_v3.go via
+	// V3 pipeline narration emitted by services/proxy/internal/app/tool_write_v3.go via
 	// ctx.StreamFn("v3_progress", {message: "..."}). One row per
 	// stage (e.g. "[probe] Generating probe candidate..."). These
 	// were silently dropped in the first cut — without this case
@@ -1116,7 +1116,7 @@ func formatAgentLensIntervention(data json.RawMessage) string {
 // formatAgentRepeatIntervention renders the agent_repeat_intervention
 // event, which fires when the proxy detected the model issuing the same
 // (tool, args) signature N times in close succession (toolRepeatThreshold
-// in services/proxy/loop_detectors.go). Sibling event to agent_lens_intervention but
+// in services/proxy/internal/app/loop_detectors.go). Sibling event to agent_lens_intervention but
 // catches structural loops the lens (which only sees write content) misses.
 // Reason is the verbose corrective queued for the next LLM call; we trim
 // it for display.

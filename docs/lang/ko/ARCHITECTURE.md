@@ -86,11 +86,11 @@ K3s 배포 경로(`scripts/install/install.sh`, `deploy/k3s/`의 매니페스트
 
 프록시는 채팅 프론트엔드의 진입점입니다. `/v1/agent`(타입 이벤트 스트림 — TUI가 사용하는 것)에서 사용자 메시지를 받아들이고, llama-server를 호출하고 도구 호출을 파싱·실행해 이벤트를 다시 스트리밍하는 내부 에이전트 루프를 실행합니다. `/v1/chat/completions` 엔드포인트는 llama-server로의 투명한 패스스루입니다. SDK 호환성을 위해 유지되며 에이전트 루프를 실행하지 않습니다. 전체 이벤트 타입 카탈로그는 [API.md](../../reference/API.md)를 참고하세요.
 
-`services/proxy/`의 테스트가 아닌 모든 Go 파일(하위 폴더 포함)과 각 파일이 담당하는 영역입니다:
+`services/proxy/`의 테스트가 아닌 모든 Go 파일(하위 폴더 포함)과 각 파일이 담당하는 영역입니다. `main.go`는 `app.Run`을 호출하여 프로그램을 시작합니다. 폴더가 없는 이름은 `internal/app/`에 있는 파일입니다:
 
 | 파일 | 담당 |
 |---|---|
-| `main.go` | HTTP 서버, 라우팅, 인증, 패스스루, 오류 엔벨로프, 비공개 값 로그 필터 |
+| `server.go` | HTTP 서버, 라우팅, 인증, 패스스루, 오류 엔벨로프, 비공개 값 로그 필터 |
 | `loop.go` | `runAgentLoop`, 펜스 가져오기, 툴체인 감지 |
 | `model_call.go`, `model_reply.go` | llama-server 호출 1회와 모델이 돌려준 응답 읽기. `model_reply.go`는 모델 텍스트의 JSON 이스케이프를 디코딩하며, UTF-16 서로게이트 쌍은 한 문자로 읽습니다. `\b`와 `\f`는 글자로 남으므로 백스페이스나 폼 피드가 터미널에 닿지 않습니다 |
 | `model_prompt.go`, `task_tier.go` | 시스템 프롬프트와 컨텍스트 예산, 메시지가 받는 등급 |
@@ -206,7 +206,7 @@ flowchart LR
 
 기본 `strict` 모드에서 프록시는 완전한 JSON 스키마 — `additionalProperties: false`와 함께 `oneOf`를 사용하고 레지스트리에서 도구 이름을 열거 — 를 전송하며, llama-server가 이를 토큰 생성 중 문법으로 강제합니다. 문법 제약은 잘못된 형식의 출력을 불가능하게 만드는 것이 아니라 드물게 만듭니다: `ATLAS_GRAMMAR_MODE=loose`는 `{"type":"json_object"}`만 전송하고(유효한 JSON이되 형태는 강제하지 않음 — 일부 모델에는 이것이 필요합니다), 응답 토큰 상한이 JSON 중간을 자를 수 있습니다. 프록시는 파싱을 실패할 수 있는 것으로 취급합니다 — 산문/`reasoning_content`에서 JSON을 복구하고, 실행 전에 잘린 도구 인자를 감지하며, 표적화된 파스 실패 설명을 되먹이고, 3회 연속 실패 후 루프를 끊습니다.
 
-**펜스 콘텐츠 채널(`@fenced`).** 파일 전체 본문은 JSON 채널로 보내지 않습니다. JSON 문자열 안의 코드는 빽빽한 줄마다 이스케이프 부담을 지며, 서빙되는 12B 모델은 측정상 이를 감당하지 못합니다: 같은 해답이 펜스 마크다운 블록으로 내보내면 6/6 파싱되고, JSON 문자열로 내보내면 0/6 파싱됩니다(닫는 괄호 누락, 리터럴 `\n`이 문장을 주석에 붙여 버림, 이어 붙인 줄의 공백 손실). 시스템 프롬프트는 모델에게 `write_file`의 `content`를 정확히 `@fenced`로 설정하라고 지시합니다. 그러면 프록시는 *제약 없는* 서브콜 하나(문법 없음, `response_format` 없음)를 보내고, 그 응답은 대상 확장자 태그(` ```python `, ` ```html `, …)가 붙은 단일 펜스 블록 안의 파일입니다. 엔벨로프는 JSON 제약 아래에 남고, 파일 본문만 평문으로 옮겨 갑니다. 메커니즘의 세부(`services/proxy/loop.go::fetchFencedContent`): 서브콜은 일시적입니다(대화에 추가되지 않음 — 메인 스레드에서 보면 모델이 `@fenced`를 쓰고 쓰기가 일어난 것). 파일 자체에 ` ``` `가 들어 있는 응답은 마지막 펜스를 기준으로 추출하므로 내부 펜스가 파일을 자르지 않습니다. 센티널*과* 파일을 한 문자열에 넣은 모델은 센티널을 떼어 내고 인라인 내용을 사용합니다. 두 번 시도한 뒤에는 인라인 내용을 요청하며 되돌려 보냅니다. 모든 시도는 실제 생성이며 실행 합계에 집계됩니다(최종 `done` 페이로드의 `fenced_calls` / `fenced_tokens`, 시도마다 `fenced_fetch` 스테이지 이벤트 하나).
+**펜스 콘텐츠 채널(`@fenced`).** 파일 전체 본문은 JSON 채널로 보내지 않습니다. JSON 문자열 안의 코드는 빽빽한 줄마다 이스케이프 부담을 지며, 서빙되는 12B 모델은 측정상 이를 감당하지 못합니다: 같은 해답이 펜스 마크다운 블록으로 내보내면 6/6 파싱되고, JSON 문자열로 내보내면 0/6 파싱됩니다(닫는 괄호 누락, 리터럴 `\n`이 문장을 주석에 붙여 버림, 이어 붙인 줄의 공백 손실). 시스템 프롬프트는 모델에게 `write_file`의 `content`를 정확히 `@fenced`로 설정하라고 지시합니다. 그러면 프록시는 *제약 없는* 서브콜 하나(문법 없음, `response_format` 없음)를 보내고, 그 응답은 대상 확장자 태그(` ```python `, ` ```html `, …)가 붙은 단일 펜스 블록 안의 파일입니다. 엔벨로프는 JSON 제약 아래에 남고, 파일 본문만 평문으로 옮겨 갑니다. 메커니즘의 세부(`services/proxy/internal/app/loop.go::fetchFencedContent`): 서브콜은 일시적입니다(대화에 추가되지 않음 — 메인 스레드에서 보면 모델이 `@fenced`를 쓰고 쓰기가 일어난 것). 파일 자체에 ` ``` `가 들어 있는 응답은 마지막 펜스를 기준으로 추출하므로 내부 펜스가 파일을 자르지 않습니다. 센티널*과* 파일을 한 문자열에 넣은 모델은 센티널을 떼어 내고 인라인 내용을 사용합니다. 두 번 시도한 뒤에는 인라인 내용을 요청하며 되돌려 보냅니다. 모든 시도는 실제 생성이며 실행 합계에 집계됩니다(최종 `done` 페이로드의 `fenced_calls` / `fenced_tokens`, 시도마다 `fenced_fetch` 스테이지 이벤트 하나).
 
 반복 검출기는 **모델**이 보낸 호출의 지문을 뜹니다. 이 스냅샷은 펜스 해석이 가져온 본문으로 `parsed.Args`를 다시 쓰기 전, 도구 호출 분기의 맨 처음에서 찍습니다. 이 스냅샷이 없으면 검출기는 호출 자체가 바이트 단위로 같은데도 시도마다 다른 바이트를 읽게 되며, 고정된 실행에서 7턴짜리 `@fenced` 루프가 검출기가 침묵한 채 하네스 상한에 닿은 이유가 이것입니다. 가져온 바이트에는 영향이 없습니다: 그 바이트는 여전히 변경, 게이트, 원장, 쓰기를 이끕니다. 대상 경로는 서명을 위해 정리되므로 `solve.py`와 `./solve.py`가 별도의 예산을 얻을 수 없습니다.
 
@@ -232,7 +232,7 @@ flowchart LR
 
 ### 도구
 
-`services/proxy/tools.go`에 16개의 도구가 등록되어 있습니다. 각 도구의 내용과 제한, 읽기 전용 여부는 [API.md § Tools available to the agent loop](../../reference/API.md#tools-available-to-the-agent-loop)를 참고하세요.
+`services/proxy/internal/app/tools.go`에 16개의 도구가 등록되어 있습니다. 각 도구의 내용과 제한, 읽기 전용 여부는 [API.md § Tools available to the agent loop](../../reference/API.md#tools-available-to-the-agent-loop)를 참고하세요.
 
 ### 산출물 원장 (관찰 전용)
 
@@ -277,7 +277,7 @@ V3 출처 필드로 투영하며, 결과가 `ctx.Messages`로 가는 유일한 �
 거칩니다. 전체 구조체는 내부 용도로 여전히 모든 필드와 함께 직렬화됩니다. 투영은 허용 목록이므로,
 `ToolResult`에 추가된 필드는 누군가 달리 결정할 때까지 대화에 들어가지 않습니다.
 
-세 테스트가 `services/proxy/tool_result_contract_test.go`와 `services/proxy/tool_effect_test.go`에서
+세 테스트가 `services/proxy/internal/app/tool_result_contract_test.go`와 `services/proxy/internal/app/tool_effect_test.go`에서
 이 경계를 지킵니다: `TestEveryModelFacingSerializationSiteIsInventoried`는 새로운 직접 직렬화나
 목록에 없는 경로로 만든 도구 메시지에서 실패하고, `TestModelFacingTextCarriesNoClassification`은
 결과별로 투영된 바이트를 고정하며, `TestModelPromptBytesAreUnchangedByClassification`은 분류가 바뀐
@@ -366,18 +366,18 @@ V3 출처 필드로 투영하며, 결과가 `ctx.Messages`로 가는 유일한 �
 
 이후의 재현성 작업으로 미루고 여기서는 고치지 않은 것: 시스템 프롬프트는 도구 설명을 Go 맵 순서로
 렌더링하므로, 같은 코드로 두 번 실행하면 다른 프롬프트 바이트가 나옵니다. 이는 동작이 아니라 프롬프트
-재현성에만 영향을 줍니다. `services/proxy/tool_effect_test.go`의 `conversationBytes`가 시스템 메시지를
+재현성에만 영향을 줍니다. `services/proxy/internal/app/tool_effect_test.go`의 `conversationBytes`가 시스템 메시지를
 생략하는 것도 바로 이 때문입니다.
 
 `SessionWrites`는 모델이 준 원시 경로를 키로 하는 별도의 오래된 맵입니다.
-`services/proxy/loop_state.go`는 그로 인한 별칭 문제를 문서화합니다. 이 맵을 읽는 것은 write_file
+`services/proxy/internal/app/loop_state.go`는 그로 인한 별칭 문제를 문서화합니다. 이 맵을 읽는 것은 write_file
 덮어쓰기 가드의 "모델 자신의 초안" 개념, 활성 디버그 빠른 경로, 세션 매니페스트 안내, V3 프로젝트
 컨텍스트, 아티팩트 게이트의 표류 검사, 편집 도구의 관대함 게이트이며, 여기서 바뀌는 것은 없습니다.
 
 작업 계약의 검증 요구(`decideVerificationDemand`)는 묻는 대상인 코드 산출물을 원장에서 가져오며, 원장에는
 모든 변경 도구의 반영이 `recordLedgerEffect`에 의해 정규적으로 기록됩니다. 이에 답하는 커버리지 —
 통과한 실행이 어떤 경로를 지명했는지, 그 경로가 어떤 바이트를 담고 있었는지 — 는
-`services/proxy/guardrails.go`의 `changedPathsForCoverage`가 계산합니다: 세션 쓰기에 원장의 정규 코드
+`services/proxy/internal/app/guardrails.go`의 `changedPathsForCoverage`가 계산합니다: 세션 쓰기에 원장의 정규 코드
 산출물을 더한 것이므로, 요구와 그 커버리지가 하나의 신원을 읽습니다. 그 전에는 커버리지가 세션 쓰기
 맵만 읽었는데, `edit_file`과 `structural_edit`은 그 맵에 쓰지 않았고 전달된 후보에 대해서는 어떤 편집
 도구도 쓰지 않았으므로, `task_mode: work`의 모든 편집 작업이 모델이 무엇을 실행했든
@@ -402,12 +402,12 @@ V3 출처 필드로 투영하며, 결과가 `ctx.Messages`로 가는 유일한 �
 인접한 도구 이름의 임베딩이 경쟁하며, 설명이 이름보다 더 중요함).
 프록시에서 모델 독립적인 네 가지 방어책이 결합됩니다:
 
-1. **설명 재작성**(`services/proxy/tool_edit.go`, `services/proxy/tool_structural_edit.go`). edit_file의 설명은 파일 전체/함수
+1. **설명 재작성**(`services/proxy/internal/app/tool_edit.go`, `services/proxy/internal/app/tool_structural_edit.go`). edit_file의 설명은 파일 전체/함수
    전체 용도에 대해 경고하고, structural_edit의 설명은 >10줄 / 노드 전체 교체에
    필수(REQUIRED)라고 명시하며, write_file의 설명은 새(NEW) 파일 전용임을
    명시합니다.
-2. **조건부 GBNF 문법**(`services/proxy/tool_schema.go`,
-   `services/proxy/model_call.go:stepExclusions`). 5줄 초과의 기존 .py/.html/.htm
+2. **조건부 GBNF 문법**(`services/proxy/internal/app/tool_schema.go`,
+   `services/proxy/internal/app/model_call.go:stepExclusions`). 5줄 초과의 기존 .py/.html/.htm
    파일에 대한 write_file가 거부되면, 다음 LLM 호출은 도구 이름 생성
    규칙에서 edit_file와 write_file를 금지하는 GBNF 문법으로 제약됩니다.
    모델은 물리적으로 그것들을 내보낼 수 없습니다. 제한은 한 번의
@@ -444,7 +444,7 @@ V3 출처 필드로 투영하며, 결과가 `ctx.Messages`로 가는 유일한 �
 | T2 (기능) | 0 (무제한) | V3 파이프라인 실행 |
 | T3 (난이도 높음) | 0 (무제한) | V3 파이프라인 실행 |
 
-위 표의 두 열은 서로 다른 두 분류기에서 나오며, 표가 하나로 읽히는 것은 우연일 뿐입니다. **최대 턴**은 메시지 등급(`services/proxy/task_tier.go:classifyAgentTier`)에서 나오며, 이 등급은 사용자가 입력한 내용을 평가합니다. **동작**은 파일 등급(`services/proxy/tools.go:classifyFileTier`)에서 나오며, 이 등급은 편집 중인 파일을 평가하고 실제로 V3를 제어합니다 — 메시지 등급은 v3-service로 전달되지만 로그 한 줄에만 남습니다.
+위 표의 두 열은 서로 다른 두 분류기에서 나오며, 표가 하나로 읽히는 것은 우연일 뿐입니다. **최대 턴**은 메시지 등급(`services/proxy/internal/app/task_tier.go:classifyAgentTier`)에서 나오며, 이 등급은 사용자가 입력한 내용을 평가합니다. **동작**은 파일 등급(`services/proxy/internal/app/tools.go:classifyFileTier`)에서 나오며, 이 등급은 편집 중인 파일을 평가하고 실제로 V3를 제어합니다 — 메시지 등급은 v3-service로 전달되지만 로그 한 줄에만 남습니다.
 
 턴 상한이 T1/T2/T3에서 같으므로, 메시지 등급이 내릴 결정은 정확히 하나입니다: 대화형인지 아닌지. T0는 실행에 상한을 두고 Plan 모드를 건너뜁니다. 다른 모든 값은 똑같이 동작합니다. 그래서 무언가를 대화형으로 판단하려면 긍정적인 증거 — 12자 미만의 인사나 질문 형태 — 가 필요하며, 나머지는 모두 작업으로 취급합니다. 이 비대칭은 의도된 것입니다: 대화를 작업으로 잘못 읽으면 플래너 호출 하나를 낭비하지만, 작업을 대화로 잘못 읽으면 실제 요청에 상한을 걸고 계획을 건너뛰게 되어 요청이 실패합니다.
 
@@ -452,12 +452,12 @@ V3 출처 필드로 투영하며, 결과가 `ctx.Messages`로 가는 유일한 �
 
 같은 비대칭이 질문 형태 검사(`isQuestionMessage`)도 지배합니다. 절을 끝내는 `?`(뒤에 끝, 공백 또는 따옴표가 오고, 괄호와 백틱 밖에 있음)는 질문이며, URL 쿼리나 정규식 안의 `?`는 질문이 아닙니다. 의문사로 시작하는 문장은 그 의문사가 온전한 단어일 때 질문입니다 — "Whole-number…", "Whenever…", "However…"는 질문이 아닙니다 — 그리고 "when"/"where"로 시작하는 문장은 도치되어야 합니다("when does"). "When the timer hits zero, …"는 요청을 시작하는 문장이기 때문입니다. 첫머리의 "do"에는 대명사가 필요하므로("do you"), "Do the same for the /users route"는 작업입니다. 메시지 중간의 조동사에는 주어가 필요하므로 ". Do not hardcode the answer."는 질문이 아닙니다. 메시지 중간의 절을 여는 의문사는 그 절이 도치된 경우에만 — 조동사가 의문사 뒤에 오는 경우, 예: "what DOES x do" — 질문입니다. 관계절은 주어-동사 순서를 유지하며("what it is", "where it was found") 서술적이므로, "post an item (what it is, where it was found)" 같은 필드 목록은 질문으로 읽히지 않습니다. 과거형 조동사는 같은 비대칭에 따라 도치 집합에서 뺐습니다: 빌드 요청에 상한이 걸려서는 안 되며, `?`가 없는 드문 과거형 중간 절 질문을 놓쳐도 플래너 호출 하나의 비용만 듭니다. 이 처리가 닫은 실패는 질문처럼 읽히는 빌드 요청이었습니다: 분실물 웹 앱 요청이 "where it was found"라는 말 때문에 대화형으로 분류되어 상한이 걸리고 계획 없이 실행되었습니다.
 
-등급 상한은 0(무제한)입니다. 언제 중단할지는 루프 내부의 디텍터 스택이 결정합니다: lens 회귀(`agent_lens_intervention`), 추론 반복(`agent_reasoning_intervention`), 도구 호출 반복(`agent_repeat_intervention`), 경로 인식 에러 브레이커, 동작 없는 done 게이트, 주장 검증 게이트, 증거 게이트, 계획 준수 임계값, 빈 응답 폴백. 운영자는 일회성 "앱 전체 수정" 프롬프트를 위해 `ATLAS_MAX_TURNS=<n>`으로 재정의할 수 있습니다 — `services/proxy/loop_state.go::envOverrideMaxTurns` 참고.
+등급 상한은 0(무제한)입니다. 언제 중단할지는 루프 내부의 디텍터 스택이 결정합니다: lens 회귀(`agent_lens_intervention`), 추론 반복(`agent_reasoning_intervention`), 도구 호출 반복(`agent_repeat_intervention`), 경로 인식 에러 브레이커, 동작 없는 done 게이트, 주장 검증 게이트, 증거 게이트, 계획 준수 임계값, 빈 응답 폴백. 운영자는 일회성 "앱 전체 수정" 프롬프트를 위해 `ATLAS_MAX_TURNS=<n>`으로 재정의할 수 있습니다 — `services/proxy/internal/app/loop_state.go::envOverrideMaxTurns` 참고.
 
 그중 세 게이트는 요청이 어떻게 표현되었는지가 아니라 실행이 관찰한 것으로 발동 여부를 결정합니다. 요청 표현은 어떤 목록으로도 완성할 수 없는 열린 어휘이기 때문입니다:
 
 - **검증 게이트** — 사용자가 수리를 요청했을 때, *또는* 실행, 테스트, 검사가 실제로 0이 아닌 값으로 종료하고 그 뒤로 아무것도 통과하지 않았을 때 `done`을 막습니다. 두 번째 조건은 모델이 스스로 만들어 낸 실패하는 테스트를 잡아내며, 이는 사용자 메시지를 어떻게 읽어도 예측할 수 없었던 것입니다. 나중의 실패는 이전의 통과를 되돌립니다. 실패한 린트나 파스는 같은 검사가 다시 통과하거나 실행이 통과하면 해제되며, 린트는 실패한 테스트를 결코 해제하지 않습니다. 프로그램이나 그 테스트를 실행했거나, HTTP 오류가 실패로 이어지는 방식(`curl -f`, 또는 본문을 `grep`으로 파이프)으로 페이지를 가져온 실행만 검증으로 셉니다. 그것도 명령줄이 그 부분의 종료 상태를 보고할 때만입니다(`services/proxy/internal/shellcmd/command_evidence.go`). 파스, 린트, 빌드, `--version`은 검증이 아니며, `pytest | tail`, `pytest || true`, `app.py; echo`, `app.py &`도 마찬가지입니다. 게이트는 그런 명령을 이유와 함께 모델에게 되짚어 줍니다. 이 게이트의 원장은 불리언이 아니라 아티팩트에 묶여 있습니다. 모든 검증 실행은 `VerificationRecord` — 명령줄, 증거 종류, 실패 여부, stdin 계약, 검증 세그먼트가 지명한 각 세션 작성 파일의 sha256 — 를 추가하며, 종료 시 그 파일들을 다시 해시하여 디스크의 바이트가 더 이상 실행이 보증한 바이트가 아니면 `done`을 되돌려 보냅니다. 프롬프트가 출력을 요구하는 작업에서 아무것도 출력하지 않은 성공 실행은 집계되지 않고 *실패한 검증으로 고정됩니다*. `prog < file`로만 실행된 프로그램(리디렉트는 세그먼트 어디에 있어도 인식되며, `cat file | prog`도 마찬가지)은 호출자가 쓰지 않을 수 있는 계약 아래에서 검증된 것이므로, 종료 시 단독 실행 한 번을 요구합니다. 파스 경고와 함께 반영된 쓰기는 그 경로를 실행 대기로 표시합니다: 명령이 실제로 그 파일을 *실행하려고 시도할* 때까지 — 인터프리터 호출 또는 `./file` — 그 경로에 대한 이후의 쓰기와 편집은 되돌려 보내집니다. 파일을 지명하는 `cat`/`grep`/`ls`는 아무것도 증명하지 않고 아무것도 해제하지 않으며, `python -m py_compile` 같은 파스도 마찬가지입니다. 그리고 실패 실행이 연속 두 번을 넘으면, 루프는 모델이 같은 텍스트로 `done`을 시도할 때까지 기다리지 않고 즉시 새로 다시 쓰라는 조언(패치를 멈추고 처음부터 다시 쓰기)을 주입합니다.
-- **동작 없는 done 게이트** — 요청이 상태 변경을 요구하는데 디스크에 아무것도 반영되지 않았을 때 `done`을 막습니다. **클라이언트가 검증된 `task_contract`를 보내면, 그 `task_mode`가 이 질문을 결정합니다**: `work`는 상태 변경이 필요하다는 뜻이고, `question`은 필요하지 않다는 뜻이며, 메시지의 표현은 더 이상 어느 쪽도 뒤집지 못합니다. 계약을 보내지 않으면 레거시 휴리스틱이 이전과 똑같이 결정합니다 — 명시적인 행동 표현이 있을 때, *또는* 대화형이 아닌 메시지에서 모델이 프로젝트를 열었는데 아무것도 바뀌지 않았을 때 막습니다. 하나의 헬퍼가 이 선택을 소유하며(`services/proxy/guardrails.go::decideActionDemand`), 두 행동 요구 호출 지점이 모두 이를 사용합니다. 휴리스틱은 그곳에서 한 번 평가되며, 계약이 결정하는 경우에도 비교를 위해 기록됩니다. 이로써 의도 목록에 없는 동사도 다룹니다(`remove the debug logging`은 어느 것과도 일치하지 않음). 반면 질문은 면제됩니다: 질문은 대화형이며, 파일을 읽고 아무것도 쓰지 않는 것이 질문에 대한 올바른 답이기 때문입니다.
+- **동작 없는 done 게이트** — 요청이 상태 변경을 요구하는데 디스크에 아무것도 반영되지 않았을 때 `done`을 막습니다. **클라이언트가 검증된 `task_contract`를 보내면, 그 `task_mode`가 이 질문을 결정합니다**: `work`는 상태 변경이 필요하다는 뜻이고, `question`은 필요하지 않다는 뜻이며, 메시지의 표현은 더 이상 어느 쪽도 뒤집지 못합니다. 계약을 보내지 않으면 레거시 휴리스틱이 이전과 똑같이 결정합니다 — 명시적인 행동 표현이 있을 때, *또는* 대화형이 아닌 메시지에서 모델이 프로젝트를 열었는데 아무것도 바뀌지 않았을 때 막습니다. 하나의 헬퍼가 이 선택을 소유하며(`services/proxy/internal/app/guardrails.go::decideActionDemand`), 두 행동 요구 호출 지점이 모두 이를 사용합니다. 휴리스틱은 그곳에서 한 번 평가되며, 계약이 결정하는 경우에도 비교를 위해 기록됩니다. 이로써 의도 목록에 없는 동사도 다룹니다(`remove the debug logging`은 어느 것과도 일치하지 않음). 반면 질문은 면제됩니다: 질문은 대화형이며, 파일을 읽고 아무것도 쓰지 않는 것이 질문에 대한 올바른 답이기 때문입니다.
 - **증거 게이트** — 실행이 내용을 한 번도 본 적 없는 워크스페이스 파일을 응답이 지명하는 종료를 막습니다. 쓰기 도구는 이미 먼저 읽지 않은 경로의 편집을 거부합니다. 이 게이트는 같은 규칙을, 응답 자체가 산출물인 답변에 적용합니다. 이 게이트는 `AgentContext.BodySeen`을 키로 삼으며, 이는 실제로 모델 앞에 놓인 파일을 기록합니다 — 의도적으로 `FilesRead`보다 좁습니다. `outline_file`은 최신성 추적을 위해 파일의 소스 전체를 캐시하지만 모델에게는 시그니처와 줄 범위만 보여 주기 때문입니다. 파일을 읽거나 직접 작성했으면 게이트가 해제됩니다.
 
 #### 클라이언트 작업 모드
@@ -505,7 +505,7 @@ V3 출처 필드로 투영하며, 결과가 `ctx.Messages`로 가는 유일한 �
 
 증거 게이트가 있는 이유는 위의 동작 없는 done 게이트의 면제 — 질문은 대화형이므로 결코 게이트에 걸리지 않음 — 때문에 답변 경로에 완료 검사가 전혀 없었기 때문입니다. 세 모듈에 걸친 진단 질문으로 측정한 결과: 12개 세션에서 모델은 `list_directory`를 실행하고, 정확히 한 파일의 개요를 본 뒤 답했으며, 본문은 한 번도 읽지 않았습니다. 결과는 모델이 살펴본 무언가가 아니라 어떤 파일 이름을 추측했는지를 따라갔습니다(`scoring.py` 11/11 오답, `planning.py` 1/1 정답). 프롬프트에 "scored"라는 단어가 들어 있었기 때문입니다. 한 응답은 본 적도 없는 파일의 "lines 134-142"를 인용했습니다.
 
-분류기는 `services/proxy/tools.go`(`classifyFileTier`)에 있고, 로직 패턴 매처는 같은 파일(`hasLogicIndicators`)에 있습니다.
+분류기는 `services/proxy/internal/app/tools.go`(`classifyFileTier`)에 있고, 로직 패턴 매처는 같은 파일(`hasLogicIndicators`)에 있습니다.
 
 **항상 T1 (직접 쓰기):**
 - 이름으로 식별되는 설정 파일(예: `package.json`, `go.mod`, `pyproject.toml`, `dockerfile`, `docker-compose.*`)
@@ -515,12 +515,12 @@ V3 출처 필드로 투영하며, 결과가 `ctx.Messages`로 가는 유일한 �
 - **10줄** 미만의 사소하게 작은 파일(그 크기에서는 V3가 의미 있게 다양화할 것이 없음)
 - 로직 지표가 없는 미지의 확장자
 
-정확한 설정 파일 목록과 확장자 집합은 `services/proxy/tools.go:classifyFileTier`에 있습니다.
+정확한 설정 파일 목록과 확장자 집합은 `services/proxy/internal/app/tools.go:classifyFileTier`에 있습니다.
 
-`edit_file`, `insert_after`, `replace_lines`는 `runEditPipeline`(`services/proxy/tool_write_v3.go`)을 통해 파이프라인에 들어가며, 이는 `deliverEditCandidate`에서 끝납니다. `write_file`은 `writeFileWithV3`를 통해 들어가며, 이 함수는 V3 서비스의 생성 스트림을 직접 호출합니다. `structural_edit`은 먼저 스플라이스를 V3 서비스의 `/internal/structural_edit`으로 보낸 다음, 같은 등급 결정을 스스로 내리고 결과를 `deliverEditCandidate`에 넘깁니다. `runEditPipeline`도 거기서 끝납니다. `runEditPipeline`과 `structural_edit`에서 등급 분류는 `max(oldTier, newTier)`를 사용하므로, T2 이상의 파일을 T1 스텁으로 줄이는 파괴적 편집도 여전히 자격을 충족합니다. 파이프라인을 건너뛰는 편집 도구는 등급과 상관없이 후보 생성을 받지 못하며, 이것이 바로 등급 시스템이 막으려고 존재하는 일입니다. `tests/contracts/api/test_write_gate_coverage.py`는 다섯 쓰기 도구 각각이 파이프라인에 들어가 같은 게이트 — 미해결 호출 검사, 임베드 스크립트 게이트, 중복 main 가드 — 를 실행하는지 단언합니다.
+`edit_file`, `insert_after`, `replace_lines`는 `runEditPipeline`(`services/proxy/internal/app/tool_write_v3.go`)을 통해 파이프라인에 들어가며, 이는 `deliverEditCandidate`에서 끝납니다. `write_file`은 `writeFileWithV3`를 통해 들어가며, 이 함수는 V3 서비스의 생성 스트림을 직접 호출합니다. `structural_edit`은 먼저 스플라이스를 V3 서비스의 `/internal/structural_edit`으로 보낸 다음, 같은 등급 결정을 스스로 내리고 결과를 `deliverEditCandidate`에 넘깁니다. `runEditPipeline`도 거기서 끝납니다. `runEditPipeline`과 `structural_edit`에서 등급 분류는 `max(oldTier, newTier)`를 사용하므로, T2 이상의 파일을 T1 스텁으로 줄이는 파괴적 편집도 여전히 자격을 충족합니다. 파이프라인을 건너뛰는 편집 도구는 등급과 상관없이 후보 생성을 받지 못하며, 이것이 바로 등급 시스템이 막으려고 존재하는 일입니다. `tests/contracts/api/test_write_gate_coverage.py`는 다섯 쓰기 도구 각각이 파이프라인에 들어가 같은 게이트 — 미해결 호출 검사, 임베드 스크립트 게이트, 중복 main 가드 — 를 실행하는지 단언합니다.
 
 **T2 (V3 파이프라인)** — 파일이 ≥10줄이고 다음 중 하나에 해당하면 자격을 충족합니다:
-- `hasLogicIndicators(content)`가 true 반환 — 함수/메서드 정의, 제어 흐름, 에러 처리, Flask/FastAPI/Django 라우팅, Express/Node API, React 상태/데이터, 검증, 데이터베이스 호출, JSX/React 컴포넌트 패턴, 임포트를 포괄하는 패턴 패밀리 전반에서 **2개 이상 일치**(리터럴 토큰 목록은 `services/proxy/tools.go:hasLogicIndicators`에 있음)
+- `hasLogicIndicators(content)`가 true 반환 — 함수/메서드 정의, 제어 흐름, 에러 처리, Flask/FastAPI/Django 라우팅, Express/Node API, React 상태/데이터, 검증, 데이터베이스 호출, JSX/React 컴포넌트 패턴, 임포트를 포괄하는 패턴 패밀리 전반에서 **2개 이상 일치**(리터럴 토큰 목록은 `services/proxy/internal/app/tools.go:hasLogicIndicators`에 있음)
 - 또는 파일이 인식되는 소스 코드/마크업 확장자(`.py`, `.go`, `.rs`, `.ts`, `.tsx`, `.js`, `.jsx`, `.html`, `.htm`, …)를 가지고 있고 로직 지표가 발동하지 않은 경우 — T2에서 의심의 혜택을 받습니다(12줄짜리 컴포넌트 셸 같은 최소하지만 실제인 파일을 포괄)
 
 **T3 (난이도 높음)** — 현재 분류기는 단독으로 T3를 내보내지 않습니다. 순환 복잡도(cyclomatic-complexity) 리파이너(`refineTierWithCC`, GH #39 항목 2의 `/internal/cyclomatic_complexity` 경유)가 McCabe CC를 기준으로 *상향*합니다: CC ≥ 8이면 T2로(T1에서 올라오는 경우 포함), CC ≥ 16이면 T3로. 절대 하향하지 않습니다.
@@ -588,9 +588,9 @@ API 계약은 [API.md § POST /v3/plan](../../reference/API.md#post-v3plan)에 �
 |---|---|
 | `services/proxy/internal/v3client/client.go` | `PlanStreaming(reqCtx, v3URL, requestID, req, onProgress)` — SSE 스트림을 열고, 진행 이벤트를 콜백으로 전달하며, `event: result` 프레임에서 최종 `Plan`을 반환합니다. `reqCtx`가 에이전트의 요청 컨텍스트를 묶으므로 `/cancel`은 진행 중인 계획을 중단합니다. V3 파이프라인 실행용 `GenerateStreaming`과 같은 구조입니다. |
 | `services/proxy/internal/wire/` | `V3PlanRequest`(`v3.go`), `Plan`, `PlanStep`(`messages.go`) 타입. |
-| `services/proxy/loop_state.go` | `AgentContext`에 `Plan`, `PlanStepsSatisfied[]`, `PlanOffStreak`, `PlanRevisions`가 추가됩니다. |
-| `services/proxy/plan_generation.go`, `services/proxy/internal/projectcontext/sample.go` | `projectcontext.Sample()`는 플래너를 위해 우선 파일(app.py, templates/index.html, package.json, …)을 순회합니다. `shouldGeneratePlan()`은 티어, 메시지 길이, 읽기 전용 요청 여부로 판단합니다. `generatePlan()`은 브리지를 실행하고, 토큰별 잡음을 버리며, 전체 단계 목록과 함께 `plan_loaded`를 내보냅니다. |
-| `services/proxy/plan_gates.go` | `matchPlanStep()`(도구 이름과 경로 접미사의 느슨한 일치), `recordPlanAdherence()`(도구 호출별 집계. 어떤 단계와도 일치하지 않는 정찰 호출 — `read_file`/`list_directory`/`find_file`/`search_files` — 은 중립이며 `off_streak`를 늘리지 않습니다), `revisePlan()`(`FilesRead`를 추가 컨텍스트로 넘겨 다시 생성). |
+| `services/proxy/internal/app/loop_state.go` | `AgentContext`에 `Plan`, `PlanStepsSatisfied[]`, `PlanOffStreak`, `PlanRevisions`가 추가됩니다. |
+| `services/proxy/internal/app/plan_generation.go`, `services/proxy/internal/projectcontext/sample.go` | `projectcontext.Sample()`는 플래너를 위해 우선 파일(app.py, templates/index.html, package.json, …)을 순회합니다. `shouldGeneratePlan()`은 티어, 메시지 길이, 읽기 전용 요청 여부로 판단합니다. `generatePlan()`은 브리지를 실행하고, 토큰별 잡음을 버리며, 전체 단계 목록과 함께 `plan_loaded`를 내보냅니다. |
+| `services/proxy/internal/app/plan_gates.go` | `matchPlanStep()`(도구 이름과 경로 접미사의 느슨한 일치), `recordPlanAdherence()`(도구 호출별 집계. 어떤 단계와도 일치하지 않는 정찰 호출 — `read_file`/`list_directory`/`find_file`/`search_files` — 은 중립이며 `off_streak`를 늘리지 않습니다), `revisePlan()`(`FilesRead`를 추가 컨텍스트로 넘겨 다시 생성). |
 
 시스템 프롬프트 렌더링은 `buildSystemPrompt`에서 이루어집니다. 계획 단계는 번호 목록으로 렌더링되고 `✓` 표시는 verify 단계에만 붙으며, verify 단계는 검증 게이트가 `done`에 대해 지키는 "수정 증거" 단계로 명시됩니다. (단계별 ☐/✓/⚐ 글리프는 TUI 렌더링에 속합니다. 아래를 참고하세요.)
 
@@ -608,7 +608,7 @@ API 계약은 [API.md § POST /v3/plan](../../reference/API.md#post-v3plan)에 �
 
 #### 튜닝 항목
 
-`services/proxy/plan_gates.go`에 정의:
+`services/proxy/internal/app/plan_gates.go`에 정의:
 
 | 상수 | 기본값 | 이유 |
 |---|---|---|
@@ -643,14 +643,14 @@ API 계약은 [API.md § POST /v3/plan](../../reference/API.md#post-v3plan)에 �
 | 계층 | 파일 | 다루는 내용 |
 |---|---|---|
 | v3-service 계획 엔드포인트 | `tests/v3-service/pipeline/test_plan_scoring.py`(채점기). 파서는 `curl /v3/plan`으로 스모크 테스트 | 채점기는 프로그램, 그 테스트 또는 프로브를 실행하는 verify 단계에 점수를 주고, 정적 검사(빌드, 파싱, 린터)와 정찰 호출에는 주지 않습니다. 파서의 허용 범위(펜스, 산문 머리말, 중괄호 중첩)는 후보 3개 샘플러로 확인합니다 |
-| 프록시 브리지 | `services/proxy/internal/v3client/client_test.go`, 스테이지 라우팅은 `services/proxy/tool_write_v3_bridge_test.go` | SSE 파싱, 결과 누락 오류, 스테이지 라우팅 |
-| 프록시 훅 | `services/proxy/loop_test.go` | 우선 파일 선택, 잘라내기 임계값, 폴백 순회, 티어와 길이 판단 |
-| 프록시 준수 | `services/proxy/plan_gates_test.go`, 시스템 프롬프트는 `services/proxy/gates_test.go` | 일치 로직(도구 이름 + 경로 접미사), 실패한 호출 제외, 수정 횟수 상한, 시스템 프롬프트 렌더링 |
+| 프록시 브리지 | `services/proxy/internal/v3client/client_test.go`, 스테이지 라우팅은 `services/proxy/internal/app/tool_write_v3_bridge_test.go` | SSE 파싱, 결과 누락 오류, 스테이지 라우팅 |
+| 프록시 훅 | `services/proxy/internal/app/loop_test.go` | 우선 파일 선택, 잘라내기 임계값, 폴백 순회, 티어와 길이 판단 |
+| 프록시 준수 | `services/proxy/internal/app/plan_gates_test.go`, 시스템 프롬프트는 `services/proxy/internal/app/gates_test.go` | 일치 로직(도구 이름 + 경로 접미사), 실패한 호출 제외, 수정 횟수 상한, 시스템 프롬프트 렌더링 |
 | TUI 렌더링 | `clients/tui/internal/pipelinestate/plan_test.go`, 핸들러는 `clients/tui/internal/app/state_plan_test.go` | `PlanView` 상태 전이, 수정 시 plan_loaded 교체, 계획 외 호출의 무음 처리 |
 
 ### 안전 제한
 
-운영자 대상 제한과 이를 튜닝하는 손잡이들입니다. 내부 스티어링 가드(트레이스백 위치 파악, 누락 모듈/누락 명령/망가진 인라인 스크립트/대소문자 불일치 스티어, 심볼 그라운딩, no-op/빈 콘텐츠/구문 게이트, doctype 제거)는 `services/proxy/guardrails*.go`와 `services/proxy/loop_*.go`에 있습니다. 구조 게이트(`edit_file`, `structural_edit`, 그리고 모든 `write_file` 분기에서 해석되지 않는 직접 호출 — 잠재적 `NameError` — 을 들여오는 `.py` 쓰기를 거부합니다. 모든 요청에서 실행되며, 이를 끄는 요청 필드는 없습니다)는 `services/proxy/gates.go`에 있습니다. 임베드 스크립트 게이트도 그곳에 있습니다: 이 게이트는 `<script>`/`<style>` 블록 안의 JavaScript를 파싱하고(CSS는 중괄호 균형을 검사), 대상은 `.html`/`.htm`/`.jinja`/`.jinja2` 파일 **그리고 Python 문자열 리터럴 안**(`render_template_string` 형태)입니다. 검사는 v3-service `POST /internal/embedded_script_check`를 통해 수행하며, 이를 새로 망가뜨리는 변경을 거부합니다. 이 게이트가 있는 이유는 다른 모든 게이트가 구조적으로 그 코드를 보지 못하기 때문입니다: 2026-08-01 도그푸딩 세션은 Flask 앱의 인라인 `<script>`에 엉뚱한 `)`를 남겼고, Python은 컴파일되고 서버는 시작되었으며 `curl /`은 200을 돌려주었습니다. 그래서 검증 게이트는 통과했고, 페이지가 브라우저에서 죽어 있는 동안 `done`이 받아들여졌습니다. 구문 게이트와 같은 정상→망가짐 규칙(아직 망가진 수리 진행 중 상태는 허용)과 같은 소프트 실패 태도를 따릅니다: 닿을 수 없는 서비스, 누락된 문법, 모호한 블록(템플릿 문장 태그, `<script src>`, JS가 아닌 `type`, 이스케이프된 Python 문자열)은 발견 사항을 내지 않으며, 결코 쓰기를 막지 않습니다. 누락 명령 스티어는 `command not found` 셸 오류에서 발동합니다: 샌드박스는 읽기 전용 베이스 위의 비루트 환경이므로 없는 바이너리를 런타임에 apt로 설치할 수 없습니다. 스티어는 그렇다고 말하고, 모델이 반복 차단기에 걸릴 때까지 다시 실행하게 두는 대신 pip로 설치할 수 있는 대안이나 미리 설치된 툴체인을 가리킵니다. 망가진 인라인 스크립트 스티어는 `python -c` 검증 한 줄 명령이 `-c` 인자 자체의 SyntaxError(여러 문장의 `def`/`for` 본문을 한 줄에 몰아넣음)로 실패할 때 발동합니다: 해답 파일은 올바르고 검증 명령만 잘못된 형식일 수 있으므로, 파싱할 수 없는 한 줄 명령을 다시 실행하는 대신 테스트를 `.py` 파일로 옮기라고 모델에게 안내합니다.
+운영자 대상 제한과 이를 튜닝하는 손잡이들입니다. 내부 스티어링 가드(트레이스백 위치 파악, 누락 모듈/누락 명령/망가진 인라인 스크립트/대소문자 불일치 스티어, 심볼 그라운딩, no-op/빈 콘텐츠/구문 게이트, doctype 제거)는 `services/proxy/guardrails*.go`와 `services/proxy/loop_*.go`에 있습니다. 구조 게이트(`edit_file`, `structural_edit`, 그리고 모든 `write_file` 분기에서 해석되지 않는 직접 호출 — 잠재적 `NameError` — 을 들여오는 `.py` 쓰기를 거부합니다. 모든 요청에서 실행되며, 이를 끄는 요청 필드는 없습니다)는 `services/proxy/internal/app/gates.go`에 있습니다. 임베드 스크립트 게이트도 그곳에 있습니다: 이 게이트는 `<script>`/`<style>` 블록 안의 JavaScript를 파싱하고(CSS는 중괄호 균형을 검사), 대상은 `.html`/`.htm`/`.jinja`/`.jinja2` 파일 **그리고 Python 문자열 리터럴 안**(`render_template_string` 형태)입니다. 검사는 v3-service `POST /internal/embedded_script_check`를 통해 수행하며, 이를 새로 망가뜨리는 변경을 거부합니다. 이 게이트가 있는 이유는 다른 모든 게이트가 구조적으로 그 코드를 보지 못하기 때문입니다: 2026-08-01 도그푸딩 세션은 Flask 앱의 인라인 `<script>`에 엉뚱한 `)`를 남겼고, Python은 컴파일되고 서버는 시작되었으며 `curl /`은 200을 돌려주었습니다. 그래서 검증 게이트는 통과했고, 페이지가 브라우저에서 죽어 있는 동안 `done`이 받아들여졌습니다. 구문 게이트와 같은 정상→망가짐 규칙(아직 망가진 수리 진행 중 상태는 허용)과 같은 소프트 실패 태도를 따릅니다: 닿을 수 없는 서비스, 누락된 문법, 모호한 블록(템플릿 문장 태그, `<script src>`, JS가 아닌 `type`, 이스케이프된 Python 문자열)은 발견 사항을 내지 않으며, 결코 쓰기를 막지 않습니다. 누락 명령 스티어는 `command not found` 셸 오류에서 발동합니다: 샌드박스는 읽기 전용 베이스 위의 비루트 환경이므로 없는 바이너리를 런타임에 apt로 설치할 수 없습니다. 스티어는 그렇다고 말하고, 모델이 반복 차단기에 걸릴 때까지 다시 실행하게 두는 대신 pip로 설치할 수 있는 대안이나 미리 설치된 툴체인을 가리킵니다. 망가진 인라인 스크립트 스티어는 `python -c` 검증 한 줄 명령이 `-c` 인자 자체의 SyntaxError(여러 문장의 `def`/`for` 본문을 한 줄에 몰아넣음)로 실패할 때 발동합니다: 해답 파일은 올바르고 검증 명령만 잘못된 형식일 수 있으므로, 파싱할 수 없는 한 줄 명령을 다시 실행하는 대신 테스트를 `.py` 파일로 옮기라고 모델에게 안내합니다.
 
 **활성 반복 중의 빠른 경로 쓰기.** V3는 T2 이상 파일의 *첫* 쓰기(기준선 생성)에서 실행됩니다. 하지만 모델이 파일을 썼고 방금 그 파일이 실행에서 실패하는 것을 보았다면, 다음 쓰기는 편집-테스트-수정 루프의 표적 수정입니다 — V3를 건너뛰고(구문 및 구조 게이트는 여전히 적용) 직접 씁니다. V3의 전체 파이프라인은 호출마다 수 분이 걸리며, 디버깅 중인 파일에서는 쓸 만한 결과 없이 끝나 어차피 폴백하는 일이 잦습니다. 반복마다 그 지연을 치르면 루프는 몇 사이클밖에 돌지 못합니다. 빠른 경로는 `SessionWrites[path]`와, 그 파일을 참조하는 가장 최근의 실패한 실행을 기준으로 합니다.
 
@@ -663,16 +663,16 @@ API 계약은 [API.md § POST /v3/plan](../../reference/API.md#post-v3plan)에 �
 | V3 대화형 벽시계 상한 | 단일 V3 파이프라인 호출은 `ATLAS_V3_TIMEOUT`(기본 300초)으로 상한; 타임아웃 시 프록시는 모델의 구문 및 구조 게이트를 통과한 내용으로 폴백하고, 실행의 최종 요약에 그 파일을 밝힘(`0`은 비활성화) | 긴 수리 정체 상황에서도 대화형 세션의 응답성 유지 |
 | 턴별 추론 예산 | ~6144 추론 토큰 후 스트림을 끊음(`ATLAS_REASONING_BUDGET`, 0은 비활성화); 복구는 내장된 tool_call을 추출하거나 다시 프롬프트함 | 추론 나선을 제한 |
 | 기존 파일에 대한 write_file | 파일이 5줄 초과면 거부; .py/.html/.htm에서는 단계별 문법 게이트가 `structural_edit`로 스티어 | 정밀 편집(`edit_file`) 또는 노드 전체 편집(`structural_edit`)을 강제 |
-| 의심스러운 축소 가드 | `oldSize >= 100B`이고 `newSize < 64B`일 때 `structural_edit`/`edit_file` 거부(`services/proxy/guardrails_write.go::validateNotSuspiciouslyShrunk`) | 파괴적 스텁 재작성이 디스크에 닿기 전에 포착 |
+| 의심스러운 축소 가드 | `oldSize >= 100B`이고 `newSize < 64B`일 때 `structural_edit`/`edit_file` 거부(`services/proxy/internal/app/guardrails_write.go::validateNotSuspiciouslyShrunk`) | 파괴적 스텁 재작성이 디스크에 닿기 전에 포착 |
 | structural_edit 폭주 콘텐츠 가드 | `content` > 8 KB AND > 파일 크기의 4배일 때 거부 | 교체 노드로 방출된 추론 누출 덩어리를 포착 |
 | structural_edit 노드 크기 전제 조건 | 교체 내용이 노드의 5배 이상이고 30줄 이상 더 크며, 파일에 이미 있는 내용을 중복하거나 파일에 20줄 이상의 모듈 수준 문자열 상수가 있을 때 거부(`v3-service` `_replacement_dwarfs_node`) | 작은 선택자를 통해 끼워 넣은 덩어리는 노드가 담고 있던 것을 지움. 관찰된 한 세션은 `@app.route`가 하나도 없는, 그래도 파싱은 되는 Flask 앱을 남김 |
-| 중복 진입점 가드 | 이전에 최대 하나였던 최상위 `if __name__ == "__main__":`를 둘 이상 남기는 `.py` 쓰기를 거부(`services/proxy/gates_edit_requests.go::duplicateMainGuard`) | 노드 선택자를 통해 끼워 넣은 파일 전체 덩어리의 징후. 파싱되고 실행되지만, 처음으로 막는 `app.run()` 뒤의 모든 것이 죽은 코드가 됨 |
+| 중복 진입점 가드 | 이전에 최대 하나였던 최상위 `if __name__ == "__main__":`를 둘 이상 남기는 `.py` 쓰기를 거부(`services/proxy/internal/app/gates_edit_requests.go::duplicateMainGuard`) | 노드 선택자를 통해 끼워 넣은 파일 전체 덩어리의 징후. 파싱되고 실행되지만, 처음으로 막는 `app.run()` 뒤의 모든 것이 죽은 코드가 됨 |
 | 중복 렉시컬 바인딩 가드 | 한 스코프에서 `let`/`const`가 같은 이름을 두 번 선언하게 남기는 편집을 거부(`v3-service` `embedded_script_check`) | 조기 SyntaxError: 브라우저가 스크립트 전체를 거부하므로, 서버는 여전히 200을 돌려주는데 페이지의 모든 핸들러가 죽음. tree-sitter는 이를 파싱하므로 구문 검사로는 볼 수 없음 |
-| 멈춘 렌더 루프 가드 | 반복 타이머가 구동하던 함수를 정확히 한 번만 예약되고 다시 걸리지 않게 남기는 편집을 거부(편집 전 파일과 함께 `v3-service` `embedded_script_check`; `services/proxy/gates.go::embeddedScriptGate`) | JavaScript는 파싱되고, 서버는 시작되며, 페이지는 200을 돌려주므로, 페이지가 한 프레임 뒤에 멈추는 동안 다른 모든 검사가 통과함 |
-| V3 범위 밖 재작성 가드 | 호출자의 편집이 건드리지 않은 줄을 빠뜨린 V3 후보를 버리고 호출자의 내용을 유지(`services/proxy/gates.go::v3RewroteBeyondTheEdit`) | V3는 *파일* 전체를 개선하므로, 작은 파일에서는 편집이 건드리지 않은 모든 것을 다시 입력함. 한 라이브 세션은 `#e94562`를 `#e94162`로, `id="msg"`를 `id=" msg"`로 돌려받았으며, 둘 다 구문 오류가 아님 |
+| 멈춘 렌더 루프 가드 | 반복 타이머가 구동하던 함수를 정확히 한 번만 예약되고 다시 걸리지 않게 남기는 편집을 거부(편집 전 파일과 함께 `v3-service` `embedded_script_check`; `services/proxy/internal/app/gates.go::embeddedScriptGate`) | JavaScript는 파싱되고, 서버는 시작되며, 페이지는 200을 돌려주므로, 페이지가 한 프레임 뒤에 멈추는 동안 다른 모든 검사가 통과함 |
+| V3 범위 밖 재작성 가드 | 호출자의 편집이 건드리지 않은 줄을 빠뜨린 V3 후보를 버리고 호출자의 내용을 유지(`services/proxy/internal/app/gates.go::v3RewroteBeyondTheEdit`) | V3는 *파일* 전체를 개선하므로, 작은 파일에서는 편집이 건드리지 않은 모든 것을 다시 입력함. 한 라이브 세션은 `#e94562`를 `#e94162`로, `id="msg"`를 `id=" msg"`로 돌려받았으며, 둘 다 구문 오류가 아님 |
 | 에러 루프 브레이커 | **같은 경로에서** **같은 종류의** 연속 3회 실패(메시지 골격: 숫자, 따옴표로 묶인 구간, 경로를 제거). 다른 거부가 오면 연속 횟수가 초기화됨. 서로 다른 거부 세 번은 루프가 아니라 수렴하는 모델이기 때문 | 정당한 반복을 죽이지 않으면서 폭주하는 실패 사이클 중단 |
 | 실패 호출 상한 | 실행당 실패한 도구 호출 12회(`maxTotalFailures`) | 거부가 바뀌면 연속 횟수가 초기화되므로, 실패 방식을 돌아가며 순환하는 실행을 제한 |
-| 계획 완료 게이트 | 플래너가 계획을 0.6 이상으로 평가했고, 계획에 단계가 2개 이상이며, 적어도 하나가 일치했을 때, 일치하는 도구 호출이 없는 계획 단계가 있는 동안 `done`을 거부(`services/proxy/guardrails.go::planIncompleteMessage`) | 여러 부분으로 된 작업을 일부만 전달하고 완료를 선언하는 경우. 턴별 진행 메모는 이미 있었지만 무시되었음 |
+| 계획 완료 게이트 | 플래너가 계획을 0.6 이상으로 평가했고, 계획에 단계가 2개 이상이며, 적어도 하나가 일치했을 때, 일치하는 도구 호출이 없는 계획 단계가 있는 동안 `done`을 거부(`services/proxy/internal/app/guardrails.go::planIncompleteMessage`) | 여러 부분으로 된 작업을 일부만 전달하고 완료를 선언하는 경우. 턴별 진행 메모는 이미 있었지만 무시되었음 |
 | 탐색 예산 | 연속 4회 읽기 전용 호출에서 넛지; 5회 이상에서 강화된 넛지. 읽기는 항상 실행됩니다 — 넛지는 *다음* 턴을 쓰기 쪽으로 유도할 뿐입니다 | 무한정 탐색하는 대신 쓰도록 모델을 유도 |
 | 명령 출력 잘라내기 | stdout 8,000자, stderr 4,000자 | 컨텍스트 범람 방지 |
 | 검색 결과 | 최대 200개 일치; 파일 검색은 1 MB 초과 파일 건너뜀 | 검색 비용 제한 |
@@ -861,7 +861,7 @@ C(x) 정규화는 `sigmoid(steepness × (energy - midpoint))`입니다. 선택�
 
 **모델 서버로 가는 호출의 귀속 정보.** Lens가 모델 서버로 보내는 모든 요청(`/embedding`, `/v1/models` 신원 탐침)은 하나의 전송 계층, `geometric_lens/model_transport.py`를 거칩니다. 이 계층은 ATLAS의 나머지 부분이 이미 쓰는 두 상관관계 헤더 `X-ATLAS-Request-ID`와 `X-ATLAS-V3-Invocation-ID`를 전달합니다. 그 값은 Lens 미들웨어가 현재 요청에 묶어 둔 신원(모든 ATLAS Python 서비스가 쓰는 것과 같은 ContextVar)에서만 옵니다. V3는 스코어링 호출에서 두 헤더를 모두 보냅니다. 묶인 신원이 없으면 헤더도 없고, 한쪽만 있는 쌍은 한쪽만 있는 채로 남으며, 요청이 끝나면 바인딩이 지워지므로 동시 요청과 백그라운드 작업이 신원을 맞바꾸거나 물려받을 수 없습니다. 시작 및 준비 작업(부팅 자가 테스트, `/ready` 재실행)은 `ATLAS_LENS_STARTUP_REQUEST_ID`와 `ATLAS_LENS_STARTUP_INVOCATION_ID`가 둘 다 설정된 경우에만 신원을 가집니다. 귀속된 임베딩 트래픽이 필요한 수집 작업은 그 쌍을 선언하고 자신의 릴레이에 등록하며, 일반 배포는 둘 다 설정하지 않습니다. 귀속 전용입니다: 어떤 스코어링, 선택, 승인, 완료 로직도 이 헤더를 읽지 않으며, 어떤 후보 바이트나 사용자 내용도 이 헤더에 들어가지 않습니다.
 
-**프록시의 직접 Lens 호출은 자체 호출 신원을 가집니다.** 프록시는 모델 서버로 가는 한 경로, 쓰기별 스코어링(`/internal/lens/score-per-step`)에서 Lens와 직접 통신하며, 이는 V3 후보 호출이 아닙니다. 단일 소유자인 `services/proxy/lens_identity.go`가 그 요청을 만들고, 묶인 `X-ATLAS-Request-ID`와 함께 그 요청 id만으로 도출한, 프록시가 소유한 Lens 호출 신원을 붙입니다: `proxy-lens:` 뒤에 `sha256("atlas/proxy-lens-invocation/v1\n" + request_id)`의 처음 16진수 32자리가 옵니다. 이 값은 결정적이고(릴레이가 모델 서버로 가는 트래픽 전에 쌍을 등록할 수 있음), 한 요청 안의 모든 직접 Lens 호출에서 같으며, 요청 간에 그리고 V3의 UUID 호출 신원과 구별되고, 타입이 있는 요청 id 외에는 아무것에서도 도출되지 않습니다: 산문, 경로, 후보 바이트, 도구 인자, 모델 출력에서 도출되지 않으며, 모델이 설정할 수도 없습니다. 이 값은 기존 `X-ATLAS-V3-Invocation-ID` 채널로 전달됩니다. 헤더 이름은 역사적인 것이며, 값은 모델 서버로 가는 일반 호출 신원입니다. 이는 자격 증명이 아니라 범위 레이블입니다: 변경, 권한, 후보, 완료를 승인하려고 이를 읽는 것은 없으며, SSE 이벤트, 도구 결과, 프롬프트, 로그에 결코 나타나지 않습니다. 요청 id가 없거나 닫힌 형식(`[A-Za-z0-9._:-]{1,128}`)을 벗어나면 호출 신원을 도출하지 않습니다. 닫힌 명세와 벡터는 `services/proxy/testdata/lens_invocation_vectors.json`에 있습니다.
+**프록시의 직접 Lens 호출은 자체 호출 신원을 가집니다.** 프록시는 모델 서버로 가는 한 경로, 쓰기별 스코어링(`/internal/lens/score-per-step`)에서 Lens와 직접 통신하며, 이는 V3 후보 호출이 아닙니다. 단일 소유자인 `services/proxy/internal/app/lens_identity.go`가 그 요청을 만들고, 묶인 `X-ATLAS-Request-ID`와 함께 그 요청 id만으로 도출한, 프록시가 소유한 Lens 호출 신원을 붙입니다: `proxy-lens:` 뒤에 `sha256("atlas/proxy-lens-invocation/v1\n" + request_id)`의 처음 16진수 32자리가 옵니다. 이 값은 결정적이고(릴레이가 모델 서버로 가는 트래픽 전에 쌍을 등록할 수 있음), 한 요청 안의 모든 직접 Lens 호출에서 같으며, 요청 간에 그리고 V3의 UUID 호출 신원과 구별되고, 타입이 있는 요청 id 외에는 아무것에서도 도출되지 않습니다: 산문, 경로, 후보 바이트, 도구 인자, 모델 출력에서 도출되지 않으며, 모델이 설정할 수도 없습니다. 이 값은 기존 `X-ATLAS-V3-Invocation-ID` 채널로 전달됩니다. 헤더 이름은 역사적인 것이며, 값은 모델 서버로 가는 일반 호출 신원입니다. 이는 자격 증명이 아니라 범위 레이블입니다: 변경, 권한, 후보, 완료를 승인하려고 이를 읽는 것은 없으며, SSE 이벤트, 도구 결과, 프롬프트, 로그에 결코 나타나지 않습니다. 요청 id가 없거나 닫힌 형식(`[A-Za-z0-9._:-]{1,128}`)을 벗어나면 호출 신원을 도출하지 않습니다. 닫힌 명세와 벡터는 `services/proxy/internal/app/testdata/lens_invocation_vectors.json`에 있습니다.
 
 **임베딩 용량 경계.** llama-server는 하나의 `/embedding` 요청을 단일 물리 배치(`-ub`, `ATLAS_UBATCH`)로 처리하며, 그보다 긴 입력은 거부합니다. 모든 Lens 점수는 시퀀스 전체에 대한 한 번의 순전파입니다. 이 거부는 배포의 전송 한계이지 텍스트에 대한 판단이 아니며, 모든 점수와 분리되어 유지됩니다: 응답은 `scored: false`, 모든 점수 필드에 `null`, 그리고 타입이 있는 `failure`(서버의 `input_tokens`와 `capacity_tokens`를 담은 `embed_capacity`, `model_server_error`, `model_server_unreachable`, `embedding_contract`, NaN이나 무한대 값에 대한 `nonfinite_score`, `internal`)를 말합니다. 서빙 경로에서는 아무것도 자르거나 나누지 않습니다. 나뉜 입력은 아티팩트가 학습된 벡터가 아니기 때문입니다. v3-service는 그 실패를 후보에 기록하고, 점수가 있는 모든 후보 뒤에 순위를 매기며, 남은 마지막 검증된 후보일 때만 전달합니다. 프록시는 점수가 없는 쓰기에 임계값을 적용하지 않습니다. 렌즈가 아는 용량(`LLAMA_EMBED_CAPACITY_TOKENS`로 선언되거나 거부에서 관찰됨)은 `/health`와 `/ready`에 보고되며, 프록시의 생성 상한보다 낮으면 상태 차원에 `lens_scoring: partial`로 보고됩니다. 결정 기록: [ADR 0010](../../adr/0010-lens-capacity-boundary-is-typed.md).
 

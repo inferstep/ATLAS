@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-PROXY = Path(__file__).resolve().parents[3] / "services" / "proxy"
+PROXY = Path(__file__).resolve().parents[3] / "services" / "proxy" / "internal" / "app"
 TOOL_FILES = (
     "tool_write_v3.go", "tool_write.go", "tool_edit.go", "tool_structural_edit.go",
     "tool_args.go", "tool_read.go", "loop.go",

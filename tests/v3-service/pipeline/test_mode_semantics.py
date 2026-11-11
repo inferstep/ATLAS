@@ -703,7 +703,7 @@ def test_the_go_request_has_no_representation_for_it():
     assert wire_files, "services/proxy/internal/wire holds no Go file"
     contract_files = list((proxy / "internal" / "taskcontract").glob("*.go"))
     assert contract_files, "services/proxy/internal/taskcontract holds no Go file"
-    go = "".join(path.read_text() for path in [proxy / "loop_state.go", *wire_files, *contract_files])
+    go = "".join(path.read_text() for path in [proxy / "internal" / "app" / "loop_state.go", *wire_files, *contract_files])
     for name in ("diagnostic_total_candidates", "min_candidates",
                  "DiagnosticTotalCandidates", "MinCandidates"):
         assert name not in go, name

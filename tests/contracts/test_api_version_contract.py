@@ -46,7 +46,7 @@ def test_version_constants_present():
 
 
 def test_version_endpoint_registered():
-    src = (REPO / "services" / "proxy" / "main.go").read_text()
+    src = (REPO / "services" / "proxy" / "internal" / "app" / "server.go").read_text()
     assert '"/version"' in src
     assert "handleVersion" in src
 
