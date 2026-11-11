@@ -193,7 +193,8 @@ the hardware you ran it on (or "untested on hardware").
 
 Under **What users will notice**, say what a user of ATLAS sees differently
 after your change, in plain sentences or a list. If users notice nothing,
-write only "Nothing." The changelog of a release is made from that part. A pull
+write only "Nothing." The changelog of a release is made from that part, and
+the `pr title` check fails with the reason when the release cannot use it. A pull
 request edits `CHANGELOG.md` only for a note a user must act on when upgrading,
 under `[Unreleased]`.
 

@@ -64,7 +64,7 @@ GATE_FILES = (
     "scripts/checks_ran.py", "scripts/change_base.py", "scripts/ci/queue_run.py", "scripts/ci/go_test_build.py",
     "scripts/ci/verify.py", "scripts/canary.py", "scripts/smoke_result.py",
     "scripts/ci/dockerfile_lint.py", "scripts/ci/check_dockerfile_sources.py", "scripts/ci/check_min_python.py",
-    "scripts/ci/staging-integration.py", "scripts/licence_names.py",
+    "scripts/ci/staging-integration.py", "scripts/licence_names.py", "scripts/release/release_changelog.py",
     "scripts/ci/ci-lock.sh", "scripts/release/release-tag.sh", "scripts/setup/environments.sh", "scripts/setup/rulesets.sh",
     # The settings file of each linter of the pipeline, should one appear.
     ".hadolint.yaml", ".hadolint.yml", ".github/zizmor.yml", "zizmor.yml", ".github/actionlint.yaml",

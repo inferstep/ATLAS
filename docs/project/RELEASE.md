@@ -180,8 +180,12 @@ Image tags drop the `v`: the git tag `v3.2.0` publishes `:3.2.0`,
 `:v3.2.0` and `:3.2`. A release candidate `v3.2.0-rc.1` publishes
 `:3.2.0-rc.1` and `:v3.2.0-rc.1` only, never `:3.2` or `:latest`.
 
-The release notes come from the conventional pull request titles between
-two tags, edited by hand in `CHANGELOG.md`.
+The changelog section of a release comes from the "What users will
+notice" part of each pull request since the last tag, through
+`python3 scripts/release/release_changelog.py --version X.Y.Z`. The type in
+the title of each pull request gives the first word of its entry. The
+`pr title` check runs the same rules on each pull request, so a part that
+the release cannot use fails before the merge.
 
 ## Release rhythm
 
@@ -261,8 +265,12 @@ remove the two old names from `not_covered` in `.github/canary.json`. Once
 it is merged, the release owner runs `scripts/setup/rulesets.sh`.
 
 1. **Notes.** On `dev`, bump the "Applies to" line at the top of
-   [SUPPORT_MATRIX.md](../guides/SUPPORT_MATRIX.md) and write the
-   `CHANGELOG.md` entry.
+   [SUPPORT_MATRIX.md](../guides/SUPPORT_MATRIX.md). Then make the
+   `CHANGELOG.md` section in this order. First, run
+   `python3 scripts/release/release_changelog.py --version X.Y.Z` and read
+   the section that it prints and the list beside it. Next, run it again
+   with `--write`. Then, for each pull request under "TO DECIDE BY HAND",
+   write its entry in the section or leave it out.
 2. **Candidate.** Fast-forward `staging` to that `dev` commit with
    [the release step](#the-release-step): open a pull request from `dev`
    into `staging`, then run `release_step.py staging <commit>`. No

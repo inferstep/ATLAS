@@ -1,13 +1,18 @@
 name: pr title
 
-# The PR title becomes the squash commit title, and release notes are
-# built from those titles, so it must be a conventional commit with the
-# component as scope: `type(scope): summary`, e.g. `fix(proxy): …` or
-# `docs(setup): …`. A `!` after the scope marks a breaking change.
+# The PR title becomes the squash commit title, so it must be a
+# conventional commit with the component as scope: `type(scope): summary`,
+# e.g. `fix(proxy): …` or `docs(setup): …`. A `!` after the scope marks a
+# breaking change. The title gives the heading of the changelog entry.
 #
-# The title is read from the event payload through an environment
-# variable, never interpolated into the script, so a crafted title can't
-# run as shell. No checkout, no token.
+# The text of the entry comes from the PR text, its part under "What users
+# will notice". scripts/release/release_changelog.py --check reads that part
+# with the rules the release uses, so a part the release can't use fails here
+# and not at the release.
+#
+# The title and the text are read from the event payload through
+# environment variables, never interpolated into the script, so crafted
+# text can't run as shell. The checkout keeps no token.
 on:
   pull_request:
     branches: [main, dev]
@@ -25,6 +30,8 @@ jobs:
   pr-title:
     name: pr title
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     steps:
       - name: Nothing to check in the merge queue
         if: github.event_name == 'merge_group'
@@ -51,3 +58,16 @@ jobs:
           echo "::error::type is one of: ${types//|/, }. scope is the component in lowercase (proxy, tui, cli, v3, lens, sandbox, inference, install, ci, docs, zh-cn, …). Keep it under 100 characters."
           echo "got: $TITLE"
           exit 1
+
+      # Dependabot writes its own text; the release puts its PRs together as one line.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        if: github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]'
+        with:
+          persist-credentials: false
+
+      - name: Check the part for users in the text
+        if: github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]'
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+        run: printf '%s\n%s' "$TITLE" "$BODY" | python3 scripts/release/release_changelog.py --check -
