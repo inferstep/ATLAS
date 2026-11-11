@@ -46,7 +46,7 @@ llama-server is the only GPU-using service; every other ATLAS service runs on CP
 
 | Backend | Status (V3.1.x) | Image / build path | Compose override | Tested cards |
 |---|---|---|---|---|
-| **CUDA** (NVIDIA) | Supported (since V3.1.0) | `services/inference/Dockerfile.v31` → `atlas-llama` | (default) | RTX 5060 Ti 16GB (canonical). The published image is compiled for Blackwell (compute capability 12.0/12.1) only; earlier generations need a local rebuild — see [SETUP.md](../guides/SETUP.md) |
+| **CUDA** (NVIDIA) | Blackwell: Supported (since V3.1.0); earlier GPUs: Preview, local rebuild required | `services/inference/Dockerfile.v31` → `atlas-llama` | (default) | RTX 5060 Ti 16GB (canonical). The published image is compiled for Blackwell (compute capability 12.0/12.1) only; earlier generations need a local rebuild — see [SETUP.md](../guides/SETUP.md) |
 | **ROCm / HIP** (AMD) | Community-tested (since V3.1.1) | `services/inference/Dockerfile.rocm` → `atlas-llama-rocm`, built on the host (`pull_policy: build`; no GHCR image) | `deploy/compose/docker-compose.rocm.yml` | RX 7900 XTX (community smoke-test, GH #26) |
 | **Metal** (Apple Silicon) | Supported ([#32](https://github.com/inferstep/ATLAS/issues/32)) | Hybrid: native llama-server (Metal) + Docker for the rest (macOS can't passthrough GPU to containers) | `deploy/compose/docker-compose.macos.yml` | M-series; Q4_K_M on ≤16 GB, Q6_K on ≥24 GB unified |
 | **Vulkan** (cross-vendor fallback) | Preview | `services/inference/Dockerfile.vulkan` → `atlas-llama-vulkan` | `deploy/compose/docker-compose.vulkan.yml` | lavapipe CPU boot path (smoke-tested); no real-GPU validation yet |
@@ -1104,7 +1104,7 @@ between two different models.
 
 ## 6. Sandbox
 
-Isolated code execution with compilation, testing, and linting.
+Isolated code execution with compilation, testing, and linting. The diagram lists implemented handlers, not a support-level guarantee: Java, Kotlin, Ruby, and PHP are Preview ([support matrix](../guides/SUPPORT_MATRIX.md)). In the default Docker deployment, the Go, Rust, C, and C++ `/execute` handlers compile but cannot run their native binary from `/tmp/sandbox`, because that workspace is `noexec` ([#163](https://github.com/inferstep/ATLAS/issues/163)). Project commands through `/shell` can build and run in `/workspace`; Go's `go run` uses the executable `GOTMPDIR` mount. `/syntax-check` only parses or compiles; it does not execute the submitted program.
 
 ```mermaid
 graph LR

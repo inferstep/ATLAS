@@ -1,4 +1,4 @@
-<!-- source: README.md synced-through: 69f2deafee29f4669c9fba659cebec683da94630 -->
+<!-- source: README.md synced-through: 7e33f929de56372528b58bd9895f587735fef89a -->
 > **[English](../../../README.md)** | **简体中文** | **[日本語](../ja/README.md)** | **[한국어](../ko/README.md)**
 
 <p align="center">
@@ -85,6 +85,7 @@
 4. **[Geometric Lens](../../reference/ARCHITECTURE.md#5-geometric-lens)** - 基于模型自身嵌入的能量打分，无需外部预言机。（[什么是 "Geometric Lens"？](../../reference/ARCHITECTURE.md#why-geometric-lens)）
    - [C(x) Cost Field](../../reference/ARCHITECTURE.md#scoring-models) - 模型隐藏维度→512→128→1 的 MLP，用于评估候选质量
    - [G(x) Quality Prediction](../../reference/ARCHITECTURE.md#scoring-models) - 其评分有助于决定生成多少候选的 XGBoost 集成；候选选择本身取最低的 C(x)
+   - [逐步评分](../../reference/API.md#geometric-lens-port-8099) - 对写入内容逐 token 计算 C(x)/G(x)；只有模型包已校准时，逐模型阈值才会触发干预
 
 5. **[Sandbox](../../reference/ARCHITECTURE.md#6-sandbox)** - 用于构建验证的隔离执行环境。
    - 多语言执行：Python、Rust、Go、C、Shell 等。Rust、Go、C 可在项目中作为命令运行；V3 检查其语法，沙箱的 `/execute` 只能编译，暂时无法运行 ([#163](https://github.com/inferstep/ATLAS/issues/163))
@@ -127,10 +128,11 @@ bash atlas-bootstrap.sh
 
 | | |
 |---|---|
-| GPU | 显存 16GB 以上。NVIDIA（CUDA，支持 (Supported)）、AMD（ROCm，社区验证 (Community-tested)）或 Apple Silicon（Metal，macOS 混合方案，支持）；其余大多数 GPU 由 Vulkan（预览 (Preview)）覆盖。预构建的 CUDA 镜像面向 Blackwell（RTX 50xx）；更早的 NVIDIA GPU 需要做一次性的本地重建（参见 [SETUP.md § CUDA Compute Capability](../../guides/SETUP.md#cuda-compute-capability-dockerfilev31)）。级别定义见 [SUPPORT_MATRIX.md](../../guides/SUPPORT_MATRIX.md)；GPU 列表见 [SETUP.md § Supported GPUs](../../guides/SETUP.md#supported-gpus)。想估算某个具体模型能否放进你的显卡，参见 [What fits on my GPU?](../../guides/TROUBLESHOOTING.md#what-fits-on-my-gpu)。 |
+| GPU | 最小 GPU 层级需要 8 GB 以上显存，推荐 16 GB。请选择能装下的模型和上下文。NVIDIA Blackwell（CUDA，Supported）；更早的 NVIDIA GPU（Preview）需要一次本地重建（见 [SETUP.md § CUDA Compute Capability](../../guides/SETUP.md#cuda-compute-capability-dockerfilev31)）。AMD ROCm 为 Community-tested；Apple Silicon Metal（macOS 混合方案）为 Supported，与系统共享内存；Vulkan 为 Preview。级别见 [SUPPORT_MATRIX.md](../../guides/SUPPORT_MATRIX.md)；GPU 列表见 [SETUP.md § Supported GPUs](../../guides/SETUP.md#supported-gpus)。模型与显卡容量的匹配方法见 [What fits on my GPU?](../../guides/TROUBLESHOOTING.md#what-fits-on-my-gpu)。 |
+| 系统内存 | 最小 GPU 层级至少需要 12 GB，推荐 16 GB 以上。更高层级需要更多（见[主机要求](../../guides/SETUP.md#hardware-sizing)）。 |
 | 运行时 | Docker（NVIDIA：+ nvidia-container-toolkit；AMD：单独的 Docker 即可） |
 | Python | 3.9 及以上 |
-| 磁盘 | 约 20GB CUDA / 约 22GB ROCm（模型权重 + 容器镜像） |
+| 磁盘 | 最小 GPU 层级至少需要 20 GB 可用空间，推荐 25 GB。更大的模型、后端镜像和构建文件需要更多（见[主机要求](../../guides/SETUP.md#hardware-sizing)）。 |
 
 Apple Silicon 通过原生 macOS 混合 Metal 方案运行（原生 llama-server 负责推理，其余组件用 Docker - 详见 **[SETUP_MACOS.md](../../guides/SETUP_MACOS.md)**）；Intel Arc (SYCL) 在路线图上。完整的手动安装路径（Docker Compose、裸机、K3s）和全部 bootstrap 参数请参见 **[SETUP.md](../../guides/SETUP.md)**。
 
@@ -138,7 +140,7 @@ Apple Silicon 通过原生 macOS 混合 Metal 方案运行（原生 llama-server
 
 ## ⚠️ 已知限制
 
-- **Linux Docker 栈，外加一条原生 macOS 路径。** NVIDIA（支持 (Supported)）、AMD ROCm（社区验证 (Community-tested)）和 Vulkan（预览 (Preview)）的 Docker 路径今天即已存在；Apple Silicon（支持）通过原生 macOS 混合 Metal 方案运行 ([#32](https://github.com/inferstep/ATLAS/issues/32))。Intel Arc / SYCL 为路线图 (Roadmap) 级别。级别定义见 [SUPPORT_MATRIX.md](../../guides/SUPPORT_MATRIX.md)。
+- **Linux Docker 栈，外加一条原生 macOS 路径。** NVIDIA Blackwell（Supported；较早的 NVIDIA 卡需本地重建，级别为 Preview）、AMD ROCm（社区验证 (Community-tested)）和 Vulkan（预览 (Preview)）的 Docker 路径今天即已存在；Apple Silicon（支持）通过原生 macOS 混合 Metal 方案运行 ([#32](https://github.com/inferstep/ATLAS/issues/32))。Intel Arc / SYCL 为路线图 (Roadmap) 级别。级别定义见 [SUPPORT_MATRIX.md](../../guides/SUPPORT_MATRIX.md)。
 - **ATLAS 目前没有基准测试结果。** V3.0 的 LiveCodeBench 数字已撤回（见 [CHANGELOG](../../../CHANGELOG.md#withdrawn-the-v30-livecodebench-result-746)），当前版本的能力与可靠性数字尚未测量。只有在留出任务上重新测量后才会公布数字；逐模型结果在 [#28](https://github.com/inferstep/ATLAS/issues/28) 中跟踪。
 - **Lens 的信号尚未得到证实。** 在参考模型上它能评分，但仍未校准，因此干预保持中立。在 3.1.6 上它没有给出可用信号，`dev` 上尚未测量 ([#281](https://github.com/inferstep/ATLAS/issues/281))。
 - **复杂功能添加可能不稳定。** 紧凑模型有时会在陌生代码库上花掉几轮 agent 回合去探索而不是写代码。

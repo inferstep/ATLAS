@@ -175,7 +175,7 @@ If you'd rather do each step manually, use Method 1 below.
 
 | Requirement | Details |
 |-------------|---------|
-| **GPU** | 8 GB+ VRAM (16 GB recommended). NVIDIA (CUDA, Supported — the published image targets Blackwell; older cards need a one-time [local rebuild](#cuda-compute-capability-dockerfilev31)); AMD (ROCm, Community-tested); Apple Silicon (Metal, macOS hybrid, Supported — see [SETUP_MACOS.md](SETUP_MACOS.md)); Vulkan (Preview) is the cross-vendor fallback; Intel Arc (SYCL) is Roadmap. See [§ Supported GPUs](#supported-gpus). |
+| **GPU** | 8 GB+ VRAM for the smallest GPU tier (16 GB recommended); choose a model and context that fit. NVIDIA Blackwell (CUDA, Supported); older NVIDIA cards (Preview) need a one-time [local rebuild](#cuda-compute-capability-dockerfilev31). AMD ROCm is Community-tested; Apple Silicon Metal (macOS hybrid) is Supported and shares system memory — see [SETUP_MACOS.md](SETUP_MACOS.md). Vulkan (Preview) is the cross-vendor fallback; Intel Arc (SYCL) is Roadmap. See [§ Supported GPUs](#supported-gpus). |
 | **GPU drivers** | NVIDIA: proprietary drivers (`nvidia-smi` should show your GPU). AMD: `amdgpu-dkms` kernel driver (`/dev/kfd` must exist; `rocm-smi` should show your GPU). |
 | **Python 3.9+** | With pip, for the CLI. Method 2 runs the services on the host: Python 3.12+ |
 | **curl** | For downloading model weights |
@@ -787,6 +787,8 @@ or model registry default changes; after a wizard run, `atlas tier fit
 | System RAM | 12 GB | 16 GB+ | PyTorch runtime + container overhead |
 | Disk | 20 GB | 25 GB | Model (4.4–23 GB depending on tier) + container images (5–8 GB) + working space |
 | CPU | 4 cores | 8+ cores | V3 pipeline is CPU-intensive during repair phases |
+
+These minima describe the smallest GPU tier. The medium tier requires 16 GB of system RAM and 25 GB of free disk; larger tiers require more. Run `atlas tier` for the requirements of your hardware tier. Apple Silicon shares memory between the OS and GPU, so use the sizing guidance in [SETUP_MACOS.md](SETUP_MACOS.md).
 
 ### Supported GPUs
 

@@ -131,10 +131,11 @@ Then in any project directory, run `atlas`.
 
 | | |
 |---|---|
-| GPU | 16 GB+ VRAM. NVIDIA (CUDA, Supported), AMD (ROCm, Community-tested), or Apple Silicon (Metal, macOS hybrid, Supported); Vulkan (Preview) covers most other GPUs. The prebuilt CUDA image targets Blackwell (RTX 50xx); older NVIDIA GPUs need a one-time local rebuild (see [SETUP.md § CUDA Compute Capability](docs/guides/SETUP.md#cuda-compute-capability-dockerfilev31)). Levels: [SUPPORT_MATRIX.md](docs/guides/SUPPORT_MATRIX.md); GPU list: [SETUP.md § Supported GPUs](docs/guides/SETUP.md#supported-gpus). To size a specific model to your card, see [What fits on my GPU?](docs/guides/TROUBLESHOOTING.md#what-fits-on-my-gpu). |
+| GPU | 8 GB+ VRAM for the smallest GPU tier; 16 GB recommended. Choose a model and context that fit. NVIDIA Blackwell (CUDA, Supported); older NVIDIA GPUs (Preview) need a one-time local rebuild (see [SETUP.md § CUDA Compute Capability](docs/guides/SETUP.md#cuda-compute-capability-dockerfilev31)). AMD ROCm is Community-tested; Apple Silicon Metal (macOS hybrid) is Supported and shares system memory; Vulkan is Preview. Levels: [SUPPORT_MATRIX.md](docs/guides/SUPPORT_MATRIX.md); GPU list: [SETUP.md § Supported GPUs](docs/guides/SETUP.md#supported-gpus). To size a specific model to your card, see [What fits on my GPU?](docs/guides/TROUBLESHOOTING.md#what-fits-on-my-gpu). |
+| System RAM | 12 GB minimum for the smallest GPU tier; 16 GB+ recommended. Larger tiers need more ([host requirements](docs/guides/SETUP.md#hardware-sizing)). |
 | Runtime | Docker (NVIDIA: + nvidia-container-toolkit; AMD: standalone Docker is enough) |
 | Python | 3.9+ |
-| Disk | ~20 GB CUDA / ~22 GB ROCm (model weights + container images) |
+| Disk | 20 GB free minimum for the smallest GPU tier; 25 GB recommended. Larger models, backend images, and build files need more ([host requirements](docs/guides/SETUP.md#hardware-sizing)). |
 
 Apple Silicon runs natively through the macOS hybrid Metal path (native llama-server + Docker for the rest - see **[SETUP_MACOS.md](docs/guides/SETUP_MACOS.md)**); Intel Arc (SYCL) is on the roadmap. For the manual install path (Docker Compose, bare-metal, K3s) and the full set of bootstrap flags, see **[SETUP.md](docs/guides/SETUP.md)**.
 
@@ -142,7 +143,7 @@ Apple Silicon runs natively through the macOS hybrid Metal path (native llama-se
 
 ## ⚠️ Known Limitations
 
-- **Linux Docker stack, plus a native macOS path.** NVIDIA (Supported), AMD ROCm (Community-tested), and Vulkan (Preview) Docker paths exist today; Apple Silicon (Supported) runs via the native macOS hybrid Metal path ([#32](https://github.com/inferstep/ATLAS/issues/32)). Intel Arc / SYCL is Roadmap. Level definitions: [SUPPORT_MATRIX.md](docs/guides/SUPPORT_MATRIX.md).
+- **Linux Docker stack, plus a native macOS path.** NVIDIA Blackwell (Supported; older NVIDIA cards require a local rebuild and are Preview), AMD ROCm (Community-tested), and Vulkan (Preview) Docker paths exist today; Apple Silicon (Supported) runs via the native macOS hybrid Metal path ([#32](https://github.com/inferstep/ATLAS/issues/32)). Intel Arc / SYCL is Roadmap. Level definitions: [SUPPORT_MATRIX.md](docs/guides/SUPPORT_MATRIX.md).
 - **ATLAS has no current benchmark result.** The V3.0 LiveCodeBench figure is withdrawn (see the [CHANGELOG](CHANGELOG.md#withdrawn-the-v30-livecodebench-result-746)), and no capability or reliability figure has been measured for the current release. Numbers will be published only after a re-measurement on held-out tasks; model-specific results are tracked in [#28](https://github.com/inferstep/ATLAS/issues/28).
 - **The lens's signal is not proven yet.** On the reference model it scores but stays uncalibrated, so its interventions are neutral. On 3.1.6 it gave no usable signal, and that is not yet measured on `dev` ([#281](https://github.com/inferstep/ATLAS/issues/281)).
 - **Complex feature additions can be inconsistent.** Compact models sometimes spend agent turns exploring an unfamiliar codebase before writing code.

@@ -1,4 +1,4 @@
-<!-- source: README.md synced-through: 7bb86537fd98a8ed6bc63d551502482c722aa60a -->
+<!-- source: README.md synced-through: 7e33f929de56372528b58bd9895f587735fef89a -->
 > **[English](../../../README.md)** | **[简体中文](../zh-CN/README.md)** | **[日本語](../ja/README.md)** | **한국어**
 
 <p align="center">
@@ -128,10 +128,11 @@ bash atlas-bootstrap.sh
 
 | | |
 |---|---|
-| GPU | VRAM 16GB 이상. NVIDIA (CUDA, 지원(Supported)), AMD (ROCm, 커뮤니티 검증(Community-tested)), 또는 Apple Silicon (Metal, macOS 하이브리드, 지원); 그 외 대부분의 GPU는 Vulkan(프리뷰(Preview))으로 커버됩니다. 사전 빌드된 CUDA 이미지는 Blackwell(RTX 50xx)을 대상으로 하며, 구형 NVIDIA GPU는 일회성 로컬 재빌드가 필요합니다([SETUP.md § CUDA Compute Capability](../../guides/SETUP.md#cuda-compute-capability-dockerfilev31) 참고). 지원 수준: [SUPPORT_MATRIX.md](../../guides/SUPPORT_MATRIX.md); GPU 목록: [SETUP.md § Supported GPUs](../../guides/SETUP.md#supported-gpus). 특정 모델이 본인 카드에 맞는지 가늠하려면 [내 GPU에는 무엇이 들어가는가?](../../guides/TROUBLESHOOTING.md#what-fits-on-my-gpu)를 참고하세요. |
+| GPU | 가장 작은 GPU 티어는 VRAM 8 GB 이상, 권장은 16 GB입니다. 용량에 맞는 모델과 컨텍스트를 선택하세요. NVIDIA Blackwell(CUDA, Supported)을 지원하며, 구형 NVIDIA GPU(Preview)는 한 번의 로컬 재빌드가 필요합니다([SETUP.md § CUDA Compute Capability](../../guides/SETUP.md#cuda-compute-capability-dockerfilev31)). AMD ROCm은 Community-tested, Apple Silicon Metal(macOS 하이브리드)은 Supported이며 시스템 메모리를 공유하고, Vulkan은 Preview입니다. 수준: [SUPPORT_MATRIX.md](../../guides/SUPPORT_MATRIX.md); GPU 목록: [SETUP.md § Supported GPUs](../../guides/SETUP.md#supported-gpus). 모델이 카드에 맞는지 확인하려면 [내 GPU에는 무엇이 들어가는가?](../../guides/TROUBLESHOOTING.md#what-fits-on-my-gpu)를 참고하세요. |
+| 시스템 RAM | 가장 작은 GPU 티어는 최소 12 GB, 권장은 16 GB 이상입니다. 상위 티어에는 더 필요합니다([호스트 요구 사항](../../guides/SETUP.md#hardware-sizing)). |
 | 런타임 | Docker (NVIDIA: + nvidia-container-toolkit; AMD: 단독 Docker로 충분) |
 | Python | 3.9 이상 |
-| 디스크 | 약 20GB CUDA / 약 22GB ROCm (모델 가중치 + 컨테이너 이미지) |
+| 디스크 | 가장 작은 GPU 티어는 여유 공간 최소 20 GB, 권장은 25 GB입니다. 더 큰 모델, 백엔드 이미지, 빌드 파일에는 더 필요합니다([호스트 요구 사항](../../guides/SETUP.md#hardware-sizing)). |
 
 Apple Silicon은 macOS 하이브리드 Metal 경로(추론은 네이티브 llama-server, 나머지 스택은 Docker — **[SETUP_MACOS.md](../../guides/SETUP_MACOS.md)** 참고)를 통해 네이티브로 동작합니다. Intel Arc (SYCL)는 로드맵에 있습니다. 수동 설치 경로(Docker Compose, 베어메탈, K3s)와 부트스트랩 플래그 전체 목록은 **[SETUP.md](SETUP.md)**를 참고하세요.
 
@@ -139,7 +140,7 @@ Apple Silicon은 macOS 하이브리드 Metal 경로(추론은 네이티브 llama
 
 ## ⚠️ 알려진 제한 사항
 
-- **Linux Docker 스택과 네이티브 macOS 경로.** NVIDIA(지원(Supported)), AMD ROCm(커뮤니티 검증(Community-tested)), Vulkan(프리뷰(Preview)) Docker 경로가 현재 존재합니다. Apple Silicon(지원)은 네이티브 macOS 하이브리드 Metal 경로([#32](https://github.com/inferstep/ATLAS/issues/32))로 동작합니다. Intel Arc / SYCL은 로드맵(Roadmap)입니다. 수준 정의: [SUPPORT_MATRIX.md](../../guides/SUPPORT_MATRIX.md).
+- **Linux Docker 스택과 네이티브 macOS 경로.** NVIDIA Blackwell(Supported; 구형 NVIDIA 카드는 로컬 재빌드가 필요한 Preview), AMD ROCm(커뮤니티 검증(Community-tested)), Vulkan(프리뷰(Preview)) Docker 경로가 현재 존재합니다. Apple Silicon(지원)은 네이티브 macOS 하이브리드 Metal 경로([#32](https://github.com/inferstep/ATLAS/issues/32))로 동작합니다. Intel Arc / SYCL은 로드맵(Roadmap)입니다. 수준 정의: [SUPPORT_MATRIX.md](../../guides/SUPPORT_MATRIX.md).
 - **ATLAS에는 현재 벤치마크 결과가 없습니다.** V3.0 LiveCodeBench 수치는 철회되었고([CHANGELOG](../../../CHANGELOG.md#withdrawn-the-v30-livecodebench-result-746) 참조), 현재 릴리스의 능력·신뢰성 수치는 아직 측정되지 않았습니다. 수치는 보류 과제로 재측정한 뒤에만 공개하며, 모델별 결과는 [#28](https://github.com/inferstep/ATLAS/issues/28)에서 추적합니다.
 - **렌즈의 신호는 아직 입증되지 않았습니다.** 기준 모델에서는 점수를 내지만 보정되지 않은 상태이므로 개입은 중립입니다. 3.1.6에서는 쓸 만한 신호를 주지 못했고, `dev`에서는 아직 측정하지 않았습니다 ([#281](https://github.com/inferstep/ATLAS/issues/281)).
 - **복잡한 기능 추가는 일관성이 떨어질 수 있습니다.** 콤팩트 모델은 코드를 쓰기 전에 낯선 코드베이스 탐색으로 에이전트 턴을 소비하기도 합니다.

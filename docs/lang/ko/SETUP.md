@@ -1,7 +1,7 @@
-<!-- source: docs/guides/SETUP.md synced-through: 7d90cbee05ec5196e2ed3f72ffc52735ce8ce245 -->
+<!-- source: docs/guides/SETUP.md synced-through: 7e33f929de56372528b58bd9895f587735fef89a -->
 > **[English](../../guides/SETUP.md)** | **[简体中文](../zh-CN/SETUP.md)** | **[日本語](../ja/SETUP.md)** | **한국어**
 
-> ℹ️ 영어 원본([SETUP.md](../../guides/SETUP.md))의 번역본입니다. ATLAS에는 고정 기본 모델이 없습니다 — `atlas init`으로 레지스트리 모델을 선택하거나 호환 GGUF를 지정하십시오. 원본과 차이가 있을 경우 영어 원본이 우선합니다.
+> ℹ️ 영어 원본([SETUP.md](../../guides/SETUP.md))의 번역본입니다. 원본과 차이가 있을 경우 영어 원본이 우선합니다.
 
 
 # ATLAS 설정 가이드
@@ -16,7 +16,7 @@
 
 | 하드웨어 | OS | 권장 경로 | 지원 수준 ([매트릭스](../../guides/SUPPORT_MATRIX.md)) |
 |---|---|---|---|
-| NVIDIA RTX 50 시리즈 / Blackwell (B100, GB10) | Linux | [방법 0: 부트스트랩](#방법-0-원샷-부트스트랩) 또는 [방법 1: Docker](#방법-1-docker-compose-권장) | 지원(Supported) — 게시된 CUDA 이미지는 Blackwell 대상 |
+| NVIDIA RTX 50 시리즈 / Blackwell (GB10) | Linux | [방법 0: 부트스트랩](#방법-0-원샷-부트스트랩) 또는 [방법 1: Docker](#방법-1-docker-compose-권장) | 지원(Supported) — 게시된 CUDA 이미지는 Blackwell 대상 |
 | NVIDIA RTX 20/30/40, GTX 10xx, 데이터센터 (V100/A100/H100/T4/L4) | Linux | [방법 1: Docker](#방법-1-docker-compose-권장) + 일회성 [로컬 재빌드](#cuda-컴퓨트-캐퍼빌리티-dockerfilev31) | 프리뷰(Preview) — 로컬 재빌드 필요 |
 | NVIDIA GPU | Windows (WSL2) | [방법 1: Docker — NVIDIA 섹션](#방법-1-docker-compose-권장) | 미지원(Unsupported) — 테스트되지 않았고 아무 주장도 하지 않음; 리포트 환영 |
 | AMD GPU (RX 6000/7000, MI200+) | Linux | [방법 1: Docker — AMD ROCm](#amd-rocm--무엇이-다른가) | 커뮤니티 검증(Community-tested) ([GH #26](https://github.com/inferstep/ATLAS/issues/26)) |
@@ -41,7 +41,7 @@ curl 명령 하나로 배포판을 감지하고 Docker + nvidia-container-toolki
 
 > **NVIDIA Blackwell 이전 GPU(RTX 20/30/40 시리즈, GTX 10xx, V100/A100/T4/L4/H100) 사용자는 이것부터 읽으세요.**
 > 게시된 `atlas-llama` CUDA 이미지는 컴퓨트 캐퍼빌리티 `120;121`(Blackwell —
-> RTX 50xx, B100, GB10) **전용**으로 컴파일되어 있습니다. 구형 NVIDIA GPU에서는
+> RTX 50xx, GB10) **전용**으로 컴파일되어 있습니다. 구형 NVIDIA GPU에서는
 > llama-server가 시작 시
 > `no kernel image is available for execution on the device`
 > 오류로 실패합니다.
@@ -64,7 +64,7 @@ curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-
 ./scripts/atlas-bootstrap.sh
 ```
 
-**지원 배포판:**
+**부트스트랩이 허용하는 배포판**(CI는 Ubuntu 22.04/24.04, Debian 12, Rocky 9를 테스트합니다 — [지원 매트릭스](../../guides/SUPPORT_MATRIX.md) 참고):
 
 | 계열 | 배포판 |
 |---|---|
@@ -74,11 +74,16 @@ curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-
 
 `ID_LIKE`가 위 계열과 일치하는 다른 배포판(예: Linux Mint, Pop!_OS)은 경고와 함께 허용됩니다. 목록에 없는 배포판 — Arch, openSUSE, Alpine, NixOS — 은 테스트되지 않았으며, 스크립트가 실행을 거부합니다.
 
-부트스트랩은 EPEL, nouveau 드라이버 충돌, libnvidia-ml.so.1 누락 케이스(RHEL 최소 설치), 그리고 "사용자를 docker 그룹에 추가했지만 현재 셸에는 아직 반영되지 않은" 경합을 우회 처리합니다.
+부트스트랩은 EPEL, libnvidia-ml.so.1 누락(RHEL 최소 설치), docker 그룹에 사용자를 추가해도 현재 셸에 아직 반영되지 않는 경합을 처리합니다. RHEL 계열에서는 nouveau가 로드되어 있으면 경고하고 블랙리스트 등록 절차를 출력합니다.
+
+**Docker 그룹 보안:** 부트스트랩은 `sudo` 없이 Docker 명령을 실행하도록 사용자를 `docker` 그룹에 추가할 수 있습니다. 이 그룹의 구성원은 호스트에서 root 수준의 권한을 가집니다. 신뢰하는 사용자에게만 부여하세요. Docker 설치와 그룹 관리를 직접 하려면 실행 전에 `ATLAS_BOOTSTRAP_SKIP_DOCKER=1`을 설정하세요.
 
 **모델 선택:** `.env.example`에는 선택된 모델이 없습니다. 부트스트랩이 `.env`를 생성했는데 `ATLAS_MODEL_FILE`이 비어 있으면, 레지스트리의 기본 권장 모델을 `.env`에 기록하여(그 과정이 로그로 남습니다) 마법사 없이도 원샷 설치가 완료되게 합니다. 선택은 `.env`를 편집하거나 `atlas init`을 실행해 언제든 바꿀 수 있습니다. 이미 비어 있지 않은 선택은 그대로 존중됩니다.
 
 <a id="cpu-only"></a>
+
+**내부 인증:** 부트스트랩은 설치한 사용자만 읽을 수 있는 `secrets/service-token`을 만들고, 기존 설정이 없는 경우 해당 사용자 ID를 `.env`의 `ATLAS_PROXY_UID`, `ATLAS_PROXY_GID`, `ATLAS_SANDBOX_UID`, `ATLAS_SANDBOX_GID`에 기록합니다. 재실행하면 기존 토큰을 유지합니다. 이전 설치에는 토큰을 추가하고, Docker가 root로 만든 `secrets/`의 소유권을 가져온 뒤 서비스를 다시 생성해 토큰을 읽게 합니다. 이후 서비스 직접 호출에는 `Authorization: Bearer <token>` 헤더가 필요하며 없으면 401을 반환합니다. `atlas`와 TUI는 설치한 사용자의 토큰을 보냅니다. 같은 머신의 다른 사용자는 토큰을 읽을 수 없어 호출이 거부됩니다.
+
 **CPU 전용 / GPU 없는 호스트 (프리뷰(Preview) — 스모크 테스트 전용).** ATLAS는 Vulkan 이미지의 lavapipe CPU 래스터라이저를 통해 GPU 없이도 부팅되지만, 추론이 매우 느립니다. 스택이 동작하는지 확인하는 용도로 쓰고, 실제 코딩 세션 용도로는 쓰지 마세요.
 
 1. **부트스트랩은 옵트인하지 않는 한 GPU 없는 호스트를 거부합니다:**
@@ -98,6 +103,8 @@ atlas model install Qwen3.5-9B-Q6_K
 docker compose -f docker-compose.yml -f deploy/compose/docker-compose.vulkan.yml -f deploy/compose/docker-compose.cpu.yml up -d
 atlas doctor            # gpu check WARNS ("CPU-only mode — very slow"); warns exit 0
 ```
+
+직접 만든 `.env`에는 서비스 토큰이 없으므로 내부 인증이 꺼져 있습니다. 부트스트랩과 `atlas init`은 토큰을 만듭니다.
 
 **방화벽:** Compose 스택은 모든 서비스를 `127.0.0.1`에만 게시하므로, 로컬 사용에는 방화벽 변경이 필요 없으며 부트스트랩은 기본적으로 firewalld를 건드리지 않습니다. 서비스를 라우팅 가능한 인터페이스에 다시 바인딩하는 배포를 위해 서비스 포트(8090, 8099, 8070, 30820)를 열려면 `ATLAS_BOOTSTRAP_OPEN_FIREWALL=1`을 설정하세요.
 
@@ -145,6 +152,10 @@ bash atlas-bootstrap.sh
 | `ATLAS_INSTALL_DIR=/path` | 클론 위치(기본 `/opt/atlas` — 아래 참고) |
 | `ATLAS_REPO_URL=https://...` | 대체 저장소 URL |
 | `ATLAS_GO_VERSION=1.26.10` | TUI 빌드에 설치되는 Go 툴체인 버전 (TUI는 1.26.10+가 필요하며, 구형 툴체인이 설치되어 있으면 자동으로 이를 가져옵니다) |
+| `ATLAS_DOWNLOAD_TRIES=3` | 설치를 중단하기 전까지 실패한 다운로드를 시도하는 횟수(pip 다운로드와 Go 모듈 다운로드) |
+| `ATLAS_DOWNLOAD_WAIT_SECONDS=5` | 다운로드 재시도 사이의 대기 시간 |
+
+**다운로드와 로그.** 설치 프로그램은 실행마다 만든 비공개 임시 폴더에 다운로드와 로그를 저장합니다. 설치가 성공하면 마지막에 폴더를 지웁니다. 실패하거나 어떤 단계가 경고와 로그 이름을 출력하면 폴더를 보존하고 출력의 마지막 줄에 경로를 표시합니다.
 
 **왜 `/opt/atlas`인가?** 시스템 전역 서드파티 소프트웨어의 표준 FHS 접두사이고, `$HOME` 정리에도 살아남기 때문입니다. 설치는 한 사용자가 소유하며, 서비스 토큰은 그 사용자만 사용합니다. 홈 디렉토리에 설치하고 싶다면:
 
@@ -163,9 +174,9 @@ curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-
 
 | 요구 사항 | 세부 내용 |
 |-------------|---------|
-| **GPU** | VRAM 16GB 이상. NVIDIA (CUDA, 지원(Supported) — 게시된 이미지는 Blackwell 대상이며, 구형 카드는 일회성 [로컬 재빌드](#cuda-컴퓨트-캐퍼빌리티-dockerfilev31) 필요); AMD (ROCm, 커뮤니티 검증(Community-tested)); Apple Silicon (Metal, macOS 하이브리드, 지원 — [SETUP_MACOS.md](../../guides/SETUP_MACOS.md) 참고); Vulkan(프리뷰(Preview))은 크로스 벤더 폴백이고, Intel Arc (SYCL)는 로드맵(Roadmap)입니다. [§ 지원 GPU](#지원-gpu) 참고. |
+| **GPU** | 가장 작은 GPU 등급은 VRAM 8 GB 이상(16 GB 권장). 메모리에 맞는 모델과 컨텍스트를 선택하세요. NVIDIA Blackwell(CUDA, Supported), 이전 NVIDIA 카드(Preview)는 한 번의 [로컬 재빌드](#cuda-컴퓨트-캐퍼빌리티-dockerfilev31)가 필요합니다. AMD ROCm은 Community-tested, Apple Silicon Metal(macOS 하이브리드)은 Supported이며 시스템 메모리를 공유합니다 — [SETUP_MACOS.md](../../guides/SETUP_MACOS.md) 참고. Vulkan(Preview)은 벤더 공통 폴백, Intel Arc(SYCL)는 Roadmap입니다. [지원 GPU](#지원-gpu) 참고. |
 | **GPU 드라이버** | NVIDIA: 전용 드라이버(`nvidia-smi`에서 GPU가 보여야 함). AMD: `amdgpu-dkms` 커널 드라이버(`/dev/kfd`가 존재해야 하며, `rocm-smi`에서 GPU가 보여야 함). |
-| **Python 3.9+** | pip 포함 |
+| **Python 3.9+** | CLI용 pip 필요. 방법 2는 호스트에서 서비스를 실행하므로 Python 3.11+ 필요 |
 | **curl** | 모델 가중치 다운로드용 |
 | **모델 가중치** | 호스트에 맞는 레지스트리 모델 또는 자체 반입(BYO) GGUF. `atlas init`이 하나를 추천하고 선택을 `.env`에 기록합니다. |
 
@@ -196,7 +207,7 @@ rocm-smi --showproductname --showmeminfo vram
 ```bash
 pip install -e .
 atlas tier              # prints detected GPU, tier classification, recommended settings
-atlas tier --json       # machine-readable (used by atlas init wizard)
+atlas tier --json       # machine-readable (for scripts)
 ```
 
 ---
@@ -214,6 +225,7 @@ atlas tier --json       # machine-readable (used by atlas init wizard)
 **AMD (ROCm):**
 - **Docker**만으로 충분 — ROCm은 별도 컨테이너 런타임이 필요 없으며 `--device=/dev/kfd --device=/dev/dri` 패스스루로 충분합니다
 - 사용자가 `video`와 `render` 그룹에 속해야 합니다: `sudo usermod -aG video,render $USER` (이후 재로그인)
+- 첫 `up`은 ROCm llama-server 이미지를 내려받지 않고 로컬에서 컴파일합니다([AMD ROCm — 달라지는 점](#amd-rocm--무엇이-다른가) 참고)
 
 ### 설정
 
@@ -234,10 +246,9 @@ case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *)
 # 3. Select/install a model and write model-aware runtime sizing
 atlas init
 
-# 4. Install Go 1.26.10+ — required for the TUI client (atlas tui) and
-#    optional for the proxy (proxy builds automatically on first run if Go
-#    is present; otherwise it runs in Docker with file access limited to
-#    ATLAS_PROJECT_DIR). Quickest path:
+# 4. Install Go 1.26.10+ — required for the TUI client (atlas tui). With
+#    this method the proxy runs in Docker, with file access limited to
+#    ATLAS_PROJECT_DIR. Quickest path:
 mkdir -p /tmp/go-install && cd /tmp/go-install
 curl -LO https://go.dev/dl/go1.26.10.linux-amd64.tar.gz
 sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.26.10.linux-amd64.tar.gz
@@ -253,7 +264,7 @@ cd clients/tui && go build -o ~/.local/bin/atlas-tui . && cd ../..
 #    selected model; they are intentionally not project-wide defaults.
 ${EDITOR:-vi} .env
 
-# 6. Start all services (first run builds container images — this takes several minutes)
+# 6. Start all services (the first run pulls the container images — this takes a few minutes; on ROCm it builds llama-server)
 #    NVIDIA hosts (default):
 docker compose up -d                                                  # or: podman-compose up -d
 #    AMD ROCm hosts:
@@ -270,15 +281,20 @@ atlas
 
 #### AMD ROCm — 무엇이 다른가
 
-ROCm 경로는 다음 세 가지를 *제외하면* NVIDIA와 동일합니다:
+ROCm 경로는 다음 네 가지를 제외하면 NVIDIA와 같습니다:
 
-1. **두 compose 파일로 기동** (또는 `atlas init`에 맡기세요):
+1. **두 compose 파일로 시작하세요**(`atlas init`이 이 명령을 `.env`에 기록하고 출력합니다):
    ```bash
    docker compose -f docker-compose.yml -f deploy/compose/docker-compose.rocm.yml up -d
    ```
    오버라이드는 llama-server 이미지를 ROCm 빌드로 전환하고, NVIDIA 드라이버 요청을 `/dev/kfd` + `/dev/dri` 패스스루로 교체하며, 엔트리포인트가 HIP 튜닝 분기를 타도록 `ATLAS_BACKEND=rocm`을 강제합니다.
 
-2. **`nvidia-container-toolkit` 불필요** — ROCm은 별도 컨테이너 런타임이 필요 없고 커널 수준 디바이스 접근만 필요합니다. 사용자가 올바른 그룹에 있는지 확인하세요:
+2. **llama-server 이미지는 내려받지 않고 로컬에서 빌드합니다.** GHCR에는 CUDA와 Vulkan llama 이미지만 사전 빌드되어 있습니다. CI에 테스트용 AMD GPU가 없으므로 `atlas-llama-rocm`은 게시되지 않습니다(ROCm은 Community-tested — [SUPPORT_MATRIX.md](../../guides/SUPPORT_MATRIX.md) 참고). 오버라이드가 `pull_policy: build`를 선언하므로 `docker compose pull`은 llama-server를 건너뛰고, 위 `up`이 `services/inference/Dockerfile.rocm`에서 컴파일합니다. 이후 빌드는 레이어 캐시를 재사용합니다. 다른 ATLAS 서비스는 평소처럼 사전 빌드 이미지를 가져옵니다. 미리 빌드하려면:
+   ```bash
+   docker compose -f docker-compose.yml -f deploy/compose/docker-compose.rocm.yml build llama-server
+   ```
+
+3. **`nvidia-container-toolkit` 불필요** — ROCm은 별도 컨테이너 런타임이 필요 없고 커널 수준 디바이스 접근만 필요합니다. 사용자가 올바른 그룹에 있는지 확인하세요:
    ```bash
    id -nG | tr ' ' '\n' | grep -E '^(render|video)$'
    # Should print both. If not:
@@ -286,14 +302,14 @@ ROCm 경로는 다음 세 가지를 *제외하면* NVIDIA와 동일합니다:
    # Then log out + back in (or: newgrp render)
    ```
 
-3. **GPU 컴퓨트 타깃.** 기본 `Dockerfile.rocm` 빌드는 RDNA3(7000 시리즈), RDNA2(6000 시리즈), CDNA2(MI200)를 포괄하는 "fat" 이미지입니다 — `gfx1100;gfx1101;gfx1102;gfx1030;gfx90a`. 특정 GPU만 겨냥한 더 작은 이미지를 원하면 빌드 전에 `ATLAS_GFX_TARGET`을 설정하세요:
+4. **GPU 컴퓨트 타깃.** 기본 `Dockerfile.rocm` 빌드는 RDNA3(7000 시리즈), RDNA2(6000 시리즈), CDNA2(MI200)를 포괄하는 "fat" 이미지입니다 — `gfx1100;gfx1101;gfx1102;gfx1030;gfx90a`. 특정 GPU만 겨냥한 더 작은 이미지를 원하면 빌드 전에 `ATLAS_GFX_TARGET`을 설정하세요:
    ```bash
    # Example: only build for RX 7900 XT/XTX
    ATLAS_GFX_TARGET=gfx1100 docker compose -f docker-compose.yml -f deploy/compose/docker-compose.rocm.yml build llama-server
    ```
    본인 카드의 gfx 타깃은 [LLVM AMDGPU 프로세서 표](https://llvm.org/docs/AMDGPUUsage.html)를 참고하세요.
 
-"공식 미지원 GPU인데 ROCm이 어느 정도 동작하는" 케이스(구형 Vega, RDNA1)는 [TROUBLESHOOTING.md § AMD GPU가 감지되지 않음](TROUBLESHOOTING.md)의 `ATLAS_HSA_OVERRIDE_GFX_VERSION` 우회책을 참고하세요.
+"공식 미지원 GPU인데 ROCm이 어느 정도 동작하는" 케이스(구형 Vega, RDNA1)는 [TROUBLESHOOTING.md § AMD GPU is "unsupported" by ROCm](../../guides/TROUBLESHOOTING.md#amd-gpu-is-unsupported-by-rocm-but-you-want-to-try-anyway-no-kernel-image-on-rocm)의 `ATLAS_HSA_OVERRIDE_GFX_VERSION` 우회책을 참고하세요.
 
 #### Vulkan — 크로스 벤더 폴백
 
@@ -318,7 +334,7 @@ CUDA/ROCm과 다른 점:
 
 1. **벤더별 커널 드라이버 요구가 없습니다.** Vulkan ICD는 이미지 안에 들어 있습니다(`mesa-vulkan-drivers`가 AMD/Intel/CPU를 커버; NVIDIA의 ICD는 nvidia-container-toolkit 마운트에서 옵니다).
 2. **`/dev/dri` 패스스루만** — `/dev/kfd`도 `--gpus all`도 없습니다(NVIDIA 툴킷을 경유하는 경우는 예외로, 그때는 둘 다 여전히 동작합니다).
-3. **GPU 선택은 `CUDA_VISIBLE_DEVICES` / `HIP_VISIBLE_DEVICES` 대신 `ATLAS_VK_DEVICE_SELECT`로.** 형식은 Mesa 표준입니다: `"vendorID:deviceID"`(16진수) 또는 디바이스 이름의 부분 문자열. `GGML_VK_VISIBLE_DEVICES`(숫자 인덱스)도 동작합니다.
+3. **GPU 선택은 `CUDA_VISIBLE_DEVICES` / `HIP_VISIBLE_DEVICES` 대신 `ATLAS_VK_DEVICE_SELECT`로 합니다.** Mesa 표준인 `"vendorID:deviceID"`(16진수) 또는 장치 이름의 부분 문자열을 사용합니다. `ATLAS_GPU_INDEX`(숫자 인덱스이며 엔트리포인트가 `GGML_VK_VISIBLE_DEVICES`로 전달)도 사용할 수 있습니다.
 4. **`atlas doctor`**가 `_check_vulkan_via_docker` 탐침을 실행합니다 — 단, `ATLAS_BACKEND=vulkan`이 설정된 경우에만(그 외에는 CUDA/ROCm 실행을 빠르게 유지하기 위해 건너뜁니다).
 
 GPU를 기대했는데 `vulkaninfo`에 `llvmpipe` CPU 디바이스만 보인다면 커널 측 디바이스 패스스루가 실패한 것입니다 — 호스트에 `/dev/dri/renderD*`가 존재하는지, 사용자가 `video` + `render` 그룹에 있는지 확인하세요(위 ROCm 요구 사항과 동일).
@@ -370,9 +386,9 @@ Jetson의 경우 두 build arg 모두 `nvcr.io/nvidia/l4t-jetpack:r36.3.0`으로
 
 **알려진 공백 (#115에서 추적):**
 
-- GHCR에 사전 빌드된 arm64 이미지가 아직 없습니다 — arm64 사용자는 위 레시피로 로컬 빌드해야 합니다. 최소 한 대의 arm64 디바이스가 엔드투엔드로 검증되면 멀티 아키텍처 사전 빌드 이미지가 제공될 예정입니다.
-- 부트스트랩 설치 프로그램(`scripts/atlas-bootstrap.sh`)은 arm64 경로에 대해 감사되지 않았습니다.
-- 다섯 개 대상 디바이스 모두 하드웨어 테스트 매트릭스가 비어 있습니다 — 해당 디바이스를 가진 얼리어답터께서는 `atlas doctor` 출력과 `vulkaninfo --summary`를 [#115](https://github.com/inferstep/ATLAS/issues/115)에 남겨 주세요.
+- arm64용으로 게시되는 이미지는 `atlas-llama-vulkan`뿐입니다(릴리스 태그). CUDA llama, proxy, V3, lens, sandbox 이미지는 amd64 전용이므로 arm64 사용자는 위 절차로 로컬 빌드해야 합니다.
+- 부트스트랩 설치 프로그램은 arm64에서 테스트되지 않습니다(CI 테스트는 amd64에서만 실행).
+- 이 장치들의 보고를 환영합니다. `atlas doctor`와 `vulkaninfo --summary` 출력을 [#115](https://github.com/inferstep/ATLAS/issues/115)에 올려주세요.
 
 ### 첫 실행 시 동작
 
@@ -431,15 +447,18 @@ atlas doctor -v           # verbose: show detail for each check
 | Host | lens_weights | `cost_field.pt` + G(x) 아티팩트 존재 |
 | Host | asa_steering | `ast_edit_steering.gguf` 존재 (실패가 아닌 경고; ATLAS는 이것 없이도 동작하며, structural_edit-vs-edit_file 편향이 스티어링되지 않을 뿐) |
 | Host | tier_match | `.env` 모델 선택이 호스트 하드웨어와 일치(초과 선택은 경고 — OOM 위험 — 일치나 여유 선택은 통과) |
+| Host | grammar_mode | `ATLAS_GRAMMAR_MODE`가 선택한 모델의 레지스트리 프로필과 일치하는지 확인(불일치 시 경고) |
 | Host | tier_constraints | 호스트 CPU/RAM/디스크가 권장 등급 최소치를 충족("16GB GPU인데 RAM 8GB" 같은 불일치를 포착) |
 | Stack | container/llama-server, geometric-lens, v3-service, sandbox, atlas-proxy | 5개 모두 실행 중이고 healthy |
-| Stack | health/llama, lens, v3, sandbox, proxy | 5개 `/health` 엔드포인트 모두 ok 반환 |
-| Stack | internal_auth | 내부 서비스 인증: 토큰 파일이 엄격한 권한과 함께 존재하고, 실제 강제 여부를 양방향으로 탐침(잘못된 토큰 → 401, 유효한 토큰은 수락); 인증이 비활성화된 경우(`secrets/service-token` 없음) 경고 |
-| Stack | status_dimensions | 프록시 `/v1/calibration/status`가 보고하는 lens/ASA 상태 7개 차원(TUI 배지가 읽는 것과 동일한 소스) |
+| Stack | health/llama, lens, v3, sandbox, proxy | `/health`가 ok를 반환하는지 확인. lens는 엄격한 `/ready`(스코어링 동작 여부)를 확인하고, 동작하지 않으면 반환된 이유 표시 |
+| Stack | internal_auth | 토큰 파일이 존재하고 권한이 제한되며 서비스 실행 사용자가 읽을 수 있는지 확인. proxy, lens, V3, sandbox 각각에서 실제 인증을 양방향으로 검사(잘못된 토큰 → 401, 유효한 토큰 수락). 인증이 꺼져 있으면(`secrets/service-token` 없음) 경고 |
+| Stack | status_dimensions | proxy의 `/v1/calibration/status`에서 lens/ASA의 일곱 상태 차원 확인(TUI 배지와 같은 정보원). 하나라도 `blocked`면 실패(proxy가 모든 요청을 거부함), 그 외에는 정보 표시 |
 | Stack | image_skew | `atlas-*` 이미지 5개가 모두 같은 태그 |
-| End-to-end | e2e_smoke | llama-server로의 라이브 `/v1/chat/completions` 왕복 (`--quick`으로 건너뜀) |
+| Stack | workspace_mounts | proxy와 sandbox가 같은 호스트 디렉터리를 `/workspace`로 바인드하는지 확인 |
+| End-to-end | e2e_smoke | proxy를 통해 llama-server까지 실제 `/v1/chat/completions` 왕복 실행(`--quick`으로 건너뜀) |
+| End-to-end | inference_contract | llama-server가 lens에서 사용할 수 있는 `/embedding` 벡터와 레이어별 은닉 상태를 제공하는지 확인(아니면 경고, `--quick`으로 건너뜀) |
 
-`vulkan`과 `metal-native` 행은 구성된 백엔드에 따라 조건부입니다. health, `internal_auth`, `status_dimensions` 행은 컨테이너가 하나 이상 떠 있을 때만 실행되고, `e2e_smoke`는 `--quick`으로 건너뜁니다. 나머지 점검은 항상 실행됩니다.
+`vulkan`과 `metal-native`는 설정한 백엔드에 따라 실행합니다. health, `internal_auth`, `status_dimensions`는 컨테이너가 하나 이상 실행 중일 때만 실행하며, `e2e_smoke`와 `inference_contract`는 `--quick`으로 건너뜁니다. 나머지는 항상 실행하지만 `docker` 점검이 실패하면 doctor는 거기서 멈춥니다.
 
 직접 확인하고 싶다면:
 
@@ -463,7 +482,7 @@ atlas doctor
 
 ```bash
 docker compose down          # Stop all services (preserves images)
-docker compose down --rmi all  # Stop and remove images (next start rebuilds)
+docker compose down --rmi all  # Stop and remove images (next start pulls them again)
 ```
 
 ### 로그와 업데이트
@@ -489,7 +508,7 @@ rm -rf ~/.cache/atlas-tui          # TUI session history
 # disk (models are the multi-GB part).
 ```
 
-K3s 설치는 대신 `scripts/install/uninstall.sh`를 사용합니다. 이 스크립트는 매니페스트를 정리하고 (선택적으로) K3s 노드 자체도 제거합니다.
+K3s 설치는 `scripts/install/uninstall.sh`로 매니페스트와 선택적으로 K3s 노드 자체를 제거합니다. `--data`는 데이터 폴더와 사용자 프로젝트가 들어 있는 프로젝트 폴더도 지우며, `--models`는 모델 파일을 지웁니다. 확인을 요청하기 전에 삭제할 각 폴더와 경로를 표시합니다.
 
 ---
 
@@ -622,7 +641,7 @@ GPU 스케줄링, 헬스 프로브, 리소스 제한을 갖춘 Kubernetes 배포
 ```bash
 # 1. Configure
 cp atlas.conf.example atlas.conf
-# Edit atlas.conf: model paths, GPU layers, context size, NodePorts
+# Edit atlas.conf: model paths, context size, NodePorts
 
 # 2. Run the installer (requires root)
 sudo scripts/install/install.sh
@@ -661,7 +680,7 @@ scripts/install/verify-install.sh
 
 ### K3s 전용 설정
 
-K3s는 설정에 `.env`가 아닌 `atlas.conf`를 사용합니다. HTTP 계약과 파이프라인 동작은 Docker Compose와 동일하며, 배포 배관만 다릅니다:
+K3s는 `.env` 대신 `atlas.conf`를 사용합니다. HTTP 계약은 Docker Compose와 같습니다. 아래 배포 구성 외에 런타임 설정 두 가지가 다릅니다. K3s는 llama-server를 `ATLAS_EMBED_POOLING=mean`(Compose는 `none`)으로 실행하며, 서비스 토큰을 마운트하지 않아 내부 인증이 꺼져 있습니다:
 
 | 설정 항목 | Docker Compose | K3s |
 |---------|---------------|-----|
@@ -673,7 +692,7 @@ K3s는 설정에 `.env`가 아닌 `atlas.conf`를 사용합니다. HTTP 계약�
 | GPU 할당 | `deploy.resources.reservations.devices` (nvidia) | `resources.limits.nvidia.com/gpu: 1` (GPU Operator 또는 디바이스 플러그인 필요) |
 | 샌드박스 툴체인 캐시 | 언어별 `tmpfs` 마운트 | 언어별 `sizeLimit` 지정 `emptyDir` (공통 패턴, 동일 세트) |
 
-모델·런타임 파라미터(`ATLAS_MAIN_MODEL`, `ATLAS_CONTEXT_LENGTH`, `ATLAS_PARALLEL_SLOTS`, `ATLAS_FLASH_ATTENTION`, KV 캐시 양자화, 렌즈 스코어링 경로용 `--embeddings`)는 두 모드 모두 동일한 환경 변수에서 읽습니다 — `atlas.conf.example`과 `.env.example`을 참고하세요.
+모델과 런타임 파라미터의 키는 모드별로 다릅니다. Compose는 `.env`에서 `ATLAS_MODEL_FILE`, `ATLAS_CTX_SIZE`, `ATLAS_PARALLEL_SLOTS`, `ATLAS_KV_TYPE_K`/`_V`를 읽고, K3s는 `atlas.conf`에서 `ATLAS_MAIN_MODEL`, `ATLAS_CONTEXT_LENGTH`, `ATLAS_PARALLEL_SLOTS`를 읽습니다. Flash attention과 `--embeddings`는 llama-server 엔트리포인트에 의해 항상 켜집니다. `atlas.conf.example`과 `.env.example`을 참고하세요.
 
 전체 `atlas.conf` 레퍼런스는 [CONFIGURATION.md](../../guides/CONFIGURATION.md)를 참고하세요.
 
@@ -706,6 +725,8 @@ ATLAS는 GPU를 5개 등급으로 분류하고 등급별로 레지스트리 모�
 | **large** | 20–32 GB | Qwen3.5 14B Q5_K_M (10.5 GB) | 32K | 2 | RTX 3090, 4090, 5090 24GB |
 | **xlarge** | 32 GB+ | Qwen3.5 32B Q5_K_M (23 GB) | 64K | 2 | RTX 5090 32GB, A6000, A100, H100 |
 
+small, large, xlarge 모델에는 아직 다운로드 소스와 lens 번들이 없어 `atlas init`은 대신 Qwen3.5 9B Q6_K를 선택합니다. 이 모델을 사용하려면 자체 GGUF를 설치하고(`atlas model install --url`) 번들을 만드세요(`atlas bench` 다음 `atlas lens build --from-results`). 번들이 없으면 요청이 거부됩니다.
+
 ```bash
 atlas tier              # classify this host + show recommendations
 atlas tier list         # show all 5 tier definitions
@@ -716,14 +737,16 @@ atlas tier --raw        # just the probe (no classification)
 
 등급 표는 VRAM 구간별 출발점을 제공합니다. **`atlas tier fit`**은 실제로 실행하는 *특정* 모델에 맞게 이를 다듬습니다 — GGUF의 KV 기하 구조와 GPU의 VRAM을 읽어 완전히 GPU 안에 머무는 최대 컨텍스트를 계산합니다(`atlas tier fit --write`는 결과를 `.env`에 적용). `ATLAS_MODEL_FILE`이나 GPU를 바꿀 때마다 실행하세요. [CLI.md § atlas tier fit](../../reference/CLI.md#atlas-tier-fit)과, 다운로드 전 사이징 안내는 [TROUBLESHOOTING.md § 내 GPU에는 무엇이 들어가는가?](TROUBLESHOOTING.md#내-gpu에는-무엇이-들어가는가)를 참고하세요.
 
-medium 등급이 ATLAS 개발 타깃입니다 — `atlas-bootstrap.sh`는 그 모델+컨텍스트 설정을 기본값으로 합니다. 다른 등급에서는 부트스트랩 완료 후 **`atlas init`**(첫 실행 마법사)을 실행하세요. `atlas tier`로 하드웨어를 탐침하고, 레지스트리에서 알맞은 모델을 골라 SHA 검증과 함께 다운로드하고, `.env`를 다시 씁니다. 하드웨어나 레지스트리 기본 모델이 바뀔 때마다 `atlas init --reconfigure`로 다시 실행하세요. 마법사 실행 후에는 `atlas tier fit --write`가 마법사의 등급 수준 기본값을 선택된 모델에 맞게 조입니다.
+medium 등급은 ATLAS의 개발 대상이며 `atlas-bootstrap.sh`는 이 모델을 기본으로 선택합니다. 컨텍스트와 슬롯은 `atlas tier fit --write`를 실행할 때까지 `.env.example` 값(`ATLAS_CTX_SIZE=131072`, 4슬롯)을 유지합니다. 다른 등급에서는 부트스트랩 완료 후 **`atlas init`**(첫 실행 마법사)을 실행하세요. `atlas tier`로 하드웨어를 감지하고 레지스트리에서 모델을 선택해 SHA 검증과 함께 다운로드한 뒤 `.env`를 다시 씁니다. 하드웨어나 레지스트리 기본값이 바뀌면 `atlas init --reconfigure`로 재실행하고, 이후 `atlas tier fit --write`로 등급별 기본 설정을 선택한 모델에 맞추세요.
 
 | 리소스 | 최소 | 권장 | 비고 |
 |----------|---------|-------------|-------|
 | GPU VRAM | 8 GB | 16 GB | 위의 등급 표 참고 |
-| 시스템 RAM | 14 GB | 16 GB+ | PyTorch 런타임 + 컨테이너 오버헤드 |
-| 디스크 | 15 GB | 25 GB | 모델(등급에 따라 4.4–23 GB) + 컨테이너 이미지(5–8 GB) + 작업 공간 |
+| 시스템 RAM | 12 GB | 16 GB+ | PyTorch 런타임 + 컨테이너 오버헤드 |
+| 디스크 | 20 GB | 25 GB | 모델(등급에 따라 4.4–23 GB) + 컨테이너 이미지(5–8 GB) + 작업 공간 |
 | CPU | 4 코어 | 8+ 코어 | V3 파이프라인은 수리 단계에서 CPU 집약적 |
+
+이 최소값은 가장 작은 GPU 등급에 해당합니다. medium은 시스템 RAM 16 GB와 여유 디스크 25 GB가 필요하며 더 큰 등급은 더 많이 필요합니다. `atlas tier`로 해당 하드웨어 등급의 요구 사항을 확인하세요. Apple Silicon은 OS와 GPU가 메모리를 공유하므로 [SETUP_MACOS.md](../../guides/SETUP_MACOS.md)의 용량 안내를 따르세요.
 
 ### 지원 GPU
 
@@ -731,7 +754,7 @@ VRAM 8GB 이상에 llama.cpp가 지원하는 백엔드를 갖춘 모든 GPU:
 
 | 벤더 | 백엔드 | 상태 | 빌드 경로 | 테스트된 카드 |
 |---|---|---|---|---|
-| NVIDIA (Blackwell — RTX 50xx, B100, GB10) | CUDA | 지원(Supported) (게시된 이미지) | `services/inference/Dockerfile.v31` | RTX 5060 Ti 16GB (주 개발 GPU) |
+| NVIDIA (Blackwell — RTX 50xx, GB10) | CUDA | 지원(Supported) (게시된 이미지) | `services/inference/Dockerfile.v31` | RTX 5060 Ti 16GB (주 개발 GPU) |
 | NVIDIA (Blackwell 이전 — RTX 20xx–40xx, GTX 10xx, V100/A100/H100/T4/L4) | CUDA | 프리뷰(Preview) — 일회성 [로컬 재빌드 필요](#cuda-컴퓨트-캐퍼빌리티-dockerfilev31) | `services/inference/Dockerfile.v31` + `--build-arg CUDA_ARCH=<cc>` | — (업스트림 llama.cpp는 이들을 지원; ATLAS에서의 메인테이너 검증은 없음) |
 | AMD | ROCm / HIP | 커뮤니티 검증(Community-tested) | `services/inference/Dockerfile.rocm` | RX 7900 XTX (커뮤니티 스모크 테스트, [GH #26](https://github.com/inferstep/ATLAS/issues/26)) |
 | Apple Silicon | Metal | 지원 (macOS 하이브리드: 네이티브 llama-server + Docker, [#32](https://github.com/inferstep/ATLAS/issues/32)) | `scripts/install/atlas-setup-macos.sh` + `deploy/compose/docker-compose.macos.yml` | M2 Pro 32GB (검증됨); M3/M4 (목표) |
@@ -742,7 +765,7 @@ VRAM 8GB 이상에 llama.cpp가 지원하는 백엔드를 갖춘 모든 GPU:
 
 #### CUDA 컴퓨트 캐퍼빌리티 (Dockerfile.v31)
 
-`services/inference/Dockerfile.v31`은 특정 CUDA 컴퓨트 캐퍼빌리티에 맞춰 llama.cpp를 컴파일합니다. 기본값 — 그리고 GHCR에 게시된 `atlas-llama` 이미지가 빌드된 값 — 은 `120;121`(Blackwell: RTX 50xx, B100, GB10) **전용**입니다. 게시된 이미지에는 그보다 이전 GPU용 커널이 없고, 내장된 PTX도 하위 방향으로 JIT 컴파일될 수 없으므로, RTX 20/30/40 시리즈, GTX 10xx, Blackwell 이전 데이터센터 카드(V100/A100/H100/T4/L4)에서는 llama-server가 시작 시 `no kernel image is available for execution on the device`로 실패합니다. 본인 아키텍처에 맞춰 추론 이미지를 한 번 재빌드해야 합니다. (잘못된 아치 값으로 로컬 빌드하면 그보다 이른 시점에 `nvcc fatal: unsupported gpu architecture`로 실패합니다.)
+`services/inference/Dockerfile.v31`은 특정 CUDA 컴퓨트 캐퍼빌리티에 맞춰 llama.cpp를 컴파일합니다. 기본값 — 그리고 GHCR에 게시된 `atlas-llama` 이미지가 빌드된 값 — 은 `120;121`(Blackwell: RTX 50xx, GB10) **전용**입니다. 게시된 이미지에는 그보다 이전 GPU용 커널이 없고, 내장된 PTX도 하위 방향으로 JIT 컴파일될 수 없으므로, RTX 20/30/40 시리즈, GTX 10xx, Blackwell 이전 데이터센터 카드(V100/A100/H100/T4/L4)에서는 llama-server가 시작 시 `no kernel image is available for execution on the device`로 실패합니다. 본인 아키텍처에 맞춰 추론 이미지를 한 번 재빌드해야 합니다. (잘못된 아치 값으로 로컬 빌드하면 그보다 이른 시점에 `nvcc fatal: unsupported gpu architecture`로 실패합니다.)
 
 본인 GPU의 아치를 확인한 뒤 `--build-arg CUDA_ARCH=<value>`로 재빌드하세요:
 
@@ -820,10 +843,10 @@ ATLAS는 모든 요청에 Geometric Lens를 사용합니다([ADR 0011](../../adr
 
 가중치 파일을 `services/geometric-lens/geometric_lens/models/`에 배치하거나 Docker Compose에서 `ATLAS_LENS_MODELS`를 통해 마운트하세요. 서비스가 시작 시 자동으로 로드합니다.
 
-가중치가 없는 모델은 자체 벤치마크 데이터로 가중치를 만드세요. `atlas bench`는 프록시를 거치지 않고 V3 단계를 직접 실행하므로, 렌즈에 가중치가 없는 상태에서도 동작합니다. 전체 루프가 CLI로 완결됩니다:
+가중치가 없는 모델은 자체 벤치마크 데이터로 만드세요. `atlas bench`는 proxy를 거치지 않고 모델에 벤치마크 작업을 직접 실행합니다(베이스라인 모드: V3 단계 꺼짐, 작업당 후보 하나). 따라서 lens에 가중치가 없어도 작동합니다. 전체 과정은 CLI로 실행합니다:
 
 ```bash
-atlas bench --run-id mymodel_lens --tasks 200    # 후보 생성 및 셀프 라벨링
+atlas bench --run-id mymodel_lens --tasks 200    # 각 태스크에서 후보 하나를 생성하고 셀프 라벨링
 atlas lens build --force --from-results benchmark/results/mymodel_lens/v3_lcb/per_task
 ```
 
@@ -831,9 +854,7 @@ atlas lens build --force --from-results benchmark/results/mymodel_lens/v3_lcb/pe
 
 ### 자체 llama-server 반입하기
 
-추론을 직접 운영하려면 — 호스트 네이티브 빌드, 원격 머신, 또는 라우터 모드의 llama.cpp —
-이를 사용하는 네 개 서비스가 그쪽을 바라보게 하고 번들된 컨테이너는 스텁으로 바꾸세요.
-`docker-compose.override.yml`을 만듭니다:
+호스트 네이티브 빌드, 원격 머신, llama.cpp router 모드 등 직접 실행한 추론 서버를 사용하려면 이를 소비하는 세 서비스의 연결 대상을 변경하고 기본 컨테이너를 스텁으로 대체하세요. `docker-compose.override.yml`을 만듭니다:
 
 ```yaml
 services:
@@ -842,15 +863,20 @@ services:
     entrypoint: []
     healthcheck:
       test: ["CMD", "true"]
-    deploy: {}
+    deploy:
+      resources:
+        reservations:
+          devices: !reset []         # drop the base file's GPU reservation
   geometric-lens:
     environment:
       LLAMA_URL: http://host.docker.internal:8080
+      LLAMA_EMBED_URL: http://host.docker.internal:8080
   v3-service:
     environment:
-      LLAMA_URL: http://host.docker.internal:8080
+      ATLAS_INFERENCE_URL: http://host.docker.internal:8080
   atlas-proxy:
     environment:
+      ATLAS_INFERENCE_URL: http://host.docker.internal:8080
       ATLAS_LLAMA_URL: http://host.docker.internal:8080
 ```
 
@@ -862,14 +888,7 @@ services:
 (`model name is missing from the request`). `.env`의 `ATLAS_MODEL_NAME`을 서빙 중인 모델 이름으로
 설정하세요 — `atlas doctor`의 스모크 테스트가 이를 함께 보내며, 단일 모델 서버는 이를 무시합니다.
 
-**첫 `docker compose up` 전에** secrets 디렉터리가 존재하는지 확인하세요 — 없으면 바인드 마운트가
-실패합니다:
-
-```bash
-mkdir -p secrets     # or set ATLAS_SECRETS_DIR
-```
-
-`atlas init`이 대신 만들어 주므로, compose를 먼저 띄우는 수동 흐름에서만 필요합니다.
+secrets 디렉터리가 없으면 내부 서비스 인증이 꺼집니다. `atlas init`이 디렉터리와 토큰을 만듭니다.
 
 ### 자체 모델 반입하기
 
@@ -883,11 +902,13 @@ mkdir -p secrets     # or set ATLAS_SECRETS_DIR
 
 `atlas-bootstrap.sh`가 서비스 기동 후 자동으로 빌드합니다. 파이프라인은 다음과 같습니다:
 
-1. `build_cvector_prompts.py`가 커밋된 `services/geometric-lens/asa_calibration/contrast_pairs.jsonl`(1000쌍)을 양성/음성 프롬프트 파일로 변환합니다.
+1. `build_cvector_prompts.py`가 `services/geometric-lens/asa_calibration/contrast_pairs.jsonl`(`generate_pairs.py`가 필요할 때 생성하는 1000쌍)을 양성/음성 프롬프트 파일로 변환합니다.
 2. 부트스트랩이 `llama-server`를 잠시 중지하고, `--method mean -ngl 99` 옵션으로 `llama-cvector-generator`를 원샷 컨테이너로 실행하여 `models/ast_edit_steering.gguf`와, 벡터가 어느 모델에 대해 빌드되었는지 기록하는 `models/ast_edit_steering.gguf.model` 사이드카 마커를 쓴 뒤, `llama-server`를 재시작합니다.
 3. `services/inference/entrypoint-v3.1.sh`가 다음 시작 시 파일을 발견하면, `.model` 사이드카 마커가 선택된 모델과 일치하는지 확인하고 `llama-server` 명령줄에 `--control-vector-scaled /models/ast_edit_steering.gguf:0.5`를 덧붙입니다. 마커가 없거나 다른 모델을 지명하는 벡터는 **비활성화** 상태로 유지됩니다(시작 배너가 이유를 보고합니다) — 벡터는 한 모델에 묶인 residual-space 아티팩트입니다.
 
 빌드는 모델이 있는 하드웨어에서 실행되며, 결과 벡터는 모델 전용입니다(한 모델의 아티팩트에 대해 빌드된 `ast_edit_steering.gguf`를 다른 베이스 모델을 돌리는 호스트로 옮기지 마세요).
+
+> `ast_edit_steering` 파일명은 의도적으로 유지됩니다. 레지스트리가 SHA로 고정하고 옆에 `.model` 마커가 있으므로, 대상 도구가 `structural_edit`로 바뀌어도 이름을 유지합니다.
 
 **동작 재정의** (튜닝하려면 `.env`에 설정):
 
@@ -898,7 +919,7 @@ mkdir -p secrets     # or set ATLAS_SECRETS_DIR
 | `ATLAS_CONTROL_VECTOR_LAYER_RANGE` | (전체 레이어) | 두 정수를 전달(예: `"24 30"`)해 레이어 대역으로 범위를 한정. 좁을수록 안전하지만 약해집니다. |
 | `ATLAS_CONTROL_VECTOR_ALLOW_UNVERIFIED` | `0` | `1`로 설정하면 `.model` 사이드카 마커가 없거나 선택된 모델과 불일치해도 벡터를 적용. 직접 빌드해 일치함을 아는 벡터에만 사용하세요. |
 
-**로컬 빌드가 실패하면**(예: 구형 `atlas-llama` 이미지에 cvector-generator 부재, GPU OOM, 런타임 pull 중 네트워크 문제) 부트스트랩은 [ATLAS HuggingFace 데이터셋](https://huggingface.co/datasets/itigges22/ATLAS)에서 사전 빌드된 `ast_edit_steering.gguf`를 다운로드하는 것으로 폴백합니다. 그것도 실패하면 설치는 경고와 함께 완료됩니다 — `atlas doctor`가 그 공백을 `fail`이 아닌 `warn`으로 표시합니다.
+**로컬 빌드가 실패하면**(이전 `atlas-llama` 이미지에 cvector-generator가 없거나 GPU OOM, 런타임 다운로드 중 네트워크 문제 등), 설치는 경고와 함께 완료되고 ATLAS는 스티어링 없이 실행됩니다. 다른 모델용 벡터를 적용하지 않습니다. `atlas doctor`는 이를 `fail`이 아닌 `warn`으로 표시합니다.
 
 빌드를 완전히 건너뛰려면 설치 프로그램 실행 전에 `ATLAS_BOOTSTRAP_SKIP_ASA=1`을 설정하세요.
 

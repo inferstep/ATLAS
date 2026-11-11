@@ -599,7 +599,7 @@ The filename must match the required `ATLAS_MODEL_FILE` selection in `.env`.
 
 **Fix:** Ensure:
 1. No other GPU processes are running (`nvidia-smi` — check for other CUDA processes)
-2. You have 16GB+ VRAM
+2. The model fits your available VRAM (see [What fits on my GPU?](#what-fits-on-my-gpu)); 16 GB is a recommendation, not a universal minimum
 3. The runtime is sized for your model + GPU: `atlas tier fit --write` (don't raise `ATLAS_CTX_SIZE` past what it recommends)
 
 ```bash
@@ -934,7 +934,9 @@ docker network create sandbox-net
 
 **Symptom:** Sandbox returns an error for a specific language.
 
-**Supported languages (execution):** Python, JavaScript, TypeScript, Go, Java, Kotlin, Rust, C, C++, Ruby, PHP, Bash. Syntax-only checks (`/syntax-check`, V3 smoke check) additionally cover HTML, XML, JSON, and YAML.
+**Implemented `/execute` handlers:** Python, JavaScript, TypeScript, Go, Java, Kotlin, Rust, C, C++, Ruby, PHP, Bash. In the default Docker deployment, Go, Rust, C, and C++ compile but cannot run the native binary from the `noexec` workspace under `/tmp/sandbox` ([#163](https://github.com/inferstep/ATLAS/issues/163)). Use project commands through `run_command` (`/shell`) to build and run them in `/workspace`; Go's `go run` uses the executable `GOTMPDIR` mount. Java and Kotlin run through the JVM; Ruby and PHP use their interpreters. These four language paths are Preview in the [support matrix](SUPPORT_MATRIX.md), not a claim of Supported status merely because handlers exist.
+
+**Syntax checking:** `/syntax-check` also covers HTML, XML, JSON, and YAML. V3 selects its smoke checker by file extension; see [V3 Hangs for Several Minutes on Non-Python Files](#v3-hangs-for-several-minutes-on-non-python-files) for the C/C++ extension-map limitation. Syntax checking is not execution.
 
 Check available runtimes:
 ```bash
@@ -987,14 +989,9 @@ To get faster (but lower quality) results:
 
 **Symptom:** System becomes sluggish or services get OOMKilled.
 
-**Expected RAM usage:**
-- llama-server: ~8 GB (model in VRAM, minimal RAM)
-- geometric-lens: ~200 MB (PyTorch runtime + models)
-- v3-service: ~150 MB (no PyTorch: it parses and orchestrates)
-- sandbox: ~100 MB (base, spikes during compilation)
-- atlas-proxy: ~30 MB (Go binary)
+The smallest GPU tier requires 12 GB of system RAM; the medium tier requires 16 GB. Larger tiers need more. These host requirements include the containers, host OS, sandbox tmpfs, and pipeline bursts; they are not measurements of idle service usage. GPU VRAM is a separate budget on discrete GPUs, while Apple Silicon shares system memory. See [host system requirements](SETUP.md#hardware-sizing).
 
-**Total:** ~500 MB RAM + 8.2 GB VRAM. If you have less than 14 GB system RAM, other services may compete for memory.
+Run `atlas tier` for the selected hardware tier and `docker stats` to inspect current container usage. Compilation and dependency installs can grow the sandbox's memory use; files written to its tmpfs mounts count toward the container memory limit too.
 
 ---
 

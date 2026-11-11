@@ -1,4 +1,4 @@
-<!-- source: docs/reference/ARCHITECTURE.md synced-through: 7bb86537fd98a8ed6bc63d551502482c722aa60a -->
+<!-- source: docs/reference/ARCHITECTURE.md synced-through: 7e33f929de56372528b58bd9895f587735fef89a -->
 > **[English](../../reference/ARCHITECTURE.md)** | **[简体中文](../zh-CN/ARCHITECTURE.md)** | **[日本語](../ja/ARCHITECTURE.md)** | **한국어**
 
 # ATLAS 아키텍처
@@ -47,7 +47,7 @@ llama-server는 GPU를 사용하는 유일한 서비스입니다. 다른 모든 
 
 | 백엔드 | 상태 (V3.1.x) | 이미지 / 빌드 경로 | Compose 오버라이드 | 테스트된 카드 |
 |---|---|---|---|---|
-| **CUDA** (NVIDIA) | 지원(Supported) (V3.1.0부터) | `services/inference/Dockerfile.v31` → `atlas-llama` | (기본값) | RTX 5060 Ti 16GB (정규). 게시된 이미지는 Blackwell(컴퓨트 캐퍼빌리티 12.0/12.1) 전용으로 컴파일되어 있으며, 이전 세대는 로컬 재빌드가 필요합니다 — [SETUP.md](SETUP.md) 참고 |
+| **CUDA** (NVIDIA) | Blackwell: Supported(V3.1.0부터); 이전 GPU: Preview, 로컬 재빌드 필요 | `services/inference/Dockerfile.v31` → `atlas-llama` | (기본값) | RTX 5060 Ti 16GB (정규). 게시된 이미지는 Blackwell(컴퓨트 캐퍼빌리티 12.0/12.1) 전용으로 컴파일되어 있으며, 이전 세대는 로컬 재빌드가 필요합니다 — [SETUP.md](SETUP.md) 참고 |
 | **ROCm / HIP** (AMD) | 커뮤니티 검증(Community-tested) (V3.1.1부터) | `services/inference/Dockerfile.rocm` → `atlas-llama-rocm`, 호스트에서 빌드 (`pull_policy: build`; GHCR 이미지 없음) | `deploy/compose/docker-compose.rocm.yml` | RX 7900 XTX (커뮤니티 스모크 테스트, GH #26) |
 | **Metal** (Apple Silicon) | 지원 ([#32](https://github.com/inferstep/ATLAS/issues/32)) | 하이브리드: 네이티브 llama-server (Metal) + 나머지는 Docker (macOS는 컨테이너로 GPU 패스스루 불가) | `deploy/compose/docker-compose.macos.yml` | M 시리즈; ≤16 GB에서 Q4_K_M, ≥24 GB 통합 메모리에서 Q6_K |
 | **Vulkan** (크로스 벤더 폴백) | 프리뷰(Preview) | `services/inference/Dockerfile.vulkan` → `atlas-llama-vulkan` | `deploy/compose/docker-compose.vulkan.yml` | lavapipe CPU 부팅 경로 (스모크 테스트됨); 실제 GPU 검증은 아직 없음 |
@@ -102,8 +102,8 @@ K3s 배포 경로(`scripts/install/install.sh`, `deploy/k3s/`의 매니페스트
 | `loop_turn.go`, `loop_checks.go`, `loop_results.go` | 루프의 한 턴: 모델 호출과 응답, 도구 실행 전 검사, 결과와 스턱 루프 차단기. `loop_turn.go`는 읽기 전용 호출이 반복된 뒤 요청이 요구하는 바에 따라 실행에 행동하거나 답하라고 재촉합니다 |
 | `tools.go`, `tool_*.go` | 16개 도구 정의와 실행기, 등급 분류, 도구 호출 문법 |
 | `gates*.go` | 정직성/계획 게이트: 클레임 체크, 구조, 구문, 임베드 스크립트, 계획 준수, 계획 리마인더 |
-| `loop_detectors.go` | 스턱 패턴 검출: 도구 반복, 추론 반복, 트레이스백 지역화 |
-| `loop_project.go` | 컨텍스트 보강: 심볼 인덱스, 프로젝트 스캔, 워크스페이스 봉쇄, 세션 파일 매니페스트 |
+| `loop_detectors.go` | 스턱 패턴 검출: 도구 반복, 추론 반복, 트레이스백의 오류 위치 확인 |
+| `loop_project.go` | 컨텍스트 보강: 심볼 인덱스, 프로젝트 스캔, 워크스페이스 경계 제한, 세션 파일 매니페스트 |
 | `guardrails_permissions.go` | 권한 게이트(`/v1/permission`), 트러스트 모드, 하드 차단 패턴 |
 | `lens.go` | 렌즈 스코어링 호출, 캘리브레이션 상태 |
 | `lens_identity.go` | Lens 서비스를 직접 호출할 때 쓰는, 프록시가 소유한 호출 신원을 만들어 붙입니다 |
@@ -341,7 +341,7 @@ V3 출처 필드로 투영하며, 결과가 `ctx.Messages`로 가는 유일한 �
 
 두 종료 경로 — 모델이 낸 `done`과 텍스트 응답 — 는 하나의 마무리 함수를 통해, 하나의 순서로 그 결정에 도달합니다: 기존 산출물 실패는 그 자체의 더 구체적인 사유를 유지합니다. 그렇지 않으면 디스크의 무언가를 바꾸라는 요청을 받고도 아무것도 바꾸지 않은 실행은 `incomplete` / `action_demanded_unmet`입니다. 그렇지 않으면 검증하라는 요청을 받고도 하지 않은 실행은 `incomplete` / `verification_demanded_unmet`입니다. 그렇지 않으면 완료가 유지됩니다. 술어는 이미 요약을 다시 쓰는 것과 같은 것이므로, 기계 판독용 절반과 산문이 더 이상 서로 모순될 수 없습니다.
 
-모든 종료 게이트는 되돌려 보내기 세 번으로 제한되며, 되돌려 보내기를 다 쓴 게이트는 실행을 더 되돌려 보내지 않지만, 집계는 멈추지 않습니다. 종료 시점에 발견 사항이 여전히 유효하면 게이트가 그것을 기록합니다. 전달된 작업에 대한 사실인 발견 사항은 실행을 `incomplete`로 끝내며, 앞선 검사가 이미 종료를 거부하지 않은 한 각자 자기 사유를 가집니다: `claim_check_unresolved`(코드가 렌더링하는 템플릿이 존재하지 않음), `warned_file_never_run`(파스 경고와 함께 쓰인 파일이 한 번도 실행되지 않음), `unread_citation`(응답이 실행이 읽지 않은 파일을 인용함). 오탐이 알려진 휴리스틱 게이트는 실행이 완료되도록 두되, 여전히 발견한 것을 요약에 밝힙니다: 일치하는 라우트가 없는 폼이나 요청 대상, 아무것도 호출하지 않는 추가된 코드, 끝나지 않은 계획 단계, stdin에 파일을 파이프해서만 실행된 프로그램, 그리고 실행이 검증한 뒤 바뀐 바이트. 검증이 요구된 경우, 표류(drift)와 마지막 변경 전에 시작된 서버에 닿은 프로브는 실행을 미검증 상태로 남기므로 실행은 `verification_demanded_unmet`으로 끝납니다. `done` 이벤트는 다 쓴 게이트가 있을 때마다 그 이름을 `unresolved`에 담습니다.
+모든 종료 게이트는 되돌려 보내기 세 번으로 제한되며, 되돌려 보내기를 다 쓴 게이트는 실행을 더 되돌려 보내지 않지만, 집계는 멈추지 않습니다. 종료 시점에 발견 사항이 여전히 유효하면 게이트가 그것을 기록합니다. 전달된 작업에 대한 사실인 발견 사항은 실행을 `incomplete`로 끝내며, 앞선 검사가 이미 종료를 거부하지 않은 한 각자 자기 사유를 가집니다: `claim_check_unresolved`(코드가 렌더링하는 템플릿이 존재하지 않음), `warned_file_never_run`(파스 경고와 함께 쓰인 파일이 한 번도 실행되지 않음), `unread_citation`(응답이 실행이 읽지 않은 파일을 인용함). 오탐이 알려진 휴리스틱 게이트는 실행이 완료되도록 두되, 여전히 발견한 것을 요약에 밝힙니다: 일치하는 라우트가 없는 폼이나 요청 대상, 어디에서도 호출되지 않는 추가된 코드, 끝나지 않은 계획 단계, stdin에 파일을 파이프해서만 실행된 프로그램, 그리고 실행이 검증한 뒤 바뀐 바이트. 검증이 요구된 경우, 표류(drift)와 마지막 변경 전에 시작된 서버에 닿은 프로브는 실행을 미검증 상태로 남기므로 실행은 `verification_demanded_unmet`으로 끝납니다. `done` 이벤트는 다 쓴 게이트가 있을 때마다 그 이름을 `unresolved`에 담습니다.
 
 모델이 낸 `done`은 실행의 파일 의무 — 선언한 것과 쓴 것 — 가 지금 이 순간, 쓰기 경로가 쓰는 것과
 같은 구문 계약을 통해 입증 가능하게 충족될 때만 `completed`입니다. 무언가가 삭제되거나 이동되었으면
@@ -735,7 +735,7 @@ flowchart LR
 
 **후보 할당: CxGx 게이트**(`phase2` / `phase2_allocated`로 방출)가 실패한 프로브에 후보를 몇 개 줄지 결정합니다. 프로브의 C(x)+G(x) 결합 점수(임베딩 추출 1회, 두 모델 모두 사용)가 2단계 규칙을 구동합니다: 보정된 C(x) 정규화 에너지가 Budget Forcing이 쓰는 것과 같은 사다리에서 기본 티어를 고르고, G(x) 품질 점수가 모델의 보정된 severe 경계 아래로 떨어지면 그 티어를 +1, 한참 아래(그 0.75배)로 떨어지면 +2 올립니다 — 프로브가 C(x)에는 싸 보이지만 G(x)에는 틀려 보이는 경우입니다. 티어가 k를 정하고(`nothink` 1, `standard` 3, `hard` 5, `extreme` 8) 여기에 **k >= 3의 하드 플로어**가 걸립니다. 따라서 게이트는 기존에 고정돼 있던 k=3에 후보를 더할 수만 있고 뺄 수는 없으며, 최악의 경우가 곧 예전 동작입니다. 두 신호 모두 이 모델의 보정 파일(`cx_normalization.json`, `gx_thresholds.json`)을 필요로 합니다: 렌즈가 보정되지 않았거나, 렌즈가 프로브를 거절하면(임베딩 배치에 비해 너무 김, 비어 있음) `standard`에서 정확히 k=3을 할당하므로, 보정되지 않은 번들은 자기에게 아무 의미도 없는 척도로 라우팅되는 대신 예전에 돌리던 파이프라인을 그대로 돌립니다. 스코어링을 전혀 할 수 없는 렌즈는 대신 실행을 멈춥니다([ADR 0011](../../adr/0011-the-lens-is-required.md)).
 
-이 플로어가 앞서 제거된 C(x) 전용 할당기와의 차이입니다: 그쪽은 플로어가 없어서 *방금 실패한* 프로브의 태스크에 k=1을 건네주었습니다. 렌즈 기반 할당이 고정 또는 무작위 티어 할당보다 나은지는 측정되지 않았습니다. 이전의 4-암 비교(게이트 적용, 고정 k=3, 같은 티어 구성을 태스크 간에 섞은 것, k=8, 암당 n=175)는 어느 쪽의 근거도 되지 않습니다. 이 비교는 Qwen3.5-9B에서, 이 저장소에 없는 패치된 러너로, 라이브 게이트가 적용할 수 없는 에스컬레이션 시 사고(thinking)를 켠 채, G(x) 헤드 학습에 쓰인 LiveCodeBench 태스크에서 실행되었고, 그 표본 크기에서는 암 간 차이가 잡음 범위 안에 있습니다.
+이 플로어가 앞서 제거된 C(x) 전용 할당기와의 차이입니다: 그쪽은 플로어가 없어서 *방금 실패한* 프로브의 태스크에 k=1을 건네주었습니다. 렌즈 기반 할당이 고정 또는 무작위 티어 할당보다 나은지는 측정되지 않았습니다. 이전의 4개 군 비교(게이트 적용, 고정 k=3, 같은 티어 구성을 태스크 간에 섞은 것, k=8, 군당 n=175)는 어느 쪽의 근거도 되지 않습니다. 이 비교는 Qwen3.5-9B에서, 이 저장소에 없는 패치된 러너로, 라이브 게이트가 적용할 수 없는 에스컬레이션 시 사고(thinking)를 켠 채, G(x) 헤드 학습에 쓰인 LiveCodeBench 태스크에서 실행되었고, 그 표본 크기에서는 군 간 차이가 잡음 범위 안에 있습니다.
 
 라이브 경로와의 차이: 프록시의 V3 브리지는 `ATLAS_V3_TIMEOUT`(기본 300s) 이후 파이프라인 호출을 포기합니다. 벤치에는 없던 상한이라, k=8로의 무제한 에스컬레이션은 예산을 생성에 다 써 버리고 시간 안에 낼 수 있었던 k=3 답 대신 타임아웃 폴백을 반환하게 됩니다. 그래서 라이브 오케스트레이터는 남은 실시간과 해당 태스크에서 관측된 호출당 지연을 함께 넘기고, 게이트는 예산이 실제로 생성할 수 있는 수준까지 티어를 낮춥니다 — 에스컬레이션이 Phase 3를 굶기지 않도록 리파인먼트 1회분을 남겨 두되, 플로어 아래로는 결코 내려가지 않습니다. 벤치 러너는 예산을 넘기지 않고 측정된 그대로 할당합니다. 구현은 `services/v3-service/stages/cxgx_gate.py`이며 두 오케스트레이터가 공유합니다.
 
@@ -875,7 +875,7 @@ C(x) 정규화는 `sigmoid(steepness × (energy - midpoint))`입니다. 선택�
 
 ## 6. Sandbox
 
-컴파일, 테스트, 린팅을 갖춘 격리된 코드 실행 환경입니다.
+컴파일, 테스트, 린팅을 갖춘 격리 코드 실행 환경입니다. 그림은 구현된 핸들러 목록이며 지원 등급을 보장하지 않습니다. Java, Kotlin, Ruby, PHP는 Preview입니다([지원 매트릭스](../../guides/SUPPORT_MATRIX.md)). 기본 Docker 배포에서 Go, Rust, C, C++의 `/execute` 핸들러는 컴파일할 수 있지만 작업 디렉터리 `/tmp/sandbox`가 `noexec`라 네이티브 바이너리를 실행할 수 없습니다([#163](https://github.com/inferstep/ATLAS/issues/163)). `/shell` 프로젝트 명령은 `/workspace`에서 빌드·실행할 수 있고, Go의 `go run`은 실행 가능한 `GOTMPDIR` 마운트를 사용합니다. `/syntax-check`는 파싱 또는 컴파일만 하며 제출한 프로그램을 실행하지 않습니다.
 
 ```mermaid
 graph LR

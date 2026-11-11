@@ -1,4 +1,4 @@
-<!-- source: docs/guides/GETTING_STARTED.md synced-through: 5610fde5ba546c1b0f7c7cb0c1e5b6b4339083b7 -->
+<!-- source: docs/guides/GETTING_STARTED.md synced-through: 0cd25cdfe99f1602e4ba38de5985f255228f20dd -->
 > **[English](../../guides/GETTING_STARTED.md)** | **简体中文**
 
 > ℹ️ **译者注：** 若本译文与英文原版 ([GETTING_STARTED.md](../../guides/GETTING_STARTED.md)) 有出入，以英文原版为准。
@@ -66,7 +66,7 @@ atlas doctor
 - **大改动**触发 V3 流水线：Pipeline 窗格展示规划、多个候选的生成、沙箱验证与修复，然后才有任何东西落盘（T2 路径）。
 - **权限提示**在默认模式下出现在破坏性步骤（shell 命令、删除）之前——`y` 允许一次，`a` 本会话内允许，`n` 拒绝。每次删除单独询问；`a` 从不覆盖之后的删除。各模式的文档见 [CLI.md § 权限模式](../../reference/CLI.md#permission-modes)。
 
-之后：用 `/diff`（或 `git diff`）审阅，跑你的测试，满意再提交。`/undo` 会软重置 agent 做出的最后一次提交；`Ctrl+C` 中途取消一个回合。
+之后：用 `/diff`（或 `git diff`）审阅，跑你的测试，满意再提交。`/undo` 会软重置最后一次提交，无论提交者是谁；`Ctrl+C` 中途取消一个回合。
 
 ## 自带模型
 

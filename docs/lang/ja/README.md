@@ -1,4 +1,4 @@
-<!-- source: README.md synced-through: 04200038b5c2bd17d531f7441507853132f165aa -->
+<!-- source: README.md synced-through: 7e33f929de56372528b58bd9895f587735fef89a -->
 > **[English](../../../README.md)** | **[简体中文](../zh-CN/README.md)** | **日本語** | **[한국어](../ko/README.md)**
 
 <p align="center">
@@ -128,10 +128,11 @@ bash atlas-bootstrap.sh
 
 | | |
 |---|---|
-| GPU | VRAM 16GB 以上。NVIDIA (CUDA、サポート対象 (Supported))、AMD (ROCm、コミュニティ検証済み (Community-tested))、または Apple Silicon (Metal、macOS ハイブリッド、サポート対象)。その他大半の GPU は Vulkan (プレビュー (Preview)) でカバー。プレビルドの CUDA イメージは Blackwell (RTX 50xx) を対象としており、それより古い NVIDIA GPU は一度だけのローカル再ビルドが必要です ([SETUP.md § CUDA Compute Capability](../../guides/SETUP.md#cuda-compute-capability-dockerfilev31) を参照)。レベルの定義: [SUPPORT_MATRIX.md](../../guides/SUPPORT_MATRIX.md)。GPU 一覧: [SETUP.md § Supported GPUs](../../guides/SETUP.md#supported-gpus)。特定のモデルがお使いのカードに収まるかは [What fits on my GPU?](../../guides/TROUBLESHOOTING.md#what-fits-on-my-gpu) を参照。 |
+| GPU | 最小の GPU ティアでは VRAM 8 GB 以上、推奨は 16 GB です。収まるモデルとコンテキストを選んでください。NVIDIA Blackwell（CUDA、Supported）に対応し、古い NVIDIA GPU（Preview）は一度だけローカル再ビルドが必要です（[SETUP.md § CUDA Compute Capability](../../guides/SETUP.md#cuda-compute-capability-dockerfilev31)）。AMD ROCm は Community-tested、Apple Silicon Metal（macOS ハイブリッド）は Supported でシステムメモリを共有、Vulkan は Preview です。レベル: [SUPPORT_MATRIX.md](../../guides/SUPPORT_MATRIX.md)。GPU 一覧: [SETUP.md § Supported GPUs](../../guides/SETUP.md#supported-gpus)。モデルとカードの容量を合わせるには [What fits on my GPU?](../../guides/TROUBLESHOOTING.md#what-fits-on-my-gpu) を参照してください。 |
+| システム RAM | 最小の GPU ティアでは 12 GB 以上、推奨は 16 GB 以上です。上位ティアにはさらに必要です（[ホスト要件](../../guides/SETUP.md#hardware-sizing)）。 |
 | ランタイム | Docker (NVIDIA: + nvidia-container-toolkit; AMD: 単体の Docker で十分) |
 | Python | 3.9 以上 |
-| ディスク | 約 20GB CUDA / 約 22GB ROCm (モデル重み + コンテナイメージ) |
+| ディスク | 最小の GPU ティアでは空き容量 20 GB 以上、推奨は 25 GB です。大きなモデル、バックエンドのイメージ、ビルドファイルにはさらに必要です（[ホスト要件](../../guides/SETUP.md#hardware-sizing)）。 |
 
 Apple Silicon は macOS ハイブリッド Metal パス（ネイティブ llama-server + 残りは Docker — **[SETUP_MACOS.md](../../guides/SETUP_MACOS.md)** を参照）でネイティブ動作します。Intel Arc (SYCL) はロードマップ上の項目です。手動インストール手順 (Docker Compose、ベアメタル、K3s) とブートストラップフラグの一覧は **[SETUP.md](./SETUP.md)** をご参照ください。
 
@@ -139,7 +140,7 @@ Apple Silicon は macOS ハイブリッド Metal パス（ネイティブ llama-
 
 ## ⚠️ 既知の制限事項
 
-- **Linux の Docker スタック、加えてネイティブ macOS パス。** NVIDIA (サポート対象 (Supported))、AMD ROCm (コミュニティ検証済み (Community-tested))、Vulkan (プレビュー (Preview)) の Docker パスが現在存在します。Apple Silicon (サポート対象) はネイティブ macOS ハイブリッド Metal パス ([#32](https://github.com/inferstep/ATLAS/issues/32)) で動作します。Intel Arc / SYCL はロードマップ (Roadmap) です。レベルの定義: [SUPPORT_MATRIX.md](../../guides/SUPPORT_MATRIX.md)。
+- **Linux の Docker スタック、加えてネイティブ macOS パス。** NVIDIA Blackwell（Supported。古い NVIDIA カードはローカル再ビルドが必要な Preview）、AMD ROCm (コミュニティ検証済み (Community-tested))、Vulkan (プレビュー (Preview)) の Docker パスが現在存在します。Apple Silicon (サポート対象) はネイティブ macOS ハイブリッド Metal パス ([#32](https://github.com/inferstep/ATLAS/issues/32)) で動作します。Intel Arc / SYCL はロードマップ (Roadmap) です。レベルの定義: [SUPPORT_MATRIX.md](../../guides/SUPPORT_MATRIX.md)。
 - **ATLAS には現在のベンチマーク結果がありません。** V3.0 の LiveCodeBench の数値は撤回しました（[CHANGELOG](../../../CHANGELOG.md#withdrawn-the-v30-livecodebench-result-746) 参照）。現行リリースの能力・信頼性の数値はまだ測定されていません。数値は保留タスクでの再測定後にのみ公表し、モデル別の結果は [#28](https://github.com/inferstep/ATLAS/issues/28) で追跡します。
 - **レンズのシグナルはまだ実証されていません。** リファレンスモデルではスコアは出ますが未較正のままで、介入は中立です。3.1.6 では有効なシグナルが得られず、`dev` ではまだ測定していません ([#281](https://github.com/inferstep/ATLAS/issues/281))。
 - **複雑な機能追加は不安定なことがあります。** コンパクトなモデルは、コードを書き始める前に不慣れなコードベースの探索にエージェントターンを費やすことがあります。
