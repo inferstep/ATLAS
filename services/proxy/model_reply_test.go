@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+)
 
 // A tool call whose arguments are not under "args" gets them lifted from
 // where the model put them; one it cannot place keeps none.
@@ -47,5 +52,64 @@ func TestAReplyThatDoesNotParseIsNamedByItsShape(t *testing.T) {
 		if category, _ := classifyParseFailure(tc.raw, ""); category != tc.category {
 			t.Errorf("%s: %q, want %q", tc.name, category, tc.category)
 		}
+	}
+}
+
+func TestCancelledModelPhaseDoesNotCallInference(t *testing.T) {
+	calls := 0
+	server := stubInference(t, []string{`{"type":"done","summary":"done"}`}, 1, &calls)
+	defer server.Close()
+	ctx := NewAgentContext(t.TempDir(), Tier0Conversational)
+	ctx.InferenceURL = server.URL
+	ctx.Ctx, ctx.cancelWork = context.WithCancel(context.Background())
+	ctx.cancelWork()
+	loop := &agentLoop{ctx: ctx, st: &runState{}}
+	check := modelCheckInput{loop: loop}
+	result := runCheckPhase(proxyChecks.modelStart, &check)
+	if result != (checkResult{checkInfrastructureError, runEnds}) || check.err != nil || ctx.TerminalStatus != "incomplete" || ctx.TerminalReason != "cancelled" {
+		t.Fatalf("cancelled phase = %+v, %v", result, check.err)
+	}
+	response, parsed, outcome, err := loop.takeModelTurn(0)
+	if response != "" || parsed.Type != "" || outcome != runEnds || err != nil {
+		t.Fatalf("cancelled turn = %q, %+v, %v, %v", response, parsed, outcome, err)
+	}
+	if calls != 0 {
+		t.Errorf("cancelled turn made %d inference calls", calls)
+	}
+}
+
+func TestFencedFetchCategoriesPreserveTheErrorAndFailureCharge(t *testing.T) {
+	ctx := NewAgentContext(t.TempDir(), Tier0Conversational)
+	ctx.FencedFailures = map[string]int{fencedKey(ctx, "note.txt"): maxFencedFailuresPerPath}
+	_, err := fetchFencedContent(ctx, "call", "note.txt")
+	if err == nil || fencedErrorCategory(err) != checkGuardRefusal {
+		t.Fatalf("spent allowance category = %v", err)
+	}
+	if ctx.FencedFailures[fencedKey(ctx, "note.txt")] != maxFencedFailuresPerPath {
+		t.Fatal("admission charged another attempt")
+	}
+
+	ctx.Ctx, ctx.cancelWork = context.WithCancel(context.Background())
+	ctx.cancelWork()
+	fetch := fencedFetch{ctx: ctx, path: "cancelled.txt"}
+	_, done, err := fetch.settle(fencedAnswer{err: context.Canceled}, 0)
+	if !done || fencedErrorCategory(err) != checkInfrastructureError || !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled fetch = %v, %v", done, err)
+	}
+	if ctx.FencedFailures[fencedKey(ctx, "cancelled.txt")] != 1 {
+		t.Fatal("cancelled attempt was not charged once")
+	}
+
+	calls := 0
+	server := stubInference(t, []string{"no block", "still no block"}, 1, &calls)
+	defer server.Close()
+	ctx = NewAgentContext(t.TempDir(), Tier0Conversational)
+	ctx.InferenceURL = server.URL
+	_, err = fetchFencedContent(ctx, "call", "note.txt")
+	if err == nil || fencedErrorCategory(err) != checkModelError || !strings.HasPrefix(err.Error(), "no fenced block after 2 attempt(s)") {
+		t.Fatalf("unusable model reply = %v", err)
+	}
+	if calls != 2 || ctx.FencedFailures[fencedKey(ctx, "note.txt")] != 2 {
+		t.Fatalf("attempts=%d, failures=%v", calls, ctx.FencedFailures)
 	}
 }

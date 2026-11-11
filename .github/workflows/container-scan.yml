@@ -9,9 +9,8 @@ name: Container image scan
 # them; a run with none closes the open issue. A finding with no fix does not
 # count (ignore-unfixed). The run blocks no merge: it is not a check of a pull
 # request.
-# Not scanned: the ROCm inference image (services/inference/Dockerfile.rocm). It is
-# built on the user's machine and never published, so there is no image to
-# read here.
+# The ROCm job builds and scans the inference image for AMD graphics
+# processors. The job does not publish it.
 on:
   schedule:
     - cron: '0 6 * * 1'   # weekly, Monday 06:00 UTC
@@ -80,9 +79,64 @@ jobs:
           path: trivy.json
           retention-days: 7
 
+  rocm:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Free disk space for the ROCm build
+        uses: jlumbroso/free-disk-space@ceedf095f4ec1a097402bc6bd80831f2e1a6fde6  # v2.0.0
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: true
+          swap-storage: false
+
+      # See docs/project/gates.md, "Docker Hub and the checks", for the mirror's fallback.
+      # actionlint does not support the $/ form that zizmor requests.
+      - uses: ./.github/actions/docker-hub-mirror  # zizmor: ignore[self-repository]
+
+      - name: Build the ROCm image
+        # One graphics processor target is enough: Trivy reads operating system
+        # and package layers, which do not depend on the target.
+        run: docker build -f services/inference/Dockerfile.rocm --build-arg GFX_TARGET=gfx1100 -t atlas-llama-rocm:local services/inference
+
+      - name: Scan the ROCm image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          image-ref: atlas-llama-rocm:local
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          timeout: 30m0s
+          exit-code: '0'
+
+      - name: the CRITICAL findings that have a fix, for the report job
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          image-ref: atlas-llama-rocm:local
+          format: json
+          output: trivy.json
+          severity: CRITICAL
+          ignore-unfixed: true
+          timeout: 30m0s
+          exit-code: '0'
+          skip-setup-trivy: true
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: trivy-atlas-llama-rocm-local
+          path: trivy.json
+          retention-days: 7
+
   report:
     name: the issue of CRITICAL findings that have a fix
-    needs: trivy
+    needs: [trivy, rocm]
     # A scan that failed leaves the run red by itself; the findings of the
     # others are still reported.
     if: ${{ !cancelled() }}
@@ -116,11 +170,12 @@ jobs:
           # The issue is closed only after a week in which every image was
           # scanned: an image that went unscanned has findings nobody saw.
           SCANS: ${{ needs.trivy.result }}
+          ROCM_SCAN: ${{ needs.rocm.result }}
         run: |
           number=$(gh issue list --repo "$REPO" --state open --search "in:title \"$TITLE\"" --json number,title \
             | jq -r --arg title "$TITLE" 'map(select(.title == $title))[0].number // empty')
           if [ "$COUNT" = "0" ]; then
-            if [ -n "$number" ] && [ "$SCANS" = "success" ]; then
+            if [ -n "$number" ] && [ "$SCANS" = "success" ] && [ "$ROCM_SCAN" = "success" ]; then
               gh issue close "$number" --repo "$REPO" --comment "The scan of run $RUN found no CRITICAL finding that has a fix."
             fi
             exit 0

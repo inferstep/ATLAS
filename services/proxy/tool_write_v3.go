@@ -677,15 +677,9 @@ func syntaxRefusal(path, content, detail string) *wire.ToolResult {
 // applyWriteGates runs the gates between the decision and the disk, in order.
 // A non-nil result ends the write with it.
 func applyWriteGates(write *v3Write) *wire.ToolResult {
-	for _, gate := range []func(*v3Write) *wire.ToolResult{
-		withdrawRefusedCandidate, refuseContentThatDoesNotParse, refuseUnresolvedCalls,
-		refuseBrokenEmbeddedScript, refuseDuplicateEntrypoint, refuseCancelledWrite,
-	} {
-		if refusal := gate(write); refusal != nil {
-			return refusal
-		}
-	}
-	return nil
+	input := candidateCheckInput{write: write}
+	runCheckPhase(proxyChecks.candidate, &input)
+	return input.result
 }
 
 // withdrawRefusedCandidate applies the policy's refusal. A refusal withdraws the
@@ -1394,4 +1388,9 @@ func writeWithoutCandidate(ctx *AgentContext, path, content, message string) (*w
 	}
 	res, err := writeFileRecorded(path, content, ctx)
 	return applyRouteObservation(res, err, check)
+}
+
+type candidateCheckInput struct {
+	toolCheckOutput
+	write *v3Write
 }

@@ -607,36 +607,9 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 	if ctx != nil && ctx.ShellEffectsUnobserved {
 		s.gateUnresolved("shell_observation", "the workspace was too large to observe every file the shell commands changed")
 	}
-	if gate, msg := s.repairGate(ctx); gate != "" {
-		return gate, msg
-	}
-	if gate, msg := s.intentGates(ctx, claimText); gate != "" {
-		return gate, msg
-	}
-	if gate, msg := s.handoffGate(ctx, claimText); gate != "" {
-		return gate, msg
-	}
-	if gate, msg := s.evidenceGates(ctx, claimText); gate != "" {
-		return gate, msg
-	}
-	if gate, msg := s.scopeGate(ctx, userMessage, claimText); gate != "" {
-		return gate, msg
-	}
-	if gate, msg := s.runFirstGateAtExit(ctx); gate != "" {
-		return gate, msg
-	}
-	if gate, msg := s.routeContractGate(ctx); gate != "" {
-		return gate, msg
-	}
-	contractDemand := decideVerificationDemand(ctx, ctx.TaskContract, s.expectedOutputs)
-	contractOwed := contractDemand.Required && !contractDemand.Met
-	if gate, msg := s.backgroundGate(ctx, contractOwed); gate != "" {
-		return gate, msg
-	}
-	if gate, msg := s.verificationGates(ctx, contractDemand, contractOwed); gate != "" {
-		return gate, msg
-	}
-	return s.completionGates(ctx, userMessage, claimText)
+	input := exitCheckInput{ctx: ctx, state: s, userMessage: userMessage, claimText: claimText}
+	runCheckPhase(proxyChecks.exit, &input)
+	return input.gate, input.message
 }
 
 // repairGate holds the exit while a file this session wrote does not parse.
@@ -659,10 +632,8 @@ func (s *runState) repairGate(ctx *AgentContext) (string, string) {
 	return "", ""
 }
 
-// intentGates hold a reply that is not an answer yet: one that promises the
-// content, announces a tool call it never made, or closes by deferring the
-// work. A reply that says it cannot do the work is marked, not sent back.
-func (s *runState) intentGates(ctx *AgentContext, claimText string) (string, string) {
+// promisedContentGate holds a reply that promises content but does not provide it.
+func (s *runState) promisedContentGate(ctx *AgentContext, claimText string) (string, string) {
 	if promisesMoreContent(claimText) {
 		if s.continuationFits(ctx) && s.chargeBounce("intent_gate") {
 			log.Printf("[agent] intent gate: bouncing a reply that promised content it did not deliver (bounce %d/%d)",
@@ -671,6 +642,10 @@ func (s *runState) intentGates(ctx *AgentContext, claimText string) (string, str
 		}
 		s.replyOutstanding = true
 	}
+	return "", ""
+}
+
+func (s *runState) announcedToolGate(ctx *AgentContext, claimText string) (string, string) {
 	if s.toolsRun == 0 && announcesImminentToolUse(claimText) {
 		if s.continuationFits(ctx) && s.chargeBounce("intent_gate") {
 			log.Printf("[agent] intent gate: bouncing a text exit that announced a tool call without making one (bounce %d/%d)",
@@ -679,8 +654,12 @@ func (s *runState) intentGates(ctx *AgentContext, claimText string) (string, str
 		}
 		s.replyOutstanding = true
 	}
-	// The same failure after work has started. The zero-tools condition above
-	// is there so narration cannot interrupt work in progress -- but a
+	return "", ""
+}
+
+func (s *runState) deferredReplyGate(ctx *AgentContext, claimText string) (string, string) {
+	// announcedToolGate checks for zero tools so narration cannot interrupt work in progress.
+	// This check handles the same failure after work has started. A
 	// `text` exit has already stopped the work, and a reply that CLOSES by
 	// deferring ("I will now check the generate_plan function", "Please wait
 	// while I verify the exact line") hands the user nothing. Judged on the
@@ -726,9 +705,8 @@ func (s *runState) handoffGate(ctx *AgentContext, claimText string) (string, str
 	return "", ""
 }
 
-// evidenceGates hold a reply that cites a file the run never read, or code
-// that no read showed.
-func (s *runState) evidenceGates(ctx *AgentContext, claimText string) (string, string) {
+// unreadCitationGate holds a reply that cites a file the run never read.
+func (s *runState) unreadCitationGate(ctx *AgentContext, claimText string) (string, string) {
 	// A claim about a file the run never opened. This is the conversational
 	// half of an invariant the write path already enforces — edit_file,
 	// structural_edit, insert_after and replace_lines all refuse a path that
@@ -745,7 +723,11 @@ func (s *runState) evidenceGates(ctx *AgentContext, claimText string) (string, s
 		}
 		s.gateUnresolved("evidence_gate", "the reply cites "+strings.Join(cited, ", ")+", which this run never read")
 	}
-	// The same claim one level down: the file was opened, but a truncated or
+	return "", ""
+}
+
+func (s *runState) unshownSymbolGate(ctx *AgentContext, claimText string) (string, string) {
+	// unreadCitationGate checks whether the file was opened. Here, a truncated or
 	// ranged read never showed the code the reply describes.
 	if gaps := unshownSymbolCitations(ctx, claimText); len(gaps) > 0 {
 		if s.chargeBounce("evidence_gate") {
@@ -863,26 +845,6 @@ func (s *runState) backgroundGate(ctx *AgentContext, contractOwed bool) (string,
 	return "", ""
 }
 
-// verificationGates hold an exit whose verification is missing, out of date
-// or partial, in this order: a run only ever fed through stdin, bytes that
-// changed after the run that verified them, no verifying run at all, a probe
-// of older code, and a work contract that nothing current shows working.
-func (s *runState) verificationGates(ctx *AgentContext, contractDemand verificationDemand, contractOwed bool) (string, string) {
-	if gate, msg := s.redirectGate(ctx); gate != "" {
-		return gate, msg
-	}
-	if gate, msg := s.artifactGate(ctx); gate != "" {
-		return gate, msg
-	}
-	if gate, msg := s.verificationGate(ctx); gate != "" {
-		return gate, msg
-	}
-	if gate, msg := s.staleProbeGate(ctx); gate != "" {
-		return gate, msg
-	}
-	return s.contractVerificationGate(ctx, contractDemand, contractOwed)
-}
-
 // redirectGate holds a run that was verified only with input piped into its
 // stdin.
 func (s *runState) redirectGate(ctx *AgentContext) (string, string) {
@@ -983,26 +945,6 @@ func (s *runState) contractVerificationGate(ctx *AgentContext, contractDemand ve
 		return "verification_gate", contractDemandMessage(ctx, contractDemand) + s.uncountedCheck
 	}
 	return "", ""
-}
-
-// completionGates hold an exit that leaves the work unfinished, in this
-// order: code nothing calls, plan steps never carried out, no change where
-// the request asked for one, a named deliverable not on disk, and a claim of
-// completeness the files do not bear out.
-func (s *runState) completionGates(ctx *AgentContext, userMessage, claimText string) (string, string) {
-	if gate, msg := s.orphanGate(ctx); gate != "" {
-		return gate, msg
-	}
-	if gate, msg := s.planGate(ctx); gate != "" {
-		return gate, msg
-	}
-	if gate, msg := s.actionGate(ctx, userMessage); gate != "" {
-		return gate, msg
-	}
-	if gate, msg := s.outputGate(ctx); gate != "" {
-		return gate, msg
-	}
-	return s.claimCheckGate(ctx, userMessage, claimText)
 }
 
 // orphanGate holds the exit while code this run added is never called.
@@ -1264,4 +1206,28 @@ func handoffMessage(ctx *AgentContext) string {
 		"available to you: it holds files such as %s. Use list_directory, search_files and read_file to find "+
 		"what you need, then answer in a single `text` reply. Ask the user only for something the files cannot "+
 		"tell you.", strings.Join(files, ", "))
+}
+
+// exitCheckInput keeps the claim and its first refusal together.
+type exitCheckInput struct {
+	ctx                    *AgentContext
+	state                  *runState
+	userMessage, claimText string
+	contractDemand         verificationDemand
+	contractOwed           bool
+	gate, message          string
+}
+
+func (input *exitCheckInput) result(gate, message string) checkResult {
+	input.gate, input.message = gate, message
+	if gate != "" {
+		return checkResult{checkGuardRefusal, turnEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *exitCheckInput) prepareContract() checkResult {
+	input.contractDemand = decideVerificationDemand(input.ctx, input.ctx.TaskContract, input.state.expectedOutputs)
+	input.contractOwed = input.contractDemand.Required && !input.contractDemand.Met
+	return checkResult{checkPass, turnContinues}
 }
