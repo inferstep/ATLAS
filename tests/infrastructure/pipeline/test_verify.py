@@ -127,3 +127,13 @@ def test_a_dockerfile_change_shows_the_findings_of_its_own_files(verify, monkeyp
 def test_a_change_with_no_dockerfile_does_not_run_hadolint(verify):
     assert verify.hadolint_notes(["services/proxy/loop.go", "scripts/ci/check_dockerfile_sources.py"]) == []
 
+
+
+def test_golangci_lint_runs_in_the_folder_of_each_go_module_the_change_touches(verify, monkeypatch):
+    monkeypatch.setattr(verify.shutil, "which", lambda name: "/usr/bin/" + name)
+    folders = []
+    monkeypatch.setattr(verify.subprocess, "run", lambda args, cwd, **kwargs: folders.append(cwd) or
+                        verify.subprocess.CompletedProcess(args, 0, "0 issues.\n", ""))
+    assert verify.golangci_notes(["services/proxy/x.go", "clients/tui/y.go"], "origin/dev") == []
+    assert folders == [verify.ROOT / "services" / "proxy", verify.ROOT / "clients" / "tui"]
+    assert all(folder.is_dir() for folder in folders)

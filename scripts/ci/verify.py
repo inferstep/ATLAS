@@ -154,16 +154,16 @@ def advisory(changed: list[str], base: str) -> list[str]:
 def golangci_notes(changed: list[str], base: str) -> list[str]:
     """What golangci-lint finds in the Go code this change adds."""
     out = []
-    modules = [m for m, folder in (("proxy", "services/proxy"), ("tui", "clients/tui")) if any(p.startswith(folder + "/") for p in changed)]
-    if not modules or not (ROOT / ".golangci.yml").is_file():
+    folders = [folder for folder in ("services/proxy", "clients/tui") if any(p.startswith(folder + "/") for p in changed)]
+    if not folders or not (ROOT / ".golangci.yml").is_file():
         return out
     if not shutil.which("golangci-lint"):
         return out + ["skip golangci-lint: it is not installed (https://golangci-lint.run/welcome/install/)"]
-    for module in modules:
+    for folder in folders:
         done = subprocess.run(["golangci-lint", "run", "./...", f"--new-from-merge-base={base}", "--issues-exit-code=0"],
-                              cwd=ROOT / module, capture_output=True, text=True, check=False)
+                              cwd=ROOT / folder, capture_output=True, text=True, check=False)
         if "0 issues" not in done.stdout:
-            out += [f"note golangci-lint in {module}/ (reports, does not fail):"]
+            out += [f"note golangci-lint in {folder}/ (reports, does not fail):"]
             out += ["  " + line for line in done.stdout.splitlines()]
     return out
 
