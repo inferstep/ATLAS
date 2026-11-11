@@ -1298,12 +1298,12 @@ curl http://localhost:30820/languages
 {
   "languages": {
     "python": "Python 3.13.18",
-    "javascript": "v24.22.0",
+    "javascript": "v24.22.2",
     "typescript": "Version 7.0.2",
-    "go": "go version go1.27.2 linux/amd64",
+    "go": "go version go1.27.4 linux/amd64",
     "java": "javac 21.0.13",
     "kotlin": "",
-    "ruby": "ruby 3.3.8 (2025-04-09 revision b200bad6cd) [x86_64-linux-gnu]",
+    "ruby": "ruby 3.3.13 (2026-10-23 revision af48f08f21) [x86_64-linux-gnu]",
     "php": "PHP 8.4.27 (cli) (built: Oct 21 2026 07:53:46) (NTS)",
     "rust": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
     "c": "gcc (Debian 14.2.0-19) 14.2.0",

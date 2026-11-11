@@ -1106,16 +1106,18 @@ between two different models.
 
 Isolated code execution with compilation, testing, and linting.
 
+The [sandbox toolchain table](../project/CONTAINER_PACKAGING.md#sandbox-toolchains) records versions, installation sources, verification, and support policies.
+
 ```mermaid
 graph LR
     subgraph executors["Language Executors"]
         Py["Python\npylint (0-10) + pytest"]
         JS["JavaScript\nNode.js 24"]
         TS["TypeScript\ntsc --noEmit + tsx"]
-        Go["Go 1.27.2\ngo build + run"]
+        Go["Go 1.27.4\ngo build + run"]
         Java["Java 21\njavac + java -cp"]
         Kotlin["Kotlin 2.4.0\nkotlinc + java -jar"]
-        Rust["Rust stable\nrustc + run"]
+        Rust["Rust 1.99.1\nrustc + run"]
         C["C / C++\ngcc/g++ -Wall"]
         Ruby["Ruby\nruby -c + run"]
         PHP["PHP\nphp -l + run"]

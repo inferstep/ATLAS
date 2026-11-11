@@ -12,7 +12,8 @@ WORKDIR /app
 # between base bumps; within a week they come from the cache.
 ARG PACKAGE_REFRESH
 
-# Install system dependencies and language runtimes
+# Install system dependencies and language runtimes.
+# apt verifies package hashes through signed Debian metadata. Unpinned versions allow Debian security updates.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # C/C++
     gcc g++ make \
@@ -40,9 +41,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install Node.js 24 LTS (supported to 2028-04-30) from its release archive,
 # checked against the published SHA-256
-ARG NODE_VERSION=24.22.0
-ARG NODE_SHA256_AMD64=cc2f601cee82d9a5a233302fe307abc600727035fd7d2c3a3571755989e95008
-ARG NODE_SHA256_ARM64=fef00bb4d36e1c50104a9775a10359beee98f162b4104dd12472c75065c6a143
+ARG NODE_VERSION=24.22.2
+ARG NODE_SHA256_AMD64=48cc0e21e048790e54c0cf5749c2725005313d652651c40b7a21feb9697aaf75
+ARG NODE_SHA256_ARM64=eb187837a2230d4047161ac0be008584e16b46f726e9c9490ee35dc6b17d9ba8
 RUN case "$(dpkg --print-architecture)" in \
       amd64) arch=x64; sha="${NODE_SHA256_AMD64}" ;; \
       arm64) arch=arm64; sha="${NODE_SHA256_ARM64}" ;; \
@@ -52,12 +53,15 @@ RUN case "$(dpkg --print-architecture)" in \
     && echo "${sha}  /tmp/node.tar.xz" | sha256sum -c - \
     && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 --no-same-owner \
     && rm /tmp/node.tar.xz \
+    # npm's bundled dependencies need fixes beyond the Node archive.
+    # npm checks registry integrity metadata for this fixed package.
+    && npm install -g --ignore-scripts npm@11.21.2 \
     && node --version && npm --version
 
 # Install Go, checked against the published SHA-256
-ARG GO_VERSION=1.27.2
-ARG GO_SHA256_AMD64=ecbadb99091a3f46e31f5f934b068b1864eafa7995211b39eaddf76996045fe5
-ARG GO_SHA256_ARM64=94f3e30b8e374bc285e7dadc11e0865726b9bc6e85b841ccceaabc0214c6b7c8
+ARG GO_VERSION=1.27.4
+ARG GO_SHA256_AMD64=7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840
+ARG GO_SHA256_ARM64=3392582988a273a87ab5043ee1b2c9c17a2c3c00580bf9326c47a2e0aaaeac92
 RUN arch="$(dpkg --print-architecture)" \
     && case "${arch}" in \
       amd64) sha="${GO_SHA256_AMD64}" ;; \
@@ -70,7 +74,8 @@ RUN arch="$(dpkg --print-architecture)" \
     && rm /tmp/go.tar.gz
 ENV PATH="/usr/local/go/bin:${PATH}"
 RUN go version \
-    # Install Java 21 (JDK headless — javac + java, no GUI libs)
+    # Install Java 21 (JDK headless — javac + java, no GUI libs).
+    # apt verifies signed Debian metadata and package hashes; the unpinned package receives Debian security updates.
     && apt-get update && apt-get install -y --no-install-recommends \
         openjdk-21-jdk-headless \
     && rm -rf /var/lib/apt/lists/* \
@@ -89,7 +94,8 @@ RUN curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/kotlin.zip \
 
 ENV PATH="/opt/kotlinc/bin:${PATH}"
 
-# Install PHP (CLI, no compile step) and Ruby (interpreter, no compile step)
+# Install PHP (CLI, no compile step) and Ruby (interpreter, no compile step).
+# apt verifies signed Debian metadata and package hashes; unpinned packages receive Debian security updates.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         php-cli \
         ruby \
@@ -102,7 +108,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # (read-only toolchain); CARGO_HOME is repointed to the user's tmpfs
 # home by compose so registry/cache writes work on the read-only root.
 # rustup-init is checked against its published SHA-256; rustup checks the
-# toolchain it downloads.
+# toolchain it downloads against the release manifest; this also selects the platform components.
 ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo
 ARG RUSTUP_VERSION=1.29.1
 ARG RUSTUP_SHA256_AMD64=dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71
@@ -126,6 +132,7 @@ RUN rustc --version && cargo --version \
     # Project detection may select npm, pnpm, yarn, or bun from lockfiles; the
     # sandbox needs all of them available for build-command verification to be
     # accurate.
+    # npm checks registry integrity metadata. Dependency ranges remain unlocked; the package manager resolves platform packages.
     && npm install -g --ignore-scripts typescript@7.0.2 tsx@4.23.15 pnpm@12.14.0 yarn@1.22.22 \
     && tsc --version && pnpm --version && yarn --version
 
