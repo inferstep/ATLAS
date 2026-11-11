@@ -61,7 +61,14 @@ def test_list_installed_filter_returns_empty_on_missing_dir(tmp_path, capsys):
                      "--no-color"])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "no models match these filters" in out
+    assert out == (f"ATLAS model registry {model.DASH} models dir: {tmp_path}\n\n"
+                   "  (no models match these filters)\n")
+
+
+def test_list_empty_json_is_still_a_successful_response(tmp_path, capsys):
+    rc = model.main(["list", "--installed", "--json", "--models-dir", str(tmp_path)])
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out) == {"models_dir": str(tmp_path), "models": []}
 
 
 def test_list_installed_picks_up_present_file(tmp_path, capsys):
@@ -91,6 +98,147 @@ def test_list_json_structure(tmp_path, capsys):
     assert nine["installed"] is False
     assert nine["installed_size_gb"] is None
     assert nine["download_url"].startswith("https://huggingface.co/")
+
+
+@pytest.mark.parametrize("unicode_ok", [True, False], ids=["unicode", "ascii"])
+def test_list_json_preserves_registry_fields_order_and_disk_state(
+        tmp_path, monkeypatch, capsys, unicode_ok):
+    base = model_registry.by_name("Qwen3.5-9B-Q6_K")
+    first = dataclasses.replace(base, name="Zulu é", model_file="zulu.gguf")
+    second = dataclasses.replace(base, name="Alpha", model_file="alpha.gguf")
+    monkeypatch.setattr(model_registry, "REGISTRY", [first, second])
+    monkeypatch.setattr(model, "UNICODE_OK", unicode_ok)
+    monkeypatch.setattr(model.sys.stdout, "isatty", lambda: True)
+    with (tmp_path / first.model_file).open("wb") as stream:
+        stream.truncate(1024 ** 3)
+
+    rc = model.main(["list", "--json", "--models-dir", str(tmp_path)])
+
+    assert rc == 0
+    expected = {"models_dir": str(tmp_path), "models": [
+        {**dataclasses.asdict(first), "installed": True, "installed_size_gb": 1.0},
+        {**dataclasses.asdict(second), "installed": False, "installed_size_gb": None},
+    ]}
+    captured = capsys.readouterr()
+    assert captured.out == json.dumps(expected, indent=2, ensure_ascii=not unicode_ok) + "\n"
+    assert captured.err == ""
+
+
+@pytest.mark.parametrize("flags", [["--no-color"], ["--json"]], ids=["text", "json"])
+def test_list_combines_filters_without_reordering(tmp_path, monkeypatch, capsys, flags):
+    base = model_registry.by_name("Qwen3.5-9B-Q6_K")
+    entries = [
+        dataclasses.replace(base, name="Zulu"),
+        dataclasses.replace(base, name="Alpha"),
+        dataclasses.replace(base, name="Other tier", tier="small"),
+        dataclasses.replace(base, name="No lens", lens_status="no-artifacts"),
+        dataclasses.replace(base, name="Missing", model_file="missing.gguf"),
+    ]
+    monkeypatch.setattr(model_registry, "REGISTRY", entries)
+    with (tmp_path / base.model_file).open("wb") as stream:
+        stream.truncate(1024 ** 3)
+
+    rc = model.main(["list", "--tier", "medium", "--installed", "--lens-supported",
+                     "--models-dir", str(tmp_path), *flags])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert out.index("Zulu") < out.index("Alpha")
+    for excluded in ("Other tier", "No lens", "Missing"):
+        assert excluded not in out
+
+
+@pytest.mark.parametrize("installed,url,gated,token,label,tone", [
+    pytest.param(True, None, True, None, "installed", "green", id="installed-before-url"),
+    pytest.param(True, "https://example.com/m.gguf", True, None,
+                 "installed", "green", id="installed-before-token"),
+    pytest.param(False, None, True, "hf_test", "(no download URL)", "dim", id="url-before-token"),
+    pytest.param(False, None, True, None, "(no download URL)", "dim", id="url-before-gate"),
+    pytest.param(False, "https://example.com/m.gguf", True, None,
+                 "(requires HF_TOKEN)", "yellow", id="token-needed"),
+    pytest.param(False, "https://example.com/m.gguf", True, "hf_test",
+                 "gated, HF_TOKEN present", "dim", id="token-present"),
+    pytest.param(False, "https://example.com/m.gguf", False, "hf_test",
+                 "not installed", "dim", id="ungated-with-token"),
+    pytest.param(False, "https://example.com/m.gguf", False, None,
+                 "not installed", "dim", id="ungated-without-token"),
+])
+@pytest.mark.parametrize("tty,flags,colors", [
+    pytest.param(True, [], dict(bold="\033[1m", reset="\033[0m", dim="\033[2m",
+                               green="\033[32m", yellow="\033[33m"), id="color"),
+    pytest.param(True, ["--no-color"], dict.fromkeys(
+        ("bold", "reset", "dim", "green", "yellow"), ""), id="no-color"),
+    pytest.param(False, [], dict.fromkeys(
+        ("bold", "reset", "dim", "green", "yellow"), ""), id="pipe"),
+])
+def test_list_status_precedence_and_table_output(
+        tmp_path, monkeypatch, capsys, installed, url, gated, token, label, tone, tty, flags, colors):
+    entry = dataclasses.replace(model_registry.by_name("Qwen3.5-9B-Q6_K"),
+                                download_url=url, requires_hf_token=gated,
+                                model_size_gb=1.0, lens_calibrated=True)
+    monkeypatch.setattr(model_registry, "REGISTRY", [entry])
+    monkeypatch.setattr(model_registry, "is_installed", lambda m, directory: installed)
+    monkeypatch.setattr(model_registry, "installed_size_gb", lambda m, directory: 1.0)
+    monkeypatch.setattr(model, "_hf_token", lambda: token)
+    monkeypatch.setattr(model, "UNICODE_OK", False)
+    monkeypatch.setattr(model.sys.stdout, "isatty", lambda: tty)
+
+    rc = model.main(["list", "--models-dir", str(tmp_path), *flags])
+
+    assert rc == 0
+    bold, reset, dim = colors["bold"], colors["reset"], colors["dim"]
+    assert capsys.readouterr().out == (
+        f"{bold}ATLAS model registry{reset} {model.DASH} models dir: {tmp_path}\n\n"
+        f"  [OK]    {bold}Qwen3.5-9B-Q6_K{reset}\n"
+        f"      tier: medium  size:   1.0 GB  Lens supported  {model.DASH}  "
+        f"{colors[tone]}{label}{reset}\n\n"
+        f"  {dim}Run `atlas model install <name>` to download. A model marked "
+        "Lens no-artifacts installs only with --no-lens, and ATLAS stops agent work "
+        "on it until it has its own Lens bundle (`atlas bench`, then "
+        f"`atlas lens build --from-results`).{reset}\n")
+
+
+@pytest.mark.parametrize("lens,calibrated,installed,size,calibration_note,size_note", [
+    pytest.param("supported", False, True, 1.0, True, False, id="legacy-bundle"),
+    pytest.param("supported", False, False, None, True, False, id="legacy-uninstalled"),
+    pytest.param("supported", True, True, 1.0, False, False, id="calibrated"),
+    pytest.param("no-artifacts", False, True, 1.0, False, False, id="no-artifacts"),
+    pytest.param("unverified", False, True, 1.0, False, False, id="unverified"),
+    pytest.param("supported", True, False, 0.1, False, False, id="incomplete-file"),
+    pytest.param("supported", True, True, None, False, False, id="file-disappeared"),
+    pytest.param("supported", True, True, 0.5, False, False, id="lower-boundary"),
+    pytest.param("supported", True, True, 1.5, False, False, id="upper-boundary"),
+    pytest.param("supported", True, True, 0.49, False, True, id="too-small"),
+    pytest.param("supported", True, True, 1.51, False, True, id="too-large"),
+    pytest.param("supported", False, True, 2.0, True, True, id="both-warnings"),
+])
+@pytest.mark.parametrize("flags,yellow,reset", [
+    pytest.param(["--no-color"], "", "", id="plain"),
+    pytest.param([], "\033[33m", "\033[0m", id="color"),
+])
+def test_list_calibration_and_size_warnings(
+        tmp_path, monkeypatch, capsys, lens, calibrated, installed, size,
+        calibration_note, size_note, flags, yellow, reset):
+    entry = dataclasses.replace(model_registry.by_name("Qwen3.5-9B-Q6_K"),
+                                lens_status=lens, lens_calibrated=calibrated, model_size_gb=1.0)
+    monkeypatch.setattr(model_registry, "REGISTRY", [entry])
+    monkeypatch.setattr(model_registry, "is_installed", lambda m, directory: installed)
+    monkeypatch.setattr(model_registry, "installed_size_gb", lambda m, directory: size)
+    monkeypatch.setattr(model.sys.stdout, "isatty", lambda: True)
+
+    rc = model.main(["list", "--models-dir", str(tmp_path), *flags])
+
+    assert rc == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert any(f"Lens {lens}  {model.DASH}" in line for line in lines)
+    warnings = [line for line in lines if "Lens calibration:" in line or "note:" in line]
+    calibration = (f"      {yellow}Lens calibration: legacy bundle; run `atlas lens build` "
+                   f"before production use{reset}")
+    size_warning = (f"      {yellow}note: on-disk size {size or 0:.1f} GB differs "
+                    f"from registered 1.0 GB{reset}")
+    assert (calibration in warnings) == calibration_note
+    assert (size_warning in warnings) == size_note
+    assert len(warnings) == calibration_note + size_note
 
 
 # ---------------------------------------------------------------------------

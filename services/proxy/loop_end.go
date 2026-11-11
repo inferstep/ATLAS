@@ -254,13 +254,7 @@ func undoneApprovedDeletion(ctx *AgentContext) bool {
 	if ctx == nil {
 		return false
 	}
-	ctx.mu.Lock()
-	keys := make([]string, 0, len(ctx.fulfilledDeletions))
-	for k := range ctx.fulfilledDeletions {
-		keys = append(keys, k)
-	}
-	ctx.mu.Unlock()
-	for _, k := range keys {
+	for _, k := range ctx.fulfilledDeletionPaths() {
 		if _, err := os.Lstat(k); err == nil {
 			return true
 		}
@@ -871,87 +865,15 @@ func modelProseIfAuthorized(status wire.TerminalStatus, prose string) string {
 func finalizeCompletion(ctx *AgentContext, st *runState, userMessage, completedReason string) (wire.TerminalStatus, string) {
 	// Settle what can be settled FIRST, so the evidence the rest of this
 	// function reads is about a workspace nothing is still writing to.
-	liveJobs := settleBackgroundHazard(ctx)
-
-	// A file this session left unparseable outranks every other reason: it
-	// is the most specific thing the user needs to know, and the final
-	// message says what was tried on it (repairHandoff).
-	st.refreshRepairs(ctx, st.turn, "")
-	if len(st.openRepairs()) > 0 {
-		return wire.TerminalIncomplete, "repair_unfinished"
-	}
-
-	ok, why := terminalCompletionAllowed(ctx, st.expectedOutputs)
-	if !ok {
-		return wire.TerminalIncomplete, why
-	}
-	if st.actionDemandedAndUnmet(ctx, userMessage) {
-		return wire.TerminalIncomplete, "action_demanded_unmet"
-	}
-	if st.verificationDemandedAndUnmet() {
-		return wire.TerminalIncomplete, "verification_demanded_unmet"
-	}
-	// A declared work request cannot finish on prose, existence, a parse, or a
-	// command that named nothing. Evaluated here, in the one finalizer both the
-	// model's `done` and the text exit call, so the two cannot drift.
-	if d := decideVerificationDemand(ctx, ctx.TaskContract, st.expectedOutputs); d.Required && !d.Met {
-		log.Printf("[agent] work contract: no current bound verification for %q", d.Missing)
-		return wire.TerminalIncomplete, "verification_demanded_unmet"
-	}
-	// A candidate this run authorized and delivered owes one more thing that
-	// could not be answered before it landed: that it is still there, at the
-	// bytes it was authorized at, with the session's own record agreeing.
-	//
-	// Scoped to targets this run actually delivered to. An output that was
-	// never produced is owed by missingExpectedOutputs, which already owns
-	// that question; claiming it here too would be a second rule for one
-	// obligation.
-	if owed, why := postDeliverySettlementOwed(ctx); owed {
-		log.Printf("[agent] authorized delivery is not settled: %s", why)
-		return wire.TerminalIncomplete, "post_delivery_settlement_pending"
-	}
-	// The model asking to finish is part of the evidence. A prose reply after a
-	// mutation is a chat turn, not a completion claim, so it stays honest even
-	// when everything else is satisfied. Bounded continuation is a later slice.
-	if tc := ctx.TaskContract; completedReason == "text_reply" && tc != nil &&
-		tc.TaskMode == taskcontract.TaskModeWork && st.madeProductiveChange {
-		return wire.TerminalIncomplete, "work_not_declared_complete"
-	}
-	if reason := st.replyIncompleteReason(); reason != "" {
-		return wire.TerminalIncomplete, reason
-	}
-	// Something may still be writing. A hash taken now describes an instant,
-	// not a result, and nothing here can tell a quiet process from a finished
-	// one -- only a confirmed exit can.
-	if len(liveJobs) > 0 || workspaceHazardous(ctx) {
-		return wire.TerminalIncomplete, "background_work_unresolved"
-	}
-	// Settle first, from the workspace as it is now. A debt can become
-	// resolved without another tool call -- a deletion of a path that was
-	// already absent is owed and discharged by the same fact -- and settling
-	// only after an execution meant those never retired. This is the existing
-	// structural rule (confirmed absence, demonstrated bytes, a completed
-	// move), evaluated at the moment the decision is made.
-	settleMutationDebt(ctx, st)
-	// Work the model asked for, that the system permitted, and that never
-	// reached a state anything could check. A success elsewhere does not
-	// settle it.
-	if hasUnresolvedDebt(st) {
-		return wire.TerminalIncomplete, "unresolved_mutation_debt"
-	}
-	// A gate that spent its bounces with its finding still true, where the
-	// finding is a fact about the delivered work: a claim-check gap (a
-	// template the code renders does not exist), a file with a parse warning
-	// that never ran, a reply citing files the run never read. Last, so every
-	// more specific reason above keeps its place. The heuristic gates stand as
-	// caveats in the summary instead.
-	if reason := st.unresolvedGateReason(); reason != "" {
-		return wire.TerminalIncomplete, reason
+	input := completionCheckInput{ctx: ctx, state: st, userMessage: userMessage, completedReason: completedReason,
+		liveJobs: settleBackgroundHazard(ctx)}
+	if runCheckPhase(proxyChecks.completion, &input).outcome != turnContinues {
+		return wire.TerminalIncomplete, input.reason
 	}
 	if completedReason != "" {
 		return wire.TerminalCompleted, completedReason
 	}
-	return wire.TerminalCompleted, why
+	return wire.TerminalCompleted, input.reason
 }
 
 // replyIncompleteReason is why the closing itself is not an answer, or "".
@@ -1054,4 +976,156 @@ func settleBackgroundHazard(ctx *AgentContext) []string {
 		invalidateTrackedValidation(ctx)
 	}
 	return live
+}
+
+type completionCheckInput struct {
+	ctx                          *AgentContext
+	state                        *runState
+	userMessage, completedReason string
+	liveJobs                     []string
+	reason                       string
+}
+
+func (input *completionCheckInput) refuse(reason string) checkResult {
+	input.reason = reason
+	return checkResult{checkGuardRefusal, runEnds}
+}
+
+func (input *completionCheckInput) repairs() checkResult {
+	ctx := input.ctx
+	st := input.state
+	// A file this session left unparseable outranks every other reason: it
+	// is the most specific thing the user needs to know, and the final
+	// message says what was tried on it (repairHandoff).
+	st.refreshRepairs(ctx, st.turn, "")
+	if len(st.openRepairs()) > 0 {
+		return input.refuse("repair_unfinished")
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *completionCheckInput) deliverables() checkResult {
+	ctx := input.ctx
+	st := input.state
+	ok, why := terminalCompletionAllowed(ctx, st.expectedOutputs)
+	input.reason = why
+	if !ok {
+		return input.refuse(why)
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *completionCheckInput) action() checkResult {
+	ctx := input.ctx
+	st := input.state
+	userMessage := input.userMessage
+	if st.actionDemandedAndUnmet(ctx, userMessage) {
+		return input.refuse("action_demanded_unmet")
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *completionCheckInput) verification() checkResult {
+	st := input.state
+	if st.verificationDemandedAndUnmet() {
+		return input.refuse("verification_demanded_unmet")
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *completionCheckInput) contract() checkResult {
+	ctx := input.ctx
+	st := input.state
+	// A declared work request cannot finish on prose, existence, a parse, or a
+	// command that named nothing. Evaluated here, in the one finalizer both the
+	// model's `done` and the text exit call, so the two cannot drift.
+	if d := decideVerificationDemand(ctx, ctx.TaskContract, st.expectedOutputs); d.Required && !d.Met {
+		log.Printf("[agent] work contract: no current bound verification for %q", d.Missing)
+		return input.refuse("verification_demanded_unmet")
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *completionCheckInput) deliverySettlement() checkResult {
+	ctx := input.ctx
+	// A candidate this run authorized and delivered owes one more thing that
+	// could not be answered before it landed: that it is still there, at the
+	// bytes it was authorized at, with the session's own record agreeing.
+	//
+	// Scoped to targets this run actually delivered to. An output that was
+	// never produced is owed by missingExpectedOutputs, which already owns
+	// that question; claiming it here too would be a second rule for one
+	// obligation.
+	if owed, why := postDeliverySettlementOwed(ctx); owed {
+		log.Printf("[agent] authorized delivery is not settled: %s", why)
+		return input.refuse("post_delivery_settlement_pending")
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *completionCheckInput) declaredCompletion() checkResult {
+	ctx := input.ctx
+	st := input.state
+	completedReason := input.completedReason
+	// The model asking to finish is part of the evidence. A prose reply after a
+	// mutation is a chat turn, not a completion claim, so it stays honest even
+	// when everything else is satisfied. Bounded continuation is a later slice.
+	if tc := ctx.TaskContract; completedReason == "text_reply" && tc != nil &&
+		tc.TaskMode == taskcontract.TaskModeWork && st.madeProductiveChange {
+		return input.refuse("work_not_declared_complete")
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *completionCheckInput) reply() checkResult {
+	st := input.state
+	if reason := st.replyIncompleteReason(); reason != "" {
+		return input.refuse(reason)
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *completionCheckInput) background() checkResult {
+	ctx := input.ctx
+	liveJobs := input.liveJobs
+	// Something may still be writing. A hash taken now describes an instant,
+	// not a result, and nothing here can tell a quiet process from a finished
+	// one -- only a confirmed exit can.
+	if len(liveJobs) > 0 || workspaceHazardous(ctx) {
+		return input.refuse("background_work_unresolved")
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *completionCheckInput) mutationDebt() checkResult {
+	ctx := input.ctx
+	st := input.state
+	// Settle first, from the workspace as it is now. A debt can become
+	// resolved without another tool call -- a deletion of a path that was
+	// already absent is owed and discharged by the same fact -- and settling
+	// only after an execution meant those never retired. This is the existing
+	// structural rule (confirmed absence, demonstrated bytes, a completed
+	// move), evaluated at the moment the decision is made.
+	settleMutationDebt(ctx, st)
+	// Work the model asked for, that the system permitted, and that never
+	// reached a state anything could check. A success elsewhere does not
+	// settle it.
+	if hasUnresolvedDebt(st) {
+		return input.refuse("unresolved_mutation_debt")
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *completionCheckInput) unresolvedGates() checkResult {
+	st := input.state
+	// A gate that spent its bounces with its finding still true, where the
+	// finding is a fact about the delivered work: a claim-check gap (a
+	// template the code renders does not exist), a file with a parse warning
+	// that never ran, a reply citing files the run never read. Last, so every
+	// more specific reason above keeps its place. The heuristic gates stand as
+	// caveats in the summary instead.
+	if reason := st.unresolvedGateReason(); reason != "" {
+		return input.refuse(reason)
+	}
+	return checkResult{checkPass, turnContinues}
 }
