@@ -121,13 +121,19 @@ RUN case "$(dpkg --print-architecture)" in \
     && rm /tmp/rustup-init \
     && chmod -R a+rX /opt/rustup /opt/cargo
 ENV PATH="/opt/cargo/bin:${PATH}"
-RUN rustc --version && cargo --version \
-    # Install JavaScript/TypeScript verification tools and package managers.
-    # Project detection may select npm, pnpm, yarn, or bun from lockfiles; the
-    # sandbox needs all of them available for build-command verification to be
-    # accurate.
-    && npm install -g --ignore-scripts typescript@7.0.2 tsx@4.23.15 pnpm@12.14.0 yarn@1.22.22 \
-    && tsc --version && pnpm --version && yarn --version
+RUN rustc --version && cargo --version
+
+# Install JavaScript/TypeScript verification tools and package managers.
+# Project detection may select npm, pnpm, yarn, or bun from lockfiles; the
+# sandbox needs all of them available for build-command verification to be
+# accurate. npm ci installs the exact versions of js-tools/package-lock.json
+# and checks each package against its integrity hash there (under /opt for
+# non-root reads). Dependabot moves the pins of js-tools/package.json.
+COPY js-tools/package.json js-tools/package-lock.json /opt/js-tools/
+RUN npm ci --prefix /opt/js-tools --ignore-scripts \
+    && chmod -R a+rX /opt/js-tools
+ENV PATH="/opt/js-tools/node_modules/.bin:${PATH}"
+RUN tsc --version && pnpm --version && yarn --version
 
 # Install Bun for bun.lockb projects (under /opt for non-root reads),
 # checked against the published SHA-256.

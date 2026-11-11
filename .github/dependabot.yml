@@ -129,3 +129,18 @@ updates:
       # sandbox interpreter). Patch + digest updates still flow.
       - dependency-name: "python"
         update-types: ["version-update:semver-minor"]
+
+  # The JavaScript tools that services/sandbox/Dockerfile installs with npm ci.
+  - package-ecosystem: npm
+    directory: /services/sandbox/js-tools
+    target-branch: dev
+    schedule:
+      interval: weekly
+    groups:
+      npm:
+        patterns: ["*"]
+    # A new major version of a tool can change how the sandbox checks a
+    # project, so it moves by hand, as a base-image major does.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
