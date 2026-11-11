@@ -5,6 +5,7 @@ as the merge writes them. The merge breaks each long line of a pull request's
 text at 72 columns, and takes the spaces at the start of such a line away.
 """
 import importlib.util
+import io
 import os
 import subprocess
 import sys
@@ -458,3 +459,49 @@ def test_the_guide_for_contributors_names_the_heading_and_the_sentence(release):
     assert f"**{release.HEADING}**" in guide
     assert f'"{release.NOTHING}"' in guide
     assert "edits `CHANGELOG.md` only for a note a user must act on" in guide
+
+
+@pytest.mark.parametrize("text, why", [
+    pytest.param("What it changes.\n\n## Why\n\nA reason.", 'its text has no heading "What users will notice"', id="no heading"),
+    pytest.param(users("One.") + "\n\n## What users will notice\n\nTwo.", 'the heading "What users will notice" 2 times',
+                 id="the heading twice"),
+    pytest.param(users("<!-- A comment of the template. -->"), "its part for users is empty", id="an empty part"),
+    pytest.param(users("Nothing. But the installer asks one more question."), 'starts with "Nothing" and goes on',
+                 id="Nothing and more"),
+    pytest.param(users("| Before | Now |\n|---|---|\n| a | b |"), "it has a table", id="a table"),
+    pytest.param(users("Run this:\n\n```\natlas doctor\n```"), "it has a code block", id="a code block"),
+    pytest.param(users("> A quoted line."), "it has a quoted block", id="a quoted block"),
+    pytest.param(users("<details>\nMore.\n</details>"), "it has HTML", id="HTML"),
+    pytest.param(users("The first.\n\n### For Windows\n\nThe second."), "it has a heading of its own", id="a heading"),
+    pytest.param(users("- An item.\n  - An item inside it."), "it has a list inside a list", id="a list inside a list"),
+])
+def test_check_fails_a_pull_request_that_the_release_would_decide_by_hand(release, tmp_path, capsys, text, why):
+    pull_request = tmp_path / "pull-request.md"
+    pull_request.write_text(f"fix(tui): a\n\n{text}", encoding="utf-8")
+    status = release.main(["--check", str(pull_request)])
+    said = capsys.readouterr().out
+    assert status == 1
+    assert why in said
+    assert 'Fix: edit the text of the pull request. Put the heading "## What users will notice" in it once' in said
+
+
+@pytest.mark.parametrize("title, text, said", [
+    pytest.param("ci(tests): a", users("Nothing."), 'ok, it says "Nothing."', id="Nothing."),
+    pytest.param("fix(tui): a", users(f"{SENTENCE}\n\nA second paragraph."), "ok, the part for users gives an entry",
+                 id="plain sentences"),
+    pytest.param("fix(tui): a", users(f"- {ITEM}\n- A short one."), "ok, the part for users gives an entry", id="a list"),
+    pytest.param('Revert "fix(tui): a"', "Reverts inferstep/ATLAS#1", "ok, a revert", id="Revert of GitHub"),
+    pytest.param("revert(tui): take a out again", "No part.", "ok, a revert", id="the type revert"),
+])
+def test_check_passes_a_pull_request_that_the_release_can_place_from_stdin(release, capsys, monkeypatch, title, text, said):
+    # GitHub sends the text of a pull request with a carriage return at the end of each line.
+    monkeypatch.setattr(sys, "stdin", io.StringIO(f"{title}\n\n{text}".replace("\n", "\r\n")))
+    status = release.main(["--check", "-"])
+    assert status == 0
+    assert said in capsys.readouterr().out
+
+
+def test_check_of_a_file_that_is_not_there_stops_with_the_fix(release, tmp_path, capsys):
+    status = release.main(["--check", str(tmp_path / "not-there.md")])
+    assert status == 2
+    assert "Fix: give a file that can be read, or - for stdin." in capsys.readouterr().err

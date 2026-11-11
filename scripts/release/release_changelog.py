@@ -49,12 +49,20 @@ It reads git only: no token and no network. The release owner runs it as one
 step of a release, reads the section, and edits it by hand where needed.
 
 Usage: release_changelog.py --version 3.2.0 [--name NAME] [--since v3.1.6] [--to COMMIT] [--date 2026-11-01] [--write]
+       release_changelog.py --check FILE
 
 Without --write it prints the section. With --write it puts the section into
 CHANGELOG.md under a heading for the version and leaves `[Unreleased]` empty.
 What the release owner has to know is printed beside it, on the error stream.
 
-Exit status: 0 when the section was printed or written; 2 when the commits or
+With --check it checks one pull request before its merge, with the same rules:
+the file, or stdin for -, has the title on the first line and the text after
+it. It exits 1 with the reason and the fix when the release would send the
+pull request to the owner by hand. A revert passes: it goes by hand anyway.
+The workflow pr-title.yml runs it on each pull request.
+
+Exit status: 0 when the section was printed or written, or the pull request
+passed the check; 1 when it did not pass; 2 when the commits or
 the changelog cannot be read, the version has a section already, or the
 places do not add up.
 """
@@ -226,13 +234,18 @@ def named_by(commit: Commit, numbers: list, hashes: list) -> bool:
     return commit.number in numbers or any(commit.hash.startswith(start) for start in hashes)
 
 
+def marks_a_revert(title: str) -> bool:
+    """Whether a title is the one GitHub gives a revert, or has the type revert."""
+    named = TITLE.match(title)
+    return title.startswith('Revert "') or bool(named and named["type"] == "revert")
+
+
 def reverts_among(found: list) -> dict:
     """For each commit that takes part in a revert, why it is decided by hand: the revert, and each commit it names."""
     why: dict = {}
     for commit in found:
-        named = TITLE.match(commit.title)
         lines = REVERTS.findall(commit.body)
-        if not lines and not commit.title.startswith('Revert "') and not (named and named["type"] == "revert"):
+        if not lines and not marks_a_revert(commit.title):
             continue
         said = " ".join(lines)
         numbers, hashes = re.findall(r"#(\d+)\b", said), re.findall(r"\b[0-9a-f]{7,40}\b", said)
@@ -249,17 +262,9 @@ def reverts_among(found: list) -> dict:
     return {commit: "; ".join(reasons) for commit, reasons in why.items()}
 
 
-def place_of(commit: Commit, in_changelog: bool, revert: str) -> tuple:
-    """The one place of a commit, and with it the text of its entry or the reason to decide by hand."""
-    if not commit.number:
-        return "no_number", "; ".join(filter(None, [revert, "it changed CHANGELOG.md" if in_changelog else ""]))
-    if revert:
-        return "by_hand", revert
-    if commit.email == DEPENDABOT:
-        return "dependencies", ""
-    count, part = users_part(commit.body)
-    if count == 0 and in_changelog:
-        return "has_entry", ""
+def judged(text: str) -> tuple:
+    """The part for users in a pull request's text: "nothing", "entries" with the part, or "by_hand" with the reason."""
+    count, part = users_part(text)
     if count == 0:
         return "by_hand", f'its text has no heading "{HEADING}"'
     if count > 1:
@@ -272,9 +277,23 @@ def place_of(commit: Commit, in_changelog: bool, revert: str) -> tuple:
         return "by_hand", f'its part for users starts with "Nothing" and goes on: "{" ".join(part.split())[:120]}"'
     if not_plain(part):
         return "by_hand", f"its part for users is not plain sentences or a list: it has {not_plain(part)}"
-    if in_changelog:
+    return "entries", part
+
+
+def place_of(commit: Commit, in_changelog: bool, revert: str) -> tuple:
+    """The one place of a commit, and with it the text of its entry or the reason to decide by hand."""
+    if not commit.number:
+        return "no_number", "; ".join(filter(None, [revert, "it changed CHANGELOG.md" if in_changelog else ""]))
+    if revert:
+        return "by_hand", revert
+    if commit.email == DEPENDABOT:
+        return "dependencies", ""
+    if in_changelog and users_part(commit.body)[0] == 0:
+        return "has_entry", ""
+    place, text = judged(commit.body)
+    if place == "entries" and in_changelog:
         return "by_hand", "it has a part for users and it changed CHANGELOG.md too, so its entry may stand twice"
-    return "entries", joined_again(part)
+    return place, joined_again(text) if place == "entries" else text
 
 
 def sort_out(found: list, changed: set) -> dict:
@@ -350,9 +369,28 @@ def for_the_owner(places: dict, read: int, since: str, to: str) -> str:
     return "\n".join(lines)
 
 
+def checked(pull_request: str) -> int:
+    """Check the text of one pull request, its title on the first line, as the release will read it. The exit status."""
+    title, _, text = pull_request.partition("\n")
+    if marks_a_revert(title):
+        print("release changelog: ok, a revert; the release owner decides it at the release")
+        return 0
+    place, why = judged(text)
+    if place == "by_hand":
+        print(f"release changelog: {why}. Fix: edit the text of the pull request. Put the heading "
+              f'"## {HEADING}" in it once, and under it plain sentences or a list of what a user sees '
+              f'differently, or only the sentence "{NOTHING}" when a user sees no change.')
+        return 1
+    print("release changelog: ok, " + (f'it says "{NOTHING}"' if place == "nothing" else "the part for users gives an entry"))
+    return 0
+
+
 def parse(argv: list | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--version", required=True, help="the version of the release, as in 3.2.0")
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--version", help="the version of the release, as in 3.2.0")
+    mode.add_argument("--check", metavar="FILE",
+                      help="check one pull request: its title on the first line, then its text; - reads stdin")
     parser.add_argument("--name", default="", help="the name of the release line, when the heading carries one")
     parser.add_argument("--since", default="", help="the last release; by default the newest release tag behind --to")
     parser.add_argument("--to", default="HEAD", help="the commit that is released")
@@ -365,6 +403,12 @@ def parse(argv: list | None) -> argparse.Namespace:
 
 def main(argv: list | None = None) -> int:
     args = parse(argv)
+    if args.check:
+        try:
+            return checked(sys.stdin.read() if args.check == "-" else Path(args.check).read_text(encoding="utf-8"))
+        except OSError as error:
+            print(f"release changelog: {error}. Fix: give a file that can be read, or - for stdin.", file=sys.stderr)
+            return 2
     path = args.root / "CHANGELOG.md"
     try:
         if not re.fullmatch(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?", args.version):
