@@ -519,6 +519,25 @@ func runCommandVerifiable(out wire.RunCommandOutput) bool {
 	return out.ExitCode == 0 && !out.TimedOut && !wire.ExecutionKnownIncomplete(out.Outcome)
 }
 
+// hostShell is the absolute path of bash from the start of the proxy.
+// A later change to PATH cannot change which file runs a host command.
+// When host execution is active and hostShellErr is set, main stops the proxy.
+var hostShell, hostShellErr = findHostShell()
+
+// findHostShell finds bash on PATH and refuses a relative path. The search
+// refuses a relative match by default (exec.ErrDot), unless GODEBUG=execerrdot=0
+// is set. A relative path would make each command search PATH again.
+func findHostShell() (string, error) {
+	path, err := exec.LookPath("bash")
+	if err != nil {
+		return "", fmt.Errorf("host execution (ATLAS_VERIFY_IN=host) needs bash, and none was found on PATH: %w", err)
+	}
+	if !filepath.IsAbs(path) {
+		return "", fmt.Errorf("host execution (ATLAS_VERIFY_IN=host) needs bash at an absolute path, and PATH gave %q", path)
+	}
+	return path, nil
+}
+
 // runLocally executes a command only when the operator explicitly selects
 // host verification (ATLAS_VERIFY_IN=host). Sandbox outages never route
 // here implicitly. Host mode removes the container backstop entirely:
@@ -538,7 +557,7 @@ func runLocally(command, cwd string, timeout time.Duration) wire.RunCommandOutpu
 	// and this route reports unclassified rather than claiming a completion it
 	// cannot demonstrate -- which is why host execution can run commands and
 	// cannot produce verification evidence.
-	cmd := exec.CommandContext(ctx, "bash", "-c",
+	cmd := exec.CommandContext(ctx, hostShell, "-c",
 		fmt.Sprintf("ulimit -v %d 2>/dev/null; %s", hostAddressSpaceKiB(), command))
 	cmd.Dir = cwd
 	// Its own process group, so the kill below reaches what it started.

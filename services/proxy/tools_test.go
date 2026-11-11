@@ -890,6 +890,57 @@ func TestRunLocallyEcho(t *testing.T) {
 	}
 }
 
+func TestNoShellOnPathIsNamedInTheMessage(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	_, err := findHostShell()
+
+	if err == nil {
+		t.Fatal("findHostShell found a shell on an empty PATH")
+	}
+	for _, want := range []string{"ATLAS_VERIFY_IN=host", "needs bash", "PATH"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not contain %q", err, want)
+		}
+	}
+}
+
+func TestARelativeShellOnPathIsRefused(t *testing.T) {
+	// GODEBUG=execerrdot=0 lets the PATH search return a path relative to the
+	// current folder. findHostShell must still refuse that relative path.
+	t.Setenv("GODEBUG", "execerrdot=0")
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "bash"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	t.Setenv("PATH", ".")
+
+	path, err := findHostShell()
+
+	if err == nil {
+		t.Fatalf("findHostShell gave %q for PATH=\".\"; want an error", path)
+	}
+	for _, want := range []string{"ATLAS_VERIFY_IN=host", "bash", "absolute path", "PATH"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not contain %q", err, want)
+		}
+	}
+}
+
+func TestAHostCommandRunsTheShellFoundAtStart(t *testing.T) {
+	// The package found the shell when it loaded. A later change to PATH must
+	// not change which file runs the command.
+	t.Setenv("PATH", t.TempDir())
+
+	out := runLocally("echo hello", t.TempDir(), 10*time.Second)
+
+	if out.ExitCode != 0 || strings.TrimSpace(out.Stdout) != "hello" {
+		t.Errorf("runLocally(echo hello) = exit %d, stdout %q, stderr %q; want exit 0, stdout \"hello\"",
+			out.ExitCode, out.Stdout, out.Stderr)
+	}
+}
+
 // Credential-file read exclusion (P0: sensitive values must not flow
 // into model context by default). All paths are synthetic fixtures.
 
