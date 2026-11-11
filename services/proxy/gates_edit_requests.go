@@ -386,9 +386,7 @@ func diskIsOwnWrite(ctx *AgentContext, path string, data []byte) bool {
 // bytes, they no longer equal the session's own write, and the mtime rule
 // applies exactly as before.
 func modifiedSinceSessionView(ctx *AgentContext, path string, data []byte) bool {
-	ctx.mu.Lock()
-	lastRead := ctx.FileReadTimes[path]
-	ctx.mu.Unlock()
+	lastRead := ctx.lastReadTime(path)
 	info, err := os.Stat(path)
 	if err != nil || !info.ModTime().After(lastRead) {
 		return false

@@ -33,16 +33,11 @@ func (loop *agentLoop) runToolCall(turn int, parsed wire.ModelResponse, intentAr
 	if outcome != turnContinues {
 		return nil, steers, outcome, nil
 	}
-	steers.repeat, outcome = loop.detectRepetition(turn, parsed, intentArgs, runawayWrite)
-	if outcome != turnContinues {
-		return nil, steers, outcome, nil
+	check := toolHealthCheckInput{loop: loop, turn: turn, parsed: parsed, intentArgs: intentArgs, runawayWrite: runawayWrite}
+	if result := runCheckPhase(proxyChecks.toolHealth, &check); result.outcome != turnContinues {
+		return nil, check.steers, result.outcome, check.err
 	}
-	steers.reasoning = detectReasoningRepetition(ctx, turn)
-	lens, outcome, err := loop.scoreWithLens(turn, parsed)
-	if outcome != turnContinues {
-		return nil, steers, outcome, err
-	}
-	steers.lens = lens
+	steers = check.steers
 
 	// Execute tool. A re-read of an unchanged file already in
 	// context is served from a compact pointer instead of
@@ -59,11 +54,10 @@ func (loop *agentLoop) runToolCall(turn int, parsed wire.ModelResponse, intentAr
 	streamToolResult(ctx, st, parsed, result, elapsed)
 	// The lens stopped scoring inside this call (V3 reported it):
 	// the run ends here, saying why (lens_required.go).
-	if why := ctx.lensDownReason(); why != "" {
-		emitTerminal(ctx, st, wire.TerminalFailed, "lens_unavailable",
-			lensUnavailableSummary(why, st.madeProductiveChange)+liveBackgroundJobNote(ctx))
-		return nil, steers, runEnds, nil
+	if outcome := runCheckPhase(proxyChecks.toolReported, &check); outcome.outcome != turnContinues {
+		return nil, steers, outcome.outcome, nil
 	}
+
 	loop.markWarnedWrite(parsed, result)
 	loop.dischargeWarnedRuns(parsed, result)
 	return result, steers, turnContinues, nil
@@ -231,27 +225,19 @@ func (loop *agentLoop) scoreWithLens(turn int, parsed wire.ModelResponse) (strin
 // during the call ends the run; the error is then what runAgentLoop returns.
 func (loop *agentLoop) dispatchToolCall(turn int, parsed wire.ModelResponse) (*wire.ToolResult, turnOutcome, error) {
 	ctx, st := loop.ctx, loop.st
-	result := redundantReadShortCircuit(parsed.Name, parsed.Args, ctx)
-	if result != nil {
-		log.Printf("[agent] turn=%d short-circuited redundant read (already in context, unchanged)", turn)
+	check := dispatchSelectionCheckInput{loop: loop, turn: turn, parsed: parsed}
+	if runCheckPhase(proxyChecks.dispatchSelection, &check).outcome != turnContinues {
+		return check.result, turnContinues, nil
 	}
-	if result == nil && (parsed.Name == "run_command" || parsed.Name == "run_background") {
-		if blk := runBlockAfterTraceback(ctx); blk != nil {
-			result = blk
-			log.Printf("[agent] turn=%d blocked re-run after traceback — forcing an edit first", turn)
-		}
+	result := executeToolCall(parsed.Name, parsed.Args, ctx)
+	// The deadline can land in the middle of a tool call. Stop
+	// here rather than starting another turn on a dead context.
+	if outcome := runCheckPhase(proxyChecks.dispatchAfter, &check); outcome.outcome != turnContinues {
+		return nil, outcome.outcome, check.err
 	}
-	if result == nil {
-		result = executeToolCall(parsed.Name, parsed.Args, ctx)
-		// The deadline can land in the middle of a tool call. Stop
-		// here rather than starting another turn on a dead context.
-		if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
-			return nil, runEnds, finishCancelledRun(ctx, st, turn)
-		}
-		// Debt is settled from the ledger's own evidence, never from
-		// the call reporting that it worked.
-		settleMutationDebt(ctx, st)
-	}
+	// Debt is settled from the ledger's own evidence, never from
+	// the call reporting that it worked.
+	settleMutationDebt(ctx, st)
 	return result, turnContinues, nil
 }
 
@@ -543,7 +529,7 @@ func (loop *agentLoop) breakErrorLoop(turn int, parsed wire.ModelResponse, resul
 // ceiling, and reports whether the run must stop. A failure of a new kind
 // starts a new streak.
 func (loop *agentLoop) countFailure(turn int, parsed wire.ModelResponse, result *wire.ToolResult) bool {
-	ctx, st := loop.ctx, loop.st
+	ctx := loop.ctx
 	// A failure that differs in KIND from the last one means the
 	// model acted on the previous rejection. Reset the streak:
 	// the breaker exists to stop a loop, and three distinct
@@ -558,36 +544,8 @@ func (loop *agentLoop) countFailure(turn int, parsed wire.ModelResponse, result 
 	}
 	loop.consecutiveErrors++
 	loop.totalFailures++
-	// Ceiling. Resetting the streak on a changed rejection kind
-	// is what lets a converging model keep going; without an
-	// absolute bound it also lets one cycle through failure modes
-	// indefinitely. Generous, because the whole point is that
-	// legitimate iteration costs several attempts per edit.
-	if loop.totalFailures >= maxTotalFailures {
-		log.Printf("[agent] breaking: %d failed tool calls this run (ceiling %d) at turn %d (productive=%v)",
-			loop.totalFailures, maxTotalFailures, turn, st.madeProductiveChange)
-		if st.madeProductiveChange {
-			emitTerminal(ctx, st, wire.TerminalStopped, "failure_ceiling",
-				unverifiedSummary(true, "The run hit its failed-call ceiling before finishing."))
-		} else {
-			emitTerminal(ctx, st, wire.TerminalStopped, "failure_ceiling", fmt.Sprintf(
-				"Stopped after %d failed tool calls with nothing landing on disk. The per-turn errors above say what was refused each time; the last one is the one to act on.", loop.totalFailures))
-		}
-		return true
-	}
-	// Path-aware breaker. Track which file each failure was on; only
-	// escalate when 3 consecutive failures share the same path (= truly
-	// stuck on one file). 3 fails across DIFFERENT files = grinding
-	// through multi-file work, keep going.
-	failPath := extractFailurePath(parsed.Name, parsed.Args)
-	ctx.RecentFailurePaths = append(ctx.RecentFailurePaths, failPath)
-	if len(ctx.RecentFailurePaths) > 3 {
-		ctx.RecentFailurePaths = ctx.RecentFailurePaths[len(ctx.RecentFailurePaths)-3:]
-	}
-	if loop.consecutiveErrors >= 3 {
-		return loop.breakSamePathLoop(turn)
-	}
-	return false
+	check := failureCheckInput{loop: loop, turn: turn, parsed: parsed}
+	return runCheckPhase(proxyChecks.failure, &check).outcome != turnContinues
 }
 
 // breakSamePathLoop judges three failures in a row: across different files the
@@ -899,4 +857,133 @@ func (loop *agentLoop) endOutOfTurns() {
 	log.Printf("[agent] max turns (%d) exceeded for %s — returning what the run found", ctx.MaxTurns, ctx.Tier)
 	emitTerminal(ctx, st, wire.TerminalIncomplete, "turn_budget_exhausted",
 		outOfTurnsSummary(ctx, st.madeProductiveChange)+liveBackgroundJobNote(ctx))
+}
+
+type toolHealthCheckInput struct {
+	loop         *agentLoop
+	turn         int
+	parsed       wire.ModelResponse
+	intentArgs   json.RawMessage
+	runawayWrite bool
+	steers       turnCorrectives
+	err          error
+}
+
+func (check *toolHealthCheckInput) repetition() checkResult {
+	var outcome turnOutcome
+	check.steers.repeat, outcome = check.loop.detectRepetition(check.turn, check.parsed, check.intentArgs, check.runawayWrite)
+	return turnCheckResult(checkGuardRefusal, outcome)
+}
+
+func (check *toolHealthCheckInput) reasoning() checkResult {
+	check.steers.reasoning = detectReasoningRepetition(check.loop.ctx, check.turn)
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *toolHealthCheckInput) lens() checkResult {
+	lens, outcome, err := check.loop.scoreWithLens(check.turn, check.parsed)
+	check.err = err
+	if outcome == turnContinues {
+		check.steers.lens = lens
+	}
+	return turnCheckResult(checkInfrastructureError, outcome)
+}
+
+func (check *toolHealthCheckInput) reportedLensFailure() checkResult {
+	ctx, st := check.loop.ctx, check.loop.st
+
+	if why := ctx.lensDownReason(); why != "" {
+		emitTerminal(ctx, st, wire.TerminalFailed, "lens_unavailable",
+			lensUnavailableSummary(why, st.madeProductiveChange)+liveBackgroundJobNote(ctx))
+		return checkResult{checkInfrastructureError, runEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+type dispatchSelectionCheckInput struct {
+	loop   *agentLoop
+	turn   int
+	parsed wire.ModelResponse
+	result *wire.ToolResult
+	err    error
+}
+
+func (check *dispatchSelectionCheckInput) cachedRead() checkResult {
+	check.result = redundantReadShortCircuit(check.parsed.Name, check.parsed.Args, check.loop.ctx)
+	if check.result != nil {
+		log.Printf("[agent] turn=%d short-circuited redundant read (already in context, unchanged)", check.turn)
+		return checkResult{checkPass, turnEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *dispatchSelectionCheckInput) rerun() checkResult {
+	if check.parsed.Name == "run_command" || check.parsed.Name == "run_background" {
+		if blk := runBlockAfterTraceback(check.loop.ctx); blk != nil {
+			check.result = blk
+			log.Printf("[agent] turn=%d blocked re-run after traceback — forcing an edit first", check.turn)
+			return checkResult{checkGuardRefusal, turnEnds}
+		}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *dispatchSelectionCheckInput) cancelled() checkResult {
+	ctx, st := check.loop.ctx, check.loop.st
+	if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
+		check.err = finishCancelledRun(ctx, st, check.turn)
+		return checkResult{checkInfrastructureError, runEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+type failureCheckInput struct {
+	loop   *agentLoop
+	turn   int
+	parsed wire.ModelResponse
+}
+
+func (check *failureCheckInput) ceiling() checkResult {
+	loop, turn := check.loop, check.turn
+	ctx, st := loop.ctx, loop.st
+
+	// Ceiling. Resetting the streak on a changed rejection kind
+	// is what lets a converging model keep going; without an
+	// absolute bound it also lets one cycle through failure modes
+	// indefinitely. Generous, because the whole point is that
+	// legitimate iteration costs several attempts per edit.
+	if loop.totalFailures >= maxTotalFailures {
+		log.Printf("[agent] breaking: %d failed tool calls this run (ceiling %d) at turn %d (productive=%v)",
+			loop.totalFailures, maxTotalFailures, turn, st.madeProductiveChange)
+		if st.madeProductiveChange {
+			emitTerminal(ctx, st, wire.TerminalStopped, "failure_ceiling",
+				unverifiedSummary(true, "The run hit its failed-call ceiling before finishing."))
+		} else {
+			emitTerminal(ctx, st, wire.TerminalStopped, "failure_ceiling", fmt.Sprintf(
+				"Stopped after %d failed tool calls with nothing landing on disk. The per-turn errors above say what was refused each time; the last one is the one to act on.", loop.totalFailures))
+		}
+		return checkResult{checkGuardRefusal, runEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (check *failureCheckInput) samePath() checkResult {
+	loop, turn, parsed := check.loop, check.turn, check.parsed
+	ctx := loop.ctx
+
+	// Path-aware breaker. Track which file each failure was on; only
+	// escalate when 3 consecutive failures share the same path (= truly
+	// stuck on one file). 3 fails across DIFFERENT files = grinding
+	// through multi-file work, keep going.
+	failPath := extractFailurePath(parsed.Name, parsed.Args)
+	ctx.RecentFailurePaths = append(ctx.RecentFailurePaths, failPath)
+	if len(ctx.RecentFailurePaths) > 3 {
+		ctx.RecentFailurePaths = ctx.RecentFailurePaths[len(ctx.RecentFailurePaths)-3:]
+	}
+	if loop.consecutiveErrors >= 3 {
+		if loop.breakSamePathLoop(turn) {
+			return checkResult{checkGuardRefusal, runEnds}
+		}
+	}
+	return checkResult{checkPass, turnContinues}
 }

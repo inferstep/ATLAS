@@ -262,9 +262,7 @@ func openConversation(ctx *AgentContext, userMessage string) bool {
 	// useless: files land, `run_command` reports them missing, and the model
 	// spends its turns concluding its own work does not exist. Cached with a
 	// TTL, so this is one probe per session at most.
-	if problem := verifyWorkspaceAlignment(ctx); problem != "" {
-		log.Printf("[agent] refusing to start — proxy and sandbox workspaces are not aligned")
-		emitTerminal(ctx, nil, wire.TerminalFailed, "workspace_misaligned", problem)
+	if runCheckPhase(proxyChecks.conversation, ctx).outcome != turnContinues {
 		return false
 	}
 
@@ -366,16 +364,14 @@ func (loop *agentLoop) takeToolTurn(turn int, response string, parsed wire.Model
 
 	// Check the workspace boundary before any gate reads a path.
 	// executeToolCall repeats this check for parallel dispatch.
-	if rejection := enforceWorkspacePaths(&parsed, ctx); rejection != "" {
-		if loop.refuseOutsideWorkspace(parsed, intentArgs, rejection) {
-			return runEnds, nil
-		}
-		return turnEnds, nil
+	workspaceCheck := toolCheckInput{loop: loop, turn: turn, parsed: &parsed, intentArgs: intentArgs}
+	if outcome := runCheckPhase(proxyChecks.workspace, &workspaceCheck).outcome; outcome != turnContinues {
+		return outcome, nil
 	}
 	if outcome := loop.screenAfterWorkspaceCheck(turn, response, &parsed, intentArgs); outcome != turnContinues {
 		return outcome, nil
 	}
-	if outcome := loop.screenExistingFileWrite(parsed, intentArgs); outcome != turnContinues {
+	if outcome := loop.screenExistingWrite(parsed, intentArgs); outcome != turnContinues {
 		return outcome, nil
 	}
 
@@ -398,41 +394,23 @@ func (loop *agentLoop) takeToolTurn(turn int, response string, parsed wire.Model
 // parsed reply, ends here, or ends the run; when the run ends, the error is
 // what runAgentLoop returns.
 func (loop *agentLoop) takeModelTurn(turn int) (string, wire.ModelResponse, turnOutcome, error) {
-	ctx, st := loop.ctx, loop.st
 	loop.startTurn(turn)
-
-	// Bail out fast if the upstream request was cancelled (the client closed the
-	// connection, user hit Ctrl-C, terminal exited). Without this check the
-	// loop would keep grinding LLM calls and tool work for a client that's
-	// already gone, burning GPU.
-	if ctx.Ctx != nil {
-		select {
-		case <-ctx.Ctx.Done():
-			return "", wire.ModelResponse{}, runEnds, finishCancelledRun(ctx, st, turn)
-		default:
-		}
+	input := modelCheckInput{loop: loop, turn: turn}
+	if result := runCheckPhase(proxyChecks.modelStart, &input); result.outcome != turnContinues {
+		return "", wire.ModelResponse{}, result.outcome, input.err
 	}
-
-	llmStart := announceModelCall(ctx, turn)
-
-	// Call LLM with grammar constraint
-	response, tokens, err := callLLMConstrained(ctx)
-	llmElapsed := time.Since(llmStart)
-	if err != nil {
-		return "", wire.ModelResponse{}, runEnds, loop.endOnInferenceFailure(turn, err, llmElapsed)
+	llmStart := announceModelCall(loop.ctx, turn)
+	response, tokens, err := callLLMConstrained(loop.ctx)
+	input.response, input.err, input.elapsed = response, err, time.Since(llmStart)
+	if result := runCheckPhase(proxyChecks.modelInference, &input); result.outcome != turnContinues {
+		return "", wire.ModelResponse{}, result.outcome, input.err
 	}
-	loop.recordModelReply(turn, response, tokens, llmElapsed)
-
-	// Parse the response — extract JSON even if model added surrounding text
-	parsed, parseErr := extractModelResponse(response)
-	if parseErr != nil {
-		return response, parsed, loop.recoverFromParseFailure(turn, response, parseErr), nil
+	loop.recordModelReply(turn, response, tokens, input.elapsed)
+	if result := runCheckPhase(proxyChecks.modelReply, &input); result.outcome != turnContinues {
+		return response, input.parsed, result.outcome, nil
 	}
-	if outcome := loop.refuseBrokenContent(turn, parsed); outcome != turnContinues {
-		return response, parsed, outcome, nil
-	}
-	logModelTurn(ctx, turn, parsed, response)
-	return response, parsed, turnContinues, nil
+	logModelTurn(loop.ctx, turn, input.parsed, response)
+	return response, input.parsed, turnContinues, nil
 }
 
 // startTurn opens turn `turn` on the run state and, once the run nears its
@@ -705,57 +683,6 @@ func (loop *agentLoop) answerContentLoop(turn int, response string) turnOutcome 
 	return turnContinues
 }
 
-// refuseBrokenContent refuses, before anything runs, a tool call whose content
-// string ended early or whose intended bytes are ambiguous. Three refusals in a
-// row end the run.
-func (loop *agentLoop) refuseBrokenContent(turn int, parsed wire.ModelResponse) turnOutcome {
-	ctx, st := loop.ctx, loop.st
-	// A tool_call can parse cleanly and still be mis-segmented: an
-	// unescaped quote inside a file body closes the JSON string early and
-	// the file's remainder is discarded into unknown keys, so a truncated
-	// write reports success. Catch it here, before execution, and hand the
-	// model the real cause under the same retry cap parse failures use —
-	// never write the truncated content.
-	if parsed.Type == "tool_call" {
-		if feedback, bad := swallowedContentFeedback(parsed.Name, parsed.Args); bad {
-			log.Printf("[agent] turn=%d %s: content string terminated early (unescaped quote) — refusing the truncated write", turn, parsed.Name)
-			ctx.Stream("error", map[string]string{
-				"error":    "tool call content was truncated by an unescaped quote",
-				"category": "swallowed_content",
-			})
-			ctx.Messages = append(ctx.Messages, wire.AgentMessage{Role: "user", Content: feedback})
-			loop.consecutiveErrors++
-			if loop.consecutiveErrors >= 3 {
-				log.Printf("[agent] breaking swallowed-content loop at turn %d (%d consecutive)", turn, loop.consecutiveErrors)
-				emitTerminal(ctx, st, wire.TerminalStopped, "unusable_model_output",
-					"Stopped: the model's file writes kept ending early on an unescaped double-quote inside the content, three times in a row. Ask again and, for a large HTML/JS file, request that it be built with structural_edit or split across smaller writes."+liveBackgroundJobNote(ctx))
-				return runEnds
-			}
-			return turnEnds
-		}
-		// Content whose intended bytes are ambiguous (prose around a fence,
-		// a doubled escape, a line break that lost its backslash) is
-		// refused, not rewritten into a guess. Same retry cap.
-		if feedback, bad := jsonChannelContentFeedback(parsed.Name, parsed.Args); bad {
-			log.Printf("[agent] turn=%d %s: content bytes ambiguous — refused before execution", turn, parsed.Name)
-			ctx.Stream("error", map[string]string{
-				"error":    "tool call content was refused before execution: its intended bytes were ambiguous",
-				"category": "ambiguous_content",
-			})
-			ctx.Messages = append(ctx.Messages, wire.AgentMessage{Role: "user", Content: feedback})
-			loop.consecutiveErrors++
-			if loop.consecutiveErrors >= 3 {
-				log.Printf("[agent] breaking ambiguous-content loop at turn %d (%d consecutive)", turn, loop.consecutiveErrors)
-				emitTerminal(ctx, st, wire.TerminalStopped, "unusable_model_output",
-					"Stopped: nothing was written for the last three file writes — each one's content was ambiguous (a markdown fence with text around it, or a doubled or lost escape) and was refused rather than guessed at. Ask again."+liveBackgroundJobNote(ctx))
-				return runEnds
-			}
-			return turnEnds
-		}
-	}
-	return turnContinues
-}
-
 // logModelTurn writes the turn's reply to the operator log, its arguments
 // summarised, and the raw reply's shape when a tool call came without any.
 func logModelTurn(ctx *AgentContext, turn int, parsed wire.ModelResponse, response string) {
@@ -903,4 +830,106 @@ func explorationNudge(consecutiveReads *int, turn int, writeDemanded bool) strin
 		return explorationEscalated
 	}
 	return explorationWarning
+}
+
+type modelCheckInput struct {
+	loop     *agentLoop
+	turn     int
+	response string
+	parsed   wire.ModelResponse
+	elapsed  time.Duration
+	err      error
+}
+
+func (input *modelCheckInput) cancellation() checkResult {
+	// Bail out fast if the upstream request was cancelled (the client closed the
+	// connection, user hit Ctrl-C, terminal exited). Without this check the
+	// loop would keep grinding LLM calls and tool work for a client that's
+	// already gone, burning GPU.
+	ctx := input.loop.ctx
+	if ctx.Ctx != nil {
+		select {
+		case <-ctx.Ctx.Done():
+			input.err = finishCancelledRun(ctx, input.loop.st, input.turn)
+			return checkResult{checkInfrastructureError, runEnds}
+		default:
+		}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *modelCheckInput) inference() checkResult {
+	if input.err != nil {
+		input.err = input.loop.endOnInferenceFailure(input.turn, input.err, input.elapsed)
+		return checkResult{checkInfrastructureError, runEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *modelCheckInput) parse() checkResult {
+	parsed, err := extractModelResponse(input.response)
+	input.parsed = parsed
+	if err != nil {
+		return checkResult{checkModelError, input.loop.recoverFromParseFailure(input.turn, input.response, err)}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *modelCheckInput) swallowedContent() checkResult {
+	loop, turn, parsed := input.loop, input.turn, input.parsed
+	ctx, st := loop.ctx, loop.st
+	if parsed.Type != "tool_call" {
+		return checkResult{checkPass, turnContinues}
+	}
+	// A tool_call can parse cleanly and still be mis-segmented: an
+	// unescaped quote inside a file body closes the JSON string early and
+	// the file's remainder is discarded into unknown keys, so a truncated
+	// write reports success. Catch it here, before execution, and hand the
+	// model the real cause under the same retry cap parse failures use —
+	// never write the truncated content.
+	if feedback, bad := swallowedContentFeedback(parsed.Name, parsed.Args); bad {
+		log.Printf("[agent] turn=%d %s: content string terminated early (unescaped quote) — refusing the truncated write", turn, parsed.Name)
+		ctx.Stream("error", map[string]string{
+			"error":    "tool call content was truncated by an unescaped quote",
+			"category": "swallowed_content",
+		})
+		ctx.Messages = append(ctx.Messages, wire.AgentMessage{Role: "user", Content: feedback})
+		loop.consecutiveErrors++
+		if loop.consecutiveErrors >= 3 {
+			log.Printf("[agent] breaking swallowed-content loop at turn %d (%d consecutive)", turn, loop.consecutiveErrors)
+			emitTerminal(ctx, st, wire.TerminalStopped, "unusable_model_output",
+				"Stopped: the model's file writes kept ending early on an unescaped double-quote inside the content, three times in a row. Ask again and, for a large HTML/JS file, request that it be built with structural_edit or split across smaller writes."+liveBackgroundJobNote(ctx))
+			return checkResult{checkModelError, runEnds}
+		}
+		return checkResult{checkModelError, turnEnds}
+	}
+	return checkResult{checkPass, turnContinues}
+}
+
+func (input *modelCheckInput) ambiguousContent() checkResult {
+	loop, turn, parsed := input.loop, input.turn, input.parsed
+	ctx, st := loop.ctx, loop.st
+	if parsed.Type != "tool_call" {
+		return checkResult{checkPass, turnContinues}
+	}
+	// Content whose intended bytes are ambiguous (prose around a fence,
+	// a doubled escape, a line break that lost its backslash) is
+	// refused, not rewritten into a guess. Same retry cap.
+	if feedback, bad := jsonChannelContentFeedback(parsed.Name, parsed.Args); bad {
+		log.Printf("[agent] turn=%d %s: content bytes ambiguous — refused before execution", turn, parsed.Name)
+		ctx.Stream("error", map[string]string{
+			"error":    "tool call content was refused before execution: its intended bytes were ambiguous",
+			"category": "ambiguous_content",
+		})
+		ctx.Messages = append(ctx.Messages, wire.AgentMessage{Role: "user", Content: feedback})
+		loop.consecutiveErrors++
+		if loop.consecutiveErrors >= 3 {
+			log.Printf("[agent] breaking ambiguous-content loop at turn %d (%d consecutive)", turn, loop.consecutiveErrors)
+			emitTerminal(ctx, st, wire.TerminalStopped, "unusable_model_output",
+				"Stopped: nothing was written for the last three file writes — each one's content was ambiguous (a markdown fence with text around it, or a doubled or lost escape) and was refused rather than guessed at. Ask again."+liveBackgroundJobNote(ctx))
+			return checkResult{checkModelError, runEnds}
+		}
+		return checkResult{checkModelError, turnEnds}
+	}
+	return checkResult{checkPass, turnContinues}
 }

@@ -35,6 +35,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
+          ref: dev
           persist-credentials: false
           sparse-checkout: |
             scripts/bot
@@ -49,7 +50,7 @@ jobs:
           permission-issues: write
           permission-pull-requests: write
           permission-organization-projects: read
-          permission-contents: read   # commits on dev, for "Closes #N"
+          permission-contents: read   # commits on dev and label settings at target commits
 
       - run: python3 scripts/bot/atlas_bot.py sync
         env:
