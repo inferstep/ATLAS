@@ -160,12 +160,12 @@ AMD or a Vulkan GPU or on K3s. Before 3.2.0, on a host of each kind:
 
 | Branch | Job | Gets code by | Artifacts |
 |---|---|---|---|
-| `dev` | Integration | Pull requests, merged by the merge queue | `:dev` and an immutable `:sha-<commit>` image per push |
+| `dev` | Integration | Pull requests, merged by the merge queue | `:dev` and a `:sha-<commit>` image per push |
 | `staging` | Release candidate | Fast-forward from `dev`, by the release step | `vX.Y.Z-rc.N` tag, RC images |
 | `main` | Released | Fast-forward from `staging` after qualification, by the release step | Signed `vX.Y.Z` tag, `:latest`, version images |
 
-Contributors always target `dev`. Commits get no version: each one gets an
-immutable `sha-*` image and moves `:dev`. A version is decided at release
+Contributors always target `dev`. Commits get no version: each one gets a
+`sha-*` image and moves `:dev`. A version is decided at release
 time by what the release contains (semantic versioning):
 
 - any breaking change → **MAJOR**
@@ -244,6 +244,8 @@ Publishing is gated by the `production` environment
 the waiting deployment does the pipeline move `:latest` or a version tag.
 `dev` pushes deploy to `dev` and release-candidate tags to `staging`,
 without approval. Each promotion leaves a timestamped deployment record.
+[Release safety steps](#release-safety-steps) tells what the workflows do
+for the approval, the digests and the attestations.
 
 **Before the 3.2.0 candidate.** `staging` and `main` still require
 `pytest (tests/v3)` and `pytest (tests/cli)`, the names these test jobs had
@@ -284,7 +286,21 @@ it is merged, the release owner runs `scripts/setup/rulesets.sh`.
 5. **Tag.** Check out `main`, cut and push the signed `vX.Y.Z` tag, then
    approve the tag build's `production` deployment the same way. This
    publishes `:X.Y.Z`, `:vX.Y.Z` and `:X.Y`, and `verify-tags` checks the
-   signature.
+   signature. Then check the attestation of each of the six images of the
+   new version tag:
+
+   ```bash
+   failed=""
+   for svc in proxy v3 lens sandbox llama llama-vulkan; do
+     gh attestation verify "oci://ghcr.io/inferstep/atlas-${svc}:X.Y.Z" --repo inferstep/ATLAS ||
+       failed="$failed atlas-$svc"
+   done
+   if [ -n "$failed" ]; then echo "Attestation check failed for:$failed"; false; fi
+   ```
+
+   The commands check all six images, then name each image that failed.
+   A failed check stops the release before step 6, the announcement. Find
+   the cause first ([Build attestation](#build-attestation)).
 6. **Announce** the release (GitHub release, Discussions Announcements).
    Publishing the GitHub release runs `release-files.yml`, which attaches
    `atlas-X.Y.Z-images.txt` (every image digest of the release) and its
@@ -294,6 +310,94 @@ it is merged, the release owner runs `scripts/setup/rulesets.sh`.
 manually from `main`; it also needs `production` approval) repoints every
 service's tag at an earlier one, e.g. `alias_tag: 3.2.0=latest` puts
 `:latest` back on 3.2.0. Nothing is rebuilt.
+From 3.2.0, also give `alias_digests`: the six lines of the release's
+`atlas-X.Y.Z-images.txt`, separated by spaces. Then no tag moves unless
+each source tag points at the digest in the file. With an empty
+`alias_digests`, the job does not compare digests. For example, the
+commands below check the file's signature, as
+[Signed release tags](#signed-release-tags) shows. Each command runs only
+when the command before it passed:
+
+```bash
+gh release download v3.2.0 --pattern 'atlas-3.2.0-images.txt*' &&
+cosign verify-blob --bundle atlas-3.2.0-images.txt.sigstore.json \
+  --certificate-identity https://github.com/inferstep/ATLAS/.github/workflows/release-files.yml@refs/tags/v3.2.0 \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  atlas-3.2.0-images.txt &&
+digests=$(tr '\n' ' ' < atlas-3.2.0-images.txt) &&
+[ -n "$digests" ] &&
+gh workflow run build-images.yml --ref main -f alias_tag=3.2.0=latest \
+  -f alias_digests="$digests"
+```
+
+## Release safety steps
+
+Issue [#361](https://github.com/inferstep/ATLAS/issues/361) asks for three
+safety steps for a release. This section tells what the workflows do today
+for each step. The jobs named here are in
+`.github/workflows/build-images.yml`.
+
+### Approval
+
+`scripts/setup/environments.sh` makes the `production` environment. Its
+required reviewer is the release owner. `production` accepts runs only from
+the branch `main` and from `v*` tags.
+
+- The `promote` job waits in `production` for a push to `main` and for a
+  `vX.Y.Z` tag.
+- The `alias` job always waits in `production`.
+- A push to `dev` deploys to `dev`, and a release-candidate tag
+  (`vX.Y.Z-rc.N`) deploys to `staging`. Neither needs approval.
+
+### Promotion and rollback by digest
+
+The `build` job pushes each image as `:sha-<commit>`, with the first 7
+characters of the commit. The `promote` job then copies the manifest that
+`:sha-<commit>` points at to the moving tags. It copies the tag, not the
+digest that the `build` job pushed. The `promote` job builds no image.
+
+A push of a `vX.Y.Z` tag builds the release commit again, and pushes
+`:sha-<commit>` again. Thus `:latest` and `:X.Y.Z` are two builds of the
+same commit, with different digests. For example, for 3.1.7:
+
+- `atlas-proxy:latest` is `sha256:0bc6c091…`, and `atlas-proxy:3.1.7` is
+  `sha256:2c21e26a…`. Both images carry the label of commit `d57d259`.
+- `atlas-proxy:sha-d57d259` now points at the `:3.1.7` digest.
+- Each of the other five images also has two digests.
+
+The `alias` job moves a tag by digest. It reads the digest of each of the
+six source tags, then copies those digests. With `alias_digests`, it moves
+no tag unless each source tag points at the digest given for its image.
+These two checks are in the `dev` copy of the workflow. Because `alias` runs
+from `main`, they apply from the 3.2.0 release. Until then, `alias` on
+`main` copies the source tag.
+
+### Build attestation
+
+The `build` job has the step "Attest where the image was built"
+(`actions/attest`). After each push, the step makes a signed SLSA (Supply-chain
+Levels for Software Artifacts) provenance attestation for the pushed digest.
+The attestation names the repository, the workflow, the commit and the
+digest. GitHub keeps the attestation, and the step also pushes it beside the
+image. A pull request makes no attestation, because it pushes no image.
+
+The step uses three permissions of the `build` job:
+
+- `id-token: write`, to sign the attestation as this workflow. The cosign
+  signature also uses it.
+- `attestations: write`, to keep the attestation at GitHub.
+- `packages: write`, to push the attestation beside the image. The image
+  push also uses it.
+
+Check an image:
+
+```bash
+gh attestation verify oci://ghcr.io/inferstep/atlas-<svc>@<digest> --repo inferstep/ATLAS
+```
+
+Images up to 3.1.7 have no attestation. `dev` images since
+[#475](https://github.com/inferstep/ATLAS/pull/475) have one. Release images
+have one from 3.2.0, when the step gets to `main`.
 
 ## Hotfixes
 
