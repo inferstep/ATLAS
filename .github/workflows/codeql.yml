@@ -81,7 +81,7 @@ jobs:
       # javascript-typescript (the JS extractor reads source directly).
       - name: setup java
         if: matrix.language == 'java-kotlin'
-        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad  # v6.1.0
+        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78  # v6.2.0
         with:
           distribution: temurin
           java-version: '21'
@@ -99,7 +99,7 @@ jobs:
 
       - name: init codeql (java-kotlin)
         if: matrix.language == 'java-kotlin'
-        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370  # v4.39.1
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066  # v4.39.3
         with:
           languages: java-kotlin
           build-mode: manual
@@ -107,7 +107,7 @@ jobs:
 
       - name: init codeql (${{ matrix.language }})
         if: matrix.language != 'java-kotlin'
-        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370  # v4.39.1
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066  # v4.39.3
         with:
           languages: ${{ matrix.language }}
           # security-and-quality runs the broader pack — catches both
@@ -175,7 +175,7 @@ jobs:
           echo "ok: the Kotlin compiles of the code and the tests executed"
 
       - name: analyze
-        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370  # v4.39.1
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066  # v4.39.3
         with:
           category: "/language:${{ matrix.language }}"
 
