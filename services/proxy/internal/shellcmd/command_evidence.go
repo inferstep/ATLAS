@@ -1205,40 +1205,6 @@ func npxToolKind(args []string) CommandEvidenceKind {
 	return EvidenceExecution
 }
 
-// makeTargetKind classifies `make TARGET` by the target's name. Lint and
-// format targets check; test, check and run targets execute; setup targets
-// prove nothing. Any other target, and a bare `make`, builds.
-func makeTargetKind(args []string) CommandEvidenceKind {
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		switch {
-		case a == "-C" || a == "-f" || a == "--file" || a == "--directory" || a == "-I" || a == "-o" || a == "-W",
-			(a == "-j" || a == "-l") && i+1 < len(args) && strings.Trim(args[i+1], "0123456789") == "":
-			// An option and its value: -j and -l take one only when the next word is a number.
-			i++
-			continue
-		case strings.HasPrefix(a, "-") || strings.Contains(a, "="):
-			continue
-		}
-		t := strings.ToLower(a)
-		switch {
-		case strings.Contains(t, "lint") || strings.Contains(t, "fmt") || strings.Contains(t, "format") ||
-			strings.Contains(t, "typecheck") || strings.Contains(t, "type-check") || t == "vet" || t == "tidy":
-			return EvidenceStatic
-		case strings.Contains(t, "test") || strings.Contains(t, "check") || strings.Contains(t, "spec") ||
-			strings.Contains(t, "e2e") || strings.Contains(t, "smoke") || strings.Contains(t, "verify") ||
-			t == "run" || t == "start" || t == "serve" || t == "demo" || t == "dev" ||
-			strings.HasPrefix(t, "run-") || strings.HasPrefix(t, "run_"):
-			return EvidenceExecution
-		case t == "install" || t == "uninstall" || t == "clean" || t == "distclean" || t == "deps" ||
-			t == "setup" || t == "bootstrap" || t == "venv" || t == "init":
-			return EvidenceNone
-		}
-		return EvidenceStatic
-	}
-	return EvidenceStatic // the default target, which conventionally builds
-}
-
 // RunnerEntries returns the candidate files a test runner or package run
 // executes without naming them. A bare `pytest`, or `pytest tests/`, imports
 // every test file it discovers; `python -m unittest` does the same for
