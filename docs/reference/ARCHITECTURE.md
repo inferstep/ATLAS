@@ -113,6 +113,7 @@ Every non-test Go file of `services/proxy/`, sub-folders included, with its area
 | `internal/shadowcapture/sink.go` | The private shadow capture: records comparing what a request declared with what ATLAS read from its text, written to a file by one goroutine and read by no decision. Off unless `ATLAS_SHADOW_CAPTURE` names a file |
 | `internal/memoryenvelope/envelope.go` | Validates declared deployment memory budgets against the operator-stated host capacity and reports unenforced budget overruns |
 | `internal/projectcontext/sample.go` | What a V3 request is shown of the project: the planner's sample of priority files, the files a run has read, added to a revised plan's context in sorted order of their paths, up to a limit, and each file cut to the bytes a request carries |
+| `internal/scanbudget/scanbudget.go` | The stated limit on the workspace scans a session start runs: five seconds, then the partial picture rather than a start that never reaches the model, and a `workspace` stage reported while a scan is slow enough to be worth saying |
 | `internal/workspacefs/object_handle_linux.go` | Holds Linux filesystem objects open during deletion approval so the approved object cannot be replaced before removal |
 | `internal/workspacefs/object_handle_other.go` | Refuses deletion approval on non-Linux platforms because a filesystem object cannot be safely pinned and verified |
 | `candidate_mutation_scope.go` | Derives the exact file and edit scope from model tool calls so candidates cannot modify anything outside the requested target |

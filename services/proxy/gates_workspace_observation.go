@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/itigges22/atlas-proxy/internal/wire"
 )
@@ -50,6 +51,7 @@ type workspaceSnapshot struct {
 	files     map[string]workspaceFile
 	truncated bool
 	taken     bool
+	deadline  time.Time // when the walk must stop; zero means no limit
 }
 
 const maxObservedWorkspaceFiles = 20000
@@ -74,9 +76,18 @@ func observeSkipFile(name string) bool {
 	return false
 }
 
-// snapshotWorkspace walks root and records every file's size and mtime.
+// snapshotWorkspace walks root and records every file's size and mtime. It has
+// no wall-clock limit: a walk cut short marks a command's effects unobserved,
+// which raises the shell_observation exit gate, so only the session start asks
+// for a deadline and takes the partial picture deliberately.
 func snapshotWorkspace(root string) workspaceSnapshot {
-	snap := workspaceSnapshot{files: map[string]workspaceFile{}, taken: true}
+	return snapshotWorkspaceWithin(root, time.Time{})
+}
+
+// snapshotWorkspaceWithin is snapshotWorkspace with the deadline its walk stops
+// at. A zero deadline means no limit.
+func snapshotWorkspaceWithin(root string, deadline time.Time) workspaceSnapshot {
+	snap := workspaceSnapshot{files: map[string]workspaceFile{}, taken: true, deadline: deadline}
 	if root == "" {
 		return snap
 	}
@@ -89,6 +100,10 @@ func snapshotWorkspace(root string) workspaceSnapshot {
 // observe records one entry of the walk under root, and returns what the
 // walk does next: go on, skip a folder, or stop at the cap.
 func (snap *workspaceSnapshot) observe(root, path string, d os.DirEntry, err error) error {
+	if scanExpired(snap.deadline) {
+		snap.truncated = true
+		return filepath.SkipAll
+	}
 	if err != nil {
 		return nil // an unreadable entry: skip it, the walk goes on
 	}
