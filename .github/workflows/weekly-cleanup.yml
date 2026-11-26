@@ -46,7 +46,7 @@ jobs:
           ref: ${{ github.event_name != 'pull_request' && 'dev' || '' }}
           persist-credentials: false
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5  # v7.1.0
         with:
           # The version of the Go test jobs. The list of fixers in the script
           # is read again when this version changes: a fixer that a newer Go

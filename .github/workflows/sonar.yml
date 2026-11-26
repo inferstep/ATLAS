@@ -40,7 +40,7 @@ jobs:
       # action checks the scanner's signature before it runs it. The token
       # is named in this step and nowhere else.
       - name: analysis
-        uses: SonarSource/sonarqube-scan-action@4d1dc0c91ee400dcf8a6dddf2f705ac36542e304  # v8.4.0
+        uses: SonarSource/sonarqube-scan-action@70bad232163b09d998ea0707ee80c0ec80798c16  # v8.5.1
         with:
           scannerVersion: 8.1.0.6389
         env:
