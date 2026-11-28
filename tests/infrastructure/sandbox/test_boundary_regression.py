@@ -198,13 +198,14 @@ def test_snapshot_keeps_a_link_inside_the_workspace_and_drops_one_out_of_it(exec
     (("..", "ws-sibling", "app.py"), True),
 ])
 def test_contained_path_refuses_a_path_out_of_its_base(executor, tmp_path, parts, refused):
+    import executor_languages as el
     base = tmp_path / "ws"
     base.mkdir()
     if refused:
         with pytest.raises(_http_exc(executor)):
-            executor._contained_path(base, *parts)
+            el._contained_path(base, *parts)
     else:
-        assert executor._contained_path(base, *parts) == base.joinpath(*parts)
+        assert el._contained_path(base, *parts) == base.joinpath(*parts)
 
 
 # --- Limit configuration --------------------------------------------------
