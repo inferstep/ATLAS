@@ -77,7 +77,6 @@ def _contained_path(base: Path, *parts: str) -> Path:
     return path
 
 
-
 def _extract_java_package(code: str) -> str | None:
     """Extract package name from Java source, return None if no package decl."""
     match = re.search(r'^\s*package\s+([\w.$]+)\s*;', code, re.MULTILINE)

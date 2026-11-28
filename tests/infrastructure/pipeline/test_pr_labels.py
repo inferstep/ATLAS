@@ -200,6 +200,21 @@ def test_every_core_path_of_the_settings_names_a_file_that_is_there():
     assert set(SETTINGS["core_paths"].values()) == {"the agent loop", "the tool handlers", "the guards"}
 
 
+def test_every_executor_module_of_the_sandbox_is_named_as_a_guard() -> None:
+    shared_copies = {"services/sandbox/private_values.py", "services/sandbox/structured_log.py"}
+    modules = [p.relative_to(ROOT).as_posix() for p in sorted((ROOT / "services" / "sandbox").glob("*.py"))]
+    executor_modules = [path for path in modules if path not in shared_copies]
+    assert len(executor_modules) >= 6, executor_modules
+    missing = [
+        path for path in executor_modules
+        if rules.labels_for([changed(path, 2, 1)], False, SETTINGS)
+        != rules.Labels("size/S", 3, (f"it changes the guards ({path})",))
+    ]
+    assert not missing, (
+        f"{missing} in services/sandbox/ are not named as `the guards` in `core_paths` of .github/atlas-bot.yml, so a "
+        "pull request that changes only them is not marked high risk. Fix: add each to `core_paths` with `the guards`.")
+
+
 def files_with_text_for_the_model():
     """The files of v3-service, without its tests, that hold a prompt: a text that starts with "You are a", or the
     marks of a ChatML prompt."""

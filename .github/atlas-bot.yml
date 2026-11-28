@@ -76,6 +76,7 @@ pull_requests:
     services/proxy/internal/logsafe/*: the guards
     services/proxy/internal/assetlint/*: the guards
     services/sandbox/executor_server.py: the guards
+    services/sandbox/executor_languages.py: the guards
     services/sandbox/executor_models.py: the guards
     services/sandbox/executor_parsers.py: the guards
     services/sandbox/resource_contract.py: the guards
